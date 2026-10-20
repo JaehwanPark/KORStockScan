@@ -10,7 +10,7 @@ from src.engine.lifecycle import research_storage as storage
 from src.engine.scalping import pre_submit_delay_initial_policy as initial
 
 
-def _committed(tmp_path, *, missing_identity=False, with_short=False, short_value=2, algorithm=None):
+def _committed(tmp_path, *, missing_identity=False, with_short=False, short_value=2, algorithm=None, parents=None):
     data = tmp_path / "data"
     candidate = tmp_path / "candidate"
     rows = []
@@ -18,7 +18,7 @@ def _committed(tmp_path, *, missing_identity=False, with_short=False, short_valu
         for n in range(6):
             at = 1792112400.0 + n * 600
             row = dict(identity=initial.digest([anchor, n]), alias=["2026-10-16", f"{n+1:06d}", anchor+str(n)],
-                anchor_kind=anchor, session="REGULAR", parent_compatibility=["a"*64, "b"*64],
+                anchor_kind=anchor, session="REGULAR", parent_compatibility=parents or ["a"*64, "b"*64],
                 native_evaluation_bound=True, committed_at=at, observation_end_at=at+183,
                 p0_valid=True, situation="test_situation", execution_context="ALL",
                 decision_source_sha256=initial.digest(["decision", anchor, n]),
@@ -376,6 +376,22 @@ def test_projection_pools_only_verified_alias_equivalence_and_retains_captured_h
     assert len(projected) == 2
     assert projected[0]["parent_compatibility"] == projected[1]["parent_compatibility"]
     assert [r["captured_parent_compatibility"][1] for r in projected] == originals
+
+    # The production provider emits that same canonical parent. Connect it to
+    # an actually selected native map, rather than passing a research key by
+    # hand and overlooking a future request/consumer mismatch.
+    _, _, report, policy = _committed(tmp_path/'selected', with_short=True, short_value=50,
+        parents=projected[0]['parent_compatibility'])
+    prepared = initial.PreparedPolicy.from_artifacts(policy, report, target_date='2026-10-19')
+    for alias, risk in [('f6', None), ('f7', None), ('f7', 'STALE_SOURCE')]:
+        schema = {'format':{'schema':{'properties':{'fact':{'type':'string','enum':[alias]}}}}}
+        if risk:schema['format']['schema']['properties']['risk']={'enum':[risk]}
+        actual = registry.provider_identity(dict(instructions='Same prompt', model='gpt-5.4-nano', text=schema),
+            dict(policy_version='continuous_reversal_policy_v6', registry_sha256='c'*64))
+        result = prepared.lookup(target_date='2026-10-19', market='REGULAR', kind='test_situation',
+            parents=['a'*64, actual['identity_sha256']])
+        assert result['delay_sec'] == (0 if risk else 1)
+        assert result['status'] == ('unsupported_existing_behavior' if risk else 'loaded')
 
 
 def test_tampered_projection_shard_rejected_and_complete_report_not_written(tmp_path):

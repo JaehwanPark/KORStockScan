@@ -47,28 +47,30 @@ def test_native_append_index_consumption_never_reads_the_raw_source(tmp_path,mon
 
 
 @pytest.mark.parametrize("mode", ["verified_append", "strict_append", "missing_append", "rewrite"])
-def test_pinned_row_snapshot_admits_only_native_append_and_never_new_rows(tmp_path, mode):
-    path = source(tmp_path)
-    append(tmp_path, path, row())
-    receipt = {} if mode != "strict_append" else None
-    stream = store.read_rows(tmp_path, path, snapshot_receipt=receipt)
-    assert next(stream)[0]['row']['decision_trace_id'] == 'trace-1'
-    if mode in {"verified_append", "strict_append"}:
-        append(tmp_path, path, row('trace-2'))
-    elif mode == "missing_append":
-        with path.open('ab') as handle:
-            handle.write(json.dumps(row('trace-2')).encode()+b'\n')
-    else:
-        path.write_bytes(path.read_bytes().replace(b'trace-1', b'trace-9'))
-    if mode == "verified_append":
-        assert list(stream) == []
-        assert receipt['verified_append_after_snapshot'] is True
-        assert receipt['generation']['selected_records'] == 1
-    else:
-        with pytest.raises(store.InputPending):
-            list(stream)
-        assert receipt in (None, {})
-
+@pytest.mark.parametrize("reuse_session", [False, True])
+def test_pinned_row_snapshot_admits_only_native_append_and_never_new_rows(tmp_path, mode, reuse_session):
+    from contextlib import nullcontext
+    with store.read_session(tmp_path) if reuse_session else nullcontext():
+        path = source(tmp_path)
+        append(tmp_path, path, row())
+        receipt = {} if mode != "strict_append" else None
+        stream = store.read_rows(tmp_path, path, snapshot_receipt=receipt)
+        assert next(stream)[0]['row']['decision_trace_id'] == 'trace-1'
+        if mode in {"verified_append", "strict_append"}:
+            append(tmp_path, path, row('trace-2'))
+        elif mode == "missing_append":
+            with path.open('ab') as handle:
+                handle.write(json.dumps(row('trace-2')).encode()+b'\n')
+        else:
+            path.write_bytes(path.read_bytes().replace(b'trace-1', b'trace-9'))
+        if mode == "verified_append":
+            assert list(stream) == []
+            assert receipt['verified_append_after_snapshot'] is True
+            assert receipt['generation']['selected_records'] == 1
+        else:
+            with pytest.raises(store.InputPending):
+                list(stream)
+            assert receipt in (None, {})
 
 def test_200_gib_unindexed_history_is_pending_without_a_raw_read(tmp_path,monkeypatch):
     path=source(tmp_path)
@@ -1083,3 +1085,27 @@ def test_failed_read_transaction_releases_snapshot_before_connection_reuse(tmp_p
 def test_maintenance_rejects_noncanonical_dates_before_preparing_any_database(tmp_path, day):
     with pytest.raises(ValueError):store._maintain_once(tmp_path, day)
     assert not (tmp_path/'report').exists()
+
+
+@pytest.mark.parametrize('pinned', [False, True])
+def test_snapshot_generation_and_first_row_use_the_same_database_view(tmp_path, monkeypatch, pinned):
+    path=source(tmp_path);append(tmp_path,path,row('before'))
+    original=store.generation
+    calls=[]
+    def generation(root, source_path):
+        value=original(root,source_path)
+        if not calls:
+            calls.append(True)
+            append(tmp_path,path,row('after'))
+        return value
+    monkeypatch.setattr(store,'generation',generation)
+    receipt={} if pinned else None
+    stream=store.read_rows(tmp_path,path,snapshot_receipt=receipt)
+    if pinned:
+        rows=list(stream)
+        assert [v['row']['decision_trace_id'] for v,_ in rows]==['before']
+        assert receipt['generation']['selected_records']==1
+        assert receipt['verified_append_after_snapshot'] is True
+    else:
+        with pytest.raises(store.InputPending):list(stream)
+    assert len(list(store.read_rows(tmp_path,path)))==2

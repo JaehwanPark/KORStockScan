@@ -66,6 +66,7 @@ def stopped_recovery(tmp_path, monkeypatch):
     monkeypatch.setattr(D,'verify_candidate_active_policy',lambda *a:dict(status='pass',
         receipt_path=str(policy),receipt_sha256=D.H._sha(policy),
         pointer_path=str(policy),pointer_sha256=D.H._sha(policy)))
+    monkeypatch.setattr(D, 'verify_candidate_report_currentness', lambda *a:dict(status='pass'), raising=False)
     d=D.StoppedDeploymentRecovery(tmp_path,candidate,day,D.CONFIRM)
     return d, status_path, policy
 
@@ -303,7 +304,8 @@ def test_transition_does_not_advance_past_failed_phase(failure):
 
 
 @pytest.fixture
-def driver(tmp_path):
+def driver(tmp_path, monkeypatch):
+    monkeypatch.setattr(D, "verify_candidate_report_currentness", lambda *a:dict(status="pass"), raising=False)
     d = object.__new__(D.Deployment)
     d.workspace = tmp_path
     runtime = tmp_path / 'data/runtime'; runtime.mkdir(parents=True)
@@ -815,11 +817,16 @@ def _mock_adoption_preflight(d, monkeypatch, reject=None):
         return dict(status='pass',receipt_path=str(prior_handoff),receipt_sha256=D.H._sha(prior_handoff),
                     pointer_path=str(d.selection),pointer_sha256=D.H._sha(d.selection))
     monkeypatch.setattr(D, 'verify_candidate_active_policy', active)
+    def reports(*args):
+        calls.append('reports')
+        if reject == 'reports': raise ValueError('candidate_validation_rejected')
+        return {'status':'pass'}
+    monkeypatch.setattr(D, 'verify_candidate_report_currentness', reports, raising=False)
     d._preflight_native_verified = False
     return calls
 
 
-@pytest.mark.parametrize("rejected", ["intraday_release_handoff", "runtime_policy_bootstrap", "delay", "stop", "holding", "active_policy"])
+@pytest.mark.parametrize("rejected", ["intraday_release_handoff", "runtime_policy_bootstrap", "delay", "stop", "holding", "active_policy", "reports"])
 def test_adoption_native_preflight_failure_never_replaces_old_hold(driver, monkeypatch, rejected):
     d = driver; _, _, failed_path, prior_path = _failed_hold_fixture(d, monkeypatch)
     original = {path: path.read_bytes() for path in (d.hold, failed_path, prior_path, d.selection, d.checklist)}
@@ -835,7 +842,7 @@ def test_adoption_preflight_native_checks_precede_capture_and_acquire(driver, mo
     hold_before = d.hold.read_bytes()
     calls = _mock_adoption_preflight(d, monkeypatch)
     d.preflight()
-    assert calls == ["src.engine.automation.intraday_release_handoff", "src.engine.automation.runtime_policy_bootstrap", "delay", "stop", "holding", "active_policy"]
+    assert calls == ["src.engine.automation.intraday_release_handoff", "src.engine.automation.runtime_policy_bootstrap", "delay", "stop", "holding", "active_policy", "reports"]
     assert d._preflight_native_verified is True
     assert d.hold.read_bytes() == hold_before
     d.acquire_hold()
@@ -1161,3 +1168,32 @@ def test_stopped_startup_timeout_recovery_keeps_exact_phase_and_error(stopped_re
     else:
         with pytest.raises(ValueError,match='stopped_recovery_source_invalid'):d.preflight()
     assert before==(path.read_bytes(),d.hold.read_bytes())
+
+
+@pytest.mark.parametrize('fault', [None, 'code', 'source', 'quantity_incomplete', 'quantity_missing', 'missing_after_date'])
+def test_report_preflight_reuses_native_currentness_and_preserves_economic_gaps(tmp_path, monkeypatch, fault):
+    from src.engine.monitoring import main_trailing_currentness as trailing
+    from src.engine.error_detectors import artifact_freshness as artifacts
+    day, source = '2026-10-20', '2026-10-19'
+    monkeypatch.setattr(D.H, 'preserve_checklist', lambda target: {'source_date':source})
+    monkeypatch.setattr(D.H, '_read', lambda path: {'original':'holding'})
+    monkeypatch.setattr(trailing, 'observe', lambda data, held, target_date:
+        {'status':'code_changed' if fault=='code' else 'generation_current'})
+    quantity=dict(status='source_gap', findings=['initial_quantity_economic_source_gap'],
+        bounded_contract_validated=fault!='source', observation_complete=fault!='quantity_incomplete',
+        postclose_stage_status='not_observed' if fault=='quantity_missing' else 'source_gap')
+    if fault=='missing_after_date':quantity['findings']=['initial_quantity_stage_missing_after_date']
+    seen=[]
+    def observe(root, date):
+        seen.append((root,date))
+        return quantity
+    monkeypatch.setattr(artifacts, '_initial_quantity_semantics', observe)
+    if fault:
+        with pytest.raises(ValueError, match='deployment_.*report_not_current'):
+            D.verify_candidate_report_currentness(tmp_path,tmp_path/'candidate',day)
+    else:
+        result=D.verify_candidate_report_currentness(tmp_path,tmp_path/'candidate',day)
+        assert result['status']=='pass' and result['source_date']==source
+        assert result['quantity']['findings']==['initial_quantity_economic_source_gap']
+        assert result['runtime_effect'] is False and result['policy_effect']=='unchanged'
+    assert seen==([] if fault=='code' else [(tmp_path/'candidate',source)])

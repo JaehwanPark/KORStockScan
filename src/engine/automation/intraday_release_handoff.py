@@ -2907,6 +2907,73 @@ REVIEWED_CLEAN_SQLITE_DEPENDENCY_VARIANTS = {
     } for key, value in REVIEWED_SQLITE_LIFECYCLE_DEPENDENCY_VARIANTS.items()
 }
 
+# Reviewed approved delay-v4 evidence plus retired PYRAMID helper removal.
+# Keep the issued cleanup/SQLite profiles; one complete final trigger owns all
+# producer/consumer bytes, including startup and pre-drain report currentness.
+REVIEWED_DELAY_CLEANUP_HASHES = {'src/engine/automation/main_trailing_source_store.py': 'aca2d7dda4c8eda53f6634a73b133090e73c511cc62973584f31633245edd850',
+ 'src/engine/automation/pre_submit_delay_partitioned_research.py': 'cbc0a519c2126948f7c68982c86bae7678c54db65c687ed960563cf76053e6e3',
+ 'src/engine/automation/pre_submit_delay_research_review.py': '159b04fa4b5486e43feba9ca2dee73b7e1f9052926f729cb6169ff0ff89ad2ac',
+ 'src/engine/monitoring/submission_bottleneck_monitor.py': '3e22aacfc10f43a86e4e242793eb30b44bb2f622d55236debb6e8a0dfdfc2158',
+ 'src/engine/scalping/pre_submit_delay_initial_policy.py': '918c266dea445d4b9f949b6ae76755c724df8fc525760812a0cab33b70de8b1c',
+ 'src/engine/scalping/pre_submit_delay_tuning.py': '6d2335731199417edce383e773b5737b110f4401297fefce75fc578dd7ce6fd2',
+ 'src/engine/scalping/reversal_auxiliary_registry.py': '80d91c4cd7758621236403d2f4ae4596317d9fa10a8624a616c3699775aedea0',
+ 'src/engine/sniper_state_handlers.py': '8a0c18d2c097b063a8349907f39e6057d43b7ad9ef173e5f6c4e1be48f8b21f9',
+ 'src/bot_main.py': 'f8c2f1626d60502234c002bb75f99fb6e092c620ad2ae6ae87eac6db76da1f0c',
+ 'src/engine/automation/ordered_intraday_deploy.py': '9b16f12badd137f866cd77b09e356ef75e70ce40fa1a1455c16581fea98fbea0'}
+REVIEWED_DELAY_CLEANUP_PAIRS = {'src/engine/automation/main_trailing_source_store.py': (('3e7893cab9a61cf3ff9e08242a9786d2d8f24cc69dd42c7f9943bd90bcf116ae',
+                                                          'aca2d7dda4c8eda53f6634a73b133090e73c511cc62973584f31633245edd850'),
+                                                         ('a27ce958c053023e920ac23e6369126bdc7d77eb2d73fd713cc5c109e212d593',
+                                                          'aca2d7dda4c8eda53f6634a73b133090e73c511cc62973584f31633245edd850')),
+ 'src/engine/automation/pre_submit_delay_partitioned_research.py': (('df3407a49b012152ee894db86b5052a681ccf6122db5c459cf743747e8f95ba6',
+                                                                     'cbc0a519c2126948f7c68982c86bae7678c54db65c687ed960563cf76053e6e3'),
+                                                                    ('1f92ea9be98b4a9d0cce66d4105959b21eb03b5d060c501d628b9cef2cc73d65',
+                                                                     'cbc0a519c2126948f7c68982c86bae7678c54db65c687ed960563cf76053e6e3')),
+ 'src/engine/automation/pre_submit_delay_research_review.py': (('6cf9e50d915da95f0cd469b2a7d36ede3754cba6c237f69ab0fdfcf565f968d6',
+                                                                '159b04fa4b5486e43feba9ca2dee73b7e1f9052926f729cb6169ff0ff89ad2ac'),),
+ 'src/engine/monitoring/submission_bottleneck_monitor.py': (('b2ed455255bc7659d2959a5c6012fe052206de588f1932d57dde2e376d2fad18',
+                                                             '3e22aacfc10f43a86e4e242793eb30b44bb2f622d55236debb6e8a0dfdfc2158'),
+                                                            ('082d6e1af5276405fc493d2be739818ad7d9d55e5026a113029f66eaec0b4b2e',
+                                                             '3e22aacfc10f43a86e4e242793eb30b44bb2f622d55236debb6e8a0dfdfc2158'),
+                                                            ('e9905d8614a2b8c8751b723eaa8ba53507e2b67e0909c53c393c92b366fb68b9',
+                                                             '3e22aacfc10f43a86e4e242793eb30b44bb2f622d55236debb6e8a0dfdfc2158')),
+ 'src/engine/scalping/pre_submit_delay_initial_policy.py': (('0853914ebbc643de4301b87209c9db106662bd60485146b0d16e495b77c0cd33',
+                                                             '918c266dea445d4b9f949b6ae76755c724df8fc525760812a0cab33b70de8b1c'),
+                                                            ('9bf1914b5445ad687d2480352cb01d6ca3ab742709175a3ba7181d1747499edc',
+                                                             '918c266dea445d4b9f949b6ae76755c724df8fc525760812a0cab33b70de8b1c')),
+ 'src/engine/scalping/pre_submit_delay_tuning.py': (('c5fdf030c87f4faf94a70ecf1d2c4c40a753b4da6069a58ed105f5e43cb76605',
+                                                     '6d2335731199417edce383e773b5737b110f4401297fefce75fc578dd7ce6fd2'),
+                                                    ('c2fb791a41e35c326ca874562c332fac0e7ea16cda0066fc82f34679cd93ef1a',
+                                                     '6d2335731199417edce383e773b5737b110f4401297fefce75fc578dd7ce6fd2')),
+ 'src/engine/scalping/reversal_auxiliary_registry.py': (('5702bd5b558ca0e61c52eb4c3679c4f57d6bc877629ea9635ad6f0143fe413da',
+                                                         '80d91c4cd7758621236403d2f4ae4596317d9fa10a8624a616c3699775aedea0'),
+                                                        ('a9ca6ebc7b924fcb8de2dc4b141d99500aacc5f3700fe566b3fea190b24cbd31',
+                                                         '80d91c4cd7758621236403d2f4ae4596317d9fa10a8624a616c3699775aedea0')),
+ 'src/engine/sniper_state_handlers.py': (('885af7dd480a520e98502bcd6729586b4d21016de8254a4a7d9e299389f09ed4',
+                                          '8a0c18d2c097b063a8349907f39e6057d43b7ad9ef173e5f6c4e1be48f8b21f9'),
+                                         ('669b6109e36f81e9dee263d1c3e31011d55fd612d5641713c6ee109a827a9425',
+                                          '8a0c18d2c097b063a8349907f39e6057d43b7ad9ef173e5f6c4e1be48f8b21f9')),
+ 'src/bot_main.py': (('d98fbcddf8f3d2735385fcb92f1d5d43a631bc1b7ab11e2d5c7311c838ae969a',
+                      'f8c2f1626d60502234c002bb75f99fb6e092c620ad2ae6ae87eac6db76da1f0c'),
+                     ('a2e8ec8578bb6b52cc91348584a8c4627fdc06412dc505a71c2c9ebf8f6bd526',
+                      'f8c2f1626d60502234c002bb75f99fb6e092c620ad2ae6ae87eac6db76da1f0c')),
+ 'src/engine/automation/ordered_intraday_deploy.py': (('4345d7b8ea95b13b7c7862bc54c24b9add92e6da79806190308bfb17b15ba3b9',
+                                                       '9b16f12badd137f866cd77b09e356ef75e70ce40fa1a1455c16581fea98fbea0'),
+                                                      ('48b9376c7683466e5d0e195ac971c93d1ed1cd442e9968eddacc2031e38e75a9',
+                                                       '9b16f12badd137f866cd77b09e356ef75e70ce40fa1a1455c16581fea98fbea0'))}
+REVIEWED_DELAY_CLEANUP_DEPENDENCY_VARIANTS = {
+    (trigger, REVIEWED_DELAY_CLEANUP_HASHES.get(trigger, sha)): {**value,
+        'selector_path': 'src/engine/sniper_state_handlers.py',
+        'selector_sha256': REVIEWED_DELAY_CLEANUP_HASHES['src/engine/sniper_state_handlers.py'],
+        'dependencies': {**value['dependencies'], **REVIEWED_DELAY_CLEANUP_HASHES},
+        'contract_extensions': {
+            origin: {name: REVIEWED_DELAY_CLEANUP_HASHES.get(os.path.normpath(name), digest)
+                     for name, digest in paths.items()}
+            for origin, paths in value['contract_extensions'].items()},
+    } for (trigger, sha), value in REVIEWED_CLEAN_SQLITE_DEPENDENCY_VARIANTS.items()
+}
+for (_trigger, _trigger_sha), _variant in REVIEWED_DELAY_CLEANUP_DEPENDENCY_VARIANTS.items():
+    REVIEWED_HOLDING_RESEARCH_DEPENDENCIES[_trigger][_trigger_sha] = _variant['dependencies']
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -2966,7 +3033,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         dependencies = generations.get(trigger_sha, {})
         # New exact selectors precede their historical parent. The first match
         # selects one complete generation, never per-file SHA alternatives.
-        for variants in (REVIEWED_CLEAN_SQLITE_DEPENDENCY_VARIANTS,
+        for variants in (REVIEWED_DELAY_CLEANUP_DEPENDENCY_VARIANTS,
+                         REVIEWED_CLEAN_SQLITE_DEPENDENCY_VARIANTS,
                          REVIEWED_SQLITE_LIFECYCLE_DEPENDENCY_VARIANTS,
                          REVIEWED_RETIRED_REVIEW_DEPENDENCY_VARIANTS,
                          REVIEWED_PRODUCT_INTAKE_DEPENDENCY_VARIANTS,
@@ -3068,7 +3136,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         if before == after:
             continue
         pair = (hashlib.sha256(before).hexdigest(), hashlib.sha256(after).hexdigest())
-        if (pair in REVIEWED_VOTE_METADATA_PAIRS.get(name, ())
+        if (pair in REVIEWED_DELAY_CLEANUP_PAIRS.get(repository_name(name), ())
+                or pair in REVIEWED_VOTE_METADATA_PAIRS.get(name, ())
                 or pair in REVIEWED_PRE_ENTRY_OBSERVER_PAIRS.get(name, ())
                 or pair in REVIEWED_STOP_INDEXED_VOTE_PAIRS.get(name, ())
                 or pair in REVIEWED_STOP_FORWARD_STREAM_PAIRS.get(name, ())

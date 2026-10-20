@@ -873,14 +873,16 @@ def build_step(data_root, path, *, max_bytes=MAX_STEP_BYTES, seconds=1):
 def read_rows(data_root, path, *, kinds=None, identities=None, symbols=None, stages=None, after=None,
               snapshot_receipt=None):
     """Read verified rows; an explicit receipt may admit certified later appends."""
-    with _database(data_root, path, readonly=True) as (db, path, namespace):
+    with read_session(data_root), _database(data_root, path, readonly=True) as (db, path, namespace):
         if snapshot_receipt is not None:
             db.execute('BEGIN')
         name = str(path)
         start_generation=generation(data_root,path)
         state = db.execute('SELECT signature,catchup_end,cursor,producer_end,invalid FROM sources WHERE path=?', (name,)).fetchone()
+        observed_signature = (start_generation['source_stat'] if snapshot_receipt is not None
+            else source_signature(data_root,path))
         if (state is None or state[4] or state[1] != state[2]
-                or json.loads(state[0]) != source_signature(data_root,path) or state[3] != start_generation['size']):
+                or json.loads(state[0]) != observed_signature or state[3] != start_generation['size']):
             raise InputPending('trailing_index_coverage_incomplete')
         query, args = 'SELECT offset,size,raw_sha,body_sha,body FROM rows WHERE source=?', [name]
         for column, values in (('kind', kinds), ('identity', identities), ('symbol', symbols), ('stage', stages)):
@@ -900,6 +902,10 @@ def read_rows(data_root, path, *, kinds=None, identities=None, symbols=None, sta
             if value.get('schema')!=SCHEMA:
                 raise ValueError('trailing_index_projection_schema_invalid')
             yield value, dict(path=name, decoded_offset=offset, size=size, sha256=raw_sha)
+        if snapshot_receipt is not None:
+            # All pinned rows have been consumed. Validate the live successor
+            # outside that read snapshot, including when a session reuses db.
+            db.rollback()
         end_generation = generation(data_root,path)
         if end_generation != start_generation and (
                 snapshot_receipt is None or not _append_successor(start_generation, end_generation)):

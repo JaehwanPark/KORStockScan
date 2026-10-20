@@ -136,6 +136,32 @@ def verify_candidate_active_policy(workspace, candidate, commit, day):
                 candidate_commit=commit, bundle_sha256=bundle['bundle_sha256'], policy_effect='unchanged')
 
 
+def verify_candidate_report_currentness(workspace, candidate, day):
+    """Use existing bounded report consumers before any Main drain.
+
+    Historical economic gaps remain evidence; invalidated current report/code
+    bindings must be natively republished by their owners before a transition.
+    """
+    from src.engine.monitoring import main_trailing_currentness as trailing
+    from src.engine.error_detectors.artifact_freshness import _initial_quantity_semantics
+    data = Path(workspace)/'data'
+    source_date = H.preserve_checklist(day)['source_date']
+    holding = H._read(data/'report/monitor_snapshots'/('holding_exit_observation_'+source_date+'.json'))
+    observed = trailing.observe(data, holding, target_date=day)
+    if observed.get('status') != 'generation_current':
+        raise ValueError('deployment_trailing_report_not_current')
+    quantity = _initial_quantity_semantics(Path(candidate), source_date)
+    if (quantity.get('bounded_contract_validated') is not True
+            or quantity.get('observation_complete') is not True
+            or 'initial_quantity_stage_missing_after_date' in quantity.get('findings', [])
+            or quantity.get('postclose_stage_status') in {None, 'not_observed', 'source_invalid'}):
+        raise ValueError('deployment_quantity_report_not_current:'+','.join(quantity.get('findings', [])))
+    return dict(status='pass', source_date=source_date, target_date=day,
+        trailing=observed, quantity={key:quantity.get(key) for key in (
+            'status','findings','postclose_stage_status','observation_generation','source_reference_count')},
+        policy_effect='unchanged', runtime_effect=False, actual_pid_consumed=False)
+
+
 def _metadata_signature(path):
     info = Path(path).lstat()
     return tuple(getattr(info, "st_" + name) for name in (
@@ -474,6 +500,8 @@ class Deployment:
         _atomic(self.directory / 'candidate-holding-vote-code.json', _json_bytes(holding_check))
         active_check = verify_candidate_active_policy(self.workspace, self.candidate, self.commit, self.day)
         _atomic(self.directory/'candidate-active-policy-code.json', _json_bytes(active_check))
+        self.state['candidate_report_currentness'] = verify_candidate_report_currentness(
+            self.workspace, self.candidate, self.day)
         self.frozen = dict(self.frozen)
         self.frozen.update((code_check.get('prepared_code_origin') or {}).get('sources', {}))
         # The selector is transition provenance, asserted separately below.
@@ -917,7 +945,8 @@ class StoppedDeploymentRecovery(Deployment):
         checks = dict(delay=verify_candidate_delay_code(self.day, self.candidate, self.commit),
             stop=H.verify_candidate_stop_code(self.day, self.candidate, self.commit),
             holding=H.verify_candidate_holding_vote_code(self.day, self.candidate, self.commit),
-            active=verify_candidate_active_policy(self.workspace, self.candidate, self.commit, self.day))
+            active=verify_candidate_active_policy(self.workspace, self.candidate, self.commit, self.day),
+            reports=verify_candidate_report_currentness(self.workspace, self.candidate, self.day))
         self.prepared_delay_check = checks['delay']
         self.directory = self.workspace / 'data/runtime/release_transitions' / self.day / self.commit
         self.directory.mkdir(parents=True, exist_ok=False)

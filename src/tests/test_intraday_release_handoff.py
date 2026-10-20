@@ -146,8 +146,9 @@ def test_quantity_cost_handoff_requires_exact_original_and_reviewed_sources(tmp_
          '7f2552aedde8fec6ef904a43105827907e50dfc8') + ':' + name])
     # This exercises the preserved original quantity-cost generation. Current
     # successor source bytes are covered by the complete-generation Git tests.
-    after = ((root/name).read_bytes() if observer else subprocess.check_output(
-        ['git', '-C', str(root), 'show', '99e158af1c4c743d32662630e0397b58c1f7338e:' + name]))
+    after = subprocess.check_output(['git', '-C', str(root), 'show',
+        ('0ce816f7c1e2c495c24fc11fd4ab0a7d837c56ca' if observer else
+         '99e158af1c4c743d32662630e0397b58c1f7338e') + ':' + name])
     verifier = (root / own).read_bytes()
     pair = (handoff.REVIEWED_SOURCE_INTEGRATION_PAIRS[name][0] if observer else
             handoff.REVIEWED_QUANTITY_RESEARCH_COST_SOURCES[name])
@@ -1757,8 +1758,9 @@ def test_archive_authority_successor_accepts_the_issued_full_reader_origin(avg_d
 
 @pytest.mark.parametrize('family', ['main_stop', 'holding_vote', 'pre_submit_delay'])
 @pytest.mark.parametrize('generation,reader_path,fault', [(generation,path,fault)
-    for generation in ('source_reader','source_integration','original_gap','incident_order','product_intake','sqlite_lifecycle','retired_review','clean_sqlite')
-    for path in (tuple({**handoff.REVIEWED_SQLITE_LIFECYCLE_HASHES, **handoff.REVIEWED_RETIRED_REVIEW_HASHES}) if generation=='clean_sqlite' else
+    for generation in ('source_reader','source_integration','original_gap','incident_order','product_intake','sqlite_lifecycle','retired_review','clean_sqlite','delay_cleanup')
+    for path in (tuple(handoff.REVIEWED_DELAY_CLEANUP_HASHES) if generation=='delay_cleanup' else
+        tuple({**handoff.REVIEWED_SQLITE_LIFECYCLE_HASHES, **handoff.REVIEWED_RETIRED_REVIEW_HASHES}) if generation=='clean_sqlite' else
         tuple(handoff.REVIEWED_RETIRED_REVIEW_HASHES) if generation=='retired_review' else
         tuple(handoff.REVIEWED_SQLITE_LIFECYCLE_HASHES) if generation=='sqlite_lifecycle' else
         tuple(handoff.REVIEWED_PRODUCT_INTAKE_HASHES) if generation=='product_intake' else
@@ -1767,7 +1769,7 @@ def test_archive_authority_successor_accepts_the_issued_full_reader_origin(avg_d
         ('src/engine/lifecycle/research_json_stream.py',
         'src/engine/automation/main_startup_validation.py','src/engine/automation/next_preopen_readiness.py',
         *(['src/engine/infrastructure/startup_validation_code_context.py'] if generation=='source_integration' else [])))
-    for fault in ([None,'missing','dirty','committed_change']+(['parent_mix'] if generation in ('sqlite_lifecycle','retired_review','clean_sqlite') else []))])
+    for fault in ([None,'missing','dirty','committed_change']+(['parent_mix'] if generation in ('sqlite_lifecycle','retired_review','clean_sqlite','delay_cleanup') else []))])
 def test_source_reader_handoff_preserves_issued_policy_and_exact_dependencies(tmp_path, family, fault, reader_path,generation):
     import hashlib
     import os
@@ -1790,18 +1792,21 @@ def test_source_reader_handoff_preserves_issued_policy_and_exact_dependencies(tm
         names.update(variant['dependencies'])
     names.update(handoff.REVIEWED_SOURCE_READER_HASHES)
     if generation!='source_reader':names.update(handoff.REVIEWED_SOURCE_INTEGRATION_HASHES)
-    if generation in ('original_gap','incident_order','product_intake','sqlite_lifecycle','retired_review','clean_sqlite'):names.update(handoff.REVIEWED_ORIGINAL_GAP_HASHES)
-    if generation in ('product_intake','sqlite_lifecycle','retired_review','clean_sqlite'):names.update(handoff.REVIEWED_PRODUCT_INTAKE_HASHES)
+    if generation in ('original_gap','incident_order','product_intake','sqlite_lifecycle','retired_review','clean_sqlite','delay_cleanup'):names.update(handoff.REVIEWED_ORIGINAL_GAP_HASHES)
+    if generation in ('product_intake','sqlite_lifecycle','retired_review','clean_sqlite','delay_cleanup'):names.update(handoff.REVIEWED_PRODUCT_INTAKE_HASHES)
     if generation in ('sqlite_lifecycle','clean_sqlite'):names.update(handoff.REVIEWED_SQLITE_LIFECYCLE_HASHES)
-    if generation in ('retired_review','clean_sqlite'):names.update(handoff.REVIEWED_RETIRED_REVIEW_HASHES)
+    if generation in ('retired_review','clean_sqlite','delay_cleanup'):names.update(handoff.REVIEWED_RETIRED_REVIEW_HASHES)
+    if generation=='delay_cleanup':
+        for variant in handoff.REVIEWED_DELAY_CLEANUP_DEPENDENCY_VARIANTS.values():
+            names.update(variant['dependencies'])
     names.add('src/engine/automation/intraday_release_handoff.py')
     for name in names:
         path = root/name; path.parent.mkdir(parents=True,exist_ok=True)
-        path.write_bytes((canonical/name).read_bytes() if generation=='clean_sqlite' or
+        path.write_bytes((canonical/name).read_bytes() if generation=='delay_cleanup' or
             name=='src/engine/automation/intraday_release_handoff.py' else subprocess.check_output(
                 ['git','-C',str(canonical),'show',
                  ({'source_reader':'0255cb05f','incident_order':'041caf05e','product_intake':'21d822a64',
-                   'sqlite_lifecycle':'c550a4c43','retired_review':'3d8abd012'}.get(generation,'99c51c85f'))
+                   'sqlite_lifecycle':'c550a4c43','retired_review':'3d8abd012','clean_sqlite':'0ce816f7c'}.get(generation,'99c51c85f'))
                  +':'+os.path.normpath(name)]))
     original = {key: hashlib.sha256(subprocess.check_output(
         ['git','-C',str(root),'show',origin+':'+os.path.normpath(name)])).hexdigest()
