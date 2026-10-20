@@ -383,3 +383,14 @@ PYTHONPATH=. /home/ubuntu/KORStockScan/.venv/bin/python -m src.engine.automation
 ```
 
 향후 실제 관측은 검증된 코드의 정식 인계와 자연 PASS가 필요하다. 10/19 PREOPEN/PID 소비는 기존 `DirectFamilyPreopenPolicyHandoff`의 소유이며, 단기 표본 부족은 현재 0초 초기정책의 추가 승인 gate가 아니다.
+
+## 체결 이후 하락과 0초 선택 근거 재검토 — 2026-10-20
+
+사용자 `다음액션 실행`에 따라 기존 `PreSubmitDelaySituationResearch1017`의 새 결함을 재개한다. 이전 완료·배포 이력은 유지한다. 구현과 실제 재계산 결과는 [기존 연구 리뷰](../audits/pre-submit-delay-situation-research-implementation-review-2026-10-17.md#체결-기준-재검토와-단기-선정-보완--2026-10-20)에 기록한다.
+
+1. **체결 모집단과 기회 모집단을 함께 보존한다.** 06/05 이후 매수수량이 기록된 Main 전략 포지션 전수를 읽기 전용 DB 조회로 고정한다. 실제 broker fill leg와 Main 주문 소유권이 연결된 행만 첫 체결·마지막 기록 체결 기준 가격경로를 계산한다. 포지션 갱신시각을 체결시각으로 바꾸지 않으며, 미확인·미청산·추가매수·과거 원천 부재를 분모에서 삭제하지 않는다. 정책 학습은 별도 정책 재시작 경계인 09/29 이후만 사용한다.
+2. **동일 ENTER_NOW+PASS 기회의 0/1/3/5/30/60/120/180초를 비교한다.** 미체결 기회도 포함하며 가격 개선과 실제 체결을 구분한다. native 판정/attempt→동결 주문계획→record 연결만 인정한다. 가격상한·첫 leg 수량/호가잔량 적합성은 관측된 범위의 진단이고, 반사실 재점검 PASS·전체 체결·비용후 EV를 만들어내지 않는다. 체결 기준 5분·10분 자료와 구간 최저가는 보조 진단이며 최저가를 사후 최적 진입점으로 선택하지 않는다.
+3. **정책 의미가 같은 요청별 인용 별칭만 통합한다.** 검증된 compact wire의 `fact.enum=f6/f7` 차이는 연구 호환키에서 정규화하고 미래 provider identity에도 같은 계약을 적용한다. 원 receipt/hash는 보존하며 machine·prompt·model·options·risk/verdict·validator 차이는 계속 분리한다.
+4. **선정 알고리즘 v4에 단기를 포함한다.** v2/v3는 원 grid와 분할을 재현한다. v4는 P0와 단기 관측 모두 실제 목표시각 이후 250ms 이내인 pair만 단기 후보로 받는다. 학습에서 후보를 고정하고 시간순 검증구간의 방향을 확인한다. 기존 상황/부모 분류, purge, 지원되는 0초 자식의 부모 양수 차단을 유지한다.
+5. **0초의 의미를 구분한다.** 지연 유리, 관측 pair에서 즉시 유리, 판단 불충분을 별도 표시한다. 미지원 정책·표본 부족·학습/검증 불일치 때문에 유지한 0초는 최적 시간 증명이 아니다. 원천 누락 경보로도 바꾸지 않는다. 의미감시는 선택값·policy status·선정 근거와 commit→제출 함수 반환 시간을 집계하고, 단기 지연의 due/recheck/terminal도 기존 종결 계약으로 검사한다.
+6. **재계산은 별도 후보 출력에서 끝까지 검증한다.** 기존 family ledger·compact·native index·완료 체결 field tree를 사용한다. 영향 없는 장후 전체 체인 재실행이나 큰 raw 전수 재해시를 하지 않는다. 기존 보고서에 새로운 immutable attempt를 생성하고, 새 후보는 source 10/19·publication 10/20·effective 10/21로 격리한다. 현재 정책·selector·PREOPEN을 교체하지 않는다. 후보 native 검증과 코드 검토 완료 이후 정식 코드 인계·정책 게시·실제 PID 소비는 `DirectFamilyPreopenPolicyHandoff`의 별도 수용이다.

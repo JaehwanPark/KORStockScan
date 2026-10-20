@@ -8,12 +8,13 @@ from __future__ import annotations
 
 import argparse
 from collections import Counter
-from datetime import date
+from datetime import date, datetime, timedelta
 import hashlib
 import json
 import math
 import os
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from src.engine.lifecycle import research_storage as storage
 from src.engine.scalping import pre_submit_delay_initial_policy as initial
@@ -28,6 +29,7 @@ MAX_COMPACT_BYTES = 64 * 1024 * 1024
 MAX_COMPACT_RECORDS = 1000000
 MAX_DURABLE_BYTES = 512 * 1024 * 1024
 MAX_TEMP_BYTES = 1024 * 1024 * 1024
+EXECUTION_HORIZONS = (1, 3, 5, 30, 60, 120, 180, 300, 600)
 
 
 def _sha(value):
@@ -158,6 +160,15 @@ def _enrich(db, row, receipt):
     features = dict(row.get("execution_features") or {})
     if commit and commit.get("decision_source_sha256") == row.get("decision_source_sha256"):
         receipt["bound_projection_anchors"] += 1
+        proof = commit.get("entry_auxiliary_policy_identity")
+        if proof:
+            from src.engine.scalping.reversal_auxiliary_registry import timing_compatibility_identity, validate_identity
+            try:
+                proof = validate_identity(json.loads(proof) if isinstance(proof, str) else proof)
+                if proof["identity_sha256"] == row.get("captured_parent_compatibility", row["parent_compatibility"])[1]:
+                    result["auxiliary_timing_compatibility_sha256"] = timing_compatibility_identity(proof)
+            except (ValueError, TypeError, KeyError):
+                receipt["compatibility_identity_unverified_n"] = receipt.get("compatibility_identity_unverified_n", 0)+1
         machine = commit.get("original_machine_observation_sha256")
         native = commit.get("original_evaluation_attempt_id") or commit.get("evaluation_attempt_id") or commit.get("request_id")
         if _sha(machine) and isinstance(native, str) and native:
@@ -199,7 +210,7 @@ def _populate(db, root, report, compact_receipt):
             id TEXT PRIMARY KEY, gid TEXT, day TEXT, symbol TEXT, anchor TEXT,
             session TEXT, situation TEXT, at REAL, end REAL, p0 INTEGER,
             native INTEGER, opportunity TEXT, spread_bp REAL, progress_bp REAL,
-            split TEXT DEFAULT 'unqualified'
+            compatibility_gid TEXT, split TEXT DEFAULT 'unqualified'
         ) WITHOUT ROWID;
         CREATE TABLE pairs (id TEXT, horizon REAL, bp REAL,
                             PRIMARY KEY(id,horizon)) WITHOUT ROWID;
@@ -250,12 +261,14 @@ def _populate(db, root, report, compact_receipt):
         for name in ("delay_recheck_requested_at_epoch",
                      "delay_recheck_completed_at_epoch", "delay_terminal_reason"):
             counts["available:" + name] += row.get(name) is not None
-        db.execute("INSERT INTO population(id,gid,day,symbol,anchor,session,situation,at,end,p0,native,opportunity,spread_bp,progress_bp) "
-                   "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (
+        compatible = [parents[0], row.get("auxiliary_timing_compatibility_sha256", parents[1])]
+        db.execute("INSERT INTO population(id,gid,day,symbol,anchor,session,situation,at,end,p0,native,opportunity,spread_bp,progress_bp,compatibility_gid) "
+                   "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (
                        row["identity"], _group(row["anchor_kind"], row["session"], parents),
                        alias[0], alias[1], row["anchor_kind"], row["session"], row["situation"],
                        row["committed_at"], row["observation_end_at"], int(row["p0_valid"]),
-                       int(row["native_evaluation_bound"]), independent, spread, progress))
+                       int(row["native_evaluation_bound"]), independent, spread, progress,
+                       _group(row["anchor_kind"], row["session"], compatible)))
         all_pairs = dict(row["pairs"])
         for horizon, value in (row.get("research_short_pairs") or {}).items():
             if str(horizon) in {str(k) for k in all_pairs}:
@@ -415,8 +428,21 @@ def _cell_review(db, item, horizons, supported_anchor):
     independent_n, identity_bound_n, anchors, days, symbols = db.execute(
         "SELECT count(DISTINCT p.opportunity),count(p.opportunity),count(*),count(DISTINCT p.day),"
         "count(DISTINCT p.symbol) FROM population p WHERE " + where, args).fetchone()
+    research = [(float(delay), stats) for delay, stats in candidates.items() if stats["train"]["n"]]
+    winner, winner_stats = min(research, key=lambda v: (-v[1]["train"]["mean_bp"], v[0])) if research else (None, None)
+    # A new diagnostic compares short observations without rewriting the sealed
+    # selector, borrowing different parent generations, or choosing on holdout.
+    direction = "indeterminate"
+    if winner_stats and winner_stats["validation"]["n"]:
+        train_mean, holdout_mean = winner_stats["train"]["mean_bp"], winner_stats["validation"]["mean_bp"]
+        if train_mean > 0 and holdout_mean > 0:
+            direction = "positive_delay_supported"
+        elif train_mean <= 0 and holdout_mean <= 0:
+            direction = "immediate_supported_on_observed_pairs"
     return dict(key=key, original_cell=cell, selection_reason_raw=cell.get("selection_basis"),
                 selection_reason_normalized=_reason(cell, observed),
+                evidence_verdict=initial.selection_evidence(cell),
+                optimal_delay_proven=False,
                 selected_delay_sec=cell.get("delay_sec"),
                 fallback_key=cell.get("fallback_key"),
                 fallback_resolution=_fallback(db, item, supported_anchor),
@@ -424,6 +450,11 @@ def _cell_review(db, item, horizons, supported_anchor):
                 unique_independent_opportunities=independent_n if identity_bound_n == anchors else None,
                 known_identity_subset_unique_opportunities=independent_n,
                 frozen_partition_counts=membership, candidates=candidates, pairwise_common_cohort=overlap,
+                expanded_grid_research=dict(train_selected_delay_sec=winner, evidence_verdict=direction,
+                    train=winner_stats["train"] if winner_stats else None,
+                    validation=winner_stats["validation"] if winner_stats else None,
+                    comparison_population="candidate_own_p0_pairs_consult_pairwise_common_cohort",
+                    policy_selection_authority=False),
                 diagnostic_only=True, policy_reselected=False)
 
 
@@ -553,6 +584,14 @@ def _generate(data_root, source_date, output_dir):
             committed_at=at, observation_end_at=end, split=split, independent_opportunity_sha256=opp)
             for i, d, s, a, at, end, split, opp in db.execute(
                 "SELECT id,day,symbol,anchor,at,end,split,opportunity FROM population ORDER BY at,id")))
+        compatibility_ref = storage.write_tree(output, (
+            dict(compatibility_group=group, anchor_kind=anchor, session=market,
+                 anchors=n, original_parent_groups=parents, source_dates=days, symbols=symbols,
+                 original_partitions_preserved=True, policy_selection_authority=False)
+            for group, anchor, market, n, parents, days, symbols in db.execute(
+                "SELECT compatibility_gid,anchor,session,count(*),count(DISTINCT gid),count(DISTINCT day),"
+                "count(DISTINCT symbol) FROM population WHERE p0=1 AND native=1 "
+                "GROUP BY compatibility_gid,anchor,session ORDER BY compatibility_gid")))
     if byte_generation(pointer) != generation_before:
         raise ValueError("delay_review_committed_pointer_changed")
     if code_before != dict(review_module_sha256=byte_generation(Path(__file__))["sha256"],
@@ -579,7 +618,8 @@ def _generate(data_root, source_date, output_dir):
         original_census=report.get("census"), horizons_sec=horizons,
         short_horizon_observation_status={str(delay): {
             "paired_observation_n": counts.get("short_pairs:" + str(delay), 0),
-            "status": "observed_research_only" if delay in horizons else "no_historical_observation"}
+            "status": ("observed_policy_candidate" if policy.get("algorithm") == initial.ALGORITHM
+                       else "observed_research_only") if delay in horizons else "no_historical_observation"}
             for delay in (1, 3, 5)},
         census={k: v for k, v in counts.items() if not k.startswith("available:")},
         unique_independent_opportunities=known_unique if all_identity_bound else None,
@@ -590,7 +630,10 @@ def _generate(data_root, source_date, output_dir):
         selection_reason_counts_by_anchor={anchor: {reason: n for (a, reason), n in anchor_reasons.items() if a == anchor}
             for anchor in sorted({a for a, _ in anchor_reasons})},
         cell_count_role="overlapping_parent_and_situation_cells_not_independent_opportunities",
+        default_delay_interpretation="existing_behavior_without_comparative_evidence",
         contributions_ref=contributions_ref, frozen_membership_ref=split_ref,
+        semantic_compatibility_ref=compatibility_ref,
+        compatibility_contract="exact_machine_prompt_model_options_validator_and_schema_except_local_fact_alias",
         feature_groups_ref=feature_groups_ref, compact_enrichment=compact_receipt,
         preserved_field_coverage={k.removeprefix("available:"): v for k, v in counts.items() if k.startswith("available:")},
         analysis_availability=dict(
@@ -612,13 +655,421 @@ def _generate(data_root, source_date, output_dir):
     return result
 
 
+def _epoch(value):
+    numeric = initial.number(value)
+    if numeric is not None:
+        return numeric
+    try:
+        stamp = datetime.fromisoformat(str(value))
+        return (stamp.replace(tzinfo=ZoneInfo("Asia/Seoul")) if stamp.tzinfo is None else stamp).timestamp()
+    except ValueError:
+        return None
+
+
+def _trade_census(through_date):
+    """Read position records in one read-only transaction; no DBManager/migrations."""
+    from sqlalchemy import create_engine, text
+    from src.utils.constants import POSTGRES_URL
+    end = date.fromisoformat(through_date) + timedelta(days=1)
+    engine = create_engine(POSTGRES_URL, connect_args={"connect_timeout": 3,
+        "options": "-c default_transaction_read_only=on -c statement_timeout=5000"})
+    try:
+        with engine.connect() as connection:
+            rows = connection.execute(text(
+                "SELECT id,stock_code AS code,strategy,position_tag,status,buy_time,buy_price,buy_qty,"
+                "initial_buy_qty,add_count,sell_time FROM recommendation_history "
+                "WHERE buy_time>=:start AND buy_time<:end AND buy_qty>0 "
+                "AND strategy IN ('SCALPING','SCALP') ORDER BY buy_time,id LIMIT :limit"),
+                dict(start="2026-06-05", end=end.isoformat(), limit=MAX_ANCHORS + 1))
+            result = [{k: v.isoformat() if isinstance(v, (datetime, date)) else v
+                       for k, v in row.items()} for row in rows.mappings()]
+    finally:
+        engine.dispose()
+    if len(result) > MAX_ANCHORS:
+        raise ValueError("delay_review_trade_census_budget_exceeded")
+    return result
+
+
+def _execution_sources(data_root, days):
+    """Reuse native indexed projections. A missing index never triggers a raw scan."""
+    from . import main_trailing_source_store as native
+    rows, sources, gaps = [], [], []
+    retained = 0
+    for day in days:
+        path = data_root / "pipeline_events" / f"pipeline_events_{day}.jsonl"
+        if not (data_root / "report/main_trailing_source_index" / day / "pipeline_events.sqlite").is_file():
+            gaps.append(dict(source_date=day, reason="native_pipeline_index_absent"))
+            continue
+        before = len(rows)
+        try:
+            snapshot = {}
+            for value, reference in native.read_rows(data_root, path,
+                    kinds=("delay_receipt", "pipeline_receipt"), snapshot_receipt=snapshot):
+                encoded = storage.encoded(value)
+                retained += len(encoded)
+                if retained > MAX_COMPACT_BYTES or len(rows) >= MAX_COMPACT_RECORDS:
+                    raise ValueError("delay_review_execution_source_budget_exceeded")
+                row = value["row"]
+                rows.append((row, reference))
+            sources.append(dict(source_date=day, **snapshot, selected_rows=len(rows)-before))
+        except (OSError, ValueError) as exc:
+            del rows[before:]
+            gaps.append(dict(source_date=day, reason=str(exc)[:160]))
+            if retained > MAX_COMPACT_BYTES or str(exc) == "delay_review_execution_source_budget_exceeded":
+                raise ValueError("delay_review_execution_source_budget_exceeded") from exc
+    return rows, dict(sources=sources, gaps=gaps, bytes_decoded=retained,
+                     whole_raw_files_scanned=0)
+
+
+def _native_fill_rows(data_root, day):
+    """Read fill fields from the existing completed-store, without quote-tree copies."""
+    from . import main_trailing_completed_store as native
+    from src.engine.lifecycle.snapshot_archive import snapshot_identity
+    from src.engine.lifecycle.holding_window_generation import byte_generation
+    raw = data_root/"report/monitor_snapshots"/f"trade_review_{day}.json"
+    dependency_path = raw.with_suffix(".completed_projection.json.dependencies.json")
+    if not dependency_path.is_file():
+        return None
+    dependency = native._metadata(dependency_path)
+    bound = native.binding(data_root, dependency)
+    if not bound:
+        return None
+    allowed = data_root/"report/main_trailing_completed_source"/day
+    manifest = Path(bound["manifest_path"])
+    if (not manifest.resolve().is_relative_to(allowed/"generations")
+            or byte_generation(manifest) != bound["manifest_generation"]):
+        raise ValueError("delay_review_native_fill_manifest_changed")
+    body = native._metadata(manifest)
+    original_cache_verified = body.get("extraction_schema") == "original_sealed_completed_stream_v1"
+    if (body.get("schema") != native.SCHEMA or body.get("source_date") != day
+            or dependency.get("date") != day
+            or body.get("source_data_root") != str(data_root)
+            or body.get("artifact_sha256") != bound.get("artifact_sha256")
+            or body.get("projection_generation") != dependency.get("projection")
+            or body.get("snapshot_identity") != dependency.get("snapshot_identity")
+            or (not original_cache_verified and body["snapshot_identity"] != snapshot_identity(raw))
+            or body.get("census_sha256") != dependency.get("census_sha256")
+            or body.get("completed_count") != dependency.get("completed_count")
+            or body.get("runtime_effect") is not False or body.get("allowed_runtime_apply") is not False
+            or type(body.get("completed_count")) is not int
+            or not 0 <= body["completed_count"] <= MAX_ANCHORS):
+        raise ValueError("delay_review_native_fill_source_binding_invalid")
+    fact_rows = {}
+    scalar_ref = dependency.get("fact_projection")
+    if scalar_ref:
+        scalar = raw.with_suffix(".fact_projection.json")
+        if scalar_ref.get("size", 0) > 4 * 1024 * 1024 or byte_generation(scalar) != scalar_ref:
+            raise ValueError("delay_review_native_fill_fact_changed")
+        # The producer seals this plain JSON through the dependency receipt,
+        # not an embedded artifact_sha256 like native index metadata.
+        value = json.loads(scalar.read_bytes())
+        if byte_generation(scalar) != scalar_ref:
+            raise ValueError("delay_review_native_fill_fact_changed")
+        if (value.get("date") != day or value.get("snapshot_identity") != body["snapshot_identity"]):
+            raise ValueError("delay_review_native_fill_fact_binding_invalid")
+        fact_rows = {str(r["id"]): r for r in value.get("sections", {}).get("completed_trade_projection", [])}
+    rows = []
+    for item in storage.iter_tree(allowed, body["records_ref"]):
+        if item["fields_ref"]["count"] > 256:
+            raise ValueError("delay_review_native_fill_field_budget")
+        fields = {}
+        for field in storage.iter_tree(allowed, item["fields_ref"]):
+            if field["key"] in fields:
+                raise ValueError("delay_review_native_fill_duplicate_field")
+            fields[field["key"]] = field["value"]
+        legs = fields.get("buy_fill_legs_ref")
+        if legs is not None:
+            if legs["count"] > 10000:
+                raise ValueError("delay_review_native_fill_leg_budget")
+            fields["buy_fill_legs"] = list(storage.iter_tree(allowed, legs))
+        if str(fields.get("id") or fields.get("record_id")) != item["record_id"]:
+            raise ValueError("delay_review_native_fill_record_conflict")
+        fact_time = fact_rows.get(item["record_id"], {}).get("buy_time")
+        if (fact_time is not None and fields.get("buy_time") is not None
+                and _epoch(fact_time) != _epoch(fields["buy_time"])):
+            raise ValueError("delay_review_native_fill_position_clock_conflict")
+        fields["buy_time"] = fact_time if fact_time is not None else fields.get("buy_time")
+        rows.append(fields)
+    if len(rows) != body["completed_count"] or native._metadata(dependency_path) != dependency:
+        raise ValueError("delay_review_native_fill_census_changed")
+    return rows, {**bound["manifest_generation"], "path": str(manifest),
+                  "artifact_sha256": body["artifact_sha256"], "source_kind": "native_completed_fill_fields"}
+
+
+def _snapshot_fills(data_root, days):
+    """Small recorded fill projections only; large sources retain an explicit gap."""
+    from src.engine.lifecycle.holding_window_generation import source_stat
+    from src.engine.ai.holding_exit_vote import buy_fill_identity_from_legs
+    fills, sources, gaps = {}, [], []
+    total = 0
+    for day in days:
+        try:
+            native = _native_fill_rows(data_root, day)
+        except (OSError, ValueError) as exc:
+            gaps.append(dict(source_date=day, reason=str(exc)[:160]))
+            continue
+        path = data_root / "report/monitor_snapshots" / f"trade_review_{day}.json"
+        if native is None and not path.is_file():
+            gaps.append(dict(source_date=day, reason="fill_snapshot_absent"))
+            continue
+        if native is not None:
+            records, source = native
+        else:
+            before = source_stat(path.stat())
+            if before[2] > 16 * 1024 * 1024 or total + before[2] > MAX_COMPACT_BYTES:
+                gaps.append(dict(source_date=day, reason="fill_snapshot_requires_native_projection"))
+                continue
+            with path.open("rb") as handle:
+                raw = handle.read(16 * 1024 * 1024 + 1)
+            if len(raw) != before[2] or source_stat(path.stat()) != before:
+                raise ValueError("delay_review_fill_snapshot_changed")
+            value = json.loads(raw)
+            if value.get("date") != day:
+                raise ValueError("delay_review_fill_snapshot_date_invalid")
+            total += len(raw)
+            source = dict(path=str(path), sha256=hashlib.sha256(raw).hexdigest(), size=len(raw))
+            records = value.get("sections", {}).get("completed_trade_projection", [])
+        sources.append(source)
+        for row in records:
+            legs = row.get("buy_fill_legs")
+            identity = buy_fill_identity_from_legs(legs)
+            if identity is None:
+                continue
+            valid = all(_epoch(leg.get("at")) is not None
+                and (initial.number(leg.get("price")) or 0) > 0 for leg in legs)
+            if not valid:
+                continue
+            key = str(row.get("id"))
+            item = dict(code=row.get("code"), legs=legs, buy_fill_identity=identity, source=source,
+                        position_buy_time=row.get("buy_time"))
+            if key in fills and fills[key]["buy_fill_identity"] != identity:
+                raise ValueError("delay_review_fill_snapshot_conflict")
+            fills[key] = item
+    return fills, dict(sources=sources, gaps=gaps, legacy_snapshot_bytes_read=total,
+                      native_read_scope="bound_metadata_and_fill_fields_only")
+
+
+def _timing_opportunities(events):
+    """Exact native machine/attempt -> frozen plan -> record, never a time-nearest join."""
+    from src.engine.scalping import trailing_entry_research_source as plans
+    delays = [row for row, _ in events if row.get("stage", "").startswith("pre_submit_delay_")]
+    opportunities, census = initial.project_rows(delays)
+    plans_by_attempt, orders, quotes = {}, {}, {}
+    for row, reference in events:
+        fields = row.get("fields") or {}
+        rid = str(row.get("record_id"))
+        stage = row.get("stage")
+        if stage == "entry_execution_sizing_plan":
+            try:
+                receipt = plans.validate(fields.get("trailing_entry_plan_receipt"))
+            except (ValueError, TypeError, KeyError):
+                continue
+            if (receipt["symbol"] != row.get("stock_code")
+                    or receipt["position_key"] != "record:" + rid
+                    or fields.get("trailing_entry_plan_receipt_sha256") not in (None, "", receipt["receipt_sha256"])):
+                continue
+            key = (row["emitted_date"], row["stock_code"],
+                   receipt["machine_observation_sha256"], receipt["evaluation_attempt_id"])
+            plans_by_attempt.setdefault(key, {})[receipt["receipt_sha256"]] = (rid, receipt)
+        elif stage == "order_leg_sent" and fields.get("buy_owner_type") == "main_scalping":
+            if (str(fields.get("actual_order_submitted")).lower() == "true"
+                    and fields.get("buy_owner_id") == "main_scalping:" + rid):
+                orders.setdefault(rid, set()).add(str(fields.get("order_no")))
+        elif stage == "scalp_trailing_input_transition":
+            from src.engine.scalping.universal_trailing_replay import quote_source_digest
+            try:
+                q = fields.get("universal_trailing_quote")
+                q = json.loads(q) if isinstance(q, str) else q
+                if not isinstance(q, dict) or q.get("kind") != "QUOTE":
+                    continue
+                known, event = initial.number(q.get("known_at")), initial.number(q.get("event_at"))
+                ask, bid = initial.number(q.get("ask")), initial.number(q.get("bid"))
+                if (known is None or event is None or not 0 <= known-event <= .7
+                        or ask is None or bid is None or not 0 < bid <= ask
+                        or str(q.get("item", ""))[:6] != row.get("stock_code")
+                        or q.get("coverage_complete") is not True
+                        or q.get("source_sha256") != quote_source_digest(q)):
+                    continue
+                quotes.setdefault(rid, []).append(dict(symbol=row["stock_code"], known_at=known, ask=ask, bid=bid,
+                    midpoint=(ask+bid)/2, source_sha256=q["source_sha256"], source=reference))
+            except (ValueError, TypeError):
+                continue
+    commits = {(r["emitted_date"], r["stock_code"], r["fields"]["delay_intent_id"]): r["fields"]
+               for r in delays if r["stage"] == "pre_submit_delay_committed"}
+    terminals, quote_fields = {}, {}
+    for row in delays:
+        if row["stage"] == "pre_submit_delay_quote_observed":
+            fields = row["fields"]
+            key = (row["emitted_date"], row["stock_code"], fields["delay_intent_id"])
+            horizon = initial.number(fields.get("target_delay_sec"))
+            quote_fields.setdefault(key, {}).setdefault(horizon, {})[initial.digest(fields)] = fields
+        if row["stage"] == "pre_submit_delay_intent_terminal":
+            fields = row["fields"]
+            key = (row["emitted_date"], row["stock_code"], fields["delay_intent_id"])
+            terminals.setdefault(key, []).append(fields)
+    result = []
+    for opportunity in opportunities:
+        alias = tuple(opportunity["alias"])
+        commit = commits[alias]
+        attempt = commit.get("original_evaluation_attempt_id") or commit.get("evaluation_attempt_id")
+        key = (*alias[:2], commit.get("original_machine_observation_sha256"), attempt)
+        matches = plans_by_attempt.get(key, {})
+        rid, plan = next(iter(matches.values())) if len(matches) == 1 else (None, None)
+        terminal = terminals.get(alias, [])
+        unique = {initial.digest(t): t for t in terminal}
+        terminal = next(iter(unique.values())) if len(unique) == 1 else {}
+        if terminal.get("decision_source_sha256") != opportunity["decision_source_sha256"]:
+            terminal = {}
+        pairs = {**opportunity["pairs"], **(opportunity.get("research_short_pairs") or {})}
+        comparisons = []
+        first_leg = next(iter(plan["execution_plan"].get("legs") or []), {}) if plan else {}
+        cap, qty = initial.number(first_leg.get("numeric_price")), initial.number(first_leg.get("qty"))
+        for horizon, improvement in sorted(pairs.items(), key=lambda x: float(x[0])):
+            observed = quote_fields.get(alias, {}).get(float(horizon), {})
+            q = next(iter(observed.values())) if len(observed) == 1 else {}
+            ask, depth = initial.number(q.get("ask_price")), initial.number(q.get("ask_qty"))
+            comparisons.append(dict(delay_sec=float(horizon), price_improvement_bp=improvement,
+                ask_price=ask, ask_qty=depth, quote_source_sha256=q.get("quote_source_sha256"),
+                first_leg_price=cap, first_leg_qty=qty,
+                first_leg_quote_price_depth_supported=(ask <= cap and depth >= qty
+                    if ask is not None and cap is not None and depth is not None and qty is not None else None),
+                executable_fill=None, recheck_and_other_guards="unobserved_for_counterfactual"))
+        result.append(dict(identity=opportunity["identity"], source_date=alias[0], symbol=alias[1],
+            delay_intent_id=alias[2], anchor_kind=opportunity["anchor_kind"],
+            session=opportunity["session"], situation=opportunity["situation"],
+            parents=opportunity["parent_compatibility"], committed_at=opportunity["committed_at"],
+            native_evaluation_attempt_id=attempt, record_id=rid,
+            record_link_status="exact_native_plan" if rid else "missing_or_conflicting_native_plan",
+            plan_sha256=plan["receipt_sha256"] if plan else None,
+            planned_total_qty=plan["execution_plan"]["total_qty"] if plan else None,
+            selected_delay_sec=initial.number(commit.get("selected_delay_sec")),
+            runtime_policy_status=commit.get("delay_policy_status"),
+            terminal_reason=terminal.get("terminal_reason"),
+            submit_finished_at_epoch=initial.number(terminal.get("submit_finished_at_epoch")),
+            same_opportunity_price_improvement_bp={str(k): v for k, v in sorted(pairs.items(), key=lambda x: float(x[0]))},
+            candidate_comparisons=comparisons,
+            execution_recheck_status="not_inferred_from_quote_path", modeled_fill=None,
+            paired_net_ev_delta_pct=None, historical_tuning_eligible=alias[0] >= "2026-09-29"))
+    return result, quotes, orders, census
+
+
+def _fill_path(trade, fill, quotes, orders):
+    rid = str(trade["id"])
+    result = dict(record_id=rid, symbol=trade["code"], status=trade["status"],
+        recorded_buy_time=trade["buy_time"], recorded_buy_price=trade["buy_price"],
+        recorded_buy_qty=trade["buy_qty"], anchors=[], realized_pnl_krw=None,
+        economics_status="not_evaluated_no_exact_cost_binding",
+        anchor_status="exact_fill_clock_unavailable", main_owner_verified=False)
+    if not fill:
+        return result
+    legs = fill["legs"]
+    if (fill["code"] != trade["code"] or sum(leg["qty"] for leg in legs) != trade["buy_qty"]
+            or _epoch(fill.get("position_buy_time")) != _epoch(trade["buy_time"])
+            or (trade.get("add_count") or 0) != 0):
+        result["anchor_status"] = "position_generation_or_scale_in_conflict"
+        return result
+    from src.engine.ai.holding_exit_vote import buy_fill_identity_from_legs
+    if buy_fill_identity_from_legs(legs) != fill["buy_fill_identity"]:
+        raise ValueError("delay_review_fill_identity_invalid")
+    ordered = sorted(legs, key=lambda leg: _epoch(leg["at"]))
+    result["main_owner_verified"] = ordered[0]["order_no"] in orders.get(rid, set())
+    result["all_leg_order_owner_receipts_observed"] = all(
+        leg["order_no"] in orders.get(rid, set()) for leg in legs)
+    if not result["main_owner_verified"]:
+        result["anchor_status"] = "main_order_owner_unverified"
+        return result
+    result.update(anchor_status="exact_first_and_last_recorded_fill",
+                  fill_identity=fill["buy_fill_identity"], fill_source=fill["source"],
+                  fill_count=len(legs))
+    observations = sorted((q for q in quotes if q.get("symbol") == trade["code"]), key=lambda q: q["known_at"])
+    weighted = sum(leg["price"] * leg["qty"] for leg in legs) / sum(leg["qty"] for leg in legs)
+    for name, at, price in (("first_fill", _epoch(ordered[0]["at"]), ordered[0]["price"]),
+                            ("last_recorded_fill", _epoch(ordered[-1]["at"]), weighted)):
+        paths = []
+        for horizon in EXECUTION_HORIZONS:
+            target = at+horizon
+            tolerance = .25 if horizon in (1, 3, 5) else 3.0
+            found = next((q for q in observations if target <= q["known_at"] <= target+tolerance), None)
+            paths.append(dict(horizon_sec=horizon,
+                status="observed" if found else "no_exact_horizon_quote",
+                observed_at=found["known_at"] if found else None,
+                ask=found["ask"] if found else None, bid=found["bid"] if found else None,
+                ask_change_bp=(found["ask"]-price)/price*10000 if found else None,
+                bid_change_bp=(found["bid"]-price)/price*10000 if found else None,
+                source_sha256=found["source_sha256"] if found else None))
+        window = [q for q in observations if at <= q["known_at"] <= at+600]
+        result["anchors"].append(dict(anchor_kind=name, at=at, fill_price=price,
+            fill_clock_resolution_sec=1, short_horizon_clock_quality="broker_second_resolution",
+            horizons=paths, observed_quote_n=len(window),
+            observed_min_ask_change_bp=min((q["ask"]-price)/price*10000 for q in window) if window else None,
+            minimum_role="sampled_path_diagnostic_not_future_optimal_entry",
+            continuous_coverage_proven=False))
+    return result
+
+
+def generate_execution_review(data_root, through_date, output_dir, *, trades=None):
+    """Census every real position, preserving gaps and exact opportunity linkage."""
+    data_root, output = _output_path(data_root, output_dir)
+    date.fromisoformat(through_date)
+    trades = _trade_census(through_date) if trades is None else trades
+    if len(trades) > MAX_ANCHORS or len({str(t["id"]) for t in trades}) != len(trades):
+        raise ValueError("delay_review_trade_census_invalid")
+    for trade in trades:
+        if (not "2026-06-05" <= str(trade["buy_time"])[:10] <= through_date
+                or _epoch(trade["buy_time"]) is None
+                or (initial.number(trade.get("buy_qty")) or 0) <= 0):
+            raise ValueError("delay_review_trade_census_scope_invalid")
+    days = sorted({str(t["buy_time"])[:10] for t in trades}
+        | {p.name for p in (data_root/"report/main_trailing_source_index").glob("????-??-??")
+           if "2026-09-29" <= p.name <= through_date})
+    events, source_receipt = _execution_sources(data_root, days)
+    opportunities, quotes, orders, census = _timing_opportunities(events)
+    fills, fill_receipt = _snapshot_fills(data_root, days)
+    output.mkdir(parents=True, exist_ok=True)
+    from src.engine.lifecycle.research_disk_budget import use
+    with use(output, durable_limit=MAX_DURABLE_BYTES, temp_limit=MAX_TEMP_BYTES):
+        trade_rows = [_fill_path(t, fills.get(str(t["id"])), quotes.get(str(t["id"]), []), orders) for t in trades]
+        trade_ref = storage.write_tree(output, trade_rows)
+        opportunities_ref = storage.write_tree(output, opportunities)
+        census_ref = storage.write_tree(output, trades)
+    result = dict(schema="pre_submit_delay_execution_review_v1", through_date=through_date,
+        status="complete_with_explicit_coverage", runtime_effect=False, allowed_runtime_apply=False,
+        decision_authority="report_only", metric_role="initial_entry_price_timing_diagnostic",
+        primary_decision_metric="same_opportunity_quote_and_exact_fill_anchored_price_change",
+        window_policy="clean_baseline_census_forward_refresh_only_for_tuning",
+        sample_floor="diagnostic_no_promotion", source_quality_gate="native_index_and_exact_fill_identity",
+        forbidden_uses=["policy_publication", "modeled_fill_as_actual", "future_minimum_entry", "gross_as_net"],
+        clean_census_start="2026-06-05", policy_refresh_start="2026-09-29",
+        census=dict(position_records=len(trades), opportunity_anchors=len(opportunities),
+            price_ready_anchors=sum(r["anchor_kind"] == "price_ready" for r in opportunities),
+            exact_fill_clock_records=sum(bool(r["anchors"]) for r in trade_rows),
+            anchor_status_counts=dict(Counter(r["anchor_status"] for r in trade_rows))),
+        qualification_census=census, trade_census_sha256=initial.digest(trades),
+        trade_census_ref=census_ref, trades_ref=trade_ref, opportunities_ref=opportunities_ref,
+        pipeline_source=source_receipt, fill_source=fill_receipt,
+        paired_net_ev_delta_pct=None, realized_pnl_krw=None,
+        policy_reselected=False, default_zero_optimality_proven=False,
+        code_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest())
+    result["artifact_sha256"] = initial.digest(result)
+    destination = output/"execution_report.json"
+    if destination.exists() and initial._read(destination) != result:
+        raise ValueError("delay_review_immutable_execution_report_conflict")
+    initial._atomic(destination, result)
+    return result
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--data-root", required=True, type=Path)
     parser.add_argument("--source-date", required=True)
     parser.add_argument("--output-dir", required=True, type=Path)
+    parser.add_argument("--execution-through-date", help="Optional read-only real-position census and indexed path review")
     args = parser.parse_args(argv)
     result = generate(args.data_root, args.source_date, args.output_dir)
+    if args.execution_through_date:
+        execution = generate_execution_review(args.data_root, args.execution_through_date, args.output_dir)
+        print(json.dumps(dict(execution_report=str(args.output_dir / "execution_report.json"),
+                              census=execution["census"]), sort_keys=True))
     print(json.dumps(dict(status=result["status"], source_date=result["source_date"],
                           report=str(args.output_dir / "report.json"), census=result["census"],
                           selection_reason_counts=result["selection_reason_counts"]), sort_keys=True))

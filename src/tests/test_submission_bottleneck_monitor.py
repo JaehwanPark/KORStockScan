@@ -5003,6 +5003,44 @@ def test_delay_recheck_admission_is_pending_only_until_its_exact_deadline(tmp_pa
     assert expired['issues']['selected_due_completion_missing'] == 1
 
 
+@pytest.mark.parametrize("selected", [1, 3, 5])
+def test_delay_short_selected_policy_keeps_due_receipt_monitoring(tmp_path, selected):
+    started = monitor.stamp('2026-10-16T10:00:00+09:00')
+    _delay_semantic_fixture(tmp_path, grid=True, anchor='price_ready', selected=selected,
+        recheck=(selected+1, {'recheck_status': 'admitted', 'successor_request_id': 'successor',
+            'due_at_epoch': started.timestamp()+selected,
+            'recheck_submitted_at_epoch': started.timestamp()+selected+1,
+            'recheck_deadline_epoch': started.timestamp()+100}))
+    pending = monitor.pre_submit_delay_source_semantics(tmp_path, started+timedelta(seconds=70))
+    assert pending['recheck_states'] == {'admitted': 1}
+    assert pending['diagnostics']['selected_due_recheck_pending'] == 1
+    assert 'selected_due_instrumentation_gap' not in pending['diagnostics']
+    assert 'recheck_receipt_invalid' not in pending['issues']
+    expired = monitor.pre_submit_delay_source_semantics(tmp_path, started+timedelta(seconds=101))
+    assert expired['issues']['selected_due_completion_missing'] == 1
+
+
+@pytest.mark.parametrize("status,basis,evidence", [
+    ('unsupported_existing_behavior', None, 'indeterminate'),
+    ('loaded', 'paired_quote_immediate', 'immediate_supported_on_observed_pairs'),
+    ('loaded', 'paired_quote_holdout_immediate', 'indeterminate'),
+])
+def test_delay_zero_policy_evidence_is_not_source_loss(tmp_path, status, basis, evidence):
+    started = monitor.stamp('2026-10-16T10:00:00+09:00')
+    _delay_semantic_fixture(tmp_path, grid=True, anchor='price_ready', selected=0,
+        quote_horizons=(0, 1, 3, 5, 30, 60, 120, 180),
+        commit_updates={'delay_policy_status': status, 'delay_selection_basis': basis,
+                        'delay_evidence_verdict': 'positive_delay_supported'},
+        terminal=(2, {'terminal_reason': 'submitted', 'submit_call_outcome': 'returned_true',
+                      'submit_finished_at_epoch': started.timestamp()+2}))
+    result = monitor.pre_submit_delay_source_semantics(tmp_path, started+timedelta(seconds=360))
+    assert result['issues'] == {}
+    assert result['policy_status_counts'] == {status: 1}
+    assert result['policy_evidence_counts'] == {evidence: 1}
+    assert result['selected_delay_counts'] == {'0': 1}
+    assert result['commit_to_submit_return_sec'] == {'n': 1, 'sum_sec': 2, 'max_sec': 2}
+
+
 def test_delay_wrong_parent_terminal_cannot_satisfy_intent(tmp_path):
     started, _ = _delay_semantic_fixture(tmp_path, anchor='price_ready', selected=30,
         quote_horizons=(0,30,60,120,180), terminal=(61, {

@@ -46,6 +46,30 @@ def test_native_append_index_consumption_never_reads_the_raw_source(tmp_path,mon
     assert len(values[0][1]['sha256'])==64
 
 
+@pytest.mark.parametrize("mode", ["verified_append", "strict_append", "missing_append", "rewrite"])
+def test_pinned_row_snapshot_admits_only_native_append_and_never_new_rows(tmp_path, mode):
+    path = source(tmp_path)
+    append(tmp_path, path, row())
+    receipt = {} if mode != "strict_append" else None
+    stream = store.read_rows(tmp_path, path, snapshot_receipt=receipt)
+    assert next(stream)[0]['row']['decision_trace_id'] == 'trace-1'
+    if mode in {"verified_append", "strict_append"}:
+        append(tmp_path, path, row('trace-2'))
+    elif mode == "missing_append":
+        with path.open('ab') as handle:
+            handle.write(json.dumps(row('trace-2')).encode()+b'\n')
+    else:
+        path.write_bytes(path.read_bytes().replace(b'trace-1', b'trace-9'))
+    if mode == "verified_append":
+        assert list(stream) == []
+        assert receipt['verified_append_after_snapshot'] is True
+        assert receipt['generation']['selected_records'] == 1
+    else:
+        with pytest.raises(store.InputPending):
+            list(stream)
+        assert receipt in (None, {})
+
+
 def test_200_gib_unindexed_history_is_pending_without_a_raw_read(tmp_path,monkeypatch):
     path=source(tmp_path)
     with path.open('r+b') as handle:handle.truncate(200*1024**3)

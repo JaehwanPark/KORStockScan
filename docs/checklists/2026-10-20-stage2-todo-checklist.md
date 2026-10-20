@@ -260,3 +260,12 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
 - 12:11 통합 수용:99c51c85f에0255·c696과 원 holding 사건 식별 수리를 포함해 native P5/c992f414의12 consumer·격리·종료·load PASS 및 ordered complete/pass, PID782998/start11032230을 확인했다. `[MainPolicyLoadAndExitValidation1018]`의 보존 정책 P5 code/native/PID 수용은 완료한다. 원 실패 이력은 위에 유지한다. 기동 뒤 holding12:10:40을 full health12:11:47이 같은 SHA로 읽었고 새 source gap은0, 원49389 두 사유는 보존한다. `[HoldingProfitExitSourceContractRepair]`·수량/비용·자연 수용과 현재 partial 관측을 완료 처리하지 않는다. [최종 소비](../../tmp/postclose-monitoring-20261019/holding-probe-integration-native/verification.json).
 
 - 12:20 정규 통보 수용:`[HoldingProfitExitSourceContractRepair]`의 원49389 두 사유는 native source_gap으로 유지되며, 새 report 세대에서도 같은 사건 식별자를 받아 실제 재전송0을 확인했다(last_seen12:20:27, last_sent12:15:28). code/통합 배포/PID/중복 통보 수용을 원 자료 복구·자연 비용/관측 완료와 구분한다. [실제 정규 consumer](../../tmp/postclose-monitoring-20261019/holding-probe-integration-native/natural-duplicate-cycle-verification.json).
+
+
+## 매수 지연 근거 재검토 — 2026-10-20
+
+- [ ] `[PreSubmitDelaySituationResearch1017] 체결 기준 가격경로·단기 선택·정책 근거 수리의 자연 소비 확인` (`Due: 2026-10-21`, `Slot: PREOPEN`, `TimeWindow: 07:35~09:30`, `Track: RuntimeStability`)
+  - Source: 사용자 `다음액션 실행`, [기존 계획](../proposals/pre-submit-delay-situation-initial-policy-and-postclose-regeneration-plan-2026-10-10.md#체결-이후-하락과-0초-선택-근거-재검토--2026-10-20), [원인·수리·회귀·재계산](../audits/pre-submit-delay-situation-research-implementation-review-2026-10-17.md#체결-기준-재검토와-단기-선정-보완--2026-10-20). 원10/17 완료/배포 이력은 보존하고 새 wire 별칭 해시·단기 선정/감시·체결 reader 결함만 재개한다.
+  - 구현/연구: 선택21d822a64 기준 격리 작업본 `pre-submit-delay-evidence-20261020`에서 보완했다. 포지션585건·기회357건, 정확 fill/owner13건을 보존하고 후보 v4는105개 price_ready cell 중 판단 불충분92개·관측 pair 즉시 우위11개·중복 부모/자식180초2개다. 현재0초를 최적 시간으로 판정하지 않는다. source10/19→effective10/21 후보는 별도 출력에만 존재한다.
+  - Acceptance 유지/확장: 원 short clock/P0/미래·과거 호가/회차예산/만료·예외·불확실/과거 projection hash/후보 pair·고정 split·0초 fallback/출력 한도 반례를 유지한다. f6/f7만 통합하고 다른 prompt/risk/model/validator는 분리하며, 정상 append snapshot과 미영수 append/재작성을 구분한다. 실제 시간별 coverage·정확 fill leg·successor/terminal 및 정책 근거를 같은 native ID로 대사한다.
+  - 다음: 정식 코드·정책 인계 승인 범위에서 `DirectFamilyPreopenPolicyHandoff`의 원 정책/현재 PID 보존 검증과 새 정책 준비를 진행한다. 실제 배포·PREOPEN·PID·자연1/3/5초 선택/재점검은 미실행이며 자료 부족만으로 초기정책의 추가 경제성 승인 gate를 만들지 않는다. 과거 결손569건과 비용후 EV null은 현재 코드 수리와 별개로 남긴다.

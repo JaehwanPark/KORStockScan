@@ -92,6 +92,8 @@ _V2_SOURCE_FIELDS = frozenset(_DECISION_SOURCE_KEYS + _QUOTE_SOURCE_KEYS + (
     'recheck_native_status', 'recheck_machine_policy_sha256', 'recheck_ai_policy_sha256',
     'successor_machine_observation_sha256',
     'delay_decision_type', 'price_cap',
+    'delay_policy_status', 'delay_selection_basis', 'delay_evidence_verdict',
+    'delay_selected_cell_key',
 ))
 
 

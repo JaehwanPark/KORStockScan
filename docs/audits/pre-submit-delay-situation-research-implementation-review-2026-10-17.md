@@ -77,3 +77,48 @@ rising/holding의 원 보고서→현재 코드 generation 쌍과 새로운 독�
 FAIL은 `update_kospi`의 기존 요일 오탐이다. 실제 설치 `5 20 * * 1-5`와 달리 cron completion/산출물 등록부가 토요일에도21:05 이후 당일 표식을 요구한다. c5의16:11 점검은 같은 항목이 not_yet_due여서 결함이 드러나지 않았고, 해당 감시 코드는 c5/c446/3abcc에서 같았다. 원 FAIL을 보존한다. 수정 소유 파일은 `error_detectors/cron_completion.py`, `artifact_freshness.py`, `schedule_contract.py`이며, 다음 조치는 월~금 설치 일정의 expectedness 결속이다. 단순 trading_day_only 변경으로 평일 휴장일 skipped receipt 확인까지 생략하지 않는다. 종료 기준은 토요일 마감 후 미예정·월요일 미완료 FAIL·평일 휴장 skipped receipt 유효·cron 조회불가 unknown 보존이다. [분류 기록](/home/ubuntu/KORStockScan/data/report/pre_submit_delay_research_deployment/2026-10-17/attempts/reviewed-v5/postpublication-health-classification.json)에 원문 hash와 별도 잔여를 남겼으며 이번 연구 코드의 정상 결과로 덮지 않았다.
 
 WARN의 `main_trailing_research_handoff_invalid`는 c5 원문부터 존재한다. 기존10/19 OPEN `HoldingProfitExitSourceContractRepair`의 정확한 원세대→현 코드 인계/재검증 담당을 유지한다. 최초 수량의 비용/귀속 결손과 기존 설정 오류 로그2건도 보존했다. 이번 작업이 전체 장후 경제성이나 모든 감시기 결함을 해소했다고 주장하지 않는다.
+
+## 체결 기준 재검토와 단기 선정 보완 — 2026-10-20
+
+### 범위와 판단
+
+- 사용자 `다음액션 실행`의 구현·반복 자체 리뷰·장후 영향 범위 재계산이다. 기준은 실제 선택 `21d822a64a9f4b9047d06babab26febf59f6ae61`, Main PID1175053/start11403252이며 격리 branch `work/pre-submit-delay-consumer-20261020`, 작업본 `/home/ubuntu/KORStockScan-worktrees/pre-submit-delay-evidence-20261020`에서 구현했다. canonical fcd31ae7c의 병행 수정·선택 릴리스·기동 상태를 덮지 않는다.
+- **현재 0초는 최적 시간 증명이 아니다.** 10/20 관측된 price_ready5건은 모두 `unsupported_existing_behavior`의 0초다. 10/19 원 정책124개 price_ready cell 중110개는 근거 불충분,12개는 관측 pair에서 즉시 유리,2개는180초를 지지한다. 두 양수 cell은 중복 부모/자식 유형이므로 독립 사례2건이 아니다.
+- 운영 default0, 비교 근거, 실제 체결/비용후 성과를 구분한다. 학습/검증 혼합 방향, 미지원 부모·상황, holdout 부족을 즉시 우월로 표시하지 않는다. 초기 정책에 별도의 경제성 승인 gate를 추가하지 않았다.
+
+### 최초 결함과 수리
+
+| 최초 위반 계약 | 원인·수리·회귀 |
+| --- | --- |
+| 동일 정책의 요청별 해시 분열 | 실제 HPSP의 compact wire `fact.enum`이 f6→f7로 바뀌어 부모 identity가 분리됐다. 원 proof를 검증한 뒤 인용 별칭만 정규화한다. payload/schema provenance와 원 hash를 보존하고 prompt/model/options/risk/verdict/validator 차이는 합치지 않는다. 미래 provider identity와 과거 projection에 같은 owner를 사용한다. |
+| 단기 관측과 실행 선정 불일치 | v4는 엄격한 P0/단기 clock을 만족한1/3/5초를 후보에 포함한다. v2/v3 재현은 원 grid 그대로 유지한다. fixture에서1초 선정→native 검증→PreparedPolicy lookup까지 연결하며 미유효 P0를 거절한다. |
+| 단기 due 의미감시 오판 | 선택값 검사가 legacy grid에 한정돼 있었다. 단기 선택도 정확한 successor/deadline/terminal 검사를 받도록 수정했다. 정책 미지원/0초 근거는 원천결손으로 세지 않고 별도 집계한다. commit→제출 함수 반환은 체결시간·의도된 대기시간과 구분한다. |
+| native 주문계획 연결 누락 | embedded receipt self-hash는 유효한데 중복 outer hash의 부재를 실패로 처리했다. outer hash가 존재하면 일치를 요구하고, 부재이면 native receipt·symbol·record·원 machine/attempt를 검증한다. 가까운 시각/종목만으로 연결하지 않는다. |
+| 체결시각·원천 세대 오판 | DB position buy_time과 broker fill 시각은 실제로1초 다를 수 있다. position generation은 원 scalar/field와 비교하고 가격경로는 broker 시각으로 계산한다. original sealed cache는 기존 logical-source/epoch 검증을 따른다. dependency로 봉인된 plain fact JSON에 embedded artifact hash를 요구하던 추가 오탐도 수정했다. |
+| 장중 정상 append의 전체 제외 | native SQLite reader의 명시적 snapshot receipt 모드에서 읽은 prefix를 고정하고 native append 후속 세대만 허용한다. 원 strict reader는 그대로 유지한다. 추가 행을 이전 snapshot에 섞지 않으며 미영수 append·재작성·generation conflict는 계속 실패한다. |
+| 부분 결과의 성공 오인 | records/bytes 상한 초과는 완료 보고서 발행 전에 실패한다. native metadata/fill fields만 읽고 큰 미색인 snapshot은 정확한 날짜·사유로 남긴다. 미확인 값·비용은 null이다. |
+
+### 실제 재계산과 소비
+
+- [최종 체결/기회 보고서](/home/ubuntu/KORStockScan/data/report/pre_submit_delay_research_review/2026-10-19/attempts/20261020-execution-v3/execution_report.json): clean baseline06/05 이후 매수수량이 기록된 포지션585건을 보존했다. 정확한 first/last recorded fill·Main 주문 연결13건, fill clock 미확인569건, Main owner 미확인1건, position generation/추가매수 충돌2건이다.13건 모두에서 연속 호가가 확보됐다는 뜻은 아니다. ENTER_NOW+PASS 기준점357건(price_ready143, signal_ready214), native 주문계획 연결51건이다. 후행 관측이 없는 행과 미체결 기회도 남겼다.
+- 첫 체결 기준1/3/5/30초의 정확한 호가가 있는 포지션은 각각3/4/2/3건이다.60/120/180초는0건이다. 일부 sparse 경로로 전체585건의 하락률이나 최적 지연을 확정하지 않는다. HPSP49389는 첫 체결51300원 이후 관측 최저ask가 약19.49bp 낮지만, 마지막 기록 체결의 가중 평균51188.89원 기준 관측 최저ask는 약2.17bp 높다. 부분 체결·최종 수량 갱신·체결 이후 호가를 같은 기준으로 취급할 수 없다.
+- 원 분석[v1](/home/ubuntu/KORStockScan/data/report/pre_submit_delay_research_review/2026-10-19/attempts/20261020-execution-v1/execution_report.json)과 추가 오탐이 드러난[v2](/home/ubuntu/KORStockScan/data/report/pre_submit_delay_research_review/2026-10-19/attempts/20261020-execution-v2/execution_report.json)는 보존했다. v3는 수정된 원인만 재검증했다. legacy snapshot31,761,648B와 native index16일의 선택 projection45,448,247B를 읽었고 pipeline raw 전체 scan은0이다. v3 소요6.26초, 최대RSS198,692KiB다. 서로 다른 coverage와 cache 상태를 속도 개선 배수로 비교하지 않는다.
+- [격리 후보 policy](/home/ubuntu/KORStockScan/data/report/pre_submit_delay_research_review/2026-10-19/attempts/20261020-candidate-v4/threshold_cycle/pre_submit_delay_policy/generations/81fe37304478f68d490a2b0e644c923698479a09d546e031a25406ed2d31cc17/policy.json)는 source10/19·publication10/20·effective10/21이며 실제 게시본이 아니다. policy SHA `678240cfd2cb93f5f82cc529126211b11bfc47f66b21ea9beab05bf3d6d43e74`, algorithm v4다. 정책 학습은09/29 이후 family ledger로 확인한345기준점/P0293만 사용한다.
+- 정확한 부모 조합은78→57개, price_ready cell124→105개로 줄었고 가격 pair373→402쌍(단기29쌍 포함)이다. 새105개 cell의 근거는 **불충분92 / 관측 pair 즉시 우위11 / 양수 지연2**다. 양수2개는 같은 부모 집단의180초 부모/자식이며 부모 train6·holdout3, 평균 가격 개선8.74bp/8.23bp다. 실제 데이터에서1/3/5초의 최종 채택은 없었다. 이를 채택 성공이나 비용후 이익으로 표시하지 않는다.
+- [native 선택 검증](/home/ubuntu/KORStockScan/tmp/pre-submit-delay-evidence-20261020/native-selection-validation.json)은 원v3·새v4의 전량 재현 및 각각124/105개 cell의 PreparedPolicy 조회를 확인한다. 새 code contract도 일치한다. 후보 생산은 compact5,580,745B/2,273행을1회 decode했으며150.14초·최대RSS82,460KiB다. 현재 정책과 원 PREOPEN bytes를 수정하지 않았다.
+
+### 대체·제거와 검증
+
+| 기존 구현 | 대체·판정·현재 소비자 |
+| --- | --- |
+| provider_identity 내부 schema_shape | `response_contract_shape`로 consolidated. provider와 검증된 과거 timing identity가 한 구현을 사용한다. |
+| 신규 정책의 legacy 전용 후보 선택 | v4 버전별 horizon/selection_pairs로 consolidated. 동결 v2/v3는 기존 정책 재현·native validator 때문에 retained이며 퇴역 실행 권한이 아니다. |
+| 보고서/lookup에서 혼동하던0초 의미 | `selection_evidence`로 consolidated. report·PreparedPolicy·기존 의미감시가 같은 판정 owner를 소비한다. |
+| raw report 별도 우회 reader | none. 기존 `pre_submit_delay_research_review`, native source/completed-store, family producer를 확장했다. 새 module·wrapper·worker·schedule·report framework 없음. |
+| 전체 파일 세대가 같아야 하는 native read | 기존 strict 모드 retained. 정확한 immutable 입력 소비자가 사용한다. 장중 분석만 명시적 pinned snapshot receipt를 사용하고 같은 writer proof/reader 안에서 검증한다. |
+
+비테스트 source8파일 `+602/-42`, test4파일 `+351/-4`다. 새 모듈/entrypoint는 없으며 기존 CLI의 선택적 체결 census, 기존 snapshot reader 인자, 기존 lookup 진단 필드가 늘었다. 순증은 전수 모집단 보존·정확 체결/기회 연결·가격경로와 단기 선택 및 부정 입력 회귀에 따른다. 이동·미니파이·퇴역 코드의 다른 경로 이동은 없다. 관련 정적/동적 호출, CLI 및 family dispatch는 기존 owner를 유지한다.
+
+중간 영향1,404개·추가 native reader/보고서135개를 거쳐 최종 영향1,494개 회귀가140.33초에 통과했다. compile·diff 검사와 canonical/격리 print-only parser도 통과했고, 현재 체크리스트의 재개 owner는 각각1개다. live provider/order 호출, bot 재기동, 운영 정책 게시, 원 장후 전체 체인 재생성은 수행하지 않았다.
+
+잔여 소유자는 현재 checklist의 `PreSubmitDelaySituationResearch1017`이다. source-index/정확 fill clock가 없는 과거 행은 복구 완료나 영구 소실로 단정하지 않는다. 자연 관측은 정확 horizon coverage와 원 체결 leg, code/policy 인계는 `DirectFamilyPreopenPolicyHandoff`, 비용후 경제성은 실제 비용·terminal 결속으로 각각 종료한다. 현재 machine 부모가 다른 행은 새 후보의 양수 cell을 승계하지 않는다.

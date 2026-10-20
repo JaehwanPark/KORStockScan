@@ -1760,6 +1760,8 @@ def pre_submit_delay_source_semantics(data_root, now, prior_cursor=None):
               "coverage_started_at": None, "minutes": {}, "delay_events": []}
     issues, diagnostics, healthy, examples = Counter(), Counter(), Counter(), []
     horizon_states, horizon_states_by_grid, recheck_states = Counter(), Counter(), Counter()
+    policy_states, evidence_states, selected_delays = Counter(), Counter(), Counter()
+    submit_latency = {"n": 0, "sum_sec": 0.0, "max_sec": None}
     if migrated:
         diagnostics['raw_cursor_contract_migrated'] += 1
     issue_scopes, healthy_scopes = Counter(), Counter()
@@ -1887,6 +1889,10 @@ def pre_submit_delay_source_semantics(data_root, now, prior_cursor=None):
                         "submit_call_outcome": fields.get("submit_call_outcome"),
                         "target_delay_sec": fields.get("target_delay_sec"),
                         "selected_delay_sec": fields.get("selected_delay_sec"),
+                        "delay_policy_status": fields.get("delay_policy_status"),
+                        "delay_selection_basis": fields.get("delay_selection_basis"),
+                        "delay_evidence_verdict": fields.get("delay_evidence_verdict"),
+                        "submit_finished_at_epoch": fields.get("submit_finished_at_epoch"),
                         "route": str(fields.get("route") or ""),
                         "session_bucket": str(fields.get("market_session_bucket") or ""),
                         "quote_route": str(fields.get("quote_route") or ""),
@@ -2298,10 +2304,25 @@ def pre_submit_delay_source_semantics(data_root, now, prior_cursor=None):
             if not observation_only and observation_terminals and actual_terminal is None:
                 diagnostics["observation_terminal_does_not_close_order_intent"] += 1
             selected = _delay_source_number(commit.get("selected_delay_sec"))
-            if selected not in _DELAY_LEGACY_HORIZONS:
+            if selected not in _DELAY_RESEARCH_HORIZONS:
                 selected = None
                 if not observation_only:
                     diagnostics["selected_due_instrumentation_gap"] += 1
+            if not observation_only:
+                from src.engine.scalping.pre_submit_delay_initial_policy import selection_evidence
+                policy_states[str(commit.get("delay_policy_status") or "unobserved")] += 1
+                evidence = selection_evidence({
+                    "delay_sec": selected, "selection_basis": commit.get("delay_selection_basis"),
+                    "runtime_apply_allowed": commit.get("delay_policy_status") == "loaded"})
+                evidence_states[evidence] += 1
+                if selected is not None:
+                    selected_delays[f"{selected:g}"] += 1
+                finished = _delay_source_number((actual_terminal or {}).get("submit_finished_at_epoch"))
+                if finished is not None and committed_epoch <= finished <= now.timestamp():
+                    elapsed = finished - committed_epoch
+                    submit_latency["n"] += 1
+                    submit_latency["sum_sec"] += elapsed
+                    submit_latency["max_sec"] = max(submit_latency["max_sec"] or 0, elapsed)
             valid_rechecks = []
             for row in bound_rechecks:
                 status = row.get("recheck_status")
@@ -2361,6 +2382,10 @@ def pre_submit_delay_source_semantics(data_root, now, prior_cursor=None):
             "horizon_states": dict(sorted(horizon_states.items())),
             "horizon_states_by_grid": dict(sorted(horizon_states_by_grid.items())),
             "recheck_states": dict(sorted(recheck_states.items())),
+            "policy_status_counts": dict(sorted(policy_states.items())),
+            "policy_evidence_counts": dict(sorted(evidence_states.items())),
+            "selected_delay_counts": dict(sorted(selected_delays.items())),
+            "commit_to_submit_return_sec": submit_latency,
             "issues_by_scope": dict(sorted(issue_scopes.items())),
             "healthy_by_scope": dict(sorted(healthy_scopes.items())),
             "examples": examples, "summary_last_writer_pid": manifest.get("last_writer_pid"),
