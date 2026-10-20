@@ -131,22 +131,26 @@ def test_reviewed_consumer_source_pair_is_exact_and_read_only(tmp_path, monkeypa
 @pytest.mark.parametrize('name', [
     'src/engine/strategy_position_performance_report.py',
     'src/engine/lifecycle/broker_cost_reconciliation.py',
+    'src/engine/monitoring/submission_bottleneck_monitor.py',
 ])
 @pytest.mark.parametrize('damage', [None, 'before', 'after', 'dirty', 'verifier', 'origin_digest'])
 def test_quantity_cost_handoff_requires_exact_original_and_reviewed_sources(tmp_path, monkeypatch, name, damage):
-    """The new allowance cannot admit another economic source or dirty release."""
+    """Reviewed economic/observer pairs cannot admit unknown or dirty bytes."""
     import hashlib
     import subprocess
     root = Path(handoff.__file__).resolve().parents[3]
     own = 'src/engine/automation/intraday_release_handoff.py'
+    observer = name=='src/engine/monitoring/submission_bottleneck_monitor.py'
     before = subprocess.check_output(['git', '-C', str(root), 'show',
-        '7f2552aedde8fec6ef904a43105827907e50dfc8:' + name])
+        ('ab1c46633e638658721ec4bdab611bd389451985' if observer else
+         '7f2552aedde8fec6ef904a43105827907e50dfc8') + ':' + name])
     # This exercises the preserved original quantity-cost generation. Current
     # successor source bytes are covered by the complete-generation Git tests.
-    after = subprocess.check_output(['git', '-C', str(root), 'show',
-        '99e158af1c4c743d32662630e0397b58c1f7338e:' + name])
+    after = ((root/name).read_bytes() if observer else subprocess.check_output(
+        ['git', '-C', str(root), 'show', '99e158af1c4c743d32662630e0397b58c1f7338e:' + name]))
     verifier = (root / own).read_bytes()
-    pair = handoff.REVIEWED_QUANTITY_RESEARCH_COST_SOURCES[name]
+    pair = (handoff.REVIEWED_SOURCE_INTEGRATION_PAIRS[name][0] if observer else
+            handoff.REVIEWED_QUANTITY_RESEARCH_COST_SOURCES[name])
     assert pair == (hashlib.sha256(before).hexdigest(), hashlib.sha256(after).hexdigest())
     expected = hashlib.sha256(json.dumps({name: pair[0]}, sort_keys=True,
         separators=(',', ':')).encode()).hexdigest()
@@ -1746,8 +1750,9 @@ def test_archive_authority_successor_accepts_the_issued_full_reader_origin(avg_d
 @pytest.mark.parametrize('family', ['main_stop', 'holding_vote', 'pre_submit_delay'])
 @pytest.mark.parametrize('fault', [None, 'missing', 'dirty', 'committed_change'])
 @pytest.mark.parametrize('generation,reader_path', [(generation,path)
-    for generation in ('source_reader','source_integration','original_gap')
-    for path in (('src/engine/scalping/holding_profit_exit_semantics.py',) if generation=='original_gap' else
+    for generation in ('source_reader','source_integration','original_gap','incident_order')
+    for path in (('src/engine/monitoring/submission_bottleneck_monitor.py',) if generation=='incident_order' else
+        ('src/engine/scalping/holding_profit_exit_semantics.py',) if generation=='original_gap' else
         ('src/engine/lifecycle/research_json_stream.py',
         'src/engine/automation/main_startup_validation.py','src/engine/automation/next_preopen_readiness.py',
         *(['src/engine/infrastructure/startup_validation_code_context.py'] if generation=='source_integration' else [])))])
@@ -1773,12 +1778,14 @@ def test_source_reader_handoff_preserves_issued_policy_and_exact_dependencies(tm
         names.update(variant['dependencies'])
     names.update(handoff.REVIEWED_SOURCE_READER_HASHES)
     if generation!='source_reader':names.update(handoff.REVIEWED_SOURCE_INTEGRATION_HASHES)
-    if generation=='original_gap':names.update(handoff.REVIEWED_ORIGINAL_GAP_HASHES)
+    if generation in ('original_gap','incident_order'):names.update(handoff.REVIEWED_ORIGINAL_GAP_HASHES)
     names.add('src/engine/automation/intraday_release_handoff.py')
     for name in names:
         path = root/name; path.parent.mkdir(parents=True,exist_ok=True)
-        path.write_bytes((canonical/name).read_bytes() if generation!='source_reader' else
-            subprocess.check_output(['git','-C',str(canonical),'show','0255cb05f:'+os.path.normpath(name)]))
+        path.write_bytes((canonical/name).read_bytes() if generation=='incident_order' or
+            name=='src/engine/automation/intraday_release_handoff.py' else subprocess.check_output(
+                ['git','-C',str(canonical),'show',
+                 ('0255cb05f' if generation=='source_reader' else '99c51c85f')+':'+os.path.normpath(name)]))
     original = {key: hashlib.sha256(subprocess.check_output(
         ['git','-C',str(root),'show',origin+':'+os.path.normpath(name)])).hexdigest()
         for key,name in inventory.items()}

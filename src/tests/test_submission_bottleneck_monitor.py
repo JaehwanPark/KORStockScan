@@ -5083,9 +5083,13 @@ def _old_scanner_observation(now, birth, actor):
 
 @pytest.mark.parametrize('damage',[None,'hash','actor','start','at','date','scope','rule','count','missing',
     'unknown','duplicate','promotion','new_issue','birth','oversize','conflicting_native'])
-def test_historical_scanner_health_requires_all_exact_original_evidence(damage):
+@pytest.mark.parametrize('coverage_order',['none','first','last'])
+def test_historical_scanner_health_requires_all_exact_original_evidence(damage,coverage_order):
     from src.engine.scalping.ai_decision_trace import _json_bytes
-    result,_,_,_=_bounded_outcome_health_fixture(partial=False)
+    if coverage_order=='none':
+        result,_,_,_=_bounded_outcome_health_fixture(partial=False)
+    else:
+        result,gap=_derived_coverage_health_fixture()
     now=monitor.stamp(result['as_of']);generation=result['observer_generation']
     birth=generation['actor_birth_proof']['birth_lower_bound_epoch']
     actor=generation['actor_birth_proof']['actor']
@@ -5116,12 +5120,17 @@ def test_historical_scanner_health_requires_all_exact_original_evidence(damage):
     if damage not in (None,'hash'):
         row['machine_observation_sha256']=hashlib.sha256(_json_bytes({k:v for k,v in row.items()
             if k!='machine_observation_sha256'})).hexdigest()
+    if coverage_order=='last':result['incidents']=dict(reversed(list(result['incidents'].items())))
     before=json.dumps(result,sort_keys=True)
     health=monitor.observation_health_projection(result)
     assert health['status']==('warning_pending' if damage is None else 'not_eligible'),health
     assert json.dumps(result,sort_keys=True)==before
     assert item['status']=='active' and item['examples'][0]['economic_source']['status']=='source_gap'
     assert health['runtime_effect'] is False and health['full_coverage_proven'] is False
+    if coverage_order!='none':
+        assert gap['issues']=={'machine_probe:coverage_degraded:krx_nxt_integrated':1}
+        assert result['notification_pending']==['machine_auxiliary_intraday_source_gap']
+        assert result['incidents']['machine_auxiliary_intraday_source_gap']['status']=='active'
 
 
 def test_machine_reader_preserves_exact_old_scanner_bytes_across_bounded_tail(tmp_path,monkeypatch):

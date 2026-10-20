@@ -2801,7 +2801,12 @@ REVIEWED_SOURCE_INTEGRATION_DEPENDENCY_VARIANTS = {
             for origin, paths in value['contract_extensions'].items()},
     } for key, value in REVIEWED_SOURCE_READER_DEPENDENCY_VARIANTS.items()
 }
-REVIEWED_SOURCE_INTEGRATION_PAIRS = {'src/engine/automation/main_startup_validation.py': (('190855a642ca713fe53257eae2268eeb5786990c474f2b63904ace41b66c9661',
+# The observer successor only completes bounded incident classification; its
+# exact bytes preserve current/unknown failures and the source-quality alert.
+REVIEWED_SOURCE_INTEGRATION_PAIRS = {'src/engine/monitoring/submission_bottleneck_monitor.py': (
+    ('b2ed455255bc7659d2959a5c6012fe052206de588f1932d57dde2e376d2fad18',
+     'e9905d8614a2b8c8751b723eaa8ba53507e2b67e0909c53c393c92b366fb68b9'),),
+ 'src/engine/automation/main_startup_validation.py': (('190855a642ca713fe53257eae2268eeb5786990c474f2b63904ace41b66c9661',
                                                        '399ee38f0d22991d9761e5d301f8bc6af15b53fe2a8ba582cbc0435bd62daa67'),
                                                       ('c39f9d5b8a68c297304c95b36a8ff7415fd413f3493e5584eb227adecc6ce84c',
                                                        '399ee38f0d22991d9761e5d301f8bc6af15b53fe2a8ba582cbc0435bd62daa67')),
@@ -2825,6 +2830,19 @@ REVIEWED_SOURCE_INTEGRATION_PAIRS['src/engine/scalping/holding_profit_exit_seman
     (old, REVIEWED_ORIGINAL_GAP_HASHES['src/engine/scalping/holding_profit_exit_semantics.py'])
     for old in ('7512700df7e7d3bf705ec3e5d866bf9b916e564d60312fa3918f950c34431b78',
                 '586d26b7c6a9bd7041477f490c1f897f3d305d7dd07b2d56af3e368221af29de'))
+
+# Select a complete successor, retaining every issued original-gap profile.
+REVIEWED_INCIDENT_ORDER_DEPENDENCY_VARIANTS = {
+    key: {**value,
+        'selector_path': 'src/engine/monitoring/submission_bottleneck_monitor.py',
+        'selector_sha256': REVIEWED_SOURCE_INTEGRATION_PAIRS[
+            'src/engine/monitoring/submission_bottleneck_monitor.py'][0][1],
+        'dependencies': {**value['dependencies'],
+            'src/engine/monitoring/submission_bottleneck_monitor.py':
+                REVIEWED_SOURCE_INTEGRATION_PAIRS[
+                    'src/engine/monitoring/submission_bottleneck_monitor.py'][0][1]},
+    } for key, value in REVIEWED_ORIGINAL_GAP_DEPENDENCY_VARIANTS.items()
+}
 
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
@@ -2879,7 +2897,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         dependencies = generations.get(trigger_sha, {})
         # New exact selectors precede their historical parent. The first match
         # selects one complete generation, never per-file SHA alternatives.
-        for variants in (REVIEWED_ORIGINAL_GAP_DEPENDENCY_VARIANTS,
+        for variants in (REVIEWED_INCIDENT_ORDER_DEPENDENCY_VARIANTS,
+                         REVIEWED_ORIGINAL_GAP_DEPENDENCY_VARIANTS,
                          REVIEWED_SOURCE_INTEGRATION_DEPENDENCY_VARIANTS,
                          REVIEWED_SOURCE_READER_DEPENDENCY_VARIANTS,
                          REVIEWED_FROZEN_INPUT_DEPENDENCY_VARIANTS,

@@ -4430,7 +4430,8 @@ def observation_health_projection(result):
                     or status == 'historical_unresolved' and (now-last).total_seconds() <= SOURCE_WINDOW_SEC
                        and not historical_cohort):
                 incidents_valid = False
-                break
+                # Finish the bounded scan: later exact old-PID evidence must
+                # still be classified for the warning-only quality path.
     require(incidents_valid, 'active_current_or_unknown_incident')
     # A completed bounded report can faithfully report incomplete source/AI
     # outcomes. Preserve every original quality failure without relabelling the

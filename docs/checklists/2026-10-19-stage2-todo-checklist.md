@@ -42,7 +42,8 @@
 
 ## 실행 항목
 
-- [ ] `[SubmissionMonitorSyncLineage1019] 제출병목 관측기의 동기 요청 신원 결속 수리·후속 반영` (`Due: 2026-10-19`, `Slot: INTRADAY`, `TimeWindow: 코드 리뷰 종결 후 승인된 후속 배포 시`, `Track: RuntimeStability`)
+- [x] `[SubmissionMonitorSyncLineage1019] 제출병목 관측기의 동기 요청 신원 결속 수리·후속 반영` (`Due: 2026-10-19`, `Slot: INTRADAY`, `TimeWindow: 코드 리뷰 종결 후 승인된 후속 배포 시`, `Track: RuntimeStability`)
+  - 10/20 이관: 미종결 Acceptance와 아래 원 이력은 보존한다. 실행 OPEN owner는 [10/20 동일 ID](2026-10-20-stage2-todo-checklist.md#제출병목-관측기-계약-수리)로 이전하며 이 체크는 자연 수용 완료가 아니다.
   - 15:27 후속 수용:18e1bba21/PID1355795/start3557005 ordered complete·startup reader verified,15:26:53 자연 full의 observer pending_no_applicable_observations/선언 재계산 일치/unmet0과 process/log PASS다. 원4행 history replay verified4/4이며 현재 세대 history 표본0·partial 관측과 구분한다. pipeline 최초801,760,912B 색인 이관도 완료했다. 자연 source/short horizon/PASS→submit 수용은 이 owner OPEN을 유지한다. [실행 근거](../../tmp/observer-history-proof-20261019-1512/final-verification.json).
   - 15:12 신규 결함: 현재 연속 구간0초를 lifetime history 부재로 오분류한 관측기를 수리했다. 원4행 replay verified4/4·known56·warning_pending/unmet0, source coverage 미승격과 실제 stale 진단 보존을 확인했다. probe/diagnostic 중복 제거도 native lease 기준으로 통합했고3437회귀 PASS다. 새 선택/PID 및 정기 관측은 후속 별도 수용이다. [검토](../audits/preopen-alert-repair-2026-10-19.md#1512-native-history-continuous-window-contract).
   - 15:11 적용 수용: e200a7216/PID1307428/start3456859 ordered complete,15:08:02 startup reader verified 및 자연 process/log PASS다. 현재 actor observer는 partial/warning_pending/unmet0, full artifact는 I/O 경합으로 보류했다. trailing bounded 현재성 정상·quantity 실제 비용/terminal5건·pipeline 최초 legacy prefix 이관·자연 제출 개선 수용은 각각 별도 OPEN으로 유지한다. [실행 근거](../../tmp/artifact-source-repair-20261019-1050/consumer-retry-final-verification.json).

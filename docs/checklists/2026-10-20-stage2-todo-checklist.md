@@ -113,6 +113,12 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
   - 원천 비용·terminal·과거 중단 자료 부재는 `null`/제외/명시적 `source_gap`으로 남기며 `valid_empty` 또는 0원으로 대체하지 않는다. 기존 6개 유형 10/15/20/25/25%와 분할·timeout 프로필을 보존하고 추가 경제성 승인 gate·주문·provider·threshold 변경을 만들지 않는다.
   - 코드/장후 재생성 완료와 다음 자연 수집 수용은 별개다. 새 배포 이후 실제 시작/종료/중단 영수증과 비용 원천의 정확한 대사를 확인하며, 10/19 PREOPEN·PID 소비는 기존 `DirectFamilyPreopenPolicyHandoff`만 소유한다.
 
+## 제출병목 관측기 계약 수리
+
+- [ ] `[SubmissionMonitorSyncLineage1019] 제출병목 관측기 계약 수리·정규 소비 수용` (`Due: 2026-10-20`, `Slot: INTRADAY`, `TimeWindow: 승인된 순차 반영과 후속 정규 관측`, `Track: RuntimeStability`)
+  - 이전 [10/19 동일 ID의 Acceptance·이력](2026-10-19-stage2-todo-checklist.md#실행-항목)을 보존해 이관한다. 자연 request/trace 동기·async 결속, source/short-horizon/PASS→Main 제출은 정책·주문·경제성과 분리하여 OPEN을 유지한다.
+  - 12:26 신규 계약 결함: 구 PID 사건의 원문 증거가 유효한데 앞의 커버리지 사건에서 검사를 중단하여 순서에 따라 artifact 실패가 달라진다. 기존 최대256건 검사를 끝까지 수행하고 원천 품질 경고와 실제 current/unknown 실패를 보존한다. 원22 probe 중4 covered·비용 null은 복구로 간주하지 않는다. [원인·회귀·반영 검토](../audits/postclose-root-cause-recovery-review-2026-10-19.md#submission-observer-incident-order-repair).
+
 ## 익절 원천 수리 인계
 
 - [ ] `[HoldingProfitExitSourceContractRepair] Main 보유 익절 원천·재생·의미 계약 수리` (`Due: 2026-10-20`, `Slot: IMPLEMENTATION`, `TimeWindow: 09:00~23:59`, `Track: RuntimeStability`)
