@@ -198,8 +198,10 @@ def test_stopped_recovery_from_intraday_does_not_fabricate_native_receipt(stoppe
 
 @pytest.mark.parametrize('failure', [None, 'preflight', 'publish', 'attest'])
 def test_cli_holds_detector_lock_through_attestation_and_failure(tmp_path, monkeypatch, failure):
+    (tmp_path/'data').mkdir(exist_ok=True)
     calls = []
     class Driver:
+        workspace=tmp_path;day='2026-10-12'
         def __getattr__(self, name):
             def step(*args):
                 _assert_detector_lock_held(tmp_path)
@@ -283,10 +285,12 @@ def test_wrapper_stale_reader_and_invalid_selection_never_publish(tmp_path, guar
 
 
 @pytest.mark.parametrize('failure', [None, 'preflight', 'acquire_hold', 'drain', 'publish', 'prepare', 'start', 'attest'])
-def test_transition_does_not_advance_past_failed_phase(failure):
+def test_transition_does_not_advance_past_failed_phase(tmp_path, failure):
+    (tmp_path/'data').mkdir()
     calls = []
     steps = ['preflight', 'acquire_hold', 'drain', 'publish', 'prepare', 'start', 'attest']
     class Driver:
+        workspace=tmp_path;day='2026-10-12'
         def __getattr__(self, name):
             def step(*args):
                 calls.append(name)
@@ -301,6 +305,54 @@ def test_transition_does_not_advance_past_failed_phase(failure):
     else:
         assert D.execute(Driver()) == {'status': 'pass'}
         assert calls == steps
+
+
+@pytest.mark.parametrize('failure', [None, 'drain', 'attest'])
+def test_source_epoch_keeps_native_readers_across_the_actual_transition(tmp_path, monkeypatch, failure):
+    import sqlite3
+    from src.engine.automation import main_trailing_source_store as store
+    data=tmp_path/'data';data.mkdir()
+    target=store._index_path(data,'holding_path_votes','2026-10-20')
+    target.parent.mkdir(parents=True)
+    native=store._open_database(target,readonly=False,writer=True)
+    native.close()
+    opened=[];original=store._open_database
+    def observe(*args,**kwargs):
+        db=original(*args,**kwargs)
+        assert kwargs['readonly'] is True and not db.in_transaction
+        opened.append(db);return db
+    monkeypatch.setattr(store,'_open_database',observe)
+    class Driver:
+        workspace=tmp_path;day='2026-10-20'
+        def preflight(self):assert not opened
+        def __getattr__(self,name):
+            def step(*args):
+                if name=='fail':return
+                assert len(opened)==1 and not opened[0].in_transaction
+                assert opened[0].execute('PRAGMA user_version').fetchone()[0]==1
+                if name==failure:raise ValueError(name)
+                return dict(status='pass')
+            return step
+    if failure:
+        with pytest.raises(ValueError,match=failure):D.execute(Driver())
+    else:assert D.execute(Driver())==dict(status='pass')
+    assert len(opened)==1
+    with pytest.raises(sqlite3.ProgrammingError,match='closed'):opened[0].execute('SELECT 1')
+    assert sorted(p.name for p in target.parent.glob('*.sqlite'))==['holding_path_votes.sqlite']
+
+
+def test_source_epoch_failure_cannot_acquire_hold_or_drain(tmp_path):
+    data=tmp_path/'data';data.mkdir()
+    target=data/'report/main_trailing_source_index/holding_path_votes.sqlite'
+    target.parent.mkdir(parents=True);target.write_bytes(b'not sqlite');target.chmod(0o600)
+    called=[]
+    class Driver:
+        workspace=tmp_path;day='2026-10-20'
+        def preflight(self):called.append('preflight')
+        def fail(self,exc):called.append('fail')
+        def __getattr__(self,name):return lambda *a:called.append(name)
+    with pytest.raises(__import__('sqlite3').DatabaseError):D.execute(Driver())
+    assert called==['preflight','fail']
 
 
 @pytest.fixture

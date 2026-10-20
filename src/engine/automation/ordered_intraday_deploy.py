@@ -18,7 +18,7 @@ import uuid
 import shlex
 import stat
 import time
-from contextlib import contextmanager
+from contextlib import contextmanager, ExitStack
 from datetime import datetime
 from pathlib import Path
 
@@ -311,16 +311,33 @@ def _wait(predicate, timeout, reason):
         time.sleep(0.25)
 
 
+@contextmanager
+def _source_database_epoch(workspace, day):
+    """Keep native WAL readers resident across drain, launch and attestation."""
+    from src.engine.automation import main_trailing_source_store as store
+    from src.engine.lifecycle.research_input_budget import Claim
+    data = (Path(workspace)/'data').resolve(strict=True)
+    with ExitStack() as readers:
+        for namespace in store.NAMESPACES:
+            target = store._index_path(data, namespace, day)
+            if target.exists() or target.is_symlink():
+                claim = Claim(2*1024*1024)
+                readers.callback(claim.close)
+                readers.enter_context(store._connection(target, readonly=True))
+        yield
+
+
 def execute(driver):
     """Order is deliberate: no selection or shared document write before drain."""
     try:
         driver.preflight()
-        driver.acquire_hold()
-        driver.drain()
-        driver.publish()
-        driver.prepare()
-        driver.start()
-        return driver.attest()
+        with _source_database_epoch(driver.workspace, driver.day):
+            driver.acquire_hold()
+            driver.drain()
+            driver.publish()
+            driver.prepare()
+            driver.start()
+            return driver.attest()
     except BaseException as exc:
         driver.fail(exc)
         raise
