@@ -1467,6 +1467,87 @@ def _missing_buy_flow_report(*, damage=None):
         mechanical_policy_receipt=mechanical, consumed_pid=42)
 
 
+def _historical_resolution_fixture(tmp_path, monkeypatch):
+    from copy import deepcopy
+    from src.engine.ai.holding_exit_vote import persist_buy_fill_receipt
+    from src.engine.error_detectors import artifact_freshness as detector
+    data = tmp_path/'data'
+    semantics = _missing_buy_flow_report()
+    at = datetime.fromisoformat('2026-10-09T10:00:00+09:00').timestamp()
+    for row in semantics['source_gap_details']:
+        row['signal_id'] = str(at)+':SCALP_TRAILING_LIMIT_WEAK'
+    identities = {}
+    for rid in (21, 22):
+        identities[rid] = persist_buy_fill_receipt(dict(id=rid, code='123456',
+            buy_time='2026-10-09T09:00:00', buy_qty=1, buy_price=100.,
+            _entry_receipt_filled_by_order_no={str(rid):1},
+            _entry_receipt_executions_by_order_no={str(rid):{'1':dict(cumulative_qty=1)}}), data)
+    semantics.update(policy_status='verified_incumbent_carried', economics_status='unavailable',
+        lifecycle=[dict(position_key='record:22', buy_fill_identity=identities[22],
+            signal_id=str(at+60)+':SCALP_TRAILING_LIMIT_WEAK', signal_at=at+60,
+            lifecycle_state='completed', economics_status='unavailable', blocking_reason=None,
+            orders=['2'])])
+    report = dict(target_date='2026-10-09', as_of=semantics['as_of'],
+        source_generation=semantics['source_generation'], profit_exit_semantics=semantics, dry_run=False)
+    path = data/'report/holding_exit_sentinel/holding_exit_sentinel_2026-10-09.json'
+    path.parent.mkdir(parents=True);path.write_text(json.dumps(report))
+    monkeypatch.setattr(sentinel, 'DATA_DIR', data)
+    monkeypatch.setattr(sentinel, 'build_holding_exit_sentinel_report', lambda *a, **k: deepcopy(report))
+    now = datetime.fromisoformat('2026-10-10T07:00:00+09:00')
+    return detector, report, path, now
+
+
+def test_native_historical_resolution_reaches_detector_without_rewriting_original(tmp_path, monkeypatch):
+    detector, report, path, now = _historical_resolution_fixture(tmp_path, monkeypatch)
+    original = path.read_bytes()
+    assert detector._holding_profit_exit_semantics(tmp_path, '2026-10-09', now=now)['status'] == 'source_gap'
+    receipt = sentinel.publish_historical_buy_resolution('2026-10-09', ['21'], now=now)
+    observed = detector._holding_profit_exit_semantics(tmp_path, '2026-10-09', now=now)
+    assert observed['status'] == 'historical_diagnostic' and observed['findings'] == []
+    assert observed['source_gap_count'] == 2 and observed['semantic_status'] == 'source_gap'
+    assert observed['economics_status'] == 'unavailable'
+    assert detector._semantic_alert_candidates('holding_profit_exit', observed, '2026-10-09') == []
+    assert path.read_bytes() == original
+    assert sentinel.publish_historical_buy_resolution('2026-10-09', ['21'], now=now+timedelta(minutes=1)) == receipt
+
+
+@pytest.mark.parametrize('fault', ['new_gap', 'new_generation', 'receipt', 'code', 'raw', 'new_pid',
+                                  'current_date', 'no_natural', 'unrepaired_display', 'reaudit', 'wrong_ids'])
+def test_historical_resolution_never_hides_current_or_changed_loss(tmp_path, monkeypatch, fault):
+    from src.engine.scalping import holding_profit_exit_semantics as native
+    from src.engine.ai import holding_exit_vote
+    detector, report, path, now = _historical_resolution_fixture(tmp_path, monkeypatch)
+    prepublication = fault in {'current_date', 'no_natural', 'unrepaired_display', 'reaudit', 'wrong_ids'}
+    if not prepublication:
+        sentinel.publish_historical_buy_resolution('2026-10-09', ['21'], now=now)
+    if fault == 'new_gap':
+        report['profit_exit_semantics']['source_gaps'].append(dict(position_id='23', reason='tp_signal_buy_generation_missing'))
+        path.write_text(json.dumps(report))
+    elif fault == 'new_generation':
+        report['source_generation'] = report['profit_exit_semantics']['source_generation'] = 'f'*64
+        path.write_text(json.dumps(report))
+    elif fault == 'receipt':
+        p=tmp_path/'data/runtime/holding_buy_fill_receipts/21.json';p.write_bytes(p.read_bytes()+b'\n')
+    elif fault == 'code': monkeypatch.setattr(native,'historical_resolution_code',lambda: {})
+    elif fault in {'raw', 'new_pid'}:
+        p=(tmp_path/'data/pipeline_events/pipeline_events_2026-10-09.jsonl' if fault=='raw' else
+           tmp_path/'data/runtime/policy_bootstrap/verified_holding_profit_pid/2026-10-09/new.json')
+        p.parent.mkdir(parents=True,exist_ok=True);p.write_text('{}\n')
+    elif fault == 'current_date': now=now-timedelta(days=1)
+    elif fault == 'no_natural':
+        report['profit_exit_semantics']['lifecycle']=[];path.write_text(json.dumps(report))
+    elif fault == 'unrepaired_display':
+        monkeypatch.setattr(holding_exit_vote,'restore_buy_fill_receipt',lambda *a,**k:'position_price_mismatch')
+    elif fault == 'reaudit':
+        monkeypatch.setattr(sentinel,'build_holding_exit_sentinel_report',lambda *a,**k:dict(report,source_generation='e'*64))
+    if prepublication:
+        with pytest.raises(ValueError):
+            sentinel.publish_historical_buy_resolution('2026-10-09', ['99'] if fault=='wrong_ids' else ['21'], now=now)
+    observed=detector._holding_profit_exit_semantics(tmp_path,'2026-10-09',now=now)
+    assert observed['status'] != 'historical_diagnostic'
+    assert detector._semantic_alert_candidates('holding_profit_exit',observed,'2026-10-09')
+
+
 def test_original_missing_buy_evidence_is_stable_without_fabricating_lineage_or_policy_success():
     from src.engine.monitoring.semantic_incident_contract import holding_gap_identity
     report = _missing_buy_flow_report()
@@ -1592,7 +1673,8 @@ def test_semantics_uses_each_verified_pid_policy_after_same_day_restart():
     assert result["mechanical_policy_sha256_by_pid"]["42"] != result["mechanical_policy_sha256_by_pid"]["43"]
 
 
-@pytest.mark.parametrize('damage',[None,'no_archive','typed_hash','typed_parent','archive_conflict'])
+@pytest.mark.parametrize('damage',[None,'no_archive','typed_hash','typed_parent','archive_conflict',
+    'historical_late', 'historical_missing', 'historical_badseal', 'historical_wrong_date', 'historical_future'])
 def test_current_typed_pid_receipt_matches_native_archive_without_false_conflict(tmp_path,monkeypatch,damage):
     from copy import deepcopy
     from src.engine.scalping import trailing_situation_policy as typed
@@ -1617,12 +1699,31 @@ def test_current_typed_pid_receipt_matches_native_archive_without_false_conflict
     prior=dict(schema='holding_profit_pid_verification_v1',target_date=day,pid=pid,
         manifest_sha256=manifest['manifest_sha256'],mechanical_policy_receipt=archived,
         verified_at=day+'T09:00:00+09:00')
+    if damage=='historical_wrong_date':prior['target_date']='2026-09-25'
+    if damage=='historical_future':prior['verified_at']=day+'T09:03:00+09:00'
     prior['receipt_sha256']=_digest_json(prior)
+    if damage=='historical_badseal':prior['receipt_sha256']='f'*64
+    if damage and damage.startswith('historical_'):
+        verification['verified_at']=day+'T09:02:00+09:00'
+        (root/f'runtime_policy_bootstrap_verify_{day}.json').write_text(json.dumps(verification))
+    if damage=='historical_missing':(root/f'runtime_policy_bootstrap_verify_{day}.json').unlink()
     archive=root/'verified_holding_profit_pid'/day;archive.mkdir(parents=True)
     if damage!='no_archive':(archive/f'holding_profit_pid_{pid}_{manifest["manifest_sha256"]}.json').write_text(json.dumps(prior))
     before={p:p.read_bytes() for p in root.rglob('*.json')}
     receipt,consumed=sentinel._profit_exit_bootstrap_binding(day,datetime.fromisoformat(day+'T09:01:00+09:00'))
-    if damage in ('typed_hash','typed_parent'):assert receipt is None and consumed=={}
+    if damage and damage.startswith('historical_'):
+        assert receipt is None and consumed=={}
+        receipt,consumed=sentinel._profit_exit_bootstrap_binding(day,datetime.fromisoformat(day+'T09:01:00+09:00'),historical=True)
+        if damage in ('historical_late','historical_missing'):assert receipt==augmented and consumed=={pid:augmented}
+        else:assert receipt is None and consumed=={}
+    elif damage in ('typed_hash','typed_parent'):assert receipt is None and consumed=={}
     elif damage=='archive_conflict':assert receipt==augmented and pid not in consumed
     else:assert receipt==augmented and consumed=={pid:augmented}
     assert all(p.read_bytes()==raw for p,raw in before.items())
+
+
+def test_historical_policy_audit_cannot_accept_today():
+    from zoneinfo import ZoneInfo
+    today=datetime.now(ZoneInfo('Asia/Seoul')).date().isoformat()
+    with pytest.raises(ValueError,match='requires_closed_date'):
+        sentinel.build_holding_exit_sentinel_report(today,historical_policy=True)

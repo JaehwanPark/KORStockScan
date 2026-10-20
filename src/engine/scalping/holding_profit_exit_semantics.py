@@ -27,6 +27,150 @@ LIFECYCLE_STATES = {"signal_observed", "deferred", "guard_wait", "pending_submit
 ECONOMICS_STATES = {"pending", "verified", "unavailable"}
 
 
+def historical_buy_gap_resolution(report, *, data_root, accepted_position_ids, now):
+    """Resolve only original missing-decision lineage, after native re-audit.
+
+    The caller is the Sentinel producer. BUY receipts can restore future
+    collection, but cannot manufacture the missing decision-time reference.
+    A later, fully bound natural terminal independently witnesses collection.
+    This disposition never grants economic or execution eligibility.
+    """
+    from pathlib import Path
+    from src.engine.ai.holding_exit_vote import restore_buy_fill_receipt
+    from src.engine.monitoring.semantic_incident_contract import holding_gap_identity
+    root = Path(data_root).resolve()
+    semantics = report['profit_exit_semantics']
+    identity = holding_gap_identity(semantics)
+    day = report['target_date']
+    ids = sorted(map(str, accepted_position_ids))
+    if (now.tzinfo is None or day >= now.astimezone(KST).date().isoformat()
+            or semantics.get('target_date') != day
+            or semantics.get('source_generation') != report.get('source_generation')
+            or semantics.get('policy_status') != 'verified_incumbent_carried'
+            or identity is None or identity['schema'] != 'holding_source_gap_identity_v2'
+            or ids != sorted({row[0][7:] for row in identity['gaps']})
+            or any(len(row) != 7 for row in identity['gaps'])):
+        raise ValueError('holding_historical_gap_population_unproven')
+    losses = {row['position_id']: row for row in semantics['source_gap_details']}
+    latest_loss = max(float(row['signal_id'].split(':', 1)[0]) for row in losses.values())
+    healthy = [row for row in semantics['lifecycle']
+               if row.get('lifecycle_state') == 'completed' and row.get('blocking_reason') is None
+               and row.get('signal_at', 0) > latest_loss and row.get('orders')
+               and row['position_key'][7:] not in losses]
+    if not healthy or not semantics.get('consumed_pids'):
+        raise ValueError('holding_current_collection_unproven')
+    receipts = {}
+    for record in sorted(set(ids + [row['position_key'][7:] for row in healthy])):
+        path = root/'runtime/holding_buy_fill_receipts'/(record+'.json')
+        from src.engine.scalping.entry_split_monitor_projection import _read
+        if any(parent.is_symlink() for parent in path.parents):
+            raise ValueError('holding_historical_source_symlink')
+        body, source = _read(path, 262144)
+        stock = dict(id=int(record), code=body['code'], buy_time=body['buy_time'],
+                     buy_price=body['buy_price'], buy_qty=body['buy_qty'])
+        if body.get('source') != 'accepted_broker_execution' or restore_buy_fill_receipt(stock, root) != 'restored':
+            raise ValueError('holding_current_buy_restoration_unproven')
+        # Exercise the actual broker inventory display boundary that caused
+        # the historical loss, without modifying the receipt or live position.
+        displayed = dict(id=int(record), code=body['code'], buy_time=body['buy_time'],
+                         buy_price=int(body['buy_price']), buy_qty=body['buy_qty'])
+        if restore_buy_fill_receipt(displayed, root) != 'restored':
+            raise ValueError('holding_current_display_restoration_unproven')
+        if record in losses and body['code'] != losses[record]['stock_code']:
+            raise ValueError('holding_historical_buy_symbol_conflict')
+        signal_at = (float(losses[record]['signal_id'].split(':', 1)[0]) if record in losses else
+                     min(row['signal_at'] for row in healthy if row['position_key'] == 'record:'+record))
+        if _epoch(body['buy_time']) is None or not _epoch(body['buy_time']) < signal_at:
+            raise ValueError('holding_historical_buy_clock_conflict')
+        if any(row['position_key'] == 'record:'+record and row['buy_fill_identity'] != body['buy_fill_identity']
+               for row in healthy):
+            raise ValueError('holding_current_buy_generation_conflict')
+        # _read also checks no-follow path custody and concurrent mutation.
+        if _read(path, 262144)[1] != source:
+            raise ValueError('holding_historical_buy_source_changed')
+        receipts[record] = dict(path=str(path), sha256=source['sha256'],
+                               buy_fill_identity=body['buy_fill_identity'])
+    return dict(schema='holding_historical_buy_gap_resolution_v1', source_date=day,
+        source_generation=report['source_generation'], source_gap_identity=identity,
+        accepted_at=now.isoformat(), disposition='historical_decision_lineage_unrecoverable',
+        original_decision_lineage_recovered=False, buy_receipts=receipts,
+        current_collection_lifecycle=healthy, runtime_effect=False,
+        actual_order_submitted=False, economic_eligibility=False)
+
+
+def historical_resolution_code():
+    """Current collection repair and native audit, not a trading approval."""
+    from pathlib import Path
+    engine = Path(__file__).resolve().parents[1]
+    return {name: hashlib.sha256((engine/name).read_bytes()).hexdigest() for name in (
+        'scalping/holding_profit_exit_semantics.py', 'holding_exit_sentinel.py',
+        'ai/holding_exit_vote.py', 'sniper_trade_review_report.py')}
+
+
+def historical_resolution_sources(report, data_root):
+    """Pin the existing native writer's dated source inventory, including gaps."""
+    from pathlib import Path
+    from src.engine.scalping.entry_split_monitor_projection import _identity
+    from src.engine.ai.holding_exit_vote import path_vote_store_path
+    from src.engine.scalping.holding_path_vote_policy import policy_path
+    root = Path(data_root).resolve()
+    day = report['target_date']
+    paths = [root/'pipeline_events'/f'pipeline_events_{day}.jsonl',
+             root/'runtime/sentinel_event_cache'/f'holding_exit_sentinel_events_{day}.jsonl',
+             root/'runtime/sentinel_event_cache'/f'holding_exit_sentinel_events_{day}.meta.json',
+             root/'report/monitor_snapshots'/f'holding_exit_observation_{day}.json',
+             policy_path(root, day)]
+    paths += [root/'runtime/policy_bootstrap'/f'runtime_policy_bootstrap{suffix}_{day}.json'
+              for suffix in ('', '_verify')]
+    archive = root/'runtime/policy_bootstrap/verified_holding_profit_pid'/day
+    paths += list(archive.glob('*.json'))
+    if len(paths) > 263:
+        raise ValueError('holding_historical_pid_inventory_unbounded')
+    semantics = report['profit_exit_semantics']
+    keys = {row['position_key'] for row in semantics['lifecycle']}
+    keys.update(row['position_key'] for row in semantics['source_gap_details'])
+    paths += [path_vote_store_path(root, key) for key in sorted(keys)]
+    result = {}
+    for logical in paths:
+        for path in (logical, Path(str(logical)+'.gz'), Path(str(logical)+'.gz.archive_receipt.json')):
+            if any(parent.is_symlink() for parent in path.parents):
+                raise ValueError('holding_historical_source_symlink')
+            result[str(path)] = _identity(path) if path.exists() or path.is_symlink() else None
+    return result
+
+
+def read_historical_resolution(report, *, report_path, report_sha256, data_root, now):
+    """Warm native consumer: new generations and changed sources stay active."""
+    from pathlib import Path
+    from src.engine.scalping.entry_split_monitor_projection import _read, _digest
+    if not (Path(report_path).parent/'historical_resolutions').exists():
+        return None
+    code = historical_resolution_code()
+    sources = historical_resolution_sources(report, data_root)
+    path = Path(report_path).parent/'historical_resolutions'/(report_sha256+'-'+_digest(code)+'-'+_digest(sources)+'.json')
+    if not path.exists() and not path.is_symlink():
+        return None
+    value, reference = _read(path, 262144)
+    if (value.get('schema') != 'holding_historical_resolution_receipt_v1'
+            or value.get('report_sha256') != report_sha256
+            or value.get('code') != code
+            or value.get('receipt_sha256') != _digest({k:v for k,v in value.items() if k != 'receipt_sha256'})):
+        raise ValueError('holding_historical_resolution_invalid')
+    if value.get('sources') != historical_resolution_sources(report, data_root):
+        raise ValueError('holding_historical_resolution_source_changed')
+    resolution = value['resolution']
+    accepted = datetime.fromisoformat(resolution['accepted_at'])
+    if now is None or accepted.tzinfo is None or now.tzinfo is None or accepted > now:
+        raise ValueError('holding_historical_resolution_clock_invalid')
+    expected = historical_buy_gap_resolution(report, data_root=data_root,
+        accepted_position_ids=value['accepted_position_ids'], now=accepted)
+    if (resolution != expected or _read(path, 262144)[1] != reference
+            or _read(Path(report_path), 8*1024*1024)[1]['sha256'] != report_sha256
+            or value['sources'] != historical_resolution_sources(report, data_root)):
+        raise ValueError('holding_historical_resolution_source_changed')
+    return value
+
+
 def _epoch(value: Any) -> float | None:
     if isinstance(value, datetime):
         return (value if value.tzinfo else value.replace(tzinfo=KST)).timestamp()

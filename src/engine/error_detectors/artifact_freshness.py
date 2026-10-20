@@ -533,6 +533,14 @@ def _holding_profit_exit_semantics(root: Path, source_date: str, *, now: datetim
     except (OSError, ValueError, TypeError, AttributeError) as exc:
         return dict(meta, **_semantic_failure(exc))
     status = semantics["status"]
+    try:
+        from src.engine.scalping.holding_profit_exit_semantics import read_historical_resolution
+        resolution = read_historical_resolution(report, report_path=path,
+            report_sha256=raw_sha, data_root=(root/'data').resolve(), now=now)
+    except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+        return dict(meta, **_semantic_failure(exc))
+    if resolution is not None:
+        status = 'historical_diagnostic'
     from src.engine.monitoring.semantic_incident_contract import holding_gap_identity
     return {
         **meta, "native_validated": True, "observation_complete": True,
@@ -554,6 +562,7 @@ def _holding_profit_exit_semantics(root: Path, source_date: str, *, now: datetim
         "lifecycle_counts": dict(Counter(row.get("lifecycle_state") for row in semantics.get("lifecycle", []))),
         "economics_status": semantics.get("economics_status", "unavailable"),
         "lifecycle_verified": semantics.get("schema") == "holding_profit_exit_semantics_v2",
+        "historical_source_resolution": resolution,
     }
 
 

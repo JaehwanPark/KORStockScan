@@ -3396,6 +3396,38 @@ REVIEWED_LOGICAL_PIPELINE_DEPENDENCY_VARIANTS = {
 for (_trigger, _trigger_sha), _variant in REVIEWED_LOGICAL_PIPELINE_DEPENDENCY_VARIANTS.items():
     REVIEWED_HOLDING_RESEARCH_DEPENDENCIES[_trigger][_trigger_sha] = _variant['dependencies']
 
+# Exact immutable historical-diagnostic successor. Native archived policy/PID
+# validation affects report re-audit only; runtime policy gates stay strict.
+REVIEWED_HISTORICAL_RESOLUTION_HASHES = {'src/engine/scalping/holding_profit_exit_semantics.py': 'c3c2d58e97c99f24e37001622874ec294b4e8424e3dc22052495f35ec564b93a',
+ 'src/engine/holding_exit_sentinel.py': 'a02066a6f6538f7b4f855c5cc93ed3b5b4e661f4516c6191cd4859542cc5afdb',
+ 'src/engine/error_detectors/artifact_freshness.py': '766a583e1543b592fa5a383efdeae51050d1e7c92c70a4442255fb15e2e918f5'}
+REVIEWED_HISTORICAL_RESOLUTION_PAIRS = {'src/engine/scalping/holding_profit_exit_semantics.py': (('586d26b7c6a9bd7041477f490c1f897f3d305d7dd07b2d56af3e368221af29de',
+                                                           'c3c2d58e97c99f24e37001622874ec294b4e8424e3dc22052495f35ec564b93a'),
+                                                          ('7512700df7e7d3bf705ec3e5d866bf9b916e564d60312fa3918f950c34431b78',
+                                                           'c3c2d58e97c99f24e37001622874ec294b4e8424e3dc22052495f35ec564b93a'),
+                                                          ('e76d509fa67cb46100d1fffd1b272fbc3355b3c729604a348e22f653f8b0d269',
+                                                           'c3c2d58e97c99f24e37001622874ec294b4e8424e3dc22052495f35ec564b93a')),
+ 'src/engine/holding_exit_sentinel.py': (('5bc00325005b6d4346dc896c21741cec0e61fcd9904c6c947ae7774ce5e031e4',
+                                          'a02066a6f6538f7b4f855c5cc93ed3b5b4e661f4516c6191cd4859542cc5afdb'),),
+ 'src/engine/error_detectors/artifact_freshness.py': (('47897e387407c5d6472735463107d8e0ce7697aededa723c724973e4efc173a4',
+                                                       '766a583e1543b592fa5a383efdeae51050d1e7c92c70a4442255fb15e2e918f5'),
+                                                      ('bc6c903c8a9ea08026103101bcefcaf8e18ea5a4e707408787bc26a15ebd150a',
+                                                       '766a583e1543b592fa5a383efdeae51050d1e7c92c70a4442255fb15e2e918f5'),
+                                                      ('f8955d1d5f8fc807d0f1772e6a21ac682ff800b6668a00d551a1f4a8fd25983e',
+                                                       '766a583e1543b592fa5a383efdeae51050d1e7c92c70a4442255fb15e2e918f5'))}
+REVIEWED_HISTORICAL_RESOLUTION_DEPENDENCY_VARIANTS = {
+    (trigger, REVIEWED_HISTORICAL_RESOLUTION_HASHES.get(os.path.normpath(trigger), sha)): {**value,
+        'selector_path': 'src/engine/scalping/holding_profit_exit_semantics.py',
+        'selector_sha256': REVIEWED_HISTORICAL_RESOLUTION_HASHES['src/engine/scalping/holding_profit_exit_semantics.py'],
+        'dependencies': {**{name: REVIEWED_HISTORICAL_RESOLUTION_HASHES.get(os.path.normpath(name), digest)
+            for name, digest in value['dependencies'].items()}, **REVIEWED_HISTORICAL_RESOLUTION_HASHES},
+        'contract_extensions': {origin: {name: REVIEWED_HISTORICAL_RESOLUTION_HASHES.get(os.path.normpath(name), digest)
+            for name, digest in paths.items()} for origin, paths in value['contract_extensions'].items()},
+    } for (trigger, sha), value in REVIEWED_LOGICAL_PIPELINE_DEPENDENCY_VARIANTS.items()
+}
+for (_trigger, _trigger_sha), _variant in REVIEWED_HISTORICAL_RESOLUTION_DEPENDENCY_VARIANTS.items():
+    REVIEWED_HOLDING_RESEARCH_DEPENDENCIES[_trigger][_trigger_sha] = _variant['dependencies']
+
 
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
@@ -3469,6 +3501,9 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     logical_pipeline_present = any((root / name).is_file()
         and hashlib.sha256(candidate_bytes(name)).hexdigest() == sha
         for name, sha in REVIEWED_LOGICAL_PIPELINE_HASHES.items())
+    historical_resolution_present = any((root / name).is_file()
+        and hashlib.sha256(candidate_bytes(name)).hexdigest() == sha
+        for name, sha in REVIEWED_HISTORICAL_RESOLUTION_HASHES.items())
     contract_names = {repository_name(name) for name in paths.values()}
     for trigger, generations in REVIEWED_HOLDING_RESEARCH_DEPENDENCIES.items():
         if trigger not in contract_names:
@@ -3477,7 +3512,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         dependencies = generations.get(trigger_sha, {})
         # New exact selectors precede their historical parent. The first match
         # selects one complete generation, never per-file SHA alternatives.
-        for variants in (REVIEWED_LOGICAL_PIPELINE_DEPENDENCY_VARIANTS,
+        for variants in (REVIEWED_HISTORICAL_RESOLUTION_DEPENDENCY_VARIANTS,
+                         REVIEWED_LOGICAL_PIPELINE_DEPENDENCY_VARIANTS,
                          REVIEWED_POSTCLOSE_REPAIR_DEPENDENCY_VARIANTS,
                          REVIEWED_CLOSED_OBSERVER_DEPENDENCY_VARIANTS,
                          REVIEWED_SOURCE_EPOCH_DEPENDENCY_VARIANTS,
@@ -3589,6 +3625,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
             dependencies = {**dependencies, **REVIEWED_POSTCLOSE_REPAIR_HASHES}
         if logical_pipeline_present:
             dependencies = {**dependencies, **REVIEWED_LOGICAL_PIPELINE_HASHES}
+        if historical_resolution_present:
+            dependencies = {**dependencies, **REVIEWED_HISTORICAL_RESOLUTION_HASHES}
         dependencies_by_trigger[trigger] = (trigger_sha, dependencies)
     for key, name in paths.items():
         after = candidate_bytes(name)
@@ -3605,7 +3643,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         if before == after:
             continue
         pair = (hashlib.sha256(before).hexdigest(), hashlib.sha256(after).hexdigest())
-        if (pair in REVIEWED_LOGICAL_PIPELINE_PAIRS.get(repository_name(name), ())
+        if (pair in REVIEWED_HISTORICAL_RESOLUTION_PAIRS.get(repository_name(name), ())
+                or pair in REVIEWED_LOGICAL_PIPELINE_PAIRS.get(repository_name(name), ())
                 or pair in REVIEWED_POSTCLOSE_REPAIR_PAIRS.get(repository_name(name), ())
                 or pair in REVIEWED_CLOSED_OBSERVER_PAIRS.get(repository_name(name), ())
                 or pair in REVIEWED_SOURCE_EPOCH_PAIRS.get(repository_name(name), ())

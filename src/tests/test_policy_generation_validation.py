@@ -419,6 +419,7 @@ def test_post_aux_guard_successor_does_not_transitively_promote_older_reports(tm
 
     *[(family,'REVIEWED_SOURCE_READER_SUCCESSORS') for family in ('rising_missed','auxiliary')],
     *[(family,'REVIEWED_DELAY_CLEANUP_SUCCESSORS') for family in ('rising_missed','auxiliary','holding_vote')],
+    ('holding_vote','REVIEWED_HISTORICAL_RESOLUTION_SUCCESSORS'),
     *[(family,'REVIEWED_HOLDING_REPUBLICATION_SUCCESSORS') for family in ('entry_cancel_wait','auxiliary')],
 ])
 @pytest.mark.parametrize('damage', [None, 'missing', 'bytes', 'path', 'authority', 'seal', 'symlink',

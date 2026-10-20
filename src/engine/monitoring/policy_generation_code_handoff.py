@@ -264,6 +264,12 @@ REVIEWED_HOLDING_REPUBLICATION_SUCCESSORS = {
         'a2c47ec94d9ae8e1866af911d9de2426cf04a394f41a5dca893e90e16fc12a93'),
 }
 
+# Exact source-only historical decision disposition; fresh fixtures remain mandatory.
+REVIEWED_HISTORICAL_RESOLUTION_SUCCESSORS = {
+    'holding_vote': ('48b92485c831e215a1d7fe1ef8664113d68186e040a768087cbcb18ab0892ac3',
+                     'f1aa713f7fd76467bd78c17fb0890eee55421d4ed18c865eeca0a8edc03518db'),
+}
+
 
 def _historical_fixture(contract, data, family):
     """Preserve a prior fixture without using it to certify the successor."""
@@ -347,7 +353,8 @@ def current_fixture_observation(observed, data):
     reader = REVIEWED_SOURCE_READER_SUCCESSORS.get(family)
     reader_match = ((reader is not None and actual_pair == reader)
                     or actual_pair == REVIEWED_DELAY_CLEANUP_SUCCESSORS.get(family)
-                    or actual_pair == REVIEWED_HOLDING_REPUBLICATION_SUCCESSORS.get(family))
+                    or actual_pair == REVIEWED_HOLDING_REPUBLICATION_SUCCESSORS.get(family)
+                    or actual_pair == REVIEWED_HISTORICAL_RESOLUTION_SUCCESSORS.get(family))
     if reader_match:
         pair = actual_pair
     if not pair or actual_pair != pair:
