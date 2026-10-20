@@ -1,5 +1,5 @@
 from src.engine.lifecycle.archive import lifecycle_decision_matrix_readers as ldm
-from src.engine.lifecycle.archive import scalp_entry_action_decision_matrix_readers as entry_adm
+from src.engine.scalping import entry_observation_events as observations
 
 
 def test_market_regime_continuous_fields_are_runtime_features_not_labels():
@@ -28,7 +28,7 @@ def test_market_regime_continuous_fields_are_runtime_features_not_labels():
 
 
 def test_entry_adm_keeps_market_regime_continuous_as_context_feature():
-    row = entry_adm._base_row(
+    row = observations._base_row(
         {
             "stage": "ai_confirmed",
             "stock_code": "000001",

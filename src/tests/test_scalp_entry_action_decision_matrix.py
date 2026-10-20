@@ -3,9 +3,12 @@ import json
 from dataclasses import replace
 from datetime import datetime
 
+import pytest
+
 from src.engine.lifecycle.archive import scalp_entry_action_decision_matrix_readers as mod
 from src.engine import scalp_entry_adm_runtime as runtime_mod
 from src.engine.scalping import entry_ai_gate as entry_gate_mod
+from src.engine.scalping import entry_observation_events as observations
 
 
 
@@ -25,13 +28,92 @@ def _write_gzip_jsonl(path, rows):
             handle.write(json.dumps(row, ensure_ascii=False) + "\n")
 
 
+@pytest.mark.parametrize("storage", ["plain", "gzip", "coexist", "snapshot"])
+def test_entry_observation_consumers_share_scoped_source(
+    tmp_path, monkeypatch, storage
+):
+    from src.engine import scalp_entry_action_decision_matrix as compat
+    from src.engine.scalping import entry_observation_source as source
+    from src.utils import constants
+
+    day = "2026-09-23"
+    pipeline = tmp_path / "pipeline_events"
+    threshold = tmp_path / "threshold_cycle"
+    snapshots = threshold / "snapshots"
+    monkeypatch.setattr(constants, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(observations, "PIPELINE_EVENT_DIR", pipeline)
+    monkeypatch.setattr(observations, "THRESHOLD_EVENT_DIR", threshold)
+    monkeypatch.setattr(observations, "THRESHOLD_SNAPSHOT_DIR", snapshots)
+    accepted = {
+        "stage": "ai_confirmed", "stock_code": "005930", "record_id": "r1",
+        "emitted_date": day, "emitted_at": f"{day}T09:10:00+09:00",
+        "fields": {"record_id": "r1", "ai_score": 72, "action": "BUY"},
+    }
+    rows = [
+        accepted,
+        dict(accepted, emitted_date="2026-09-22", record_id="wrong-date"),
+        dict(accepted, record_id="retry", fields={
+            "ai_call_trigger_reason": "early_accel_recheck",
+        }),
+        dict(accepted, record_id="cancel", fields={
+            "runtime_family": "entry_cancel_wait_runtime",
+        }),
+    ]
+    path = pipeline / f"pipeline_events_{day}.jsonl"
+    if storage == "snapshot":
+        path = snapshots / f"pipeline_events_{day}_postclose.jsonl.gz"
+    elif storage == "gzip":
+        path = path.with_suffix(".jsonl.gz")
+    writer = _write_gzip_jsonl if path.suffix == ".gz" else _write_jsonl
+    writer(path, rows)
+    if storage == "coexist":
+        _write_gzip_jsonl(path.with_suffix(".jsonl.gz"), rows)
+    # A repeated source snapshot must not create a second observation.
+    _write_jsonl(snapshots / f"threshold_events_{day}_later.jsonl", rows)
+
+    events = list(compat._iter_relevant_events(day))
+    assert [event["record_id"] for event in events] == ["r1"]
+    assert events[0]["_source_path"] == str(path)
+    assert events == list(observations._iter_relevant_events(day))
+    result = source.load_entry_observations(day)
+    assert result["status"] == "pass"
+    assert len(result["rows"]) == 1
+    row = result["rows"][0]
+    assert (row["record_id"], row["ai_score"], row["chosen_action"]) == (
+        "r1", 72, "BUY_NOW",
+    )
+    assert result["decision_authority"] == "source_only"
+    assert result["runtime_effect"] is False
+    assert result["allowed_runtime_apply"] is False
+
+
+@pytest.mark.parametrize("payload", [None, "", "scalp-not-json\n[\"scalp\"]\n"])
+def test_entry_observation_empty_source_keeps_existing_status(
+    tmp_path, monkeypatch, payload
+):
+    from src.engine.scalping import entry_observation_source as source
+    from src.utils import constants
+
+    day = "2026-09-23"
+    monkeypatch.setattr(constants, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(observations, "PIPELINE_EVENT_DIR", tmp_path)
+    monkeypatch.setattr(observations, "THRESHOLD_EVENT_DIR", tmp_path / "threshold")
+    monkeypatch.setattr(observations, "THRESHOLD_SNAPSHOT_DIR", tmp_path / "snapshots")
+    if payload is not None:
+        (tmp_path / f"pipeline_events_{day}.jsonl").write_text(payload)
+    result = source.load_entry_observations(day)
+    assert result["status"] == "no_observations"
+    assert result["rows"] == []
+    assert result["allowed_runtime_apply"] is False
+
+
 def test_entry_adm_excludes_early_accel_recheck_retry_rows(tmp_path, monkeypatch):
     pipeline_dir = tmp_path / "pipeline_events"
     threshold_dir = tmp_path / "threshold_cycle"
     snapshot_dir = threshold_dir / "snapshots"
-    monkeypatch.setattr(mod, "PIPELINE_EVENT_DIR", pipeline_dir)
-    monkeypatch.setattr(mod, "THRESHOLD_EVENT_DIR", threshold_dir)
-    monkeypatch.setattr(mod, "THRESHOLD_SNAPSHOT_DIR", snapshot_dir)
+    monkeypatch.setattr(observations, "PIPELINE_EVENT_DIR", pipeline_dir)
+    monkeypatch.setattr(observations, "THRESHOLD_EVENT_DIR", threshold_dir)
+    monkeypatch.setattr(observations, "THRESHOLD_SNAPSHOT_DIR", snapshot_dir)
 
     _write_jsonl(
         pipeline_dir / "pipeline_events_2026-05-18.jsonl",
@@ -86,7 +168,7 @@ def test_entry_adm_excludes_early_accel_recheck_retry_rows(tmp_path, monkeypatch
         ],
     )
 
-    rows = list(mod._iter_relevant_events("2026-05-18"))
+    rows = list(observations._iter_relevant_events("2026-05-18"))
 
     assert len(rows) == 1
     assert rows[0]["stock_code"] == "222222"
@@ -160,15 +242,15 @@ def test_scalp_entry_adm_event_paths_include_gzip_threshold_events(
     tmp_path, monkeypatch
 ):
     threshold_dir = tmp_path / "threshold_cycle"
-    monkeypatch.setattr(mod, "THRESHOLD_EVENT_DIR", threshold_dir)
-    monkeypatch.setattr(mod, "PIPELINE_EVENT_DIR", tmp_path / "pipeline_events")
-    monkeypatch.setattr(mod, "THRESHOLD_SNAPSHOT_DIR", threshold_dir / "snapshots")
+    monkeypatch.setattr(observations, "THRESHOLD_EVENT_DIR", threshold_dir)
+    monkeypatch.setattr(observations, "PIPELINE_EVENT_DIR", tmp_path / "pipeline_events")
+    monkeypatch.setattr(observations, "THRESHOLD_SNAPSHOT_DIR", threshold_dir / "snapshots")
     _write_gzip_jsonl(
         threshold_dir / "threshold_events_2026-05-18.jsonl.gz",
         [{"stage": "scalp_entry_action_decision_snapshot", "fields": {}}],
     )
 
-    assert mod._event_paths("2026-05-18") == [
+    assert observations._event_paths("2026-05-18") == [
         threshold_dir / "threshold_events_2026-05-18.jsonl.gz"
     ]
 
@@ -191,10 +273,10 @@ def test_scalp_entry_adm_normalizes_submitted_snapshot_action():
     }
 
     assert (
-        mod._chosen_action("scalp_entry_action_decision_snapshot", fields)
+        observations._chosen_action("scalp_entry_action_decision_snapshot", fields)
         == "BUY_DEFENSIVE"
     )
-    row = mod._base_row(
+    row = observations._base_row(
         {
             "stage": "scalp_entry_action_decision_snapshot",
             "stock_code": "005930",
@@ -218,7 +300,7 @@ def test_scalp_entry_adm_normalizes_submitted_snapshot_action():
     assert row["order_response_ord_no"] == "0046858"
     assert row["submit_attempt_id"] == "005930:1781160000000:0046858"
     assert (
-        mod._chosen_action(
+        observations._chosen_action(
             "scalp_entry_action_decision_snapshot",
             {
                 "source_stage": "entry_submit_revalidation_warning",
@@ -230,7 +312,7 @@ def test_scalp_entry_adm_normalizes_submitted_snapshot_action():
 
 
 def test_scalp_entry_adm_preserves_sim_candidate_original_score_on_price_skip():
-    row = mod._base_row(
+    row = observations._base_row(
         {
             "stage": "scalp_sim_entry_ai_price_skip_order",
             "stock_code": "005930",
@@ -249,7 +331,7 @@ def test_scalp_entry_adm_preserves_sim_candidate_original_score_on_price_skip():
     assert row["score_bucket"] == "score50_64"
     assert row["chosen_action"] == "SKIP_PRE_SUBMIT_SAFETY"
     assert (
-        mod._score_source(
+        observations._score_source(
             {
                 "ai_score": "70",
                 "scalp_sim_candidate_window_original_score": "56",
@@ -260,7 +342,7 @@ def test_scalp_entry_adm_preserves_sim_candidate_original_score_on_price_skip():
 
 
 def test_scalp_entry_adm_uses_current_ai_score_on_price_skip():
-    row = mod._base_row(
+    row = observations._base_row(
         {
             "stage": "scalp_sim_entry_ai_price_skip_order",
             "stock_code": "005930",
@@ -286,21 +368,21 @@ def test_scalp_entry_adm_ai_confirmed_uses_score_as_prior_not_hard_gate(monkeypa
     )
 
     assert (
-        mod._chosen_action("ai_confirmed", {"action": "BUY", "ai_score": "72"})
+        observations._chosen_action("ai_confirmed", {"action": "BUY", "ai_score": "72"})
         == "BUY_NOW"
     )
     assert (
-        mod._chosen_action("ai_confirmed", {"action": "BUY", "ai_score": "69"})
+        observations._chosen_action("ai_confirmed", {"action": "BUY", "ai_score": "69"})
         == "BUY_NOW"
     )
     assert (
-        mod._chosen_action("ai_confirmed", {"action": "WAIT", "ai_score": "90"})
+        observations._chosen_action("ai_confirmed", {"action": "WAIT", "ai_score": "90"})
         == "NO_BUY_AI"
     )
 
 
 def test_scalp_entry_adm_preserves_submit_refresh_provenance():
-    row = mod._base_row(
+    row = observations._base_row(
         {
             "stage": "order_bundle_submitted",
             "stock_code": "005930",
@@ -501,7 +583,7 @@ def test_scalp_entry_adm_runtime_maps_runtime_context_without_unknown_buckets(
 
 
 def test_scalp_entry_adm_row_preserves_live_entry_replay_context_fields():
-    row = mod._base_row(
+    row = observations._base_row(
         {
             "stage": "scalp_entry_action_decision_snapshot",
             "stock_code": "123456",
@@ -940,7 +1022,7 @@ def test_entry_adm_backfills_exact_sim_lineage_without_symbol_time_guess():
         },
     ]
 
-    mod._backfill_sim_lineage(rows)
+    observations._backfill_sim_lineage(rows)
 
     assert rows[1]["sim_record_id"] == "SCALPSIM-005930-1"
     assert rows[1]["sim_lineage_backfill_source"] == "exact_entry_adm_candidate_id"
@@ -949,7 +1031,7 @@ def test_entry_adm_backfills_exact_sim_lineage_without_symbol_time_guess():
 
 
 def test_entry_adm_revalidation_block_backfills_score_and_canary_context_is_optional():
-    score_event = mod._base_row(
+    score_event = observations._base_row(
         {
             "stage": "blocked_ai_score",
             "stock_code": "005930",
@@ -958,7 +1040,7 @@ def test_entry_adm_revalidation_block_backfills_score_and_canary_context_is_opti
             "fields": {"ai_score": 68},
         }
     )
-    block_event = mod._base_row(
+    block_event = observations._base_row(
         {
             "stage": "entry_submit_revalidation_block",
             "stock_code": "005930",
@@ -967,7 +1049,7 @@ def test_entry_adm_revalidation_block_backfills_score_and_canary_context_is_opti
             "fields": {"entry_submit_revalidation_block": True},
         }
     )
-    canary_event = mod._base_row(
+    canary_event = observations._base_row(
         {
             "stage": "scalp_entry_action_decision_snapshot",
             "stock_code": "000660",
@@ -980,7 +1062,7 @@ def test_entry_adm_revalidation_block_backfills_score_and_canary_context_is_opti
         }
     )
 
-    mod._backfill_score_context([block_event], source_rows=[score_event, block_event])
+    observations._backfill_score_context([block_event], source_rows=[score_event, block_event])
 
     assert block_event["score_bucket"] == "score65_74"
     assert block_event["score_backfill_match_type"] == "exact_key"
@@ -1017,7 +1099,7 @@ def test_scalp_entry_adm_non_actionable_context_unknown_does_not_create_source_q
 
 
 def test_scalp_entry_adm_explicit_runtime_block_context_is_not_available():
-    row = mod._base_row(
+    row = observations._base_row(
         {
             "stage": "scalp_entry_action_decision_snapshot",
             "stock_code": "950260",
@@ -1299,7 +1381,7 @@ def test_adm_lookup_closure_splits_new_bucket_and_producer_context_missing():
     }
 
 
-def test_retired_current_producer_preserves_prior_and_has_no_authority(tmp_path,monkeypatch):
+def test_retired_current_producer_preserves_prior_and_has_no_authority(tmp_path,monkeypatch,capsys):
     import importlib
     current=importlib.import_module('src.engine.scalp_entry_action_decision_matrix')
     prior=tmp_path/"prior.json";prior.write_text("original")
@@ -1308,3 +1390,6 @@ def test_retired_current_producer_preserves_prior_and_has_no_authority(tmp_path,
     monkeypatch.setattr(type(prior),"read_text",forbidden)
     result=current.build_scalp_entry_action_decision_matrix_report("2026-10-12")
     assert result["status"]=="retired" and result["allowed_runtime_apply"] is False
+    assert current.render_scalp_entry_action_decision_matrix_markdown(result) == result
+    assert current.main([]) == 0
+    assert json.loads(capsys.readouterr().out) == result

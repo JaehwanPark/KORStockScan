@@ -361,3 +361,29 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
 - Python compile 2파일·Ruff `F401/F811/F821`·문서 링크/owner/print-only parser·`git diff --check` 통과. runtime 제거 함수의 import/attribute/getattr 참조 0, public import 9곳의 계약 보존 확인. shell/cron 및 broker API/parser/계좌/주문 callsite 변경이 없어 shell 검사와 Official Kiwoom Reference Gate는 해당 없음.
 - 증감(base `10f8d1ba6`): non-test source **+0/-158**, test **+30/-0**, docs **+20/-0**. 테스트 증가는 역사 fixture에 가려졌던 원 runtime 퇴역 경계 검증이며 생산 코드는 삭제만 했다.
 - 검토 범위의 미해결 코드 결함 0으로 구현 종결. 정책 handoff 발행·불변 배포 패키지·선택/PID 전환·재기동·자연 소비는 수행하지 않았다. 향후 배포 준비에서는 당시 선택본과 후보 commit의 기존 native handoff 계약을 검증하며, 이번 pytest 결과를 운영 적용 영수증으로 사용하지 않는다.
+
+
+## Entry 관측 reader 통합 — CodeRefactorEntryObservation1020
+
+- [x] **CodeRefactorEntryObservation1020** — 동일 정규화 구현 33개를 기존 owner로 통합하고 격리 후보를 검증.
+  - Source: 사용자 `구현하고 코드리뷰 후 수정보완 반복하고 배포본 준비`; 확정 범위는 entry event 정규화·역사 ADM reader·기존 호환 import·직접 영향 테스트다.
+  - Owner: `scalping/entry_observation_events.py`(공통 정규화), `lifecycle/archive/scalp_entry_action_decision_matrix_readers.py`(역사 전용 집계). 기준 선택 commit `d927d0d70f1daef2e2a6bf9aeccc0e0f1a028f26`, release `entry-role-latency-integrated-20261020-d927d0d70`.
+  - 격리 작업본 `/home/ubuntu/KORStockScan-worktrees/refactor-entry-readers-20261020`, branch `codex/refactor-entry-readers-20261020`. 기준본의 Opening Rotation source/test는 앞선 `d8acaa0aa`와 동일하며 중복 적용하지 않았다. 기본 작업본의 병행 문서·선택 포인터·PID·운영 shell·정책은 수정하지 않는다.
+  - 종료점: 중복 구현 제거·소비자 이관·동등성/퇴역 검증·clean 후보 커밋과 불변 배포 대기 패키지. Sentinel/reversal 통합, 성능·source-quality 의미 변경, 배포·재기동은 범위 밖이다.
+
+| 기존 대상 | 대체 | 판정·소비 근거 |
+| --- | --- | --- |
+| 역사 reader의 공통 함수 33개·동일 상수 11개 | 기존 `entry_observation_events` 구현 | consolidated; 중복 함수 본문909줄 제거. 역사 집계가 직접 사용하는 helper 5개와 상수 2개만 import하고 별도 구현을 남기지 않음 |
+| 역사 reader의 pipeline/threshold/snapshot 경로 전역값 3개 | canonical event reader의 기존 경로 | removed; 실제 경로 소비·테스트 patch를 canonical owner로 이관. 두 파일의 기본 project root 해석은 동일 |
+| 역사 reader 전용 14함수·ADM/post-sell 경로·clean baseline | 기존 역사 reader | retained; 역사 sim outcome/누적/lookup/unknown 집계가 소비. 보존 함수 AST 전부 기준본과 동일 |
+| root 호환 표면의 공통 함수 7개 import | canonical owner 직접 import | consolidated; 기존 이름은 명시적 재수출로 유지. 나머지 역사 export와 retired builder/render/CLI 유지; 문서 owner가 역사 명령을 퇴역시킬 때 이 호환 표면을 별도 제거 |
+| 현행 정규화·source adapter·dedupe/followup·Main WAIT6579 상수 | 기존 구현 | retained; gate backtest·intraday probe·Main이 소비. 두 현행 파일 bytes는 기준본과 동일하며 runtime/order/provider 권한을 추가하지 않음 |
+
+- 자체 리뷰→보완→재리뷰: 전역 경로 patch를 옛 module에 남기면 canonical import가 다른 경로를 읽을 위험을 제거했다. 호환 import는 명시적 재수출로 정리해 기존 API를 보존했다. 손상 JSON fixture가 token filter에서 조기 제외되던 것을 수정해 실제 decoder 실패 경로도 확인했다. 검토 범위의 미해결 코드 결함 0이며 전체 코드베이스 무결함을 의미하지 않는다.
+- 검증: 기존 영향5파일 변경 전 **192 PASS**, 최종 **199 PASS**, skip/제외0. 미압축·gzip·공존·snapshot, 날짜/재시도/cancel-wait 제외, 중복 source, 누락·빈 입력·손상 JSON의 기존 판정, source-only 결과와 retired builder/render/CLI 무권한 종료를 확인했다. 역사 sim/누적·정규화/score lineage·gate/probe consumer의 기존 회귀를 보존했다.
+- 격리: 기존 seccomp runner로 network connect/send를 차단하고 fixture의 원천/retirement 경로를 tmp에 결속했다. 정규 보고서·원천 재생성, provider/주문/취소 호출은 없다. 원래 source-quality 판정을 바꾸거나 과거 계보/손익을 새로 만들지 않았다.
+- Python compile4파일·Ruff `F401/F811/F821`·static import/별칭/attribute/getattr·CLI/등록 확인·문서 owner/print-only parser·`git diff --check` 통과. 제거 정의33개·미이관 consumer0·역사14함수 AST 동일·canonical2파일 bytes 동일. shell/cron 및 broker API/parser/계좌/주문 callsite 변경이 없어 shell 검사와 Official Kiwoom Reference Gate는 해당 없음.
+- 증감(base `d927d0d70`): non-test source **+29/-1,248, 순감1,219줄**; test **+113/-28, 순증85줄**; docs **+26/-0**. 새 module·wrapper·report producer·validator/framework·파일 이동 없음. 테스트 증가는 실제 source adapter/호환 reader 경로와 퇴역 CLI를 검증한다.
+- 재현/리뷰 자료는 후보 `tmp/refactor-entry-readers-20261020/`의 `baseline-tests.log`, `final-tests.log`, `removal-scope.json`, `review.json`, `docs-parser.log`에 보존한다.
+- 배포 대기 패키지 owner는 deployment infrastructure. 최종 clean commit을 `/home/ubuntu/KORStockScan-runtime-releases/entry-readers-20261020-v1`에 detached로 준비하고 기존 `runtime_release_router.validate_release`로 source/commit·공유 경로·영구 퇴역 guard를 검증한다. 최종 결과는 같은 후보 evidence directory의 `release-validation.json`에 남긴다.
+- 선택/PID 전환·실제 배포·재기동·자연 소비는 미실행이다. 공유 docs는 기존 운영 문서를 유지한다. 실제 배포 시에는 당시 선택본과 이 후보의 ancestry/문서 변경을 다시 통합하고, 정확한 active-policy native handoff/parity 및 pre-drain 검증을 새로 수행해야 한다. 이번 code/package 검증을 그 영수증으로 재사용하지 않는다.
