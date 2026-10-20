@@ -3350,6 +3350,33 @@ for (_trigger, _trigger_sha), _variant in REVIEWED_POSTCLOSE_REPAIR_DEPENDENCY_V
     REVIEWED_HOLDING_RESEARCH_DEPENDENCIES[_trigger][_trigger_sha] = _variant['dependencies']
 
 
+# Source-only logical pipeline receipt successor. Preserve the previous
+# postclose group and require the complete exact producer/cache/proof delta.
+REVIEWED_LOGICAL_PIPELINE_HASHES = {'src/engine/scalping/initial_quantity_monitor_projection.py': '8dce560b2434f30912b39330c42932debfb4671d3b3689c10226ddcd18d083c4',
+ 'src/engine/scalping/initial_quantity_policy.py': '4567eed7de944395133eb6ebc975c823cf3840e6abe9424877455130feb55c87',
+ 'src/engine/scalping/initial_quantity_source_cache.py': '353795e63675a34743f1bdf0823f684cbdcdd472cdf12790dc17896e1aa107db'}
+REVIEWED_LOGICAL_PIPELINE_PAIRS = {'src/engine/scalping/initial_quantity_monitor_projection.py': (('252ca991d7729e4b86393831ca2b6c7345a4a255d0e9c8d5d39c1bbf77a13947',
+                                                                 '8dce560b2434f30912b39330c42932debfb4671d3b3689c10226ddcd18d083c4'),
+                                                                ('28e2d8b4e06be95c5f91b36298cfe8015f0f2474419964c60f1db4fcc267a21f',
+                                                                 '8dce560b2434f30912b39330c42932debfb4671d3b3689c10226ddcd18d083c4')),
+ 'src/engine/scalping/initial_quantity_policy.py': (('806875b857f58895a39ec116ed0a3b619539f7d782fc1996581c1af84c201a34',
+                                                     '4567eed7de944395133eb6ebc975c823cf3840e6abe9424877455130feb55c87'),),
+ 'src/engine/scalping/initial_quantity_source_cache.py': (('77a7b57d5f752c760332fc6fd46a4fb121d4c0042ceb464a689fae1dc23c5704',
+                                                           '353795e63675a34743f1bdf0823f684cbdcdd472cdf12790dc17896e1aa107db'),)}
+REVIEWED_LOGICAL_PIPELINE_DEPENDENCY_VARIANTS = {
+    (trigger, REVIEWED_LOGICAL_PIPELINE_HASHES.get(os.path.normpath(trigger), sha)): {**value,
+        'selector_path': 'src/engine/scalping/initial_quantity_policy.py',
+        'selector_sha256': REVIEWED_LOGICAL_PIPELINE_HASHES['src/engine/scalping/initial_quantity_policy.py'],
+        'dependencies': {**{name: REVIEWED_LOGICAL_PIPELINE_HASHES.get(os.path.normpath(name), digest)
+                           for name, digest in value['dependencies'].items()}, **REVIEWED_LOGICAL_PIPELINE_HASHES},
+        'contract_extensions': {origin: {name: REVIEWED_LOGICAL_PIPELINE_HASHES.get(os.path.normpath(name), digest)
+            for name, digest in paths.items()} for origin, paths in value['contract_extensions'].items()},
+    } for (trigger, sha), value in REVIEWED_POSTCLOSE_REPAIR_DEPENDENCY_VARIANTS.items()
+}
+for (_trigger, _trigger_sha), _variant in REVIEWED_LOGICAL_PIPELINE_DEPENDENCY_VARIANTS.items():
+    REVIEWED_HOLDING_RESEARCH_DEPENDENCIES[_trigger][_trigger_sha] = _variant['dependencies']
+
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -3419,6 +3446,9 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     postclose_repair_present = any((root / name).is_file()
         and hashlib.sha256(candidate_bytes(name)).hexdigest() == sha
         for name, sha in REVIEWED_POSTCLOSE_REPAIR_HASHES.items())
+    logical_pipeline_present = any((root / name).is_file()
+        and hashlib.sha256(candidate_bytes(name)).hexdigest() == sha
+        for name, sha in REVIEWED_LOGICAL_PIPELINE_HASHES.items())
     contract_names = {repository_name(name) for name in paths.values()}
     for trigger, generations in REVIEWED_HOLDING_RESEARCH_DEPENDENCIES.items():
         if trigger not in contract_names:
@@ -3427,7 +3457,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         dependencies = generations.get(trigger_sha, {})
         # New exact selectors precede their historical parent. The first match
         # selects one complete generation, never per-file SHA alternatives.
-        for variants in (REVIEWED_POSTCLOSE_REPAIR_DEPENDENCY_VARIANTS,
+        for variants in (REVIEWED_LOGICAL_PIPELINE_DEPENDENCY_VARIANTS,
+                         REVIEWED_POSTCLOSE_REPAIR_DEPENDENCY_VARIANTS,
                          REVIEWED_CLOSED_OBSERVER_DEPENDENCY_VARIANTS,
                          REVIEWED_SOURCE_EPOCH_DEPENDENCY_VARIANTS,
                          REVIEWED_ROUTED_REUSE_DEPENDENCY_VARIANTS,
@@ -3536,6 +3567,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
             dependencies = {**dependencies, **REVIEWED_CLOSED_OBSERVER_HASHES}
         if postclose_repair_present:
             dependencies = {**dependencies, **REVIEWED_POSTCLOSE_REPAIR_HASHES}
+        if logical_pipeline_present:
+            dependencies = {**dependencies, **REVIEWED_LOGICAL_PIPELINE_HASHES}
         dependencies_by_trigger[trigger] = (trigger_sha, dependencies)
     for key, name in paths.items():
         after = candidate_bytes(name)
@@ -3552,7 +3585,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         if before == after:
             continue
         pair = (hashlib.sha256(before).hexdigest(), hashlib.sha256(after).hexdigest())
-        if (pair in REVIEWED_POSTCLOSE_REPAIR_PAIRS.get(repository_name(name), ())
+        if (pair in REVIEWED_LOGICAL_PIPELINE_PAIRS.get(repository_name(name), ())
+                or pair in REVIEWED_POSTCLOSE_REPAIR_PAIRS.get(repository_name(name), ())
                 or pair in REVIEWED_CLOSED_OBSERVER_PAIRS.get(repository_name(name), ())
                 or pair in REVIEWED_SOURCE_EPOCH_PAIRS.get(repository_name(name), ())
                 or pair in REVIEWED_ROUTED_REUSE_PAIRS.get(repository_name(name), ())

@@ -946,9 +946,17 @@ def _join_post_fill_paths_uncached(trades: list[dict[str, Any]], *, data_dir: Pa
         stat = path.stat()
         archive_receipt_path = Path(f"{path}.archive_receipt.json")
         archive_identity_valid: bool | None = None
+        logical_source = None
         if path.suffix == ".gz" and archive_receipt_path.is_file():
             try:
-                archive = json.loads(archive_receipt_path.read_text(encoding="utf-8"))
+                if archive_receipt_path.is_symlink() or archive_receipt_path.stat().st_size > 128 * 1024:
+                    raise ValueError('quantity_pipeline_archive_receipt_invalid')
+                raw_receipt = archive_receipt_path.read_bytes()
+                if len(raw_receipt) > 128 * 1024:
+                    raise ValueError('quantity_pipeline_archive_receipt_invalid')
+                archive = json.loads(raw_receipt)
+                if not isinstance(archive, dict) or not isinstance(archive.get('archive_generation'), dict):
+                    raise ValueError('quantity_pipeline_archive_receipt_invalid')
                 generation = archive["archive_generation"]
                 archive_identity_valid = bool(
                     archive.get("schema") == "pipeline_raw_archive_identity_v1"
@@ -956,6 +964,20 @@ def _join_post_fill_paths_uncached(trades: list[dict[str, Any]], *, data_dir: Pa
                     and generation.get("inode") == stat.st_ino
                     and generation.get("size_bytes") == stat.st_size
                     and generation.get("mtime_ns") == stat.st_mtime_ns)
+                if archive_identity_valid and ('artifact_content_sha256' in archive or 'ctime_ns' in generation):
+                    # Reuse the native raw archive owner's sealed logical
+                    # authority. Keep the original raw receipt shape stable;
+                    # compression is storage custody, not a new research input.
+                    from src.engine.automation.main_trailing_source_store import _archive_logical_authority
+                    logical = path.with_suffix('')
+                    checked = _archive_logical_authority(logical)
+                    observed = dict(device=stat.st_dev, inode=stat.st_ino, size_bytes=stat.st_size,
+                                    mtime_ns=stat.st_mtime_ns, ctime_ns=stat.st_ctime_ns)
+                    if (path.is_symlink() or logical.exists() or checked is None or checked[0] != archive
+                            or archive['archive_generation'] != observed):
+                        raise ValueError('quantity_pipeline_archive_generation_invalid')
+                    logical_source = dict(path=str(logical), size_bytes=archive['logical_size_bytes'],
+                                          sha256=archive['logical_content_sha256'], archive_identity_valid=None)
             except (OSError, ValueError, KeyError, TypeError):
                 archive_identity_valid = False
         if source_receipts is not None:
@@ -963,6 +985,8 @@ def _join_post_fill_paths_uncached(trades: list[dict[str, Any]], *, data_dir: Pa
                                     "sha256": _file_sha256(path),
                                     "archive_identity_valid": archive_identity_valid,
                                     "capture_lifecycle_generation": lifecycle_generation}
+            if logical_source is not None and archive_identity_valid:
+                source_receipts[day].update(logical_source)
         if archive_identity_valid is False:
             for group in records.values():
                 for trade in group:

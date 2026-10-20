@@ -148,6 +148,7 @@ def fingerprint(trades,path,horizon):
         'initial_quantity_cap_observation.py','initial_quantity_type.py')}
     readers['utils/jsonl_io.py']=engine.parent/'utils/jsonl_io.py'
     readers['lifecycle/research_input_budget.py']=engine/'lifecycle/research_input_budget.py'
+    readers['automation/main_trailing_source_store.py']=engine/'automation/main_trailing_source_store.py'
     reader={name:hashlib.sha256(path.read_bytes()).hexdigest()
             for name,path in readers.items()}
     legacy_fields = ('trade_id','record_id','stock_code','entry_date','exit_date',

@@ -1792,12 +1792,13 @@ def test_source_reader_handoff_preserves_issued_policy_and_exact_dependencies(tm
         names.update(variant['dependencies'])
     names.update(handoff.REVIEWED_SOURCE_READER_HASHES)
     if generation!='source_reader':names.update(handoff.REVIEWED_SOURCE_INTEGRATION_HASHES)
-    if generation in ('original_gap','incident_order','product_intake','sqlite_lifecycle','retired_review','clean_sqlite','delay_cleanup','role_latency','startup_budget','delay_shutdown','routed_reuse','source_epoch','closed_observer','postclose_repair'):names.update(handoff.REVIEWED_ORIGINAL_GAP_HASHES)
-    if generation in ('product_intake','sqlite_lifecycle','retired_review','clean_sqlite','delay_cleanup','role_latency','startup_budget','delay_shutdown','routed_reuse','source_epoch','closed_observer','postclose_repair'):names.update(handoff.REVIEWED_PRODUCT_INTAKE_HASHES)
+    if generation in ('original_gap','incident_order','product_intake','sqlite_lifecycle','retired_review','clean_sqlite','delay_cleanup','role_latency','startup_budget','delay_shutdown','routed_reuse','source_epoch','closed_observer','postclose_repair','logical_pipeline'):names.update(handoff.REVIEWED_ORIGINAL_GAP_HASHES)
+    if generation in ('product_intake','sqlite_lifecycle','retired_review','clean_sqlite','delay_cleanup','role_latency','startup_budget','delay_shutdown','routed_reuse','source_epoch','closed_observer','postclose_repair','logical_pipeline'):names.update(handoff.REVIEWED_PRODUCT_INTAKE_HASHES)
     if generation in ('sqlite_lifecycle','clean_sqlite'):names.update(handoff.REVIEWED_SQLITE_LIFECYCLE_HASHES)
-    if generation in ('retired_review','clean_sqlite','delay_cleanup','role_latency','startup_budget','delay_shutdown','routed_reuse','source_epoch','closed_observer','postclose_repair'):names.update(handoff.REVIEWED_RETIRED_REVIEW_HASHES)
-    if generation in ('delay_cleanup','role_latency','startup_budget','delay_shutdown','routed_reuse','source_epoch','closed_observer','postclose_repair'):
-        for variant in (handoff.REVIEWED_POSTCLOSE_REPAIR_DEPENDENCY_VARIANTS if generation=='postclose_repair' else
+    if generation in ('retired_review','clean_sqlite','delay_cleanup','role_latency','startup_budget','delay_shutdown','routed_reuse','source_epoch','closed_observer','postclose_repair','logical_pipeline'):names.update(handoff.REVIEWED_RETIRED_REVIEW_HASHES)
+    if generation in ('delay_cleanup','role_latency','startup_budget','delay_shutdown','routed_reuse','source_epoch','closed_observer','postclose_repair','logical_pipeline'):
+        for variant in (handoff.REVIEWED_LOGICAL_PIPELINE_DEPENDENCY_VARIANTS if generation=='logical_pipeline' else
+                handoff.REVIEWED_POSTCLOSE_REPAIR_DEPENDENCY_VARIANTS if generation=='postclose_repair' else
                 handoff.REVIEWED_CLOSED_OBSERVER_DEPENDENCY_VARIANTS if generation=='closed_observer' else
                 handoff.REVIEWED_SOURCE_EPOCH_DEPENDENCY_VARIANTS if generation=='source_epoch' else
                 handoff.REVIEWED_ROUTED_REUSE_DEPENDENCY_VARIANTS if generation=='routed_reuse' else
@@ -1809,10 +1810,10 @@ def test_source_reader_handoff_preserves_issued_policy_and_exact_dependencies(tm
     names.add('src/engine/automation/intraday_release_handoff.py')
     for name in names:
         path = root/name; path.parent.mkdir(parents=True,exist_ok=True)
-        path.write_bytes((canonical/name).read_bytes() if generation=='postclose_repair' or
+        path.write_bytes((canonical/name).read_bytes() if generation=='logical_pipeline' or
             name=='src/engine/automation/intraday_release_handoff.py' else subprocess.check_output(
                 ['git','-C',str(canonical),'show',
-                 ({'closed_observer':'04e19bad0','source_epoch':'88351a078','routed_reuse':'68213dd10','delay_shutdown':'49ef280dc','startup_budget':'105f6f031','role_latency':'6e037d078','source_reader':'0255cb05f','incident_order':'041caf05e','product_intake':'21d822a64',
+                 ({'postclose_repair':'0cfd32827','closed_observer':'04e19bad0','source_epoch':'88351a078','routed_reuse':'68213dd10','delay_shutdown':'49ef280dc','startup_budget':'105f6f031','role_latency':'6e037d078','source_reader':'0255cb05f','incident_order':'041caf05e','product_intake':'21d822a64',
                    'sqlite_lifecycle':'c550a4c43','retired_review':'3d8abd012','clean_sqlite':'0ce816f7c','delay_cleanup':'661260e5f'}.get(generation,'99c51c85f'))
                  +':'+os.path.normpath(name)]))
     original = {key: hashlib.sha256(subprocess.check_output(
@@ -1828,7 +1829,7 @@ def test_source_reader_handoff_preserves_issued_policy_and_exact_dependencies(tm
     reader = root/reader_path
     if fault == 'missing': reader.unlink()
     elif fault == 'parent_mix':
-        parent = ('04e19bad0' if generation == 'postclose_repair' else origin if generation == 'routed_reuse'
+        parent = ('0cfd32827' if generation == 'logical_pipeline' else '04e19bad0' if generation == 'postclose_repair' else origin if generation == 'routed_reuse'
                   and reader_path in handoff.REVIEWED_ROUTED_REUSE_HASHES else '21d822a64')
         reader.write_bytes(subprocess.check_output(['git','-C',str(canonical),'show',parent+':'+reader_path]))
         revision=commit()
@@ -1972,3 +1973,15 @@ def test_closed_consumption_requires_native_terminal_stop_eod_and_frozen_consump
 def test_postclose_repair_requires_complete_exact_reader_generation(tmp_path, family, source, fault):
     test_source_reader_handoff_preserves_issued_policy_and_exact_dependencies(
         tmp_path, family, fault, source, 'postclose_repair')
+
+
+@pytest.mark.parametrize('family', ['main_stop', 'holding_vote', 'pre_submit_delay'])
+@pytest.mark.parametrize('source,fault', [(source,fault)
+    for source in (*handoff.REVIEWED_LOGICAL_PIPELINE_HASHES,
+                   'src/engine/error_detectors/artifact_freshness.py',
+                   'deploy/run_threshold_cycle_postclose.sh')
+    for fault in (None,'missing','dirty','committed_change','parent_mix')
+    if fault!='parent_mix' or source in handoff.REVIEWED_LOGICAL_PIPELINE_HASHES])
+def test_logical_pipeline_handoff_binds_exact_new_and_prior_owners(tmp_path, family, source, fault):
+    test_source_reader_handoff_preserves_issued_policy_and_exact_dependencies(
+        tmp_path, family, fault, source, 'logical_pipeline')

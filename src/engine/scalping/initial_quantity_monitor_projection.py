@@ -44,6 +44,7 @@ def _code():
     from src.engine.lifecycle.holding_window_generation import cached_code_generation
     engine = Path(__file__).resolve().parents[1]
     names = set('''scalping/initial_quantity_monitor_projection.py
+automation/main_trailing_source_store.py
 scalping/entry_split_monitor_projection.py
 scalping/initial_quantity_policy.py
 scalping/initial_quantity_source_cache.py

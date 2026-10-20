@@ -100,6 +100,7 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
 ## 장후 원천·자연 수용 이관
 
 - [ ] `[InitialQuantityProducerConsumerRepair1010] 매수수량 원천·fact·시간창·장후 소비 결손 수리와 자연 수용` (`Due: 2026-10-20`, `Slot: POSTCLOSE`, `TimeWindow: 16:30~23:59`, `Track: RuntimeStability`)
+  - native 재발행 추가 원인:16일 파이프라인 gzip의 물리 경로/SHA가 timeout 재생성에 유입됐다. 논리 원천 영수증 보존 경로를 보완해 원 구현1FAIL·수정405PASS·정확 code 인계84PASS를 확인했다. 실제 cache/proof 복구는 동시 배포 담당 확정 후 원 source19/date/hash로 제한 수행하며 원 실패는 보존한다.
   - 22시 후속 보수: 원 수량 proof의 raw→native gzip 변환은 논리 SHA/size/원 inode identity로 대조하고, 비용·다른 원천 변경은 계속 거부한다. source19 proof는 기존 publisher의 전체 native 검증 후만 재발행하며 과거 비용/terminal 결손은 null로 보존한다.
   - 10/20 이관: 기능 수리·리뷰·native 재생·source19 strict/controller·20일 정책/PID 소비 완료. 수량 stage `4f3e04811174fa6fe7c8559c65994103d26d99116c572f16b159a9bd1577e82c`의 실제 마지막 소비를 확인했다. 6유형 기존 10/15/20/25/25% 부모 정책 유지; 실제 비용·terminal이 없는 과거 행은 null/제외로 보존한다. 아래 기존 Acceptance·실패·자연 수용 이력은 보존하며 다음 자연 완료 비용 표본만 대조한다. 코드 완료를 새 EV/실주문 성과로 해석하지 않는다.
   - 10/20 07:30: R19 native holding 18.623s와 최종 원천검사 결속 수량86c16e96을 확인. 손절은18 position 계산 후 indexed vote와 raw byte 세대의 비교 결함으로 최종 게시 실패. 원 실패 보존 후 기존 native typed verifier로 수리 중이며21 focused/48 handoff PASS. 전체 회귀·새 선택·재생성·20-date PREOPEN/PID는 미완료. [원인 수리 리뷰](../audits/postclose-root-cause-recovery-review-2026-10-19.md)

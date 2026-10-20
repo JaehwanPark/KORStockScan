@@ -185,6 +185,51 @@ def test_actual_cost_census_accepts_broker_cost_not_configured_rate(tmp_path):
     assert len(good)==1 and census['excluded']=={'actual_cost_identity_or_amount_invalid':1}
 
 
+@pytest.mark.parametrize('damage', [None, 'seal', 'physical', 'logical', 'ctime', 'authority', 'receipt_symlink'])
+def test_native_pipeline_gzip_preserves_issued_quantity_timeout_generation(tmp_path, monkeypatch, damage):
+    import gzip
+    from src.engine.scalping.initial_quantity_timeout_research import build_timeout_research, timeout_research_valid
+    from src.engine.scalping.micro_reversion.economic_reference import content_sha256
+    day='2026-10-08'; _quality(tmp_path,day)
+    monkeypatch.setattr(policy,'DATA_DIR',tmp_path)
+    pipeline=tmp_path/'pipeline_events'/f'pipeline_events_{day}.jsonl'
+    pipeline.parent.mkdir(); original=b'{}\n'; pipeline.write_bytes(original)
+    fact=actual_fact()
+    before=policy.build_initial_quantity_replay(day,data_dir=tmp_path,fact_rows=[fact],entry_on_or_after='2026-09-29')
+    timeout=build_timeout_research(day,data_dir=tmp_path,fact_rows=before['census']['input_fact_rows'],
+                                   entry_on_or_after='2026-09-29',replay=before)
+    assert timeout_research_valid(timeout,replay=before)
+    archived=Path(str(pipeline)+'.gz'); archived.write_bytes(gzip.compress(original)); pipeline.unlink()
+    info=archived.stat()
+    receipt=dict(schema='pipeline_raw_archive_identity_v1',logical_path=str(pipeline),
+        logical_content_sha256=hashlib.sha256(original).hexdigest(),logical_size_bytes=len(original),
+        archive_generation=dict(device=info.st_dev,inode=info.st_ino,size_bytes=info.st_size,
+                                mtime_ns=info.st_mtime_ns,ctime_ns=info.st_ctime_ns),
+        verification_contract='logical_sha256_size_crc_to_eof_v1',runtime_effect=False,allowed_runtime_apply=False)
+    if damage=='logical':receipt['logical_content_sha256']='0'*64
+    if damage=='ctime':receipt['archive_generation']['ctime_ns']+=1
+    if damage=='authority':receipt['allowed_runtime_apply']=True
+    receipt['artifact_content_sha256']=content_sha256(receipt)
+    if damage=='seal':receipt['artifact_content_sha256']='0'*64
+    receipt_path=Path(str(archived)+'.archive_receipt.json');receipt_path.write_text(json.dumps(receipt))
+    if damage=='physical':archived.write_bytes(gzip.compress(original+b'{}\n'))
+    if damage=='receipt_symlink':
+        saved=receipt_path.with_suffix('.saved');receipt_path.rename(saved);receipt_path.symlink_to(saved)
+    if damage=='receipt_symlink':
+        with pytest.raises(ValueError,match='window_dependency_path_invalid'):
+            policy.build_initial_quantity_replay(day,data_dir=tmp_path,fact_rows=before['census']['input_fact_rows'],entry_on_or_after='2026-09-29')
+        assert not timeout_research_valid(timeout,replay=before)
+        return
+    after=policy.build_initial_quantity_replay(day,data_dir=tmp_path,fact_rows=before['census']['input_fact_rows'],entry_on_or_after='2026-09-29')
+    if damage is None:
+        assert after==before
+        assert timeout_research_valid(timeout,replay=before)
+    else:
+        assert after!=before
+        assert not timeout_research_valid(timeout,replay=before)
+    assert gzip.decompress(archived.read_bytes())==(original+b'{}\n' if damage=='physical' else original)
+
+
 def _allocated_quantity_fact(tmp_path, *, record_id=7):
     from src.tests.test_broker_cost_source import broker_fixture
     from src.engine.lifecycle.broker_cost_allocation import build_research_cost_allocations
