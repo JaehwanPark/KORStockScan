@@ -162,3 +162,12 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
 - 상세 rchar/physical `read_bytes`/`write_bytes`, 입력 SHA 및 명령 증거: 후보 작업본 `tmp/review-evidence.json`, `tmp/measurement-*.json`, `tmp/validation-commands.txt`; 실행 스크립트 `tmp/measure_readers.py` SHA `a02126cf4fb3549b2521b98c5b14a2762c36a5ecfd6bf4f496c2025111676b39`(일회성 검증 자료, 운영 코드/새 framework 아님).
 - 재현: 후보에서 `PYTHONPATH=. .venv/bin/python tmp/measure_readers.py prepare`, 이후 `... tmp/measure_readers.py {machine,symbols,snapshot,rising} {before,after}`를 각각 실행. baseline 함수는 `4b278bbb3`에서 읽으며 해당 측정 함수는 `a98ff7a95`와 동일하다.
 - 배포 전 남은 gate: 실행 시 selector·PID·active policy 재고정, 후보에 결속한 native parity/handoff 및 운영 크기 임시 디스크 여유 확인. 이 후보는 실제 릴리스 선택·PID·자연 장후 소비·비용 조정 수익성 완료 증거가 아니다.
+
+### 장중 반영 승인 후 재기동 사전 리뷰
+
+- 후속 사용자 지시로 장중 반영·재기동이 승인됐다. 앞선 배포 대기 완료와 분리해 정지 전 native 검증 → ordered 배포 → 정확한 PID/관측 소비를 수행한다. 정책·threshold·주문 호출 수동 변경은 범위 밖이다.
+- 동시 배포 `a7c0b0dc5`가 09:55:31 ordered complete한 뒤 해당 코드를 기반으로 재통합했다. 원 `24ffba227`은 보존 branch에 남기고 다른 세션의 15파일과 checklist 이력을 유지했다. predecessor PID `4094188`, start ticks `10221444`이며 실행 직전 다시 고정한다.
+- 실제 정지 전 결함 재현: delay `pipeline_event_summary`, stop `log_archive_service`, holding `research_json_stream`의 미등록 코드 세대로 거절됐다. 실패 증거는 `tmp/source-read-deploy-20261020/contract-probe.json`; Main 정지/selector 변경은 이 검사에 없다.
+- 기존 handoff owner에 검토한 reader 16파일의 정확한 원본/후속 SHA와 완전한 dependency 세대를 연결했다. 이전 세대 map은 과거 영수증의 현행 검증 소비자 때문에 **retained**하며 무조건 통과/새 wrapper는 없다. 같은 origin의 새 reader 허용 3건 실패 회귀 후 12건 통과(누락·dirty·새 commit으로 변조 거절 포함). rising/auxiliary는 원 보고서와 원 fixture를 보존하고 후속 독립 fixture를 요구하며 관련 20회귀 통과.
+- native 고정 workload 128 scopes / 76,800 rows / 598 hits의 기존·후속 signal SHA가 일치했다. 원천/정책 재생성이나 provider 호출은 없었다. 최종 후보 commit에 다시 결속한 proof만 배포에 사용한다. 임시 디스크는 108GiB 여유를 확인했고 실제 전체 장후 workload의 CPU/I/O 비용은 이전 측정 한계를 유지한다.
+- 재기동·router·bootstrap·auxiliary·startup isolation 기존 회귀와 최종 native 사전 검증을 진행 중이다. 결과와 실제 배포/PID 수용은 아래 후속 기록으로 확정한다.

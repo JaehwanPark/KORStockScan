@@ -1679,7 +1679,7 @@ def test_completion_census_handoff_binds_exact_complete_generation(
                 '7df7ea3b9' if generation == 'late_cost_revision' else
                 '082234567' if generation == 'prefix_code_binding' else 'bf8465b5d')
     for name, expected in hashes.items():
-        raw = ((canonical/name).read_bytes() if generation == 'broker_custody' else
+        raw = (subprocess.check_output(['git','-C',str(canonical),'show','a7c0b0dc5:'+name]) if generation == 'broker_custody' else
                subprocess.check_output(['git','-C',str(canonical),'show','4b278bbb3:'+name]) if generation == 'vote_metadata' else
                subprocess.check_output(['git','-C',str(canonical),'show','a1748b409:'+name]) if generation == 'pre_entry_observer' else
                subprocess.check_output(['git','-C',str(canonical),'show','ab1c46633:'+name]) if generation == 'stop_indexed_votes' else
@@ -1737,3 +1737,52 @@ def test_archive_authority_successor_accepts_the_issued_full_reader_origin(avg_d
         'commit','-qm','archive authority successor of issued reader generation'],check=True)
     commit=subprocess.check_output(['git','-C',str(root),'rev-parse','HEAD'],text=True).strip()
     handoff._verify_entry_code_delta(root,commit,origin,inventory,expected)
+
+
+@pytest.mark.parametrize('family', ['main_stop', 'holding_vote', 'pre_submit_delay'])
+@pytest.mark.parametrize('fault', [None, 'missing', 'dirty', 'committed_change'])
+def test_source_reader_handoff_preserves_issued_policy_and_exact_dependencies(tmp_path, family, fault):
+    import hashlib
+    import os
+    import subprocess
+    from src.engine.scalping import main_stop_policy as stop
+    from src.engine.scalping import holding_vote_experiment as holding
+    from src.engine.scalping import pre_submit_delay_initial_policy as delay
+    canonical = Path(handoff.__file__).resolve().parents[3]
+    origin = 'ab1c46633e638658721ec4bdab611bd389451985'
+    inventories = {
+        'main_stop': {key: 'src/engine/'+key for key in stop.implementation_paths()},
+        'holding_vote': {key: 'src/engine/'+key for key in holding._code_paths()},
+        'pre_submit_delay': {name: name for name in delay.CONTRACT_PATHS},
+    }
+    inventory = inventories[family]
+    root = tmp_path/'candidate'
+    subprocess.run(['git','clone','--shared','--no-checkout','-q',str(canonical),str(root)],check=True)
+    names = {os.path.normpath(name) for name in inventory.values()}
+    for variant in handoff.REVIEWED_BROKER_CUSTODY_DEPENDENCY_VARIANTS.values():
+        names.update(variant['dependencies'])
+    names.update(getattr(handoff, 'REVIEWED_SOURCE_READER_HASHES', {}))
+    names.add('src/engine/automation/intraday_release_handoff.py')
+    for name in names:
+        path = root/name; path.parent.mkdir(parents=True,exist_ok=True)
+        path.write_bytes((canonical/name).read_bytes())
+    original = {key: hashlib.sha256(subprocess.check_output(
+        ['git','-C',str(root),'show',origin+':'+os.path.normpath(name)])).hexdigest()
+        for key,name in inventory.items()}
+    expected = hashlib.sha256(json.dumps(original,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+    def commit():
+        subprocess.run(['git','-C',str(root),'add','.'],check=True)
+        subprocess.run(['git','-C',str(root),'-c','user.name=fixture','-c','user.email=fixture@example.test',
+                        'commit','-qm','source reader generation'],check=True)
+        return subprocess.check_output(['git','-C',str(root),'rev-parse','HEAD'],text=True).strip()
+    revision = commit()
+    reader = root/'src/engine/lifecycle/research_json_stream.py'
+    if fault == 'missing': reader.unlink()
+    elif fault:
+        reader.write_bytes(reader.read_bytes()+b'\nUNREVIEWED_READER = True\n')
+        if fault == 'committed_change': revision = commit()
+    if fault:
+        with pytest.raises(ValueError):
+            handoff._verify_entry_code_delta(root,revision,origin,inventory,expected)
+    else:
+        handoff._verify_entry_code_delta(root,revision,origin,inventory,expected)

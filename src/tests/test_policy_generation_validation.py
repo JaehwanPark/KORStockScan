@@ -415,6 +415,7 @@ def test_post_aux_guard_successor_does_not_transitively_promote_older_reports(tm
     *[(family,'REVIEWED_INTEGRATED_RESEARCH_SOURCE_SUCCESSORS') for family in validation.PLANS],
     *[(family,'REVIEWED_CLEANUP_SOURCE_SUCCESSORS') for family in validation.PLANS],
     *[(family,'REVIEWED_RECEIPT_CUSTODY_SOURCE_SUCCESSORS') for family in validation.PLANS],
+    *[(family,'REVIEWED_SOURCE_READER_SUCCESSORS') for family in ('rising_missed','auxiliary')],
 ])
 @pytest.mark.parametrize('damage', [None, 'missing', 'bytes', 'path', 'authority', 'seal', 'symlink',
                                    'current_missing', 'current_bytes', 'current_code'])
