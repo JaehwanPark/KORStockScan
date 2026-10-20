@@ -4932,13 +4932,13 @@ def test_delay_cursor_partial_append_and_legacy_generation_do_not_lose_boundary(
 
 def _delay_semantic_fixture(tmp_path, *, grid=False, anchor='signal_ready', observation_only=None,
                             quote_horizons=(0,), selected=0, terminal=None, recheck=None,
-                            commit_updates=None, quote_updates=None, extra_terminals=()):
+                            commit_updates=None, quote_updates=None, extra_terminals=(), record_id=9, writer=None):
     """Create all three physical source paths with the same exact rows."""
     from src.engine.pipeline_event_summary import ProducerSummaryCompactor, execution_projection_identity
     day = '2026-10-16'
     started = monitor.stamp(day + 'T10:00:00+09:00')
     base = dict(event_type='pipeline_event', pipeline='ENTRY_PIPELINE', stock_code='005930',
-                stock_name='test', record_id=9, emitted_date=day)
+                stock_name='test', record_id=record_id, emitted_date=day)
     fields = dict(delay_intent_id='source-intent', anchor_kind=anchor,
                   market_session_bucket='krx_regular', route='KRX_NXT_INTEGRATED',
                   decision_committed_at_epoch=started.timestamp(), decision_source_sha256='a'*64,
@@ -4976,7 +4976,7 @@ def _delay_semantic_fixture(tmp_path, *, grid=False, anchor='signal_ready', obse
     (compact/'part-execution-1000.jsonl').write_text(''.join(json.dumps(dict(row,
         family='pre_submit_delay', execution_source_event_sha256=execution_projection_identity(row)))+'\n'
         for row in rows))
-    writer = ProducerSummaryCompactor(summary_dir=tmp_path/'pipeline_event_summaries', mode='shadow')
+    writer = writer or ProducerSummaryCompactor(summary_dir=tmp_path/'pipeline_event_summaries', mode='shadow')
     for row in rows:
         writer.submit(row)
     writer.flush()

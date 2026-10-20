@@ -15884,6 +15884,29 @@ def _run_sniper_iterations(
         yield None
 
 
+def close_observation_sources():
+    """Shared diagnostic cleanup for native finally and controlled self-stop."""
+    before = _SCANNER_OBSERVATION_QUEUE.snapshot()
+    complete = False
+    try:
+        from src.engine.scalping.pre_submit_delay_observation import shutdown as close_delay_observations
+        complete = close_delay_observations()
+        from src.engine.scalping.initial_quantity_cap_observation import configure_sink as configure_quantity_sink
+        configure_quantity_sink(None)
+        from src.engine.scalping.main_stop_policy import configure_source_sink as configure_stop_sink
+        configure_stop_sink(None)
+        from src.engine.scalping.reversal_anchor_index import configure_sink as configure_anchor_sink
+        configure_anchor_sink(None)
+    finally:
+        drained = _SCANNER_OBSERVATION_QUEUE.close(timeout=1.0)
+    after = _SCANNER_OBSERVATION_QUEUE.snapshot()
+    complete = complete and drained and all(after[key] == before[key] for key in (
+        'append_failed', 'append_unobservable', 'intentionally_not_written', 'unavailable'))
+    if not complete:
+        log_error('[SOURCE_OBSERVATION_SHUTDOWN_INCOMPLETE] pending=' + str(after['pending_items']))
+    return complete
+
+
 def run_sniper(is_test_mode=False):
     global KIWOOM_TOKEN, WS_MANAGER, ACTIVE_TARGETS, AI_ENGINE
     global _SCANNER_PROMOTION_INBOX
@@ -16470,15 +16493,7 @@ def run_sniper(is_test_mode=False):
                 log_error(f"hot path AI dispatcher stop failed: {e}")
             finally:
                 run_sniper.hot_path_ai_dispatcher = None
-        from src.engine.scalping.pre_submit_delay_observation import shutdown as close_delay_observations
-        close_delay_observations()
-        from src.engine.scalping.initial_quantity_cap_observation import configure_sink as configure_quantity_sink
-        configure_quantity_sink(None)
-        from src.engine.scalping.main_stop_policy import configure_source_sink as configure_stop_sink
-        configure_stop_sink(None)
-        from src.engine.scalping.reversal_anchor_index import configure_sink as configure_anchor_sink
-        configure_anchor_sink(None)
-        _SCANNER_OBSERVATION_QUEUE.close(timeout=1.0)
+        close_observation_sources()
         if WS_MANAGER:
             try:
                 WS_MANAGER.stop()

@@ -3051,6 +3051,37 @@ REVIEWED_STARTUP_BUDGET_DEPENDENCY_VARIANTS = {
 for (_trigger, _trigger_sha), _variant in REVIEWED_STARTUP_BUDGET_DEPENDENCY_VARIANTS.items():
     REVIEWED_HOLDING_RESEARCH_DEPENDENCIES[_trigger][_trigger_sha] = _variant['dependencies']
 
+# One exact generation for controlled diagnostic shutdown, retaining every
+# issued predecessor and the complete startup-budget dependency closure.
+REVIEWED_DELAY_SHUTDOWN_HASHES = {
+    'src/engine/kiwoom_sniper_v2.py': '522bc4a71a1375144db798b2e451fcee03a44e80d57323c7996fa365bf20c71c',
+    'src/engine/scalping/pre_submit_delay_observation.py': '99d7b8d5e57ad886433747cee55f8f12c9a71d539577d94adff03543a8ff724d',
+    'src/utils/pipeline_event_logger.py': 'fde49c9a27dfc5c858d765353a0a898ac45728d57ecfa0526c4a6df4fef4c99e',
+}
+REVIEWED_DELAY_SHUTDOWN_PAIRS = {
+    'src/engine/kiwoom_sniper_v2.py': (('647f24d8805d0d9d6c1489df272b258706c7314111121e8660c01ee72930e713',
+        REVIEWED_DELAY_SHUTDOWN_HASHES['src/engine/kiwoom_sniper_v2.py']),),
+    'src/engine/scalping/pre_submit_delay_observation.py': (('c4d8765a72a398b045b924d96367f5b3a0876711265134515dd4bd4fcb4199f1',
+        REVIEWED_DELAY_SHUTDOWN_HASHES['src/engine/scalping/pre_submit_delay_observation.py']),),
+    'src/utils/pipeline_event_logger.py': (('02d713d72647ce18e49c13f40843415611260a4fd5ba6be34712d6bfb9b83416',
+        REVIEWED_DELAY_SHUTDOWN_HASHES['src/utils/pipeline_event_logger.py']),),
+}
+REVIEWED_DELAY_SHUTDOWN_DEPENDENCY_VARIANTS = {
+    (trigger, REVIEWED_DELAY_SHUTDOWN_HASHES.get(os.path.normpath(trigger), sha)): {**value,
+        'selector_path': 'src/engine/kiwoom_sniper_v2.py',
+        'selector_sha256': REVIEWED_DELAY_SHUTDOWN_HASHES['src/engine/kiwoom_sniper_v2.py'],
+        'dependencies': {**{name: REVIEWED_DELAY_SHUTDOWN_HASHES.get(os.path.normpath(name), digest)
+                           for name, digest in value['dependencies'].items()},
+                         **REVIEWED_DELAY_SHUTDOWN_HASHES},
+        'contract_extensions': {
+            origin: {name: REVIEWED_DELAY_SHUTDOWN_HASHES.get(os.path.normpath(name), digest)
+                     for name, digest in paths.items()}
+            for origin, paths in value['contract_extensions'].items()},
+    } for (trigger, sha), value in REVIEWED_STARTUP_BUDGET_DEPENDENCY_VARIANTS.items()
+}
+for (_trigger, _trigger_sha), _variant in REVIEWED_DELAY_SHUTDOWN_DEPENDENCY_VARIANTS.items():
+    REVIEWED_HOLDING_RESEARCH_DEPENDENCIES[_trigger][_trigger_sha] = _variant['dependencies']
+
 
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
@@ -3106,6 +3137,9 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     role_latency_present = any((root / name).is_file()
         and hashlib.sha256(candidate_bytes(name)).hexdigest() == sha
         for name, sha in REVIEWED_ROLE_LATENCY_HASHES.items())
+    delay_shutdown_present = any((root / name).is_file()
+        and hashlib.sha256(candidate_bytes(name)).hexdigest() == sha
+        for name, sha in REVIEWED_DELAY_SHUTDOWN_HASHES.items())
     contract_names = {repository_name(name) for name in paths.values()}
     for trigger, generations in REVIEWED_HOLDING_RESEARCH_DEPENDENCIES.items():
         if trigger not in contract_names:
@@ -3114,7 +3148,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         dependencies = generations.get(trigger_sha, {})
         # New exact selectors precede their historical parent. The first match
         # selects one complete generation, never per-file SHA alternatives.
-        for variants in (REVIEWED_STARTUP_BUDGET_DEPENDENCY_VARIANTS,
+        for variants in (REVIEWED_DELAY_SHUTDOWN_DEPENDENCY_VARIANTS,
+                         REVIEWED_STARTUP_BUDGET_DEPENDENCY_VARIANTS,
                          REVIEWED_ROLE_LATENCY_DEPENDENCY_VARIANTS,
                          REVIEWED_DELAY_CLEANUP_DEPENDENCY_VARIANTS,
                          REVIEWED_CLEAN_SQLITE_DEPENDENCY_VARIANTS,
@@ -3205,6 +3240,9 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
             dependencies = {**dependencies, **REVIEWED_RETIRED_REVIEW_HASHES}
         if role_latency_present:
             dependencies = {**dependencies, **REVIEWED_ROLE_LATENCY_HASHES}
+        if delay_shutdown_present:
+            dependencies = {**dependencies, **REVIEWED_STARTUP_BUDGET_HASHES,
+                            **REVIEWED_DELAY_SHUTDOWN_HASHES}
         dependencies_by_trigger[trigger] = (trigger_sha, dependencies)
     for key, name in paths.items():
         after = candidate_bytes(name)
@@ -3221,7 +3259,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         if before == after:
             continue
         pair = (hashlib.sha256(before).hexdigest(), hashlib.sha256(after).hexdigest())
-        if (pair in REVIEWED_STARTUP_BUDGET_PAIRS.get(repository_name(name), ())
+        if (pair in REVIEWED_DELAY_SHUTDOWN_PAIRS.get(repository_name(name), ())
+                or pair in REVIEWED_STARTUP_BUDGET_PAIRS.get(repository_name(name), ())
                 or pair in REVIEWED_ROLE_LATENCY_PAIRS.get(repository_name(name), ())
                 or pair in REVIEWED_DELAY_CLEANUP_PAIRS.get(repository_name(name), ())
                 or pair in REVIEWED_VOTE_METADATA_PAIRS.get(name, ())

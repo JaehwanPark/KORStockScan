@@ -10,6 +10,7 @@ import math
 import os
 import re
 import stat
+import sys
 import threading
 import time
 from itertools import islice
@@ -563,8 +564,14 @@ def _flush_producer_summary_at_exit() -> None:
 
 
 def drain_pipeline_event_summary_before_termination() -> None:
-    """Flush now, then synchronously publish any diagnostic rows before SIGTERM."""
+    """Close loaded observation sources, then flush their rows before SIGTERM."""
     global _TERMINATION_DRAIN_ACTIVE
+    engine = sys.modules.get('src.engine.kiwoom_sniper_v2')
+    if engine is not None:
+        try:
+            engine.close_observation_sources()
+        except Exception as exc:
+            log_error('[SOURCE_OBSERVATION_SHUTDOWN_FAILED] type=' + type(exc).__name__)
     with _COMPACTOR_LOCK:
         _TERMINATION_DRAIN_ACTIVE = True
         current = _PRODUCER_COMPACTOR

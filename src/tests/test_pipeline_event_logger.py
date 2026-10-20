@@ -1491,6 +1491,51 @@ def test_execution_producer_family_projection_has_reconciled_census(monkeypatch,
     monkeypatch.setattr(logger_mod,'_PRODUCER_COMPACTOR',None)
 
 
+def test_restart_drain_closes_loaded_observers_before_summary(monkeypatch):
+    import sys
+    calls = []
+    monkeypatch.setitem(sys.modules, 'src.engine.kiwoom_sniper_v2', SimpleNamespace(
+        close_observation_sources=lambda: calls.append('observations') or True))
+    monkeypatch.setattr(logger_mod, '_PRODUCER_COMPACTOR', SimpleNamespace(
+        enable_termination_drain=lambda: calls.append('synchronous'),
+        flush=lambda: calls.append('summary')))
+    monkeypatch.setattr(logger_mod, '_RETIRING_COMPACTORS', [])
+    monkeypatch.setattr(logger_mod, '_TERMINATION_DRAIN_ACTIVE', False)
+    logger_mod.drain_pipeline_event_summary_before_termination()
+    assert calls == ['observations', 'synchronous', 'summary']
+
+
+def test_summary_drain_does_not_import_an_unstarted_engine(monkeypatch):
+    import sys
+    monkeypatch.delitem(sys.modules, 'src.engine.kiwoom_sniper_v2', raising=False)
+    calls = []
+    monkeypatch.setattr(logger_mod, '_PRODUCER_COMPACTOR', SimpleNamespace(
+        enable_termination_drain=lambda: None, flush=lambda: calls.append('summary')))
+    monkeypatch.setattr(logger_mod, '_RETIRING_COMPACTORS', [])
+    monkeypatch.setattr(logger_mod, '_TERMINATION_DRAIN_ACTIVE', False)
+    logger_mod.drain_pipeline_event_summary_before_termination()
+    assert calls == ['summary']
+    assert 'src.engine.kiwoom_sniper_v2' not in sys.modules
+
+
+@pytest.mark.parametrize('fault', ['missing', 'raise'])
+def test_restart_observation_failure_remains_visible_and_summary_still_drains(monkeypatch, fault):
+    import sys
+    calls = []
+    def fail():
+        raise OSError('fixture')
+    monkeypatch.setitem(sys.modules, 'src.engine.kiwoom_sniper_v2', SimpleNamespace(
+        **({'close_observation_sources': fail} if fault == 'raise' else {})))
+    monkeypatch.setattr(logger_mod, 'log_error', lambda value: calls.append(value))
+    monkeypatch.setattr(logger_mod, '_PRODUCER_COMPACTOR', SimpleNamespace(
+        enable_termination_drain=lambda: None, flush=lambda: calls.append('summary')))
+    monkeypatch.setattr(logger_mod, '_RETIRING_COMPACTORS', [])
+    monkeypatch.setattr(logger_mod, '_TERMINATION_DRAIN_ACTIVE', False)
+    logger_mod.drain_pipeline_event_summary_before_termination()
+    assert len(calls) == 2 and 'SOURCE_OBSERVATION_SHUTDOWN' in calls[0]
+    assert calls[-1] == 'summary'
+
+
 def test_graceful_sigterm_drain_preserves_admitted_rows(tmp_path):
     """Controlled child only; no trading process, signal handler or orders."""
     import subprocess
@@ -1499,24 +1544,51 @@ def test_graceful_sigterm_drain_preserves_admitted_rows(tmp_path):
     for drained in (False, True):
         directory = tmp_path / str(drained)
         script = f'''
-import os, signal
+import ast, os, signal, sys
+sys.addaudithook(lambda event,args: (_ for _ in ()).throw(RuntimeError('child_network_forbidden'))
+    if event in ('socket.connect','socket.getaddrinfo','socket.sendto') else None)
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from types import SimpleNamespace
 from src.utils import pipeline_event_logger as logger
+from src.engine.scalping import pre_submit_delay_observation as observer
 logger.DATA_DIR = Path({str(directory)!r})
 os.environ["PIPELINE_EVENT_HIGH_VOLUME_COMPACTION_MODE"] = "shadow"
 os.environ["PIPELINE_EVENT_COMPACTION_FLUSH_SEC"] = "3600"
 logger.emit_pipeline_event("ENTRY_PIPELINE", "TEST", "005930", "scalping_scanner_fast_precheck", record_id=1)
+queue = logger.BoundedObservationQueue(ThreadPoolExecutor(max_workers=1))
+observer.configure_sink(queue.submit)
+for identity in ('first', 'second'):
+    observer.register('005930', dict(id=identity, committed_at_epoch=1, remaining_sec=[120,180],
+        decision_source_sha256='a'*64), commit=dict(delay_intent_id=identity, decision_source_sha256='a'*64))
+# Execute the actual cleanup function without importing Main's DB/WS startup.
+tree = ast.parse(Path('src/engine/kiwoom_sniper_v2.py').read_text())
+native = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name=='close_observation_sources')
+context = dict(_SCANNER_OBSERVATION_QUEUE=queue, log_error=print)
+exec(compile(ast.Module(body=[native],type_ignores=[]),'native-cleanup','exec'),context)
+sys.modules['src.engine.kiwoom_sniper_v2'] = SimpleNamespace(close_observation_sources=context['close_observation_sources'])
 if {drained!r}:
     logger.drain_pipeline_event_summary_before_termination()
 os.kill(os.getpid(), signal.SIGTERM)
 '''
         result = subprocess.run([sys.executable, "-c", script], cwd=Path(__file__).parents[2], capture_output=True, timeout=15)
         assert result.returncode == -15
-        assert sum(len(p.read_text().splitlines()) for p in directory.glob("pipeline_events/*.jsonl")) == 1
+        raw = [json.loads(line) for p in directory.glob("pipeline_events/*.jsonl")
+               for line in p.read_text().splitlines()]
+        if drained:
+            assert len(raw) == 5, result.stdout + result.stderr
+        else:
+            assert 1 <= len(raw) <= 3  # Enqueue alone cannot promise raw append.
+        terminals = [row for row in raw if row['stage']=='pre_submit_delay_intent_terminal']
+        assert len(terminals) == (2 if drained else 0)
+        for row in terminals:
+            assert row['fields']['observation_only']=='True'
+            assert row['fields']['actual_order_submitted']=='False'
+            assert row['fields']['broker_order_forbidden']=='True'
         paths = list(directory.glob("pipeline_event_summaries/pipeline_event_producer_summary_*.jsonl"))
         assert bool(paths) is drained
         if drained:
-            assert sum(json.loads(line)["event_count"] for p in paths for line in p.read_text().splitlines()) == 1
+            assert sum(json.loads(line)["event_count"] for p in paths for line in p.read_text().splitlines()) == 5
     # All existing graceful self-termination calls must first reach the owner drain.
     import ast
     for relative in ("src/bot_main.py", "src/engine/kiwoom_sniper_v2.py"):

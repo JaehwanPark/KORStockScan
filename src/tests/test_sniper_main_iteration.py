@@ -11,13 +11,13 @@ from src.engine import kiwoom_sniper_v2 as main
 
 
 # The loop's immutable input is 9e78afd1194233d87c4d340ba2f1981d340d88d4.
-# The integrated startup comes from 9d2201141aeae409fe960ff7795a1340718a7146:
-# its native policy loader replaces the earlier separate preparation calls.
+# The reviewed 105f6f031 startup includes native policy loading and the already
+# deployed bounded local depth sampler. Preserve that exact baseline here.
 # Re-inlining the unchanged loop must match that commit's entire run_sniper,
 # including its early returns and original exception/cleanup boundary.
 # These are AST hashes, independent of indentation, comments and line numbers.
 ORIGINAL_LOOP_AST = 'a549e790d27ed4e4b86a14cfb46187cfec7dcee51f1fa869a84195e3f3dc04a5'
-INTEGRATED_RUN_AST = '601b654822e925f5aede0fb2ed9268fb450818fe203f5a9c956ef406b2192707'
+INTEGRATED_RUN_AST = '06fcd035cd24da039bf1123b4435475faf6e8c45f2ff4781e483e6462039ec4d'
 STARTUP_BINDINGS = {
     'is_test_mode', 'targets', 'admin_id', 'radar', 'ai_engine',
     'last_db_poll_time', 'last_msg_min', 'scanner_ws_reg_last_emit_ts',
@@ -68,7 +68,107 @@ def test_live_startup_consumes_native_iterator_with_original_exception_and_clean
     # Replacing only the invocation with the original body reconstructs the
     # whole pre-refactor function: startup, continue/break, catches and cleanup.
     parent.body[idx] = _native_loop()
+    cleanup = next(node for node in parent.finalbody if isinstance(node, ast.Expr)
+                   and isinstance(node.value, ast.Call)
+                   and ast.unparse(node.value) == 'close_observation_sources()')
+    # The old inline cleanup is consolidated into the shared termination owner.
+    # Restore just that former block to keep the original whole-function proof.
+    old_cleanup = ast.parse('''
+from src.engine.scalping.pre_submit_delay_observation import shutdown as close_delay_observations
+close_delay_observations()
+from src.engine.scalping.initial_quantity_cap_observation import configure_sink as configure_quantity_sink
+configure_quantity_sink(None)
+from src.engine.scalping.main_stop_policy import configure_source_sink as configure_stop_sink
+configure_stop_sink(None)
+from src.engine.scalping.reversal_anchor_index import configure_sink as configure_anchor_sink
+configure_anchor_sink(None)
+_SCANNER_OBSERVATION_QUEUE.close(timeout=1.0)
+''').body
+    offset = parent.finalbody.index(cleanup)
+    parent.finalbody[offset:offset+1] = old_cleanup
     assert _digest(function) == INTEGRATED_RUN_AST
+
+
+@pytest.fixture
+def isolated_observation_shutdown(monkeypatch):
+    from collections import Counter, OrderedDict
+    from src.engine.scalping import pre_submit_delay_observation as owner
+    from src.engine.scalping import initial_quantity_cap_observation as quantity
+    from src.engine.scalping import main_stop_policy as stop
+    from src.engine.scalping import reversal_anchor_index as anchor
+    for name, value in dict(_ACTIVE={}, _HEAPS={}, _EXPIRIES=[], _RECENT=OrderedDict(),
+            _COUNTERS=Counter(), _CLOSING=False, _CLOSED_AT=None, _SINK=None, _SAMPLER=None).items():
+        monkeypatch.setattr(owner, name, value)
+    monkeypatch.setattr(quantity, 'configure_sink', lambda *a: None)
+    monkeypatch.setattr(stop, 'configure_source_sink', lambda *a: None)
+    monkeypatch.setattr(anchor, 'configure_sink', lambda *a: None)
+    return owner
+
+
+@pytest.mark.parametrize('offset,missing,censored', [(61,0,2), (160,1,1)])
+def test_native_restart_cleanup_reaches_raw_compact_summary_and_missing_guard(
+        monkeypatch, tmp_path, isolated_observation_shutdown, offset, missing, censored):
+    from concurrent.futures import ThreadPoolExecutor
+    from datetime import timedelta
+    import json
+    from types import SimpleNamespace
+    from src.engine.monitoring import submission_bottleneck_monitor as monitor
+    from src.engine.pipeline_event_summary import ProducerSummaryCompactor
+    from src.tests.test_submission_bottleneck_monitor import _delay_semantic_fixture
+    from src.utils import pipeline_event_logger as logger
+    owner = isolated_observation_shutdown
+    producer = ProducerSummaryCompactor(summary_dir=tmp_path/'pipeline_event_summaries', mode='shadow')
+    started, _ = _delay_semantic_fixture(tmp_path, grid=True, record_id=None, writer=producer,
+        quote_horizons=(0,1,3,5,30,60))
+    monkeypatch.setattr(logger, 'DATA_DIR', tmp_path)
+    monkeypatch.setattr(logger, 'TRADING_RULES', SimpleNamespace(PIPELINE_EVENT_JSONL_ENABLED=True))
+    monkeypatch.setattr(logger, 'log_info', lambda *a, **k: None)
+    monkeypatch.setattr(logger, '_PRODUCER_COMPACTOR', producer)
+    monkeypatch.setattr(logger, '_RETIRING_COMPACTORS', [])
+    monkeypatch.setattr(logger, '_TERMINATION_DRAIN_ACTIVE', False)
+    monkeypatch.setattr(owner.time, 'time', lambda: started.timestamp()+offset)
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        queue = logger.BoundedObservationQueue(executor)
+        monkeypatch.setattr(main, '_SCANNER_OBSERVATION_QUEUE', queue)
+        owner.configure_sink(queue.submit)
+        assert owner.register('005930', dict(id='source-intent', committed_at_epoch=started.timestamp(),
+            remaining_sec=[120,180], decision_source_sha256='a'*64))
+        logger.drain_pipeline_event_summary_before_termination()
+        assert queue.snapshot()['pending_items'] == 0
+        assert owner.health()['active'] == 0
+    rows = [json.loads(line) for p in (tmp_path/'pipeline_events').glob('*.jsonl')
+            for line in p.read_text().splitlines()]
+    terminal = next(row for row in rows if row['stage']=='pre_submit_delay_intent_terminal')
+    assert terminal['fields']['terminal_finished_at_epoch'] == str(started.timestamp()+offset)
+    result = monitor.pre_submit_delay_source_semantics(tmp_path, started+timedelta(seconds=360))
+    assert result['sources'] == {'raw':'complete', 'summary':'complete', 'compact':'complete'}
+    assert result['horizon_states']['censored'] == censored
+    assert result['issues'].get('observation_horizon_missing',0) == missing
+    assert 'intent_terminal_missing' not in result['issues']
+
+
+@pytest.mark.parametrize('fault', ['queue', 'append', 'unobservable', 'timeout'])
+def test_native_shutdown_does_not_call_failed_or_unobservable_writes_complete(
+        monkeypatch, isolated_observation_shutdown, fault):
+    from concurrent.futures import ThreadPoolExecutor
+    from src.utils import pipeline_event_logger as logger
+    owner = isolated_observation_shutdown
+    errors = []
+    monkeypatch.setattr(main, 'log_error', errors.append)
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        queue = logger.BoundedObservationQueue(executor)
+        monkeypatch.setattr(main, '_SCANNER_OBSERVATION_QUEUE', queue)
+        if fault == 'timeout':
+            monkeypatch.setattr(queue, 'close', lambda **kw: False)
+        outcome = False if fault == 'append' else None if fault == 'unobservable' else {
+            'structured_append_succeeded': True}
+        callback = lambda *a, **kw: outcome
+        owner.configure_sink((lambda *a, **kw: {'status':'unavailable'}) if fault=='queue' else
+                             lambda *a, **kw: queue.submit(callback))
+        assert owner.register('005930', dict(id='exact', committed_at_epoch=1,
+            remaining_sec=[120], decision_source_sha256='a'*64))
+        assert main.close_observation_sources() is False
+    assert len(errors)==1 and 'SOURCE_OBSERVATION_SHUTDOWN_INCOMPLETE' in errors[0]
 
 
 @pytest.mark.parametrize('exception', [RuntimeError('native phase failed'), KeyboardInterrupt()])

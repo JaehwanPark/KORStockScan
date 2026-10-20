@@ -26,6 +26,8 @@ _ACTIVE = {}
 _HEAPS = {}
 _COUNTERS = Counter()
 _SINK = None
+_CLOSING = False
+_CLOSED_AT = None
 _EXPIRIES = []
 _RECENT = OrderedDict()
 _SAMPLER = None
@@ -102,13 +104,19 @@ def configure_sink(sink):
     global _SINK
     if sink is None:
         stop_sampler()
-    _SINK = sink
+    with _LOCK:
+        if _CLOSING and sink is not None:
+            return False
+        _SINK = sink
+    return True
 
 
 def sample_due(read_depth, observe, *, now=None):
     """Bounded local-cache reads; occurrence time is after the snapshot read."""
     now = time.time() if now is None else now
     with _LOCK:
+        if _CLOSING:
+            return 0
         due = sorted((heap[0][0], code) for code, heap in _HEAPS.items()
                      if heap and heap[0][0] <= now)[:MAX_SYMBOLS_PER_SAMPLE]
     for _, code in due:
@@ -127,14 +135,18 @@ def configure_sampler(read_depth, observe):
     global _SAMPLER
     if not stop_sampler():
         return False
-    _SAMPLER_STOP.clear(); _SAMPLER_WAKE.clear()
     def run():
         while not _SAMPLER_STOP.is_set():
             count = sample_due(read_depth, observe)
             _SAMPLER_WAKE.wait(.005 if count == MAX_SYMBOLS_PER_SAMPLE else SAMPLE_INTERVAL_SEC)
             _SAMPLER_WAKE.clear()
-    _SAMPLER = threading.Thread(target=run, name='pre-submit-delay-sample', daemon=True)
-    _SAMPLER.start()
+    with _LOCK:
+        if _CLOSING:
+            return False
+        _SAMPLER_STOP.clear(); _SAMPLER_WAKE.clear()
+        _SAMPLER = threading.Thread(target=run, name='pre-submit-delay-sample', daemon=True)
+        _SAMPLER.start()
+    return True
 
 
 def stop_sampler():
@@ -154,37 +166,52 @@ def stop_sampler():
 
 def append(code, name, stage, fields):
     from src.utils.pipeline_event_logger import emit_pipeline_event
-    if _SINK is None:
-        with _LOCK:
-            _COUNTERS["writer_not_prepared"] += 1
-        return False
-    try:
-        observed = (fields.get('quote_observed_at_epoch') or fields.get('decision_committed_at_epoch')
-                    or fields.get('terminal_finished_at_epoch') or time.time())
-        result = _SINK(emit_pipeline_event, "ENTRY_PIPELINE", str(name or code), code, stage,
-                       fields=fields, observed_at_epoch=observed, observation_category="pre_submit_delay")
-    except Exception:
-        with _LOCK:
-            _COUNTERS['writer_failed'] += 1
-        return False
-    accepted = isinstance(result, dict) and result.get("status") == "queued"
     with _LOCK:
+        if _CLOSING and stage != 'pre_submit_delay_intent_terminal':
+            _COUNTERS['shutdown_admission_rejected'] += 1
+            return False
+        if _SINK is None:
+            _COUNTERS["writer_not_prepared"] += 1
+            return False
+        try:
+            observed = (fields.get('quote_observed_at_epoch') or fields.get('decision_committed_at_epoch')
+                        or fields.get('terminal_finished_at_epoch') or time.time())
+            result = _SINK(emit_pipeline_event, "ENTRY_PIPELINE", str(name or code), code, stage,
+                           fields=fields, observed_at_epoch=observed, observation_category="pre_submit_delay")
+        except Exception:
+            _COUNTERS['writer_failed'] += 1
+            return False
+        accepted = isinstance(result, dict) and result.get("status") == "queued"
         _COUNTERS["queued" if accepted else "queue_rejected"] += 1
-    return accepted
+        return accepted
 
 
 def shutdown():
-    stop_sampler()
+    global _CLOSING, _CLOSED_AT, _SINK
     with _LOCK:
+        _CLOSING = True
+        if _CLOSED_AT is None:
+            _CLOSED_AT = time.time()
+    if not stop_sampler():
+        return False
+    with _LOCK:
+        accepted = True
         codes = {key[0] for key in _ACTIVE}
-    for code in codes:
-        terminate(code, reason='process_shutdown_observation_censored')
-    configure_sink(None)
+        for code in codes:
+            accepted = terminate(code, reason='process_shutdown_observation_censored',
+                                 observed_at_epoch=_CLOSED_AT) and accepted
+        _SINK = None
+        if not accepted:
+            _COUNTERS['shutdown_publication_failed'] += 1
+        return not _COUNTERS['shutdown_publication_failed']
 
 
 def register(code, state, *, name=None, commit=None):
     key = (str(code), str(state["id"]))
     with _LOCK:
+        if _CLOSING:
+            _COUNTERS['shutdown_admission_rejected'] += 1
+            return False
         if key in _ACTIVE or key in _RECENT:
             return False
         if len(_ACTIVE) >= MAX_ACTIVE or sum(k[0] == str(code) for k in _ACTIVE) >= MAX_PER_SYMBOL:
@@ -205,9 +232,8 @@ def register(code, state, *, name=None, commit=None):
         heapq.heappush(_EXPIRIES, (value['committed_at_epoch'] + LIFETIME_SEC, key))
         heapq.heappush(heap, (value["committed_at_epoch"] + value["remaining_sec"][0], key[1]))
         _COUNTERS["registered"] += 1
-    if commit is not None:
-        if not append(code, name, "pre_submit_delay_committed", commit):
-            with _LOCK:
+        if commit is not None:
+            if not append(code, name, "pre_submit_delay_committed", commit):
                 _ACTIVE.pop(key, None)
                 heap = _HEAPS.get(str(code), [])
                 heap[:] = [item for item in heap if item[1] != key[1]]
@@ -215,8 +241,7 @@ def register(code, state, *, name=None, commit=None):
                 if not heap:
                     _HEAPS.pop(str(code), None)
                 _COUNTERS['commit_queue_rejected'] += 1
-            return False
-    with _LOCK:
+                return False
         if key in _ACTIVE:
             _ACTIVE[key]['_commit_admitted'] = True
     _SAMPLER_WAKE.set()
@@ -233,6 +258,8 @@ def take_due(code, now):
     """O(D log A), where D is limited; no global sweep or tick sorting."""
     result = []
     with _LOCK:
+        if _CLOSING:
+            return result
         heap = _HEAPS.get(str(code), [])
         while heap and heap[0][0] <= now and len(result) < MAX_DUE_PER_TURN:
             _, identity = heap[0]
@@ -276,18 +303,21 @@ def discard(code, identity, *, reason):
                 'observation_only':True, 'actual_order_submitted':False, 'broker_order_forbidden':True})
 
 
-def terminate(code, *, reason):
+def terminate(code, *, reason, observed_at_epoch=None):
     with _LOCK:
+        accepted = True
         _HEAPS.pop(str(code), None)
         for key in [key for key in _ACTIVE if key[0] == str(code)]:
             identity = key[1]
             state = _ACTIVE.pop(key, None)
             if state is not None:
                 _COUNTERS[reason] += len(state["remaining_sec"])
-                append(code, state["name"], "pre_submit_delay_intent_terminal", {
+                accepted = append(code, state["name"], "pre_submit_delay_intent_terminal", {
                     "delay_intent_id": identity, "terminal_reason": reason,
                     "observation_only": True, "decision_source_sha256": state["decision_source_sha256"],
-                    "actual_order_submitted": False, "broker_order_forbidden": True})
+                    "terminal_finished_at_epoch": (time.time() if observed_at_epoch is None else observed_at_epoch),
+                    "actual_order_submitted": False, "broker_order_forbidden": True}) and accepted
+        return accepted
 
 
 def prune(now=None):

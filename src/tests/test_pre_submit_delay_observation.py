@@ -6,11 +6,94 @@ from src.engine.scalping import pre_submit_delay_observation as observer
 
 @pytest.fixture(autouse=True)
 def reset():
+    observer._CLOSING = False
+    observer._CLOSED_AT = None
     observer._ACTIVE.clear(); observer._HEAPS.clear(); observer._EXPIRIES.clear(); observer._RECENT.clear()
     observer._COUNTERS.clear(); observer.configure_sink(None)
     yield
     observer._ACTIVE.clear(); observer._HEAPS.clear(); observer._EXPIRIES.clear(); observer._RECENT.clear()
     observer.configure_sink(None)
+    observer._CLOSING = False
+    observer._CLOSED_AT = None
+
+
+def test_shutdown_seals_admission_and_preserves_actual_censor_clock(monkeypatch):
+    emitted = []
+    observer.configure_sink(lambda callback, *args, **kw:
+        emitted.append((args[3], kw)) or {'status': 'queued'})
+    assert observer.register('123456', state('first'))
+    assert observer.register('123456', state('second'))
+    monkeypatch.setattr(observer.time, 'time', lambda: 61.25)
+    assert observer.shutdown() is True
+    assert not observer.register('123456', state('after-shutdown'))
+    assert observer.health()['active'] == 0
+    assert len(emitted) == 2
+    for stage, envelope in emitted:
+        fields = envelope['fields']
+        assert stage == 'pre_submit_delay_intent_terminal'
+        assert envelope['observed_at_epoch'] == fields['terminal_finished_at_epoch'] == 61.25
+        assert fields['observation_only'] is True and fields['broker_order_forbidden'] is True
+        assert fields['actual_order_submitted'] is False
+    assert observer.shutdown() is True
+    assert len(emitted) == 2
+
+
+@pytest.mark.parametrize('failure', ['sampler', 'queue'])
+def test_shutdown_failure_cannot_claim_censor_publication(monkeypatch, failure):
+    emitted = []
+    observer.configure_sink(lambda callback, *a, **kw:
+        emitted.append(kw) or {'status': 'unavailable'})
+    assert observer.register('123456', state('exact'))
+    if failure == 'sampler':
+        monkeypatch.setattr(observer, 'stop_sampler', lambda: False)
+    assert observer.shutdown() is False
+    assert not observer.register('123456', state('late'))
+    if failure == 'sampler':
+        assert emitted == [] and observer.health()['active'] == 1
+    else:
+        assert len(emitted) == 1 and observer.health()['queue_rejected'] == 1
+        assert observer.shutdown() is False
+
+
+def test_shutdown_serializes_commit_and_refuses_sampler_or_sink_reopening(monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    import threading
+    entered, release, closing = threading.Event(), threading.Event(), threading.Event()
+    stages = []
+    def sink(callback, *args, **kwargs):
+        stages.append(args[3])
+        if args[3] == 'pre_submit_delay_committed':
+            entered.set()
+            assert release.wait(2)
+        return {'status': 'queued'}
+    observer.configure_sink(sink)
+    def close():
+        closing.set()
+        return observer.shutdown()
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        registration = executor.submit(observer.register, '123456', state('exact'), commit={'id': 'exact'})
+        assert entered.wait(2)
+        shutdown = executor.submit(close)
+        assert closing.wait(2)
+        release.set()
+        assert registration.result(2) and shutdown.result(2)
+    assert stages == ['pre_submit_delay_committed', 'pre_submit_delay_intent_terminal']
+    assert observer.configure_sink(sink) is False
+    assert observer.configure_sampler(lambda code: {}, lambda *a, **kw: None) is False
+    assert observer.take_due('123456', 1000) == []
+
+
+def test_failed_sampler_retry_retains_first_actual_shutdown_clock(monkeypatch):
+    emitted = []
+    observer.configure_sink(lambda callback, *args, **kw: emitted.append(kw) or {'status': 'queued'})
+    assert observer.register('123456', state('exact'))
+    monkeypatch.setattr(observer.time, 'time', lambda: 61.)
+    monkeypatch.setattr(observer, 'stop_sampler', lambda: False)
+    assert observer.shutdown() is False
+    monkeypatch.setattr(observer.time, 'time', lambda: 200.)
+    monkeypatch.setattr(observer, 'stop_sampler', lambda: True)
+    assert observer.shutdown() is True
+    assert emitted[0]['observed_at_epoch'] == 61.
 
 
 def state(identity, stamp=10):
