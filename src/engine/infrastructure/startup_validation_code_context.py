@@ -59,6 +59,12 @@ MAIN_PROOF_SCHEMA = 'startup_main_preparation_code_handoff_v1'
 # Preserve both the issued preparation and its reviewed same-day stopped carry.
 # Evidence: docs/audits/preopen-alert-repair-2026-10-19.md.
 REVIEWED_PREPARATION_HISTORY = {
+    #0255 source-reader successor: identical cumulative selection over a
+    # one-symbol-at-a-time frozen source; require the exact reviewed bytes.
+    'src/engine/scalping/reversal_cumulative_postclose.py': {
+        ('708ee7428c494f67a7407e5093771f8ddf45ba67227073bea05ff5d87a172493',
+         '6adcd6526ca315d53e60d4817cda3cfec1b8ed8db30d624a1c212d6005dbba87'),
+    },
     # Reviewed Main SOR eligibility union; exact native signal parity is
     # required separately by the active-policy handoff before any drain.
     'src/trading/market/session_contract.py': {
@@ -551,6 +557,65 @@ def _native_main_basis(native):
     return None
 
 
+def _preserved_native_sources(proof):
+    """Same-invocation consumed handoff plus full native bootstrap, not a PASS cache.
+
+    Intraday Main can preserve a prepared policy without publishing an auxiliary
+    transition manifest. That path must supply its own nonempty native closure;
+    an empty auxiliary manifest set alone never authorizes delegation.
+    """
+    native=proof['native_verification'];closure=proof['closure']
+    records=closure.get('preserved_generations')
+    if not records:
+        return {}
+    if (native.get('validation_scope')!='intraday_preserved_historical_generation'
+            or _native_main_basis(native)!='same_invocation_selected_intraday_native_validation'
+            or not isinstance(records,dict) or len(records)!=1):
+        raise ValueError('startup_preserved_native_scope_invalid')
+    data=Path(proof['policy_path']).parents[3];day=proof['target_date']
+    commit=proof['selected_release_commit'];selected=proof['selected_release_root']
+    base=data/'runtime/policy_bootstrap/intraday_handoff'/day
+    path=base/(commit+'.json');consumed=base/(commit+'.consumed.json')
+    sha=_sha(path);record=records.get(sha)
+    if (not isinstance(record,dict)
+            or record.get('schema')!='startup_native_preserved_preopen_closure_v1'
+            or record.get('target_date')!=day or record.get('selected_release_commit')!=commit
+            or record.get('handoff_path')!=str(path) or record.get('consumed_path')!=str(consumed)):
+        raise ValueError('startup_preserved_native_identity_invalid')
+    handoff=_json(path);receipt=_json(consumed)
+    manifest_sha=record.get('manifest_sha256')
+    if (handoff.get('schema')!='intraday_policy_preserving_release_handoff_v1'
+            or handoff.get('status')!='prepared_verified'
+            or handoff.get('target_date')!=day or handoff.get('selected_release_commit')!=commit
+            or handoff.get('release_root')!=selected or handoff.get('actual_pid_consumed') is not False
+            or handoff.get('manifest_sha256')!=manifest_sha
+            or receipt.get('schema')!='intraday_policy_preserving_consumption_v1'
+            or receipt.get('status')!='pass' or receipt.get('actual_pid_consumed') is not True
+            or receipt.get('handoff_sha256')!=sha or receipt.get('manifest_sha256')!=manifest_sha
+            or receipt.get('target_date')!=day or receipt.get('selected_release_commit')!=commit
+            or receipt.get('release_root')!=selected or not receipt.get('pid_identity')):
+        raise ValueError('startup_preserved_native_consumption_invalid')
+    refs={**handoff['frozen_files'],str(path):sha,str(consumed):_sha(consumed)}
+    if refs!=record.get('sources'):
+        raise ValueError('startup_preserved_native_source_set_changed')
+    _check_sources(refs)
+    prepared=Path(handoff['prepared_receipt_path']);value=_json(prepared)
+    full=record.get('full_bootstrap') or {};checked=full.get('result') or {}
+    bootstrap=prepared.parent/('runtime_policy_bootstrap_'+day+'.json')
+    if (refs.get(str(prepared))!=handoff.get('prepared_receipt_sha256')
+            or value.get('source_date')!=native.get('source_date') or value.get('target_date')!=day
+            or value.get('status')!='prepared_verified'
+            or (value.get('activation_candidate') or {}).get('bundle_sha256')!=proof['policy_sha256']
+            or full.get('path')!=str(bootstrap) or _sha(bootstrap)!=full.get('sha256')
+            or full.get('write') is not False or full.get('full_native_verification') is not True
+            or checked.get('status')!='pass' or checked.get('findings')
+            or checked.get('target_date')!=day or checked.get('manifest_sha256')!=manifest_sha
+            or _json(bootstrap).get('manifest_sha256')!=manifest_sha):
+        raise ValueError('startup_preserved_full_bootstrap_unbound')
+    refs[str(bootstrap)]=full['sha256']
+    return refs
+
+
 def bind_main_preparation(root, commit, data_root, intake):
     """Parent-only Git attestation after this invocation's full native verify."""
     import subprocess
@@ -591,10 +656,14 @@ def bind_main_preparation(root, commit, data_root, intake):
         inventory_attestations[item['bundle_sha256']] = dict(origin_commit=item['origin_commit'],
             code_hashes=verified)
     manifests = closure.get('manifests')
-    if not isinstance(manifests, dict) or not 1 <= len(manifests) <= 16:
+    preserved_sources=_preserved_native_sources(dict(policy_path=str(policy),policy_sha256=bundle['bundle_sha256'],
+        target_date=day,selected_release_commit=original_commit,selected_release_root=str(selected),
+        native_verification=native,closure=closure))
+    if not isinstance(manifests, dict) or len(manifests)>16 or not (manifests or preserved_sources):
         raise ValueError('startup_main_manifest_closure_required')
     sources = {str(policy): _sha(policy),
         str(data_root / 'runtime/runtime_release_selection.json'): _sha(data_root / 'runtime/runtime_release_selection.json')}
+    sources.update(preserved_sources)
     histories, native_readers = {}, {}
     for ident, observed in manifests.items():
         manifest = _json(observed['path'])
@@ -720,7 +789,9 @@ def _check_native_closure(proof):
             or len(json.dumps(entries, sort_keys=True, separators=(',', ':')).encode()) > 512 * 1024):
         raise ValueError('startup_main_digest_closure_unbounded')
     for path, entry in entries.items():
-        if (not isinstance(entry, dict) or set(entry) != {'identity', 'digest', 'created'}
+        if (not isinstance(entry, dict) or set(entry) not in ({'identity', 'digest', 'created'},
+                {'identity','digest','created','native_generation_proof'})
+                or 'native_generation_proof' in entry and not _hex(entry['native_generation_proof'])
                 or not _hex(entry.get('digest'))
                 or identity(path) != entry.get('identity')
                 or entry['identity'][4] < 1024 * 1024
@@ -729,8 +800,23 @@ def _check_native_closure(proof):
                 or type(entry['created']) not in (int, float) or not 0 <= time.time() - entry['created'] <= 600
                 or not Path(path).resolve().is_relative_to(binding['resolved_root'])):
             raise ValueError('startup_main_digest_generation_changed')
+    sessions=closure.get('digest_sessions')
+    if sessions is not None:
+        if not isinstance(sessions,dict) or not 1<=len(sessions)<=8:
+            raise ValueError('startup_main_digest_session_set_invalid')
+        for key,observed in sessions.items():
+            owner=observed.get('binding') or {};stats=observed.get('stats') or {}
+            if (key!=hashlib.sha256(json.dumps(owner,sort_keys=True).encode()).hexdigest()
+                    or owner.get('role')!='postclose' or owner.get('pid')!=binding['pid']
+                    or owner.get('boot_id')!=binding['boot_id']
+                    or owner.get('resolved_root')!=binding['resolved_root']
+                    or owner.get('lexical_root')!=binding['lexical_root']
+                    or owner.get('day') not in {native['source_date'],proof['target_date']}
+                    or stats.get('pid')!=binding['pid']):
+                raise ValueError('startup_main_digest_session_owner_changed')
     manifests = closure.get('manifests')
-    if not isinstance(manifests, dict) or not 1 <= len(manifests) <= 16:
+    preserved=_preserved_native_sources(proof)
+    if not isinstance(manifests, dict) or len(manifests)>16 or not (manifests or preserved):
         raise ValueError('startup_main_manifest_closure_invalid')
     for ident, observed in manifests.items():
         manifest = _json(observed['path'])
@@ -799,7 +885,8 @@ def _native_logical_sources(proof, *, verify_ledger=False):
         raise ValueError('startup_logical_native_validation_required')
     result = {}
     observed_manifests = proof['closure']['manifests']
-    if not isinstance(observed_manifests, dict) or not 1 <= len(observed_manifests) <= 16:
+    if (not isinstance(observed_manifests, dict) or len(observed_manifests)>16
+            or not (observed_manifests or _preserved_native_sources(proof))):
         raise ValueError('startup_logical_manifest_set_invalid')
     for ident, observed in observed_manifests.items():
         manifest = _json(observed['path'])

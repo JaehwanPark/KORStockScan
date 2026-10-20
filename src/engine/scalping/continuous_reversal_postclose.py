@@ -73,7 +73,7 @@ def completed_bars(data_root,day,*,snapshot_sink=None):
     """Same-item cached completed bars only; unresolved rows stay excluded."""
     sources=defaultdict(dict);native=set();receipts=[]
     paths=[Path(data_root)/'report'/'machine_completed_price_source'/f'machine_completed_price_source_{day}.json']
-    paths+=sorted((Path(data_root)/'runtime'/'shared_ws_completed_bars').glob('*/*/*.json'))
+    paths+=sorted((Path(data_root)/'runtime'/'shared_ws_completed_bars'/day).glob('*/*.json'))
     for path in paths:
         if not path.is_file():continue
         raw_bytes=path.read_bytes()
@@ -154,7 +154,7 @@ def ensure_population(data_root,day, *, source_generation=None, expected_sha256=
 def _build_population(data_root,day,out):
     path=out/'source.json'
 
-    from src.engine.scalping.continuous_reversal_source import freeze_normalized_sources
+    from src.engine.scalping.continuous_reversal_source import freeze_normalized_sources, iter_normalized_symbols
     out.mkdir(parents=True,exist_ok=True)
     previous=[p for p in sorted(directory(data_root,day).parent.glob('????-??-??/source.json')) if '2026-06-05'<=p.parent.name<day]
     parent=json.loads(previous[-1].read_text()) if previous else None
@@ -163,11 +163,10 @@ def _build_population(data_root,day,out):
     normalized=freeze_normalized_sources(data_root,day,out/'normalized')
     events=[];selected={};bars,bar_receipts=completed_bars(data_root,day)
     for source in normalized:
-        raw=json.loads(gzip.decompress(Path(source['path']).read_bytes()))
         output=out/f"events-{source['venue']}-{source['session']}.jsonl.gz"
         count=0
         with gzip.open(output,'wt') as handle:
-            for symbol,rows in sorted(raw['symbols'].items()):
+            for symbol,rows in iter_normalized_symbols(source['path']):
                 turns,coverage=kernel.analyze_symbol(rows,day,source['venue'],source['session'],symbol)
                 market=kernel.market_bucket(source['session']);key='|'.join((day,symbol,market))
                 rank=(coverage['valid_price_rows'],{'SOR':2,'NXT':1,'KRX':0}[source['venue']])

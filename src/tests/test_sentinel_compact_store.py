@@ -94,3 +94,16 @@ def test_index_population_and_lazy_payload_damage_rebuild(tmp_path, damage):
         rows[0]['fields']['reason']
     rows = list(store.indexed_rows(cache, previous_stamp=None, expected_count=1))
     assert rows[0]['fields']['reason'] == 'r'*1000
+
+
+def test_slim_projection_cannot_publish_or_return_mixed_generation(tmp_path):
+    import pytest
+    from src.engine.monitoring import sentinel_compact_store as owner
+    path = tmp_path / 'summary.jsonl'
+    path.write_text('first\n')
+    def race():
+        path.write_text('different generation\n')
+        return [{'event_count': 1}]
+    with pytest.raises(ValueError, match='source_changed_during_read'):
+        owner.slim_summary_projection(path, race, contract='strict-v1')
+    assert not path.with_name(path.name + '.sentinel-slim.json').exists()

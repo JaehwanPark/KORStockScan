@@ -1355,6 +1355,40 @@ def _initial_quantity_semantics(root: Path, source_date: str, *, now_epoch=None)
 
 def _semantic_object(path: Path, *, limit: int = 64 * 1024 * 1024,
                      hash_only: bool = False, observation: dict | None = None) -> tuple[dict, str]:
+    """Reuse small decoded inputs only within the current validation invocation.
+
+    Validator decisions and external dependencies are always evaluated again.
+    Large objects retain the bounded streaming/hash path rather than a cache.
+    """
+    from copy import deepcopy
+    from src.engine.infrastructure.validation_digest_session import ACTIVE, MAX_ENTRIES, identity
+    session = ACTIVE.get()
+    if session is None or session.invocation_pid != os.getpid():
+        return _read_semantic_object(path, limit=limit, hash_only=hash_only, observation=observation)
+    actual = existing_or_gzip_path(path)
+    before = identity(actual)
+    key = (str(actual.absolute()), limit, hash_only)
+    entry = session.semantic_objects.get(key)
+    if entry and entry[0] == before and time.monotonic() - entry[2] <= session.ttl:
+        if observation is not None: observation['logical_bytes'] = entry[3]
+        session.stats['semantic_reused_reads'] += 1
+        return deepcopy(entry[1])
+    details = {}
+    result = _read_semantic_object(path, limit=limit, hash_only=hash_only, observation=details)
+    if identity(actual) != before:
+        raise ValueError('semantic_generation_changed_during_read')
+    size = details['logical_bytes']
+    if observation is not None: observation.update(details)
+    if size <= 1024 * 1024:
+        if session.semantic_bytes + size > 4 * 1024 * 1024 or len(session.semantic_objects) >= MAX_ENTRIES:
+            session.semantic_objects.clear();session.semantic_bytes = 0
+        session.semantic_objects[key] = (before, deepcopy(result), time.monotonic(), size)
+        session.semantic_bytes += size
+    return result
+
+
+def _read_semantic_object(path: Path, *, limit: int = 64 * 1024 * 1024,
+                     hash_only: bool = False, observation: dict | None = None) -> tuple[dict, str]:
     """Read one bounded, stable generation without following file symlinks."""
     actual = existing_or_gzip_path(path)
     if actual.is_symlink() or actual.stat().st_size > limit:
@@ -4065,9 +4099,8 @@ class ArtifactFreshnessDetector(BaseDetector):
         if not log_path.exists():
             return None
         try:
-            lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()[
-                -5000:
-            ]
+            from src.engine.log_archive_service import tail_log_lines
+            lines = tail_log_lines(log_path, 5000)
         except OSError:
             return None
         step_token = f"step={contract['step']}"

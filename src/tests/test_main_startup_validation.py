@@ -71,7 +71,7 @@ def native_preparation_cli(tmp_path):
                       if isinstance(node, ast.FunctionDef) and node.name == 'main')
     main_source = ast.get_source_segment(owner, dispatcher)
     prelude = f'''"""Private semantic fixture; original native CLI dispatcher below."""
-import argparse,json,subprocess,sys
+import argparse,json,os,subprocess,sys
 from src.utils.constants import DATA_DIR
 from src.engine.infrastructure import validation_digest_session as digest_owner
 def verify_prepared(target_date, *, require_today=False):
@@ -107,6 +107,7 @@ def test_native_preparation_context_keeps_cli_full_scope_and_cold_invocation_bou
         assert io['remaining_entries'] == 0
         assert io['stats']['cache_status'] == 'invocation_memory_only'
         assert io['stats']['full_reads'] == io['stats']['reused_reads'] == 1
+        assert io['stats']['semantic_reused_reads'] == 0
         assert io['stats']['full_bytes'] == io['stats']['reused_bytes'] == 2 * 1024 * 1024
         assert result['native_process_lifecycle']['child_terminated'] is True
         assert result['native_process_lifecycle']['descendants_drained'] is True
@@ -188,6 +189,31 @@ def test_native_preparation_rejects_missing_context_diagnostics(tmp_path, monkey
         validation._native_preparation_check(tmp_path, DAY, '2026-10-16')
 
 
+@pytest.mark.parametrize('key', ['semantic_reused_reads', 'admitted_native_proofs', 'admitted_native_bytes'])
+@pytest.mark.parametrize('counter', [0, 7, -1, True, '0', None])
+def test_native_preparation_validates_native_reuse_counters(native_preparation_cli, monkeypatch, key, counter):
+    code, _ = native_preparation_cli
+    original = validation._run_native_validation
+    def invalid(*args, **kwargs):
+        result = original(*args, **kwargs)
+        prefix = 'P5_NATIVE_VALIDATION_IO='
+        lines = result.stderr.splitlines()
+        for index, line in enumerate(lines):
+            if line.startswith(prefix):
+                value = json.loads(line.removeprefix(prefix))
+                value['stats'][key] = counter
+                lines[index] = prefix + json.dumps(value)
+        result.stderr = '\n'.join(lines)
+        return result
+    monkeypatch.setattr(validation, '_run_native_validation', invalid)
+    if type(counter) is int and counter >= 0:
+        result = validation._native_preparation_check(code, DAY, '2026-10-16')
+        assert result['native_validation_io']['stats'][key] == counter
+    else:
+        with pytest.raises(ValueError, match='startup_native_preparation_diagnostics_invalid'):
+            validation._native_preparation_check(code, DAY, '2026-10-16')
+
+
 @pytest.mark.parametrize('failure', ['exit', 'findings'])
 def test_native_preparation_diagnostic_status_requires_full_result_contract(
         native_preparation_cli, monkeypatch, failure):
@@ -213,6 +239,11 @@ def test_native_preparation_diagnostic_status_requires_full_result_contract(
 
 @pytest.fixture
 def transaction(tmp_path, monkeypatch):
+    class FixtureClock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls.fromisoformat(DAY+'T10:00:00+09:00').astimezone(tz)
+    monkeypatch.setattr(validation, 'datetime', FixtureClock)
     workspace, code = tmp_path / "workspace", tmp_path / "code"
     workspace.mkdir()
     for item in CODE_FILES:
@@ -339,6 +370,19 @@ def test_real_early_child_terminates_with_exact_identity_and_nonempty_consumer_r
     assert (receipt.parent / "isolation.jsonl").read_bytes() == b""
     assert transaction["protected"].read_bytes() == before
     assert not (transaction["code"] / "logs").exists()
+
+
+def test_target_expiry_after_successful_child_never_becomes_parent_pass(transaction, monkeypatch):
+    class ExpiredClock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls.fromisoformat('2026-10-20T00:00:01+09:00').astimezone(tz)
+    monkeypatch.setattr(validation, 'datetime', ExpiredClock)
+    final, receipt = _run(transaction)
+    _assert_failed_terminal(final, receipt)
+    assert final['child_terminated'] is True
+    assert final['child_exit_code'] == 0
+    assert 'startup_target_expired_during_validation' in ' '.join(final['findings'])
 
 
 @pytest.mark.parametrize("mode", [
@@ -754,7 +798,7 @@ def test_parent_independently_rejects_malformed_or_unbound_child_semantics(defec
         validation._validate_child_result(child, CONSUMER_IDS, expected)
 
 
-@pytest.mark.parametrize("boundary", ["load", "validate", "validate_rejected"])
+@pytest.mark.parametrize("boundary", ["load", "validate", "validate_rejected", "preserved"])
 def test_native_cli_closure_is_collected_from_executed_native_boundaries(native_preparation_cli, boundary):
     code,data=native_preparation_cli
     package=code/'src/engine/scalping';package.mkdir();(package/'__init__.py').touch()
@@ -797,6 +841,36 @@ def validate_manifest(data_root,manifest,bundle,**kwargs):
     if boundary != 'load':
         calls = calls.replace('b=N.load(data_root=DATA_DIR,target_date=target_date)',
             'b=__import__("json").loads((DATA_DIR/"bundle.json").read_text()); N.validate(b,target_date=target_date)')
+    if boundary=='preserved':
+        # The incumbent predates invocation-wide reuse: its nested target-day
+        # owner must be observed before it clears its actual native entries.
+        (code/'src/engine/infrastructure/validation_digest_session.py').write_bytes(
+            subprocess.check_output(['git','-C',str(ROOT),'show','a7c0b0dc5:src/engine/infrastructure/validation_digest_session.py']))
+        old_cli=subprocess.check_output(['git','-C',str(ROOT),'show',
+            'a7c0b0dc5:src/engine/automation/next_preopen_readiness.py'],text=True)
+        old_main=next(n for n in ast.parse(old_cli).body if isinstance(n,ast.FunctionDef) and n.name=='main')
+        copied_main=next(n for n in ast.parse(text).body if isinstance(n,ast.FunctionDef) and n.name=='main')
+        text=text.replace(ast.get_source_segment(text,copied_main),ast.get_source_segment(old_cli,old_main))
+        text=text.replace("active.binding['day']=='2026-10-16'","active.binding['day']==target_date")
+        consumed=data/'consumed.json';consumed.write_text('{}')
+        (code/'src/engine/automation/intraday_release_handoff.py').write_text('''
+from src.utils.constants import DATA_DIR
+import hashlib
+def _sha(path):return hashlib.sha256(path.read_bytes()).hexdigest()
+def _paths(day,commit):return DATA_DIR/'bundle.json',DATA_DIR/'consumed.json'
+def verify(day,commit):return dict(status='pass',findings=[],handoff=dict(
+    frozen_files={str(DATA_DIR/'source.bin'):_sha(DATA_DIR/'source.bin')},manifest_sha256='f'*64))
+''')
+        (code/'src/engine/automation/runtime_policy_bootstrap.py').write_text('''
+from src.utils.constants import DATA_DIR
+def manifest_path(day,output_dir=None):return DATA_DIR/'bundle.json'
+def verify_bootstrap(day,write=True):return dict(status='pass',findings=[],target_date=day,manifest_sha256='f'*64)
+''')
+        calls=calls.replace('    A.validate_manifest(DATA_DIR,A.I.read('+repr(str(path))+'),b)', '''    from src.engine.automation import intraday_release_handoff as H,runtime_policy_bootstrap as B
+    H.verify(target_date,'d'*40)
+    B.verify_bootstrap(target_date,write=False)
+    with digest_owner.postclose_session(DATA_DIR,target_date):
+        digest_owner.reused_digest(DATA_DIR/'source.bin')''')
     if boundary == 'validate_rejected':
         bundle['reject'] = True
         (data/'bundle.json').write_text(json.dumps(bundle))
@@ -810,6 +884,14 @@ def validate_manifest(data_root,manifest,bundle,**kwargs):
     closure=result['native_machine_closure']
     assert closure['run_id']==run_id
     assert closure['bundles'][bundle['bundle_sha256']]['family_sha256']=='c'*64
+    if boundary=='preserved':
+        assert closure['manifests']=={}
+        record=next(iter(closure['preserved_generations'].values()))
+        assert record['full_bootstrap']['full_native_verification'] is True
+        assert record['sources'][str(consumed)]==hashlib.sha256(consumed.read_bytes()).hexdigest()
+        assert {v['binding']['day'] for v in closure['digest_sessions'].values()}=={'2026-10-16',DAY}
+        assert closure['digest_entries'][str(data/'source.bin')]['digest']==hashlib.sha256((data/'source.bin').read_bytes()).hexdigest()
+        return
     assert closure['manifests'][ident]['sha256']==hashlib.sha256(path.read_bytes()).hexdigest()
     assert closure['frozen_inventories'][str(data)][str(data/'bundle.json')]
     assert closure['frozen_validations'][str(data/'bundle.json')]['result']['schema']=='native_fixture_verified'

@@ -5391,25 +5391,39 @@ def _read_machine_projection(path: Path, *, kernels: dict) -> dict:
     before = actual.stat()
     opener = gzip.open if actual.suffix == '.gz' else open
     try:
-        with opener(actual, 'rt', encoding='utf-8') as handle:
+        with opener(actual, 'rt', encoding='utf-8', newline='') as handle:
             prefix = handle.read(64 * 1024)
             match = re.match(r'\s*\{\s*"contract"\s*:\s*', prefix)
             if match:
                 contract, _ = json.JSONDecoder().raw_decode(prefix[match.end():])
                 if not isinstance(contract, dict) or contract.get('kernels') != kernels:
                     return {}
-        with opener(actual, 'rb') as handle:
-            body = handle.read(MACHINE_PROJECTION_MAX_BYTES + 1)
-            if len(body) > MACHINE_PROJECTION_MAX_BYTES:
-                return {}
-        value = json.loads(body)
-        del body
+        from src.engine.lifecycle.research_json_stream import Reader
+        from src.engine.scalping.postclose_entry_validation import FrozenRows
+        with opener(actual, 'rt', encoding='utf-8', newline='') as handle:
+            reader = Reader(handle, max_bytes=MACHINE_PROJECTION_MAX_BYTES, budgeted=False)
+            value = {}
+            def field(key, source):
+                if key == 'rows':
+                    rows = FrozenRows()
+                    rows.extend(source.array(lambda r: r.value(MACHINE_PROJECTION_MAX_BYTES)))
+                    value[key] = rows
+                else:
+                    value[key] = source.value(MACHINE_PROJECTION_MAX_BYTES)
+                return ()
+            for _ in reader.fields(field, max_fields=None):
+                pass
+            reader.finish()
         after = actual.stat()
         if (before.st_ino, before.st_size, before.st_mtime_ns, before.st_ctime_ns) != (
                 after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns):
             raise ValueError('machine_projection_changed_during_read')
         return value if isinstance(value, dict) and compact.valid(value) else {}
-    except (OSError, EOFError, UnicodeDecodeError, json.JSONDecodeError):
+    except ValueError as exc:
+        if str(exc) == "machine_projection_changed_during_read":
+            raise
+        return {}
+    except (OSError, EOFError):
         return {}
 
 

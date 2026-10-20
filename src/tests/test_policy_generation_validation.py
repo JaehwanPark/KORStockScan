@@ -416,6 +416,8 @@ def test_post_aux_guard_successor_does_not_transitively_promote_older_reports(tm
     *[(family,'REVIEWED_CLEANUP_SOURCE_SUCCESSORS') for family in validation.PLANS],
     *[(family,'REVIEWED_RECEIPT_CUSTODY_SOURCE_SUCCESSORS') for family in validation.PLANS],
     ('holding_vote','REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS'),
+
+    *[(family,'REVIEWED_SOURCE_READER_SUCCESSORS') for family in ('rising_missed','auxiliary')],
 ])
 @pytest.mark.parametrize('damage', [None, 'missing', 'bytes', 'path', 'authority', 'seal', 'symlink',
                                    'current_missing', 'current_bytes', 'current_code'])
@@ -463,8 +465,13 @@ def test_successor_requires_preserved_prior_fixture_and_independent_current_fixt
 
 
 @pytest.mark.parametrize('family', list(validation.PLANS))
-def test_cleanup_capability_pair_is_current_and_keeps_original_source(family):
+def test_latest_capability_pair_is_current_and_keeps_original_source(family):
     from src.engine.monitoring import policy_generation_code_handoff as handoff
+    if family in handoff.REVIEWED_SOURCE_READER_SUCCESSORS:
+        old, current = handoff.REVIEWED_SOURCE_READER_SUCCESSORS[family]
+        assert current == generation.code_generation(family)
+        assert old == handoff.REVIEWED_RECEIPT_CUSTODY_SOURCE_SUCCESSORS[family][0]
+        return
     old, current = handoff.REVIEWED_CLEANUP_SOURCE_SUCCESSORS[family]
     if family=='holding_vote':
         assert (current,generation.code_generation(family)) in handoff.REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS[family]

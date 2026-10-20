@@ -378,7 +378,7 @@ def test_performance_tuning_report_prefers_trade_review_snapshot(monkeypatch):
     monkeypatch.setattr(
         report_mod,
         "load_monitor_snapshot",
-        lambda kind, target_date: (
+        lambda kind, target_date, **kwargs: (
             {
                 "sections": {
                     "recent_trades": [

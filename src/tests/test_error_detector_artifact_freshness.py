@@ -4625,3 +4625,41 @@ def test_postclose_main_absence_timeout_is_unknown(monkeypatch):
         raise subprocess.TimeoutExpired(a,2)
     monkeypatch.setattr(subprocess,'run',timeout)
     assert mod._postclose_main_absent() is False
+
+
+def test_semantic_decode_reuse_is_invocation_bound_and_not_a_verdict(tmp_path, monkeypatch):
+    import json
+    from src.engine.error_detectors import artifact_freshness as owner
+    from src.engine.infrastructure.validation_digest_session import postclose_session
+    path = tmp_path / 'value.json'
+    path.write_text(json.dumps({'rows': [{'id': 1}]}))
+    native = owner._read_semantic_object
+    reads = []
+    def counted(*args, **kwargs):
+        reads.append(1)
+        return native(*args, **kwargs)
+    monkeypatch.setattr(owner, '_read_semantic_object', counted)
+    with postclose_session(tmp_path, '2026-10-19'):
+        first, sha = owner._semantic_object(path)
+        first['rows'][0]['id'] = 'mutated copy'
+        assert owner._semantic_object(path)[0]['rows'][0]['id'] == 1
+        assert len(reads) == 1
+        path.write_text(json.dumps({'rows': [{'id': 2}]}))
+        assert owner._semantic_object(path)[0]['rows'][0]['id'] == 2
+        assert len(reads) == 2
+        with pytest.raises(ValueError):
+            owner._semantic_object(path, limit=1)
+    owner._semantic_object(path)
+    assert len(reads) == 4
+
+
+def test_semantic_reuse_caps_even_tiny_entries(tmp_path, monkeypatch):
+    from src.engine.error_detectors import artifact_freshness as owner
+    from src.engine.infrastructure import validation_digest_session as session_owner
+    monkeypatch.setattr(session_owner, 'MAX_ENTRIES', 2)
+    with session_owner.postclose_session(tmp_path, '2026-10-19') as session:
+        for i in range(3):
+            path = tmp_path / f'{i}.json'
+            path.write_text('{}')
+            assert owner._semantic_object(path)[0] == {}
+        assert len(session.semantic_objects) <= 2

@@ -546,3 +546,17 @@ def test_changed_search_domain_does_not_resume_prior_cursor(monkeypatch):
     assert seen == [0]
     assert result['evaluated_candidate_count'] == 0
     assert result['search_complete'] is False
+
+
+def test_frozen_rows_canonical_copy_hashes_without_decoding(monkeypatch):
+    from src.engine.scalping.postclose_entry_validation import FrozenRows
+    from src.engine.scalping import compact_auxiliary_paired_replay as compact
+    original = [{'z': {'unknown': None, '한글': [False, 1.2]}, 'id': 'a'}, {'id': 'a', 'cost': None}]
+    expected = compact.digest({'rows': original})
+    source, copied = FrozenRows(), FrozenRows()
+    source.extend(original)
+    copied.extend(source)
+    assert list(copied) == original
+    def forbidden(*args, **kwargs):raise AssertionError('decoded while hashing')
+    monkeypatch.setattr(FrozenRows, '__getitem__', forbidden)
+    assert compact.digest({'rows': copied}) == expected

@@ -22,16 +22,30 @@ class FrozenRows(Sequence):
         self._offsets = []
 
     def append(self, row):
+        self._append_encoded(json.dumps(row, sort_keys=True, ensure_ascii=False,
+            allow_nan=False, separators=(",", ":")).encode())
+
+    def _append_encoded(self, raw):
         self._file.seek(0, 2)
         self._offsets.append(self._file.tell())
-        self._file.write(json.dumps(row, ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode() + b"\n")
+        self._file.write(raw + b"\n")
 
     def __len__(self):
         return len(self._offsets)
 
     def extend(self, rows):
-        for row in rows:
-            self.append(row)
+        if isinstance(rows, FrozenRows):
+            for raw in rows.canonical_rows():
+                self._append_encoded(raw)
+        else:
+            for row in rows:
+                self.append(row)
+
+    def canonical_rows(self):
+        """Private-spool canonical bytes, without another decode/encode pass."""
+        for offset in self._offsets:
+            self._file.seek(offset)
+            yield self._file.readline().removesuffix(b"\n")
 
     def __eq__(self, other):
         if not isinstance(other, Sequence):

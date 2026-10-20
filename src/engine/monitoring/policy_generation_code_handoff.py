@@ -219,6 +219,15 @@ REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS = {'holding_vote': (
     ('791757cb183525948b6378ee41deaa3ab03828ee4bdaea851bdfb653b804804b',
      'd23900de242886781b47158a016756bd8bbd56dab9a16ecef23ad8983713426f'))}
 
+# SourceReadReduction1020: preserved native reports need independent fixtures
+# for the exact report-reader successor, never a rewritten historical contract.
+REVIEWED_SOURCE_READER_SUCCESSORS = {
+    'rising_missed': ('1f524a5ad98e623501eaaa2d7c81773ac0ad6328237d72ea0c95c0c8cd1251bb',
+                      'c71f1a1954a515f59bf551c8ea6e674415c2fd96f5e8e7a742fb85a56fa7493a'),
+    'auxiliary': ('80497557e7be71c0eafcdaa4bd7256250c66899a791510efa2f98f81cbcbbc05',
+                  'cc663fc62f34bd39f01591c15b13977aa50043f2fe1579291bf719ed3fb496e7'),
+}
+
 
 def _historical_fixture(contract, data, family):
     """Preserve a prior fixture without using it to certify the successor."""
@@ -295,8 +304,14 @@ def current_fixture_observation(observed, data):
     custody_match = custody is not None and actual_pair == custody
     if custody_match:
         pair = custody
-    if actual_pair in REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS.get(family, ()):
+    frozen_match=actual_pair in REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS.get(family, ())
+    if frozen_match:
         pair = actual_pair
+
+    reader = REVIEWED_SOURCE_READER_SUCCESSORS.get(family)
+    reader_match = reader is not None and actual_pair == reader
+    if reader_match:
+        pair = reader
     if not pair or actual_pair != pair:
         return validation.current_fixture_observation(observed, data)
     if (observed.get('status') != 'unverified' or observed.get('findings') != ['policy_generation_unverified']
@@ -328,7 +343,7 @@ def current_fixture_observation(observed, data):
                 or fixture['code_sha256'] != pair[1]):
             raise ValueError('successor_historical_contract_changed')
         historical_fixture = _historical_fixture(contract, data, family)
-        if (integrated_match or readonly_match or cleanup_match or custody_match) and historical_fixture is None:
+        if (integrated_match or readonly_match or cleanup_match or custody_match or reader_match or frozen_match) and historical_fixture is None:
             raise ValueError('successor_integrated_historical_fixture_required')
         current = generation.native(native, family=family, day=observed['source_date'], data_root=data,
             source_state=contract['source_state'], comparison_state=contract['comparison_state'],

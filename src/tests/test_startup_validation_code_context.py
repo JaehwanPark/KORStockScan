@@ -1009,3 +1009,56 @@ assert not A._validation_code_inventory({{{name!r}:'0'*64}}, {{{name!r}:{current
 assert_no_forbidden_attempts()
 """)
     assert result.returncode==0,result.stderr
+
+
+@pytest.mark.parametrize('fault', [None,'missing','scope','date','release','consumed','full',
+    'source','bootstrap','activation','source_date','native_pid'])
+def test_isolated_preserved_native_closure_requires_consumption_full_bootstrap_and_exact_sources(request_fixture,monkeypatch,fault):
+    f=request_fixture;main=_main_fixture(f,monkeypatch);proof=main['proof'];request=f['request']
+    data=Path(request['data_root']);commit=f['original_commit'];selected=str(f['selected'])
+    native=proof['native_verification'];native.update(validation_scope='intraday_preserved_historical_generation',
+        handoff_basis='intraday_preserved_preopen_generation_current_postclose_resealed',preserved_preopen_commit='a'*40)
+    proof['delegation_basis']=C._native_main_basis(native)
+    request['manifest']['selected_release_sha']='a'*40
+    closure=proof['closure'];closure['manifests']={};proof['historical_semantic_code_sources']={}
+    prepared=data/'runtime/policy_bootstrap/prepared'/DAY/'original'/'receipt.json'
+    prepared.parent.mkdir(parents=True)
+    prepared.write_text(json.dumps(dict(status='prepared_verified',target_date=DAY,source_date=native['source_date'],
+        activation_candidate={'bundle_sha256':proof['policy_sha256']})))
+    bootstrap=prepared.parent/('runtime_policy_bootstrap_'+DAY+'.json');bootstrap.write_text(json.dumps({'manifest_sha256':'d'*64}))
+    path=data/'runtime/policy_bootstrap/intraday_handoff'/DAY/(commit+'.json');path.parent.mkdir(parents=True)
+    consumed=path.with_name(commit+'.consumed.json')
+    handoff=dict(schema='intraday_policy_preserving_release_handoff_v1',status='prepared_verified',target_date=DAY,
+        selected_release_commit=commit,release_root=selected,actual_pid_consumed=False,manifest_sha256='d'*64,
+        prepared_receipt_path=str(prepared),prepared_receipt_sha256=C._sha(prepared),frozen_files={str(prepared):C._sha(prepared)})
+    path.write_text(json.dumps(handoff));sha=C._sha(path)
+    receipt=dict(schema='intraday_policy_preserving_consumption_v1',status='pass',actual_pid_consumed=True,
+        handoff_sha256=sha,manifest_sha256='d'*64,target_date=DAY,selected_release_commit=commit,release_root=selected,
+        pid_identity={'pid':123,'start_ticks':'456','cwd':selected+'/src'})
+    consumed.write_text(json.dumps(receipt))
+    record=dict(schema='startup_native_preserved_preopen_closure_v1',target_date=DAY,selected_release_commit=commit,
+        handoff_path=str(path),consumed_path=str(consumed),manifest_sha256='d'*64,
+        sources={**handoff['frozen_files'],str(path):sha,str(consumed):C._sha(consumed)},
+        full_bootstrap=dict(path=str(bootstrap),sha256=C._sha(bootstrap),write=False,full_native_verification=True,
+            result=dict(status='pass',findings=[],target_date=DAY,manifest_sha256='d'*64)))
+    closure['preserved_generations']={sha:record}
+    proof['source_hashes'].update(C._preserved_native_sources(proof));request['source_hashes'].update(proof['source_hashes'])
+    if fault=='missing':closure['preserved_generations']={}
+    elif fault=='scope':native['validation_scope']='current_full_contract'
+    elif fault=='date':record['target_date']='2026-10-20'
+    elif fault=='release':record['selected_release_commit']='e'*40
+    elif fault=='consumed':record['sources'][str(consumed)]='e'*64
+    elif fault=='full':record['full_bootstrap']=None
+    elif fault=='source':prepared.write_text('{}')
+    elif fault=='bootstrap':bootstrap.write_text('{}')
+    elif fault=='activation':proof['policy_sha256']='e'*64
+    elif fault=='source_date':native['source_date']='2026-10-15'
+    elif fault=='native_pid':closure['digest_binding']['pid']+=1
+    _write_request(f,request)
+    result=_child(f,MAIN_CHILD_SETUP+'''
+proof=request['main_preparation_code_handoff']
+assert proof['closure']['manifests']=={}
+assert C.preparation_logical_sources()=={}
+assert_no_forbidden_attempts()
+''')
+    assert (result.returncode==0) is (fault is None),result.stderr

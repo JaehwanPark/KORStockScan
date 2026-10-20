@@ -1429,7 +1429,8 @@ def _rehydrate_summary_for_append(summary_path: Path) -> None:
 def load_summary_rows(
     path: Path, *, include_samples: bool = True, strict: bool = False
 ) -> list[dict[str, Any]]:
-    return _load_summary_rows(path, include_samples=include_samples, strict=strict)
+    return _load_summary_rows(path, include_samples=include_samples, strict=strict,
+                              _projection_reuse=not include_samples)
 
 
 def _slim_summary_row(payload: dict[str, Any]) -> dict[str, Any]:

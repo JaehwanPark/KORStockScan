@@ -654,10 +654,19 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--verify-completion requires --selected-release-commit")
     try:
         if args.prepare or args.verify:
-            from src.engine.infrastructure.validation_digest_session import postclose_session
+            from src.engine.infrastructure.validation_digest_session import ACTIVE, postclose_session
             # The day scopes this invocation, not the semantic source contract.
             # Full verification still resolves and validates the sealed receipt.
-            with postclose_session(DATA_DIR, args.source_date if args.prepare else args.target_date) as session:
+            day = args.source_date if args.prepare else args.target_date
+            parent = ACTIVE.get()
+            if (parent is not None and parent.binding.get('role') == 'postclose'
+                    and parent.invocation_pid == os.getpid()
+                    and parent.binding.get('lexical_root') == str(DATA_DIR)
+                    and parent.binding.get('resolved_root') == str(DATA_DIR.resolve(strict=True))):
+                # P5 owns the source-day invocation and captures its digest
+                # closure after this CLI returns. Preserve that exact owner.
+                day = parent.binding['day']
+            with postclose_session(DATA_DIR, day) as session:
                 result = (prepare(args.source_date, target_date=args.target_date) if args.prepare
                           else verify_prepared(args.target_date, require_today=args.require_today))
             result = {**result, 'validation_io': session.stats}

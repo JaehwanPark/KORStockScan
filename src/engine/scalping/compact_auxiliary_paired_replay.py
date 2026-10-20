@@ -71,9 +71,9 @@ def digest(value):
             output.update(((',' if index else '') + json.dumps(key, ensure_ascii=False) + ':').encode())
             if key == 'rows':
                 output.update(b'[')
-                for ordinal, row in enumerate(value[key]):
+                for ordinal, raw in enumerate(value[key].canonical_rows()):
                     output.update((',' if ordinal else '').encode())
-                    output.update(json.dumps(row, sort_keys=True, ensure_ascii=False, separators=(',', ':'), allow_nan=False).encode())
+                    output.update(raw)
                 output.update(b']')
             else:
                 output.update(json.dumps(value[key], sort_keys=True, ensure_ascii=False, separators=(',', ':'), allow_nan=False).encode())

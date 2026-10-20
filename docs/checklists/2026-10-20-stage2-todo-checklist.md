@@ -139,3 +139,99 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
   - 인계 원본: [10/15 동일 ID의 Acceptance·이력](2026-10-15-stage2-todo-checklist.md). 원 관측/정책 날짜는 유지하며 미완료를 완료로 바꾸지 않는다.
 
   - 10/19 09:18 현재 보유 경계: 알테오젠196170의 사용자 수동 지정은 해제했으나09:15:08 기존 hard-stop 규칙이-1.51%에서 새 auto_hard_stop_handoff를 생성했다. operator 수동 소유권으로 재등록하지 않으며 hard safety를 임의 해제하지 않는다. 큐리옥스49362 직접 청산은 별도 broker1+2주 영수증/원장0/DB COMPLETED로 닫았다. 최종 observer는 semantic partial, full artifact 검사는 resource contention deferred이므로 전체 건강 완료와 구분한다.
+
+## 원천 reader 보완 후보 — SourceReadReduction1020
+
+- [x] `[SourceReadReduction1020] 활성 경로 1~8 보완·리뷰·격리 검증 후 배포 대기` (`Due: 2026-10-20`, `Slot: ADHOC`, `TimeWindow: 09:20~`, `Track: RuntimeStability`)
+  - 사용자 승인 범위: 활성 경로 1~8. 별도 작업본 구현·리뷰·수정·검증까지이며 운영 원천 재생성, provider/주문 호출, 정책 변경, 배포·재기동은 실행하지 않는다.
+  - 후보 작업본: `/home/ubuntu/KORStockScan-worktrees/source-read-reduction-20261020`; branch `codex/source-read-reduction-20261020`.
+  - 시작 기반 `4b278bbb3241a2ac5cb60fce52fe7da93391b1e4`; 작업 중 선택본이 `a98ff7a95d533b8ba33222c206bc77f941fffe99`로 변경되어 해당 기반으로 rebase했다. incoming 6파일 중 detector 및 그 테스트 2파일의 변경을 함께 보존했다. 기본 작업본·운영 shell·selector는 수정하지 않았다.
+  - 재확인 운영 PID `3964551`, start ticks `10071650`, cwd `/home/ubuntu/KORStockScan-runtime-releases/current-observer-finalization-20261020-a98ff7a95/src`. 이는 다른 배포의 상태이며 이 후보의 소비가 아니다.
+  - 코드 커밋 `9b45af5fd` → 최종 보완 `c30e4e5c2`; 선택본 체크리스트 원본 SHA `7a91512b9e36e795d20be0f68f1e44208ef9f5d289546626771b5ab982944996`는 원래 commit/release에 보존한다. 본 기록은 격리 후보 문서이며 현재 strict/checklist 영수증을 재작성하지 않는다.
+
+### 대체·제거와 유지 경계
+
+| 순위 | owner·대체 | disposition·검증 기준 |
+| --- | --- | --- |
+| 1 | `continuous_reversal_postclose.completed_bars`: `*/*/*.json` 전체 날짜 탐색 후 본문 필터 → `day/*/*.json` 선별 | **removed**: 다른 날짜 본문 읽기. embedded date·route·native 우선순위·원천 SHA 검사는 유지. 다른 날짜의 손상 파일도 open하지 않음. |
+| 2 | `rising_missed_intraday_feedback._PipelineReplay`: 단일 gzip 반복 전량 해제 → 최대 128행/약 1MiB 압축 블록과 stage/code index; rolling 3개 reader는 실행 내 과거 보고서 해석 공유 | **consolidated**: 무관 블록 반복 해제. 순서·unknown fields·raw prefix SHA·전체 결과 보존. 1,029행 중 선택 5행만 unpickle하는 회귀. **retained**: 매 실행 원본 prefix 1회 봉인과 전체 watermark/후행 관측 계산; 영속 offset/pending-state 계약이 없으므로 재시작 후 신규 raw만 읽는다고 주장하지 않음. |
+| 3 | `log_archive_service.load_monitor_snapshot(section_names=...)` → performance 첫 reader의 `recent_trades`/`meta` 구조 투영 | **removed**: 해당 소비자의 전체 completed census 객체화 및 투영 실패 시 전체 파일 fallback. 원본·gzip 우선순위와 필요한 row/경고 보존. **retained**: 전체 결과가 필요한 dashboard·custody reader의 기존 기본 API. |
+| 4 | `artifact_freshness._semantic_object` → 기존 `DigestSession`의 실행 내 작은 입력 재사용 | **consolidated**: 같은 파일·세대·limit·모드의 반복 해석. PID·TTL·inode/size/mtime/ctime/경로 identity 확인, 반환 복사 격리, 1MiB/항목·4MiB/실행 cap. 외부 의존성·validator 판정은 매번 실행; 큰 원천의 검증은 유지. |
+| 5 | `artifact_freshness._terminal_skip_status` → `tail_log_lines`; `log_archive_service._read_matching_lines` → 같은 실행의 날짜별 소규모 결과 재사용 | **removed**: 전체 `read_text().splitlines()[-5000:]`. **retained**: 날짜 interval/completeness가 없는 numeric/closed rotation의 최초 탐색과 raw 우선·archive fallback. 파일명이나 mtime만으로 과거 파일을 제외하지 않음. late/rotate·마지막 줄·한글·대규모 비선택 행 회귀. |
+| 6 | `_read_machine_projection` → 기존 `Reader`+`FrozenRows`; `FrozenRows` canonical bytes를 hash/copy에 직접 사용 | **removed**: 최대 1GiB 전체 bytes/JSON list와 동일 행의 hash용 decode/encode. kernel preflight·논리 크기 cap·generation/content hash 거절 유지; 추가 원천·정책 권한 없음. |
+| 7 | `continuous_reversal_source.iter_normalized_symbols` → population/operating/cumulative 세 reader | **removed**: 세 호출자의 `gzip.decompress(read_bytes())` 전체 symbol 객체화. 개인 임시 spool에서 한 종목 단위로 처리하며 원래 sorted-symbol 순서·모든 row·gzip CRC·generation 검사 보존. pickle은 현재 호출이 만든 비공개 임시 파일에만 사용. |
+| 8 | `pipeline_event_summary.load_summary_rows(include_samples=False)` → 기존 `slim_summary_projection`; `jsonl_io` strict receipt → 최초 읽기에서 물리/논리 SHA 결속 | **consolidated**: 같은 날짜·세대·strict 계약의 요약 반복 decode, strict 영수증의 두 번째 read/decompress/decode. 요약 변경·손상·읽는 중 교체는 재검증/거절. **retained**: audit의 raw 전체 분모와 family 의미 검증, 신규/late partition 봉인. sampling 요약을 원본 전체 모집단으로 대체하지 않음. |
+
+- 코드 증감(기반 `a98ff7a95` 대비): non-test source +422/−174 = **+248줄**; tests +323/−1 = +322줄. docs +51/−0줄(기존 체크리스트 1개). 이동 0, 다른 세션 변경 미포함.
+- 새 모듈·wrapper·validator framework·운영 스케줄 없음. 소스 증가분은 기존 owner 안의 구조 읽기·블록 index·세대 제한 재사용에 사용한다. 조건부 후보 9~11 및 과거 원천·정책·owner custody는 범위 밖이다.
+- 유지/후속 조건: (2) 영속 증분 전환은 producer의 정확한 prefix 세대/재시작·partial-line·pending-horizon 계약이 있을 때 rising-missed owner가 동일 cutoff 전체 결과 회귀로 닫는다. (5) 최초 날짜 무관 log open 제거는 log/archive owner가 원천 세대와 결속한 날짜 interval/completeness를 제공할 때 late/rotation 대사로 닫는다. 이번 후보의 절감 결과를 그 두 조건의 완료로 해석하지 않는다.
+
+### 리뷰·실패 재현·검증
+
+- 초기 실패: 다른 날짜 손상 bar open, 디스크 행 reader 미존재, strict receipt 공존본 decode 3회(2회가 계약), public slim summary 재해석 2회(1회로 감소).
+- 자체 리뷰 보완: reader import 위치 수정; 읽는 도중 summary 교체 시 혼합 세대 반환 제거; JSON 숫자의 소수점·지수 chunk 경계 및 비-JSON whitespace 회귀 후 수정; log cache의 비선택 대용량 행 상주를 1MiB 이내로 제한; CRC·논리 크기 초과·구 kernel·hash 변경 거절 확인.
+- 성능 리뷰 보완: snapshot 초기 구현 4.658초의 회귀를 발견하여 작은 JSON 값은 bounded native decoder로 검증하도록 수정(0.193초); FrozenRows hash/copy의 반복 decode/encode 제거.
+- 검증 결과: 최신 기반에서 **25파일 통합 1,930 PASS / 215.10초**, 마지막 보완 후 **9파일 780 PASS / 48.74초**. 후자는 겹치는 표적 재검증이며 합쳐서 고유 테스트 수로 보고하지 않는다. 제외·skip 0, Python compile 27파일 PASS, `git diff --check` PASS, print-only 문서 parser PASS. shell/cron 변경 0이므로 `bash -n`·배포 shell 실행은 대상 없음.
+- 추가 성능 보완: 단일 65MiB JSON 행의 반복 decode 회귀를 geometric refill로 해소하여 기존 회귀 테스트 42.30→2.05초. source/field 크기 cap은 그대로다. 빈/작은 객체가 많아도 4,096 cache entries를 초과하지 않으며 과거 보고서 cache도 합계 4MiB로 제한한다.
+- Ruff `F821/F822/F823/F811` 확인: 이번 변경 지적 0. `continuous_reversal_operating_postclose`의 기존 지역 alias `R` 재정의 F811 1건은 기반에도 있어 범위 밖으로 유지한다. 전체 Ruff clean 선언은 하지 않는다.
+- 최종 자체 재리뷰: 이번 변경의 producer/첫 consumer, 원천 변경·손상·압축 공존, 비용 null·전체 분모·결과 hash, 경로·쓰기·provider/주문 권한 경계에서 미해결 구현 결함 0. 운영 전체 원천 크기에서의 성능/임시 I/O와 실제 배포는 별도 gate다.
+
+### 동일 합성 입력의 비용 비교
+
+운영 데이터가 없는 격리 `tmp/reader-fixtures`만 사용했다. 아래 값은 OS page cache를 비우지 않은 개별 프로세스 1회 측정이며 운영 cold 성능/실제 10/19 전체 원천 성능의 증거가 아니다. 비교별 건수와 결과 digest는 동일하다. 전후 physical read가 달라 wall 차이만으로 운영 성능 향상을 확정하지 않는다. wall과 CPU는 초, RSS는 KiB.
+
+| 경로·분모 | wall 전→후 | CPU 전→후 | peak RSS 전→후 | I/O와 한계 |
+| --- | --- | --- | --- | --- |
+| machine 70,000 rows | 0.272→0.684 | 0.272→0.666 | 144,796→39,464 | 새 경로 임시 파일 약 26.2MB write/read. 메모리 절감과 CPU/I/O 증가를 구분. |
+| normalized 150,000 rows/30 symbols | 0.276→0.503 | 0.276→0.471 | 94,812→25,736 | 새 경로 임시 spool 약 9.9MB write; 종목별 완전한 label 입력 유지. |
+| snapshot recent 20 rows/전체 29.7MB | 0.209→0.193 | 0.148→0.192 | 152,836→36,604 | 전체 JSON 구조 검증 I/O는 유지; 큰 census 객체 상주 제거. |
+| rising 20,000 rows, 선택 20 rows × 3 | 0.297→0.178 | 0.297→0.143 | 48,908→39,428 | raw rchar 약 21.9MB 동일; 선택 reader 구간 0.163→0.00038초. 원본 1회 봉인 자체는 유지. |
+
+- 상세 rchar/physical `read_bytes`/`write_bytes`, 입력 SHA 및 명령 증거: 후보 작업본 `tmp/review-evidence.json`, `tmp/measurement-*.json`, `tmp/validation-commands.txt`; 실행 스크립트 `tmp/measure_readers.py` SHA `a02126cf4fb3549b2521b98c5b14a2762c36a5ecfd6bf4f496c2025111676b39`(일회성 검증 자료, 운영 코드/새 framework 아님).
+- 재현: 후보에서 `PYTHONPATH=. .venv/bin/python tmp/measure_readers.py prepare`, 이후 `... tmp/measure_readers.py {machine,symbols,snapshot,rising} {before,after}`를 각각 실행. baseline 함수는 `4b278bbb3`에서 읽으며 해당 측정 함수는 `a98ff7a95`와 동일하다.
+- 배포 전 남은 gate: 실행 시 selector·PID·active policy 재고정, 후보에 결속한 native parity/handoff 및 운영 크기 임시 디스크 여유 확인. 이 후보는 실제 릴리스 선택·PID·자연 장후 소비·비용 조정 수익성 완료 증거가 아니다.
+
+### 장중 반영 승인 후 재기동 사전 리뷰
+
+- 후속 사용자 지시로 장중 반영·재기동이 승인됐다. 앞선 배포 대기 완료와 분리해 정지 전 native 검증 → ordered 배포 → 정확한 PID/관측 소비를 수행한다. 정책·threshold·주문 호출 수동 변경은 범위 밖이다.
+- 동시 배포 `a7c0b0dc5`가 09:55:31 ordered complete한 뒤 해당 코드를 기반으로 재통합했다. 원 `24ffba227`은 보존 branch에 남기고 다른 세션의 15파일과 checklist 이력을 유지했다. predecessor PID `4094188`, start ticks `10221444`이며 실행 직전 다시 고정한다.
+- 실제 정지 전 결함 재현: delay `pipeline_event_summary`, stop `log_archive_service`, holding `research_json_stream`의 미등록 코드 세대로 거절됐다. 실패 증거는 `tmp/source-read-deploy-20261020/contract-probe.json`; Main 정지/selector 변경은 이 검사에 없다.
+- 기존 handoff owner에 검토한 reader 16파일의 정확한 원본/후속 SHA와 완전한 dependency 세대를 연결했다. 이전 세대 map은 과거 영수증의 현행 검증 소비자 때문에 **retained**하며 무조건 통과/새 wrapper는 없다. 같은 origin의 새 reader 허용 3건 실패 회귀 후 12건 통과(누락·dirty·새 commit으로 변조 거절 포함). rising/auxiliary는 원 보고서와 원 fixture를 보존하고 후속 독립 fixture를 요구하며 관련 20회귀 통과.
+- native 고정 workload 128 scopes / 76,800 rows / 598 hits의 기존·후속 signal SHA가 일치했다. 원천/정책 재생성이나 provider 호출은 없었다. 최종 후보 commit에 다시 결속한 proof만 배포에 사용한다. 임시 디스크는 108GiB 여유를 확인했고 실제 전체 장후 workload의 CPU/I/O 비용은 이전 측정 한계를 유지한다.
+- 재기동·router·bootstrap·auxiliary·startup isolation 기존 회귀와 최종 native 사전 검증을 진행 중이다. 결과와 실제 배포/PID 수용은 아래 후속 기록으로 확정한다.
+
+- 변경된 기본 작업본 `AGENTS.md` §6을 재확인해 원 실패 보존 → 최초 파손 계약 → 최소 수리 → 직접 소비 검증으로 후속 작업을 수행했다.
+- 재기동 회귀 첫 실행: 9파일 **4,513 PASS / 41 FAIL / 561.15초**. 실패 24건은 과거 broker fixture가 현재 reader를 원 코드로 사용한 오류, 2건은 capability 최신 세대 fixture, 나머지 15건은 시작 검증 세션·통계 및 과거 날짜 fixture 문제로 분리했다. 원 로그 `tmp/restart-review-pytest.txt`를 보존한다.
+- 실제 시작 검증 결함: P5의 source-date 세션과 내부 CLI의 target-date 세션이 갈라져 native digest closure가 빠졌다. 같은 PID·역할·data root의 상위 세션만 유지하도록 기존 CLI를 수정했고 다른 프로세스/원천 재사용을 추가하지 않았다. 캐시 producer의 `semantic_reused_reads`를 기존 시작 검증 reader가 거절한 문제도 정수·비음수 계약으로 결속했다. 구/신 field 호환은 기존 진단 reader 안에 있으며 판정 재사용은 없다.
+- 역사 fixture는 원 코드 commit `a7c0b0dc5`에 고정하고 transaction fixture는 명시한 날짜 clock을 사용한다. 실제 만료 가드는 유지하며 정상 child 뒤 날짜 만료 실패와 음수/bool/string/null 통계 거절 회귀를 추가했다. 원천 변경/실패·격리 실패·child 종료·native closure 검증도 그대로다.
+- 수정 후 검증: handoff source-reader/broker 36 PASS, capability 20 PASS; 최종 startup/readiness/digest/policy-generation **4파일 1,088 PASS / 20.17초**, 제외·skip 0. 겹치는 재검증 수는 합산하지 않는다. 처음 통과한 다른 회귀를 이유 없이 전량 반복하지 않는다.
+- 새 module/wrapper/validator 생성 0. `next_preopen_readiness.main`의 중첩 세션과 `main_startup_validation`의 통계 판정은 **consolidated**; 원천·정책 native 검증/만료/프로세스 격리·이전 세대 영수증은 현재 소비자가 있어 **retained**. 실주문/provider·정책 동작 변경 없음.
+- 배포 전 baseline detector(10:04)의 stop/holding report source 경고, 기존 cron 지연 및 tmp 보존량 경고는 별도 원인으로 보존한다. 이번 candidate PID/observer 검증과 구분하며 전체 운영 경고 0으로 선언하지 않는다.
+- 현재 선택 기반 `a7c0b0dc5` 대비 최종 source +518/−180, tests +420/−4, docs +70/−0. 새 파일·이동 0. compile 4파일, 문서 parser, diff 검사 PASS; 수정 경로 재리뷰 미해결 결함 0. 후보 clean commit 후 native 사전 검증과 실제 PID 소비를 별도 기록한다.
+- 최종 startup 수정 후 pre-drain에서 `main_startup_validation.py`의 이전 dependency SHA가 남은 것을 확인(6f7f61905 실패 로그 보존), 기존 source-reader map을 검토한 startup 두 파일까지 총18개로 확장했다. 해당 reader/CLI/decoder의 missing·dirty·committed-change 거절과 정상3family를 36 PASS/19.78초로 검증. 코드 값/판정 우회는 없으며 실제 정지 전 결함이다.
+
+### 실제 P5 intake 차단과 배포 보류
+
+- `7f5cd9c54b115cadc3776ab94c6f68c7e1f33d4d` 불변 후보에서 active-policy·delay·stop·holding native 사전 검사 PASS. native parity는 128 scopes/76,800 rows/598 hits, signal SHA `958e471cca3b0e833e20486dbef9aecd6973b0273c53979d8ff1d9a4eb1a42fc` 동일. 증거 `tmp/source-read-deploy-20261020/7f5cd9c54/native-preflight.json`, `active-policy-parity.json` 및 현재 capability fixtures.
+- 실제 P5 명령: 후보에서 `PYTHONPATH=. .venv/bin/python -B -m src.engine.automation.main_startup_validation --workspace /home/ubuntu/KORStockScan --target-date 2026-10-20 --candidate-root /home/ubuntu/KORStockScan-runtime-releases/source-read-reduction-20261020-7f5cd9c54`. 원 실패 `data/report/main_startup_validation/2026-10-20/09335ec448134a4e907e9a55506b2333/final.json`: `intake / startup_native_machine_closure_invalid`, candidate child 미실행.
+- 동일 원천을 다시 생성하지 않고 native 관측 경계만 1회 진단했다. selected `a7c0b0dc5`의 원 CLI는 `intraday_preserved_historical_generation` PASS, bundle 3개(현재5ac 포함)·delay 선택2개지만 auxiliary transition manifest/frozen verifier0개다. P5의 `main_startup_validation._native_preparation_check`와 `startup_validation_code_context.bind_main_preparation/_check_native_closure`는 manifest 최소1개를 필수로 요구한다. 후보 child 이전의 기존 선택본 intake 계약 차단이며, manifest 0을 성공/과거 영수증의 새 검증으로 승격하지 않는다.
+- 구 선택본의 nested target-day digest 세션에는 full164/reuse102, full1,935,791,930bytes가 있지만 P5 source-day outer에는0이다. 이 캐시 계보 결손은 후보 CLI에서 수정됐으나 기존 선택본이 실행한 진단에 소급 적용하지 않았다. 진단 `native-closure-diagnosis.json`, 원 stdout SHA `da5dae6d950d4620740b112dfe2922bb60c4893ee62cde938ca03d52efc88a24`, stderr SHA `e3a0ebd8467360f074b81500f61fb6afcc8088bc98c5bcbba52941aea2e5008f` 보존. nested native counter `admitted_native_proofs/bytes`도 정수·비음수로 검증하도록 직접 consumer를 보완했다.
+- 이 진단은 전체 운영 원천 성능 측정이 아니다. 최초 native intake 30.42초/rchar3,257,008,127, 관측 보존 진단16.24초/rchar3,257,103,353; 동일 결정적 실패를 세 번째 전량 재실행하지 않는다. 정상 원천/정책을 삭제·재발행하거나 size/timeout을 늘리지 않는다.
+- **배포 gate는 BLOCKED**. 승인 철회/권한 대기가 아니라 필수 P5 증거 결손이다. incumbent `a7c0b0dc5`, PID4094188/start10221444를 보존했고 이번 작업의 stop·selector 전환·restart·provider/주문 실행은0이다. candidate fixture/PASS를 실제 새 PID나 자연 성능으로 보고하지 않는다.
+
+- [ ] `[MainPolicyLoadAndExitValidation1018] 현재 intraday 보존 정책의 P5 native closure 계약 복구` (`Due: 2026-10-20`, `Slot: ADHOC`, `TimeWindow: 10:20~`, `Track: RuntimeStability`)
+  - 기존 [정책 로딩 검증 owner](../proposals/main-policy-load-and-exit-validation-plan-2026-10-18.md)의 새 현재 실패로 재개. 원천 감소 1~8과 별도로 기존 P5 parent/직접 child context가 소유한다. 원 실패 run `09335ec448134a4e907e9a55506b2333`, source19/apply20, current bundle `5ac1768ad97ae21e1ea36f215c031e87df1045e9ee25c24773e6d73dac6644aa`.
+  - 닫힘 검사: 실제 선택본의 native preserved-code-handoff 경로와 P5가 요구하는 auxiliary manifest 경계를 fixture로 재현하고 실제 소비 계약에 맞게 수정한다. 현재 source/code/policy/PID의 검증 가능한 원천 closure를 같은 invocation에 결속해야 한다. 빈 manifest 강제 허용·과거 PASS 재사용·새 정책 발행·불변 릴리스 편집은 금지한다. source/date/generation/원천 변경 거절을 유지하고 fresh clean 후보의 P512consumer·child 종료·무부작용 PASS를 확인한다. 그 후에만 새 exact handoff와 ordered 배포를 진행한다.
+  - 남은 수용: 현재 code handoff가 제공하는 native 검증 범위와 P5 위임 범위의 호환 설계/회귀·실제 child는 미완료다. 전체 결함0·배포 가능·자연 수용 완료를 주장하지 않는다.
+- 최종 보완 회귀: startup/readiness/digest 239 PASS/15.37초, exact source-reader handoff 36 PASS/30.44초. 전체 handoff 파일을 잘못 포함한 중간 검증은 중단해 통과 증거에서 제외하고 필요한 세션/통계·동세대/변조 거절만 재검증했다. compile5, `bash -n`3, 문서 parser·diff 검사 PASS. 새 운영 후보로 배포하지 않았고 최종 작업본 기록 commit은 사전 검증7f5cd9c54와 구분한다.
+- 배포 보류 최종 clean 작업본 commit `49a734bd3` (source/test 보완과 기록); 불변 사전 검증 후보 `7f5cd9c54`와 별도다. shared 운영 코드는 수정하지 않았다.
+- 마감 증감(선택 기반 `a7c0b0dc5` 대비, 코드49a734bd3): non-test source +521/−180 = +341, tests +427/−4 = +423, 후보 docs +87/−0. 앞선+518/+420은 중간 검증 시점 수치다. source 순증은 bounded reader/index 및 정확한 코드 handoff·시작 진단 검증이며 새 module/entrypoint/framework는0이다.
+
+
+### 0255cb05f 통합과 장중 보존 P5 계약 수리
+
+- 사용자 통합 지시에 따라0255cb05f의8개 선행 commit을 이번 원천/holding 에러 수리와 함께 인수한다. 이전 failed P5/run09335ec4와 배포 보류는 당시 이력으로 보존하며 미완료 gate를 PASS로 바꾸지 않는다.
+- 실제 보존 경로는 auxiliary transition manifest 없이 기존 준비본·정책을 사용한다. 같은 native 검증 호출의 전체 bootstrap 성공, 소비된 handoff/receipt, 준비본·선택·정책·원천 hash를 별도 typed closure로 묶는다. 빈 manifest만으로는 실패를 유지하며 current/full 경로에는 기존 manifest 계약이 그대로 적용된다. incumbent의 중첩 target-day digest는 지워지기 전에 같은 PID/boot/root/date로 기록하며 과거 PASS/cache를 재사용하지 않는다.
+- 리뷰에서0255의 cumulative postclose reader 한 파일이 P5 Main 코드 목록에 들어오지만 새 source pair가 없음을 확인했다. 원a7c→0255의 정확한 두 hash만 기존 preparation-history owner에 추가한다. merged22-file reader/census 및 P5 두 owner는 하나의 complete dependency generation으로 검증하며 per-file 대안 조합은 금지한다.
+- source-reader842 PASS, P5/policy/reuse1152 PASS, source proof/currentness/census/quantity469 PASS(중복 suite 합산 아님). 새 typed preservation은 실제 격리 child의 양성/변조·누락11개와 native producer 수집/old a7c 중첩 session으로 검증했다. 원본을 다시 읽는 native 동작은 최소 source19 frozen-input 재검증과 실제 P5 후속에서만 수행하며 정지 전까지 incumbent PID4094188/start10221444를 유지한다.
+- 원천 reader 변경으로 extractor 코드 세대가 바뀐09/30·10/15·10/16의 기존 normalized cache만 명시적 native predecessor로 재검증한다. 원문/과거 cache/정책/strict/controller를 보존하며 normal32MiB reader budget을 늘리거나 inline migration하지 않는다. native 연구/currentness, clean 후보 P512consumer·child종료·보호 원천 불변과 ordered 배포/PID는 아직 실제 영수증으로 닫아야 한다.

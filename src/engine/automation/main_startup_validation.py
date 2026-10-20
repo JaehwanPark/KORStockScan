@@ -194,6 +194,9 @@ closure=dict(schema='startup_native_machine_closure_v1', run_id=run_id, manifest
     frozen_inventories={}, frozen_validations={}, digest_entries={}, delay_selections={})
 if capture:
     from pathlib import Path
+    from contextlib import contextmanager
+    import importlib.util
+    from src.engine.infrastructure import validation_digest_session as V
     from src.engine.scalping import mechanistic_entry_runtime_policy as N
     from src.engine.scalping import reversal_auxiliary_next_session as A
     from src.engine.automation import pre_submit_delay_partitioned_research as D
@@ -204,6 +207,63 @@ if capture:
     original_frozen=A._verify_frozen
     original_manifest=A.validate_manifest
     original_delay=D.validate
+    original_activate=V.DigestSession.activate
+    def snapshot_session(session):
+        if session.binding.get('role')!='postclose':
+            return
+        if (session.data_root.resolve()!=Path(DATA_DIR).resolve()
+                or session.binding.get('day') not in {source_date,sys.argv[-1]}):
+            raise ValueError('startup_native_digest_session_owner_invalid')
+        for name,entry in session.entries.items():
+            previous=closure['digest_entries'].get(name)
+            if previous is not None and previous!=entry:
+                # A new observation of unchanged bytes can refresh created;
+                # source identity and digest cannot change within this run.
+                if any(previous.get(k)!=entry.get(k) for k in ('identity','digest')):
+                    raise ValueError('startup_native_digest_source_changed')
+            closure['digest_entries'][name]=dict(entry)
+        key=hashlib.sha256(json.dumps(session.binding,sort_keys=True).encode()).hexdigest()
+        closure.setdefault('digest_sessions',{})[key]=dict(binding=session.binding,stats=dict(session.stats))
+    @contextmanager
+    def activate(self):
+        with original_activate(self) as current:
+            try:
+                yield current
+            finally:
+                snapshot_session(current)
+    V.DigestSession.activate=activate
+    # Intraday preservation has its own native producer. Observe its actual
+    # full bootstrap and consumed handoff, never invent an auxiliary transition
+    # manifest for a policy that does not use that publication path.
+    if importlib.util.find_spec('src.engine.automation.runtime_policy_bootstrap') is not None:
+        from src.engine.automation import runtime_policy_bootstrap as B
+        from src.engine.automation import intraday_release_handoff as H
+        original_bootstrap=B.verify_bootstrap
+        original_handoff=H.verify
+        bootstrap_checks={}
+        def bootstrap(day,*args,**kwargs):
+            result=original_bootstrap(day,*args,**kwargs)
+            if (result.get('status')=='pass' and not result.get('findings')
+                    and kwargs.get('write') is False and not kwargs.get('observer_reuse')):
+                path=B.manifest_path(day,output_dir=kwargs.get('output_dir'))
+                bootstrap_checks[result['manifest_sha256']]=dict(path=str(path.resolve()),
+                    sha256=hashlib.sha256(path.read_bytes()).hexdigest(),result=result,
+                    write=False,full_native_verification=True)
+            return result
+        def handoff(day,commit,*args,**kwargs):
+            result=original_handoff(day,commit,*args,**kwargs)
+            if result.get('status')=='pass' and not result.get('findings'):
+                path,consumed=H._paths(day,commit)
+                if consumed.is_file():
+                    refs={**result['handoff']['frozen_files'],str(path):H._sha(path),str(consumed):H._sha(consumed)}
+                    closure.setdefault('preserved_generations',{})[H._sha(path)]=dict(
+                        schema='startup_native_preserved_preopen_closure_v1',target_date=day,
+                        selected_release_commit=commit,handoff_path=str(path),consumed_path=str(consumed),
+                        sources=refs,manifest_sha256=result['handoff']['manifest_sha256'],
+                        full_bootstrap=None)
+            return result
+        B.verify_bootstrap=bootstrap
+        H.verify=handoff
     def load(*args,**kwargs):
         result=original_load(*args,**kwargs)
         if result:
@@ -291,8 +351,10 @@ try:
             runpy.run_module('src.engine.automation.next_preopen_readiness',run_name='__main__')
         finally:
             if capture:
-                closure['digest_entries']=session.entries
+                snapshot_session(session)
                 closure['digest_binding']=session.binding
+                for item in closure.get('preserved_generations',{}).values():
+                    item['full_bootstrap']=bootstrap_checks.get(item['manifest_sha256'])
                 print('P5_NATIVE_MACHINE_CLOSURE='+json.dumps(closure,sort_keys=True),file=sys.stderr)
 finally:
     if session is not None:
@@ -337,7 +399,8 @@ finally:
         if (set(diagnostics) != {'source_date', 'stats', 'remaining_entries'}
                 or diagnostics['source_date'] != source_date
                 or type(diagnostics['remaining_entries']) is not int or diagnostics['remaining_entries'] != 0
-                or set(stats) - {'full_reads', 'full_bytes', 'reused_reads', 'reused_bytes',
+                or set(stats) - {'full_reads', 'full_bytes', 'reused_reads', 'reused_bytes', 'semantic_reused_reads',
+                    'admitted_native_proofs', 'admitted_native_bytes',
                     'cache_status', 'role', 'generation_sha256', 'pid', 'wall_seconds',
                     'thread_io_delta', 'peak_process_rss_kib'}
                 or stats['role'] != 'postclose'
@@ -350,6 +413,9 @@ finally:
                 or any(type(stats[key]) is not int or stats[key] < 0
                        for key in ('full_reads', 'full_bytes', 'reused_reads', 'reused_bytes'))):
             raise ValueError('diagnostic_contract')
+        for key in ('semantic_reused_reads', 'admitted_native_proofs', 'admitted_native_bytes'):
+            if key in stats and (type(stats[key]) is not int or stats[key] < 0):
+                raise ValueError('diagnostic_reuse_counter')
         if ('peak_process_rss_kib' in stats
                 and (type(stats['peak_process_rss_kib']) is not int or stats['peak_process_rss_kib'] < 0)):
             raise ValueError('diagnostic_rss')
@@ -382,7 +448,8 @@ finally:
             fail('startup_native_machine_closure_missing_or_unbounded')
         closure = json.loads(rows[0])
         if (closure.get('schema') != 'startup_native_machine_closure_v1'
-                or not closure.get('bundles') or not closure.get('manifests')
+                or not closure.get('bundles')
+                or not (closure.get('manifests') or closure.get('preserved_generations'))
                 or closure.get('digest_binding', {}).get('pid') != diagnostics['stats']['pid']):
             fail('startup_native_machine_closure_invalid')
         value = {**value, 'native_machine_closure': closure}

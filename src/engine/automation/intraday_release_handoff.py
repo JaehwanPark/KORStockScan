@@ -2721,6 +2721,93 @@ REVIEWED_FROZEN_INPUT_PAIRS = {'src/engine/automation/main_trailing_source_assem
                                               ('af3f2273dc66d0da041bc64c8b5d79dc553558d369714d586609f0f6cbbd90f0',
                                                'afbd53084fbf25dfa6f91c865d74b0327b02a38d9b3b3d7957c7a60a78874a1b'))}
 
+# Preserved source-reader generation from0255cb05f; no generic hash bypass.
+REVIEWED_SOURCE_READER_HASHES = {'src/engine/automation/main_startup_validation.py': 'c39f9d5b8a68c297304c95b36a8ff7415fd413f3493e5584eb227adecc6ce84c',
+ 'src/engine/automation/next_preopen_readiness.py': 'c7ba75db4fedb705bdbfc4b7c2bdd39ac527b44b111d33c9639e911adaded88e',
+ 'src/engine/error_detectors/artifact_freshness.py': '47897e387407c5d6472735463107d8e0ce7697aededa723c724973e4efc173a4',
+ 'src/engine/infrastructure/validation_digest_session.py': '40497e9bcb5d325bb0623631cd2149a0b2090c996bc54e3300b650f201a0e056',
+ 'src/engine/lifecycle/research_json_stream.py': '53bd6a0cec6435ff0cfb399ad75fc9edd0b479463c06dea77bc5cae5e59db4b6',
+ 'src/engine/log_archive_service.py': '18e912bb93cf937548077466fc4fd510c13fff73823e2b1c2510a19481e980af',
+ 'src/engine/monitoring/rising_missed_intraday_feedback.py': '902ec3543434043e3ee0808bdd724c119a370c43747939ed935af0df4bdb0799',
+ 'src/engine/monitoring/sentinel_compact_store.py': '3bb5572bb36683f43151fb6c4c5bcfa3bd7403b6bfa412661c556d5e0fc84b30',
+ 'src/engine/pipeline_event_summary.py': 'f3051e000b6edbd349a58e37f7880f5db10ae62dde9dec7f32edaa4eea6ebe3b',
+ 'src/engine/scalping/ai_action_outcome_calibration.py': '18c661a624b4db88ac0ee5963ff3667a258434662d9ddfca9bea8ab6cc7f50aa',
+ 'src/engine/scalping/compact_auxiliary_paired_replay.py': '792619031c87b993dd32fcff8b9821fbfbc464641ff1ea246c6871db97e26d67',
+ 'src/engine/scalping/continuous_reversal_operating_postclose.py': '23b5b1a03b3c4ad1fe5c261ed3a65917fa424d94c2e02ede18191d20b2b95f58',
+ 'src/engine/scalping/continuous_reversal_postclose.py': 'd294d3fab9ef36e29b0b15007b0d22c47e1572f3b36de25d72802873f2568dda',
+ 'src/engine/scalping/continuous_reversal_source.py': '96f1edc13538616832ec4270064afcc9a6bacab8274903cd57b2838573a1155d',
+ 'src/engine/scalping/postclose_entry_validation.py': 'ff34fd56d765e8e598cbb3f9306ebf962b144699bb6a2ec58eeee698a0754540',
+ 'src/engine/scalping/reversal_cumulative_postclose.py': '6adcd6526ca315d53e60d4817cda3cfec1b8ed8db30d624a1c212d6005dbba87',
+ 'src/engine/sniper_performance_tuning_report.py': '64a6f84c470d3f8a221a509fdf4a71152b521a49b4b5a49a0023c3214c93fbe2',
+ 'src/utils/jsonl_io.py': 'c8e3058acdf08d411bfd19edee9cdfe3871bc0b004106038f449320727ab7fb1'}
+
+REVIEWED_SOURCE_READER_DEPENDENCY_VARIANTS = {
+    key: {**value,
+        'selector_path': 'src/engine/lifecycle/research_json_stream.py',
+        'selector_sha256': REVIEWED_SOURCE_READER_HASHES['src/engine/lifecycle/research_json_stream.py'],
+        'dependencies': {**value['dependencies'], **REVIEWED_SOURCE_READER_HASHES},
+        'contract_extensions': {
+            origin: {name: REVIEWED_SOURCE_READER_HASHES.get(os.path.normpath(name), sha)
+                     for name, sha in paths.items()}
+            for origin, paths in value['contract_extensions'].items()},
+    } for key, value in REVIEWED_BROKER_CUSTODY_DEPENDENCY_VARIANTS.items()
+}
+
+REVIEWED_SOURCE_READER_PAIRS = {'src/engine/error_detectors/artifact_freshness.py': (('bc6c903c8a9ea08026103101bcefcaf8e18ea5a4e707408787bc26a15ebd150a',
+                                                       '47897e387407c5d6472735463107d8e0ce7697aededa723c724973e4efc173a4'),),
+ 'src/engine/infrastructure/validation_digest_session.py': (('655b6f32ed1f14cb7c00e7c85b4b2f3917d55e00cfdefc905160a039d585a4f1',
+                                                             '40497e9bcb5d325bb0623631cd2149a0b2090c996bc54e3300b650f201a0e056'),),
+ 'src/engine/lifecycle/research_json_stream.py': (('1ea671f8ba5b5397257c2d1da513dee653b05379133073d1412ee4edf7a07a11',
+                                                   '53bd6a0cec6435ff0cfb399ad75fc9edd0b479463c06dea77bc5cae5e59db4b6'),),
+ 'src/engine/log_archive_service.py': (('48243d6d40dc68e5d8023208b9c8c38be6d92c5326f8702a9a3d2060e1efcebb',
+                                        '18e912bb93cf937548077466fc4fd510c13fff73823e2b1c2510a19481e980af'),),
+ 'src/engine/monitoring/rising_missed_intraday_feedback.py': (('814aaadd29b76ad0b8843d3607fcb12bb086efa8b20714a6f427209e24d204d1',
+                                                               '902ec3543434043e3ee0808bdd724c119a370c43747939ed935af0df4bdb0799'),),
+ 'src/engine/monitoring/sentinel_compact_store.py': (('cde3555c1a8fd1f45a21e2fcbf54f3d6829bf2354b76dc54aed18874b415430d',
+                                                      '3bb5572bb36683f43151fb6c4c5bcfa3bd7403b6bfa412661c556d5e0fc84b30'),),
+ 'src/engine/pipeline_event_summary.py': (('fc39f13b5b026c628345268953daec046cf1277f88b9f3b1bcef4833f34e99af',
+                                           'f3051e000b6edbd349a58e37f7880f5db10ae62dde9dec7f32edaa4eea6ebe3b'),),
+ 'src/engine/scalping/ai_action_outcome_calibration.py': (('26b7b67e5efcf5ed9d4904ac2c715cb1e1e87d76a8b63acc0b6049bff91c03c2',
+                                                           '18c661a624b4db88ac0ee5963ff3667a258434662d9ddfca9bea8ab6cc7f50aa'),),
+ 'src/engine/scalping/compact_auxiliary_paired_replay.py': (('94a8ab07b0380259aba0a649719c1639cba6345bec4a4023136a417a4a467b10',
+                                                             '792619031c87b993dd32fcff8b9821fbfbc464641ff1ea246c6871db97e26d67'),),
+ 'src/engine/scalping/continuous_reversal_operating_postclose.py': (('88c6185c43171dec9ff28d2dfff621e21303f1e94489c5d8fe6755791755ec81',
+                                                                     '23b5b1a03b3c4ad1fe5c261ed3a65917fa424d94c2e02ede18191d20b2b95f58'),),
+ 'src/engine/scalping/continuous_reversal_postclose.py': (('94adb3c969f3053414e6e825878e4afbec83def90c8b5dc0bb6808fac8892edd',
+                                                           'd294d3fab9ef36e29b0b15007b0d22c47e1572f3b36de25d72802873f2568dda'),),
+ 'src/engine/scalping/continuous_reversal_source.py': (('401ff28d4f2b20db778768aa10486bffdac01466480e7429a428d3fa14705b02',
+                                                        '96f1edc13538616832ec4270064afcc9a6bacab8274903cd57b2838573a1155d'),),
+ 'src/engine/scalping/postclose_entry_validation.py': (('c8fbcdac97c33b2b06e301b15f6dbe4d42fb31824cbeef547a25de7d70aa1189',
+                                                        'ff34fd56d765e8e598cbb3f9306ebf962b144699bb6a2ec58eeee698a0754540'),),
+ 'src/engine/scalping/reversal_cumulative_postclose.py': (('708ee7428c494f67a7407e5093771f8ddf45ba67227073bea05ff5d87a172493',
+                                                           '6adcd6526ca315d53e60d4817cda3cfec1b8ed8db30d624a1c212d6005dbba87'),),
+ 'src/engine/sniper_performance_tuning_report.py': (('7ca2bb38af56e0a985c47e89bee7064efb7da1f87243d27691b3294389e0ac0a',
+                                                     '64a6f84c470d3f8a221a509fdf4a71152b521a49b4b5a49a0023c3214c93fbe2'),),
+ 'src/utils/jsonl_io.py': (('b0173c0cd27eefd75a73b9f1c2b956378256a7476341496cf248a77e9984f418',
+                            'c8e3058acdf08d411bfd19edee9cdfe3871bc0b004106038f449320727ab7fb1'),)}
+
+# Combined0255 source readers, frozen census and actual P5 preserved closure.
+# Select one complete reviewed generation before any incumbent drain.
+REVIEWED_SOURCE_INTEGRATION_HASHES = {**REVIEWED_FROZEN_INPUT_HASHES, **{'src/engine/automation/main_startup_validation.py': '9752417facdd0c3180ee38fc41b9aacddca41f8e3dd880170d7f5f208470f3f8',
+ 'src/engine/infrastructure/startup_validation_code_context.py': 'b84c73c42bd86798621f0c577dd66f005b9d78cdb6a90f092f7fa3bc3c7cf0bd'}}
+REVIEWED_SOURCE_INTEGRATION_DEPENDENCY_VARIANTS = {
+    key: {**value,
+        'selector_path': 'src/engine/infrastructure/startup_validation_code_context.py',
+        'selector_sha256': REVIEWED_SOURCE_INTEGRATION_HASHES['src/engine/infrastructure/startup_validation_code_context.py'],
+        'dependencies': {**value['dependencies'], **REVIEWED_SOURCE_INTEGRATION_HASHES},
+        'contract_extensions': {
+            origin: {name: REVIEWED_SOURCE_INTEGRATION_HASHES.get(os.path.normpath(name), sha)
+                     for name, sha in paths.items()}
+            for origin, paths in value['contract_extensions'].items()},
+    } for key, value in REVIEWED_SOURCE_READER_DEPENDENCY_VARIANTS.items()
+}
+REVIEWED_SOURCE_INTEGRATION_PAIRS = {'src/engine/automation/main_startup_validation.py': (('190855a642ca713fe53257eae2268eeb5786990c474f2b63904ace41b66c9661',
+                                                       '9752417facdd0c3180ee38fc41b9aacddca41f8e3dd880170d7f5f208470f3f8'),
+                                                      ('c39f9d5b8a68c297304c95b36a8ff7415fd413f3493e5584eb227adecc6ce84c',
+                                                       '9752417facdd0c3180ee38fc41b9aacddca41f8e3dd880170d7f5f208470f3f8')),
+ 'src/engine/infrastructure/startup_validation_code_context.py': (('4d20ceaccb28ac3ab7e3521ded1603abb3587edb8b3ad828a5ae505d02da31c3',
+                                                                   'b84c73c42bd86798621f0c577dd66f005b9d78cdb6a90f092f7fa3bc3c7cf0bd'),)}
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -2774,7 +2861,9 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         dependencies = generations.get(trigger_sha, {})
         # New exact selectors precede their historical parent. The first match
         # selects one complete generation, never per-file SHA alternatives.
-        for variants in (REVIEWED_FROZEN_INPUT_DEPENDENCY_VARIANTS,
+        for variants in (REVIEWED_SOURCE_INTEGRATION_DEPENDENCY_VARIANTS,
+                         REVIEWED_SOURCE_READER_DEPENDENCY_VARIANTS,
+                         REVIEWED_FROZEN_INPUT_DEPENDENCY_VARIANTS,
                          REVIEWED_BROKER_CUSTODY_DEPENDENCY_VARIANTS,
                          REVIEWED_VOTE_METADATA_DEPENDENCY_VARIANTS,
                          REVIEWED_PRE_ENTRY_OBSERVER_DEPENDENCY_VARIANTS,
@@ -2894,7 +2983,9 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
                 or pair == REVIEWED_AUXILIARY_HISTORY_SOURCES.get(name)):
             changed.append(name)
             continue
-        if (pair in REVIEWED_FROZEN_INPUT_PAIRS.get(repository_name(name), ())
+        if (pair in REVIEWED_SOURCE_INTEGRATION_PAIRS.get(repository_name(name), ())
+                or pair in REVIEWED_SOURCE_READER_PAIRS.get(repository_name(name), ())
+                or pair in REVIEWED_FROZEN_INPUT_PAIRS.get(repository_name(name), ())
                 or pair in REVIEWED_BROKER_CUSTODY_PAIRS.get(repository_name(name), ())
                 or pair in REVIEWED_AVG_DOWN_INPUT_SOURCES.get(repository_name(name), ())
                 or pair in (REVIEWED_DELAY_PARENT_VERIFICATION_SOURCES.get(repository_name(name)),

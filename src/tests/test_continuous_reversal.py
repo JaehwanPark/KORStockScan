@@ -421,3 +421,28 @@ def test_new_turn_after_block_wakes_machine_and_preserves_transport_backoff(monk
     stock['_scanner_entry_ai_transport_retry_after_epoch']=10
     r=H._resolve_watching_state_change_refresh(stock,ws,now_ts=4,last_ai_time=2,cooldown_sec=60)
     assert not r['allowed'] and r['reason']=='transport_timeout_retry_backoff'
+
+
+def test_completed_bars_selects_day_before_open(tmp_path):
+    root = tmp_path / 'runtime/shared_ws_completed_bars'
+    stale = root / '2026-10-18/005930/KRX.json'
+    stale.parent.mkdir(parents=True)
+    stale.write_text('not JSON and must never be opened')
+    current = root / '2026-10-19/005930/KRX.json'
+    current.parent.mkdir(parents=True)
+    current.write_text(json.dumps({'trade_date': '2026-10-19', 'bars': []}))
+    bars, receipts = P.completed_bars(tmp_path, '2026-10-19')
+    assert bars == {}
+    assert [r['path'] for r in receipts] == [str(current)]
+
+
+def test_normalized_symbols_stream_sorted_and_reject_corruption(tmp_path):
+    import gzip
+    from src.engine.scalping.continuous_reversal_source import iter_normalized_symbols
+    path = tmp_path / 'source.json.gz'
+    value = {'symbols': {'333333': rows([3, 4]), '111111': rows([1, 2])}, 'issues': {}}
+    path.write_bytes(gzip.compress(json.dumps(value).encode()))
+    assert list(iter_normalized_symbols(path)) == sorted(value['symbols'].items())
+    path.write_bytes(path.read_bytes()[:-5])
+    with pytest.raises((ValueError, EOFError, OSError)):
+        list(iter_normalized_symbols(path))

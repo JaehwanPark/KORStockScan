@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import gzip
+import io
 import hashlib
 import json
 import os
@@ -30,24 +31,67 @@ from src.engine.automation.source_quality_clean_baseline import policy_refresh_s
 
 
 class _PipelineReplay:
-    """Lossless, process-local replay; never load pickle from an external file."""
+    """Lossless private compressed blocks, indexed without persistent pickle."""
 
     def __init__(self, storage):
         self.storage = storage
         self.row_count = 0
         self.receipt = {}
+        self.blocks = []
+        self.pending = io.BytesIO()
+        self.pending_count = 0
+        self.stages = set()
+        self.codes = set()
+
+    def append(self, row):
+        pickle.dump(row, self.pending, protocol=pickle.HIGHEST_PROTOCOL)
+        self.row_count += 1
+        self.pending_count += 1
+        self.stages.add(str(row.get('stage') or ''))
+        self.codes.add(_event_code(row))
+        if self.pending_count >= 128 or self.pending.tell() >= 1024 * 1024:
+            self.flush()
+
+    def flush(self):
+        if not self.pending_count:
+            return
+        encoded = gzip.compress(self.pending.getvalue(), compresslevel=1, mtime=0)
+        offset = self.storage.tell()
+        self.storage.write(encoded)
+        self.blocks.append((offset, len(encoded), self.pending_count, self.stages, self.codes))
+        self.pending.seek(0); self.pending.truncate()
+        self.pending_count = 0; self.stages = set(); self.codes = set()
 
     def __iter__(self):
-        self.storage.seek(0)
-        with gzip.GzipFile(fileobj=self.storage, mode="rb") as stream:
-            for _ in range(self.row_count):
-                yield pickle.load(stream)
-            if stream.read(1):
-                raise ValueError("pipeline_replay_trailing_data")
+        return self.iter_rows()
+
+    def iter_rows(self, *, stages=None, stage_prefix=None, codes=None):
+        for offset, size, count, block_stages, block_codes in self.blocks:
+            if stages is not None and not block_stages.intersection(stages):
+                continue
+            if stage_prefix is not None and not any(x.startswith(stage_prefix) for x in block_stages):
+                continue
+            if codes is not None and not block_codes.intersection(codes):
+                continue
+            self.storage.seek(offset)
+            with io.BytesIO(gzip.decompress(self.storage.read(size))) as stream:
+                for _ in range(count):
+                    row = pickle.load(stream)
+                    stage = str(row.get('stage') or '')
+                    if stages is not None and stage not in stages:continue
+                    if stage_prefix is not None and not stage.startswith(stage_prefix):continue
+                    if codes is not None and _event_code(row) not in codes:continue
+                    yield row
+                if stream.read(1):raise ValueError('pipeline_replay_trailing_data')
 
 
-def _pipeline_rows(source):
-    return iter(source) if isinstance(source, _PipelineReplay) else iter_jsonl(source)
+def _pipeline_rows(source, *, stages=None, stage_prefix=None, codes=None):
+    if isinstance(source, _PipelineReplay):
+        return source.iter_rows(stages=stages, stage_prefix=stage_prefix, codes=codes)
+    return (row for row in iter_jsonl(source)
+            if (stages is None or str(row.get('stage') or '') in stages)
+            and (stage_prefix is None or str(row.get('stage') or '').startswith(stage_prefix))
+            and (codes is None or _event_code(row) in codes))
 
 
 @contextmanager
@@ -64,44 +108,43 @@ def _pipeline_replay(path):
         replay = _PipelineReplay(storage)
         digest = hashlib.sha256()
         source_bytes = 0
-        with gzip.GzipFile(fileobj=storage, mode="wb", compresslevel=1, mtime=0) as archive:
-            if source_exists:
-                with actual.open("rb") as raw:
-                    before = os.fstat(raw.fileno())
-                    compressed = actual.suffix == ".gz"
-                    stream = gzip.GzipFile(fileobj=raw, mode="rb") if compressed else raw
-                    try:
-                        while compressed or source_bytes < before.st_size:
-                            line = stream.readline() if compressed else stream.readline(before.st_size - source_bytes)
-                            if not line:
-                                break
-                            source_bytes += len(line)
-                            digest.update(line)
-                            try:
-                                row = json.loads(line.decode("utf-8", errors="replace").strip())
-                            except json.JSONDecodeError:
-                                continue
-                            if isinstance(row, dict):
-                                # A new pickler per row avoids retaining prior objects.
-                                pickle.dump(row, archive, protocol=pickle.HIGHEST_PROTOCOL)
-                                replay.row_count += 1
-                    finally:
-                        if compressed:
-                            stream.close()
-                    after = os.fstat(raw.fileno())
-                    current = actual.stat()
-                    identity = lambda st: (st.st_dev, st.st_ino)
-                    if (identity(before) != identity(current)
-                            or after.st_size < before.st_size
-                            or (after.st_size == before.st_size and
-                                (after.st_mtime_ns, after.st_ctime_ns) !=
-                                (before.st_mtime_ns, before.st_ctime_ns))
-                            or (compressed and after.st_size != before.st_size)):
-                        raise ValueError("pipeline_source_changed_during_snapshot")
-                    if not compressed and source_bytes != before.st_size:
-                        raise ValueError("pipeline_source_prefix_incomplete")
+        if source_exists:
+            with actual.open("rb") as raw:
+                before = os.fstat(raw.fileno())
+                compressed = actual.suffix == ".gz"
+                stream = gzip.GzipFile(fileobj=raw, mode="rb") if compressed else raw
+                try:
+                    while compressed or source_bytes < before.st_size:
+                        line = stream.readline() if compressed else stream.readline(before.st_size - source_bytes)
+                        if not line:
+                            break
+                        source_bytes += len(line)
+                        digest.update(line)
+                        try:
+                            row = json.loads(line.decode("utf-8", errors="replace").strip())
+                        except json.JSONDecodeError:
+                            continue
+                        if isinstance(row, dict):
+                            # A new pickler per row avoids retaining prior objects.
+                            replay.append(row)
+                finally:
+                    if compressed:
+                        stream.close()
+                after = os.fstat(raw.fileno())
+                current = actual.stat()
+                identity = lambda st: (st.st_dev, st.st_ino)
+                if (identity(before) != identity(current)
+                        or after.st_size < before.st_size
+                        or (after.st_size == before.st_size and
+                            (after.st_mtime_ns, after.st_ctime_ns) !=
+                            (before.st_mtime_ns, before.st_ctime_ns))
+                        or (compressed and after.st_size != before.st_size)):
+                    raise ValueError("pipeline_source_changed_during_snapshot")
+                if not compressed and source_bytes != before.st_size:
+                    raise ValueError("pipeline_source_prefix_incomplete")
+        replay.flush()
         replay.receipt = {
-            "strategy": "single_prefix_lossless_compressed_replay_v1",
+            "strategy": "single_prefix_indexed_compressed_replay_v2",
             "source_path": str(actual),
             "source_exists": source_exists,
             "decoded_source_bytes": source_bytes,
@@ -997,7 +1040,7 @@ def _build_forced_submit_lineage_rows(
         "entry_order_cancel_requested",
         "entry_order_cancel_confirmed",
     }
-    for row in _pipeline_rows(pipeline_path):
+    for row in _pipeline_rows(pipeline_path, stages=lineage_stages):
         stage = str(row.get("stage") or "")
         if stage not in lineage_stages:
             continue
@@ -2937,9 +2980,28 @@ def _daily_feedback_report_date(path: Path) -> str | None:
     return value if parsed.strftime("%Y-%m-%d") == value else None
 
 
+def _prior_daily_report(path, cache):
+    from copy import deepcopy
+    before = path.stat()
+    stamp = (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns, before.st_ctime_ns)
+    entry = (cache or {}).get(path)
+    if entry and entry[0] == stamp:
+        return deepcopy(entry[1])
+    with path.open('r', encoding='utf-8') as handle:
+        value = json.load(handle)
+    after = path.stat()
+    if stamp != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns):
+        raise OSError('prior_report_changed_during_read')
+    if (cache is not None and before.st_size <= 1024 * 1024 and len(cache) < 20
+            and sum(item[0][2] for item in cache.values()) + before.st_size <= 4 * 1024 * 1024):
+        cache[path] = (stamp, deepcopy(value))
+    return value
+
+
 def _clean_baseline_rolling_latency_false_negative_candidates(
     target_date: str,
     current_rows: list[dict[str, Any]],
+    *, report_cache=None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Roll source-only latency false negatives without restoring retry authority."""
 
@@ -2958,8 +3020,7 @@ def _clean_baseline_rolling_latency_false_negative_candidates(
     for path in eligible_paths[-prior_limit:] if prior_limit else []:
         report_date = path.stem.removeprefix(prefix)
         try:
-            with path.open("r", encoding="utf-8") as handle:
-                payload = json.load(handle)
+            payload = _prior_daily_report(path, report_cache)
         except (OSError, json.JSONDecodeError):
             excluded_reports.append(
                 {"target_date": report_date, "reason": "report_unreadable"}
@@ -3776,7 +3837,7 @@ def _load_tp1_label_event_projection(
         return [], observation_watermark
 
     projected: list[dict[str, Any]] = []
-    for row in _pipeline_rows(pipeline_path):
+    for row in _pipeline_rows(pipeline_path, codes=candidate_codes):
         if _event_code(row) not in candidate_codes:
             continue
         fields = _fields(row)
@@ -4095,7 +4156,7 @@ def _build_tp1_counterfactual_submit_safety(
     risk_counts: Counter[str] = Counter()
     unique_symbols: set[str] = set()
     rows: list[dict[str, Any]] = []
-    for row in _pipeline_rows(pipeline_path):
+    for row in _pipeline_rows(pipeline_path, stages={"rising_missed_tp1_counterfactual_submit_safety"}):
         if (
             str(row.get("stage") or "")
             != "rising_missed_tp1_counterfactual_submit_safety"
@@ -4624,6 +4685,7 @@ def _aggregate_nxt_post_block_outcomes(
 def _clean_baseline_rolling_nxt_post_block_outcomes(
     target_date: str,
     current_rows: list[dict[str, Any]],
+    *, report_cache=None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Aggregate recent source-quality-gated blocker outcomes since baseline.
 
@@ -4649,8 +4711,7 @@ def _clean_baseline_rolling_nxt_post_block_outcomes(
     for path in eligible_paths[-prior_limit:] if prior_limit else []:
         report_date = path.stem.removeprefix(prefix)
         try:
-            with path.open("r", encoding="utf-8") as handle:
-                payload = json.load(handle)
+            payload = _prior_daily_report(path, report_cache)
         except (OSError, json.JSONDecodeError):
             excluded_reports.append(
                 {"target_date": report_date, "reason": "report_unreadable"}
@@ -5385,7 +5446,7 @@ def _build_adverse_micro_recovery_observation(
     outcome_counts: Counter[str] = Counter()
     rows: list[dict[str, Any]] = []
     registered_observation_ids: set[str] = set()
-    for event in _pipeline_rows(pipeline_path):
+    for event in _pipeline_rows(pipeline_path, stage_prefix="rising_missed_adverse_micro_recovery_"):
         stage = str(event.get("stage") or "")
         if not stage.startswith("rising_missed_adverse_micro_recovery_"):
             continue
@@ -6769,6 +6830,7 @@ def _risky_micro_daily_rolling_eligible_rows(
 def _clean_baseline_rolling_risky_micro_outcomes(
     target_date: str,
     current_daily_rows: list[dict[str, Any]],
+    *, report_cache=None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     """Aggregate clean-baseline source-only outcomes without live authority."""
 
@@ -6785,8 +6847,7 @@ def _clean_baseline_rolling_risky_micro_outcomes(
     for path in eligible_paths[-prior_limit:] if prior_limit else []:
         report_date = path.stem.removeprefix(prefix)
         try:
-            with path.open("r", encoding="utf-8") as handle:
-                payload = json.load(handle)
+            payload = _prior_daily_report(path, report_cache)
         except (OSError, json.JSONDecodeError):
             excluded_reports.append(
                 {"target_date": report_date, "reason": "report_unreadable"}
@@ -7077,6 +7138,7 @@ def _build_report(
         else existing_or_gzip_path(pipeline_path)
     )
     generated_at = generated_at or datetime.now(KST).isoformat(timespec="seconds")
+    report_cache = {}
     source = pipeline_rows if pipeline_rows is not None else pipeline_path
     forced: dict[str, dict[str, Any]] = {}
     holding_by_record: dict[str, dict[str, Any]] = {}
@@ -7164,6 +7226,7 @@ def _build_report(
     ) = _clean_baseline_rolling_latency_false_negative_candidates(
         target_date,
         latency_canary_rows,
+        report_cache=report_cache,
     )
     tp1_label_events, tp1_observation_watermark = _load_tp1_label_event_projection(
         source
@@ -7231,6 +7294,7 @@ def _build_report(
         _clean_baseline_rolling_risky_micro_outcomes(
             target_date,
             risky_micro_episode_daily_rolling_rows,
+            report_cache=report_cache,
         )
     )
     if first_touch_source_quality_counts["first_touch_ai_provenance_missing_count"]:
@@ -7259,6 +7323,7 @@ def _build_report(
                 "rising_missed_nxt_post_block_blocker_outcome_attribution", []
             )
         ),
+        report_cache=report_cache,
     )
     initial_fail_count = sum(
         count

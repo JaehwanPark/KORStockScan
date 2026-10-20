@@ -1681,7 +1681,7 @@ def test_completion_census_handoff_binds_exact_complete_generation(
                 '7df7ea3b9' if generation == 'late_cost_revision' else
                 '082234567' if generation == 'prefix_code_binding' else 'bf8465b5d')
     for name, expected in hashes.items():
-        raw = ((canonical/name).read_bytes() if generation == 'frozen_input' else
+        raw = (subprocess.check_output(['git','-C',str(canonical),'show','e3cb1d9ca:'+name]) if generation == 'frozen_input' else
                subprocess.check_output(['git','-C',str(canonical),'show','a7c0b0dc5:'+name]) if generation == 'broker_custody' else
                subprocess.check_output(['git','-C',str(canonical),'show','4b278bbb3:'+name]) if generation == 'vote_metadata' else
                subprocess.check_output(['git','-C',str(canonical),'show','a1748b409:'+name]) if generation == 'pre_entry_observer' else
@@ -1740,3 +1740,59 @@ def test_archive_authority_successor_accepts_the_issued_full_reader_origin(avg_d
         'commit','-qm','archive authority successor of issued reader generation'],check=True)
     commit=subprocess.check_output(['git','-C',str(root),'rev-parse','HEAD'],text=True).strip()
     handoff._verify_entry_code_delta(root,commit,origin,inventory,expected)
+
+
+@pytest.mark.parametrize('family', ['main_stop', 'holding_vote', 'pre_submit_delay'])
+@pytest.mark.parametrize('fault', [None, 'missing', 'dirty', 'committed_change'])
+@pytest.mark.parametrize('generation,reader_path', [(generation,path)
+    for generation in ('source_reader','source_integration')
+    for path in ('src/engine/lifecycle/research_json_stream.py',
+        'src/engine/automation/main_startup_validation.py','src/engine/automation/next_preopen_readiness.py',
+        *(['src/engine/infrastructure/startup_validation_code_context.py'] if generation=='source_integration' else []))])
+def test_source_reader_handoff_preserves_issued_policy_and_exact_dependencies(tmp_path, family, fault, reader_path,generation):
+    import hashlib
+    import os
+    import subprocess
+    from src.engine.scalping import main_stop_policy as stop
+    from src.engine.scalping import holding_vote_experiment as holding
+    from src.engine.scalping import pre_submit_delay_initial_policy as delay
+    canonical = Path(handoff.__file__).resolve().parents[3]
+    origin = 'ab1c46633e638658721ec4bdab611bd389451985'
+    inventories = {
+        'main_stop': {key: 'src/engine/'+key for key in stop.implementation_paths()},
+        'holding_vote': {key: 'src/engine/'+key for key in holding._code_paths()},
+        'pre_submit_delay': {name: name for name in delay.CONTRACT_PATHS},
+    }
+    inventory = inventories[family]
+    root = tmp_path/'candidate'
+    subprocess.run(['git','clone','--shared','--no-checkout','-q',str(canonical),str(root)],check=True)
+    names = {os.path.normpath(name) for name in inventory.values()}
+    for variant in handoff.REVIEWED_BROKER_CUSTODY_DEPENDENCY_VARIANTS.values():
+        names.update(variant['dependencies'])
+    names.update(handoff.REVIEWED_SOURCE_READER_HASHES)
+    if generation=='source_integration':names.update(handoff.REVIEWED_SOURCE_INTEGRATION_HASHES)
+    names.add('src/engine/automation/intraday_release_handoff.py')
+    for name in names:
+        path = root/name; path.parent.mkdir(parents=True,exist_ok=True)
+        path.write_bytes((canonical/name).read_bytes() if generation=='source_integration' else
+            subprocess.check_output(['git','-C',str(canonical),'show','0255cb05f:'+os.path.normpath(name)]))
+    original = {key: hashlib.sha256(subprocess.check_output(
+        ['git','-C',str(root),'show',origin+':'+os.path.normpath(name)])).hexdigest()
+        for key,name in inventory.items()}
+    expected = hashlib.sha256(json.dumps(original,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+    def commit():
+        subprocess.run(['git','-C',str(root),'add','.'],check=True)
+        subprocess.run(['git','-C',str(root),'-c','user.name=fixture','-c','user.email=fixture@example.test',
+                        'commit','-qm','source reader generation'],check=True)
+        return subprocess.check_output(['git','-C',str(root),'rev-parse','HEAD'],text=True).strip()
+    revision = commit()
+    reader = root/reader_path
+    if fault == 'missing': reader.unlink()
+    elif fault:
+        reader.write_bytes(reader.read_bytes()+b'\nUNREVIEWED_READER = True\n')
+        if fault == 'committed_change': revision = commit()
+    if fault:
+        with pytest.raises(ValueError):
+            handoff._verify_entry_code_delta(root,revision,origin,inventory,expected)
+    else:
+        handoff._verify_entry_code_delta(root,revision,origin,inventory,expected)
