@@ -3380,6 +3380,9 @@ REVIEWED_LOGICAL_PIPELINE_PAIRS['src/engine/automation/main_stop_postclose.py'] 
 # Native legacy gzip comparison retains issued research bytes and economics.
 REVIEWED_LOGICAL_PIPELINE_HASHES['src/engine/scalping/initial_quantity_refresh_evaluation.py'] = '6b052913a8a88b6780257bbfef0de9bae5c961039608e1cfa1ed25ab0412053f'
 REVIEWED_LOGICAL_PIPELINE_PAIRS['src/engine/scalping/initial_quantity_refresh_evaluation.py'] = (('921bac7fcf49a127f1a9f7e1f15d3641b4d8eab39fb054c506e68219f5cc8f43', '6b052913a8a88b6780257bbfef0de9bae5c961039608e1cfa1ed25ab0412053f'),)
+# A regenerated holding source must use current native publication semantics.
+REVIEWED_LOGICAL_PIPELINE_HASHES['src/engine/runtime_approval_summary.py'] = 'a79d492129b3222a25711d1f1086b37c2714f50c3920b2973e74f518a97ef43d'
+REVIEWED_LOGICAL_PIPELINE_PAIRS['src/engine/runtime_approval_summary.py'] = (('91dbb00d92f0aeb51de17f92dc0bea31591f1d41ad3bcab24579c8cb3c1dd14d', 'a79d492129b3222a25711d1f1086b37c2714f50c3920b2973e74f518a97ef43d'),)
 REVIEWED_LOGICAL_PIPELINE_DEPENDENCY_VARIANTS = {
     (trigger, REVIEWED_LOGICAL_PIPELINE_HASHES.get(os.path.normpath(trigger), sha)): {**value,
         'selector_path': 'src/engine/scalping/initial_quantity_policy.py',

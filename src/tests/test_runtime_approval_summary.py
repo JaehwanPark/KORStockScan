@@ -215,7 +215,7 @@ def test_summary_preserves_only_verified_prepared_incumbent(monkeypatch, tmp_pat
     from src.engine.scalping import holding_path_vote_policy as V, holding_vote_experiment as E
     data=_patch(monkeypatch,tmp_path)
     path=V.policy_path(data,'2026-10-19');path.parent.mkdir(parents=True,exist_ok=True);path.write_text('frozen')
-    prior=dict(schema=V.SUCCESSOR_SCHEMA,selection_mode='incumbent_carry',code_sha256='old',source_date='2026-10-16')
+    prior=dict(schema=V.SUCCESSOR_SCHEMA,selection_mode='incumbent_carry',code_sha256='old',source_date='2026-10-16',source_report_sha256='source')
     calls=[]
     def load(*args,**kw):
         calls.append(kw)
@@ -235,14 +235,43 @@ def test_summary_preserves_only_verified_prepared_incumbent(monkeypatch, tmp_pat
     assert path.read_text()=='frozen'
 
 
-def test_summary_current_code_policy_can_publish_updated_source(monkeypatch,tmp_path):
+@pytest.mark.parametrize('prior_code', ['old', 'current'])
+def test_summary_current_native_replay_can_publish_updated_source(monkeypatch,tmp_path,prior_code):
     from src.engine.scalping import holding_path_vote_policy as V,holding_vote_experiment as E
     data=_patch(monkeypatch,tmp_path);path=V.policy_path(data,'2026-10-19');path.parent.mkdir(parents=True,exist_ok=True);path.write_text('old source')
-    monkeypatch.setattr(V,'load_bundle',lambda *a,**kw: dict(schema=V.SUCCESSOR_SCHEMA,selection_mode='incumbent_carry',code_sha256='current'))
+    monkeypatch.setattr(V,'load_bundle',lambda *a,**kw: dict(schema=V.SUCCESSOR_SCHEMA,selection_mode='incumbent_carry',code_sha256=prior_code,source_report_sha256='old'))
     monkeypatch.setattr(E,'code_sha',lambda:'current')
     monkeypatch.setattr(mod,'create_holding_vote_policy',lambda **kw: {'new_source':kw['source_report_sha256']})
     assert mod._holding_vote_publication_bundle(source_date='2026-10-16',target_date='2026-10-19',
         source_report_sha256='new',replay={},source_quality={})==({'new_source':'new'},False)
+
+
+@pytest.mark.parametrize('stale_replay', [False, True])
+def test_summary_changed_source_uses_native_numeric_validation(monkeypatch,tmp_path,stale_replay):
+    from src.engine.scalping import holding_path_vote_policy as V
+    from src.tests.test_holding_vote_numeric_successor import fixture
+    from src.tests.test_holding_path_vote_replay import EMPTY_SOURCE_QUALITY
+    *_,numeric=fixture(tmp_path)
+    numeric['selected_cells']={}
+    replay=dict(schema='holding_path_vote_postclose_replay_v1',vote_numeric_research=numeric)
+    prior=V.create_successor(source_date='2026-10-08',target_date='2026-10-12',
+        source_report_sha256='a'*64,replay=replay,source_quality=EMPTY_SOURCE_QUALITY)
+    prior['code_sha256']='0'*64
+    prior['bundle_sha256']=V.digest({k:v for k,v in prior.items() if k!='bundle_sha256'})
+    path=V.policy_path(tmp_path,'2026-10-12');_write(path,prior);original=path.read_bytes()
+    monkeypatch.setattr(mod,'DATA_DIR',tmp_path)
+    if stale_replay:numeric['code_sha256']='0'*64
+    args=dict(source_date='2026-10-08',target_date='2026-10-12',source_report_sha256='b'*64,
+              replay=replay,source_quality=EMPTY_SOURCE_QUALITY)
+    if stale_replay:
+        with pytest.raises(ValueError,match='holding_vote_successor_parent_invalid'):
+            mod._holding_vote_publication_bundle(**args)
+    else:
+        bundle,preserved=mod._holding_vote_publication_bundle(**args)
+        assert not preserved and bundle['source_report_sha256']=='b'*64
+        assert bundle['policy_set_sha256']==prior['policy_set_sha256']
+        assert bundle['selection_mode']=='incumbent_carry'
+    assert path.read_bytes()==original
 
 
 def test_summary_publishes_estimated_holding_vote_policy_without_realized_ev(

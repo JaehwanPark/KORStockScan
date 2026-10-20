@@ -994,7 +994,8 @@ def _holding_vote_publication_bundle(*, source_date, target_date, source_report_
         prior = V.load_bundle(DATA_DIR, target_date, require_current_code=False)
         if (prior.get('schema') == V.SUCCESSOR_SCHEMA
                 and prior.get('selection_mode') == 'incumbent_carry'
-                and prior.get('code_sha256') != code_sha()):
+                and prior.get('code_sha256') != code_sha()
+                and prior.get('source_report_sha256') == source_report_sha256):
             # The ordinary reader verifies the exact original policy/source/code
             # receipt. Rebuilding would relabel the frozen research generation.
             prior = V.load_bundle(DATA_DIR, target_date, source_report_sha256=source_report_sha256)
