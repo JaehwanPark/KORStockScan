@@ -68,6 +68,8 @@ OFF·퇴역 producer, 유효 frozen policy/checkpoint, 별도 custody/override·
 
 장후 모니터 스냅샷의 대용량 거래 리뷰는 원본 파일 identity·자체 해시·완료 census 계약이 맞는 축약본으로 보유·청산 보고서에 전달한다. 복구 실행의 재사용은 정확일자 네 산출물 해시, 프로필, 완료 축약본 및 원천 pipeline의 시각 경계가 모두 일치할 때만 허용한다. 하나라도 바뀌면 정상 생산 경로를 다시 실행한다.
 
+다음 날짜 체크리스트의 direct-family 생성기는 source-date 체크리스트에 남은 `HoldingProfitExitSourceContractRepair`와 `InitialQuantityProducerConsumerRepair1010` OPEN을 같은 ID로 이관한다. 원 Acceptance·실패 이력을 보존하고 대상 날짜의 기존 완료·수동 처분을 우선하며, 완료/부재 항목을 비용 결손만으로 다시 열지 않는다. 중복 owner·일정 누락·읽는 동안 원문 변경은 게시 전에 실패한다. 이관은 현재 진단 담당의 연결이며 원천 복구·경제성·PREOPEN/PID 완료가 아니다. 이미 strict/PID에 결속된 운영 문서의 교체는 release-routing 보존 절차를 따른다.
+
 기계 BLOCK/RECHECK 정책은 날짜가 같은 원천 감사 preflight의 해시·허용 receipt와 자원 가드를 통과한 뒤 `main_machine_policy`로 dispatch한다. Main 계산은 보조 AI 성공을 기다리지 않으며 preflight 뒤 먼저 실행한다. 같은 wrapper의 `outcome_labels`, `legacy_machine_report`, `main_auxiliary_policy`는 생존하는 Main worker다. 정확한 stage 의존과 terminal은 현행 registry로 검증하며, 퇴역 wrapper를 복원하거나 독립 final-refresh 예약을 추가하지 않는다.
 
 Wrapper는 비동기 `pre_submit_delay` 및 atomic sizing consumer를 시작하기 전에 대상일 producer summary를 동일 대상일 raw pipeline 원천과 대사해 source ledger로 봉인한다. raw가 날짜·프로파일 검증을 통과하고 중복·격리 결손이 없는데 요약 count/hash만 어긋나면 해당 거래일 raw에서 summary를 재구성하고 stage별 count/hash를 다시 확인한 뒤 봉인한다. raw 검증 또는 재구성 대사가 실패하면 하류 계산을 진행하지 않는다.

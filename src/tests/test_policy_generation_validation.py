@@ -419,6 +419,7 @@ def test_post_aux_guard_successor_does_not_transitively_promote_older_reports(tm
 
     *[(family,'REVIEWED_SOURCE_READER_SUCCESSORS') for family in ('rising_missed','auxiliary')],
     *[(family,'REVIEWED_DELAY_CLEANUP_SUCCESSORS') for family in ('rising_missed','auxiliary','holding_vote')],
+    *[(family,'REVIEWED_HOLDING_REPUBLICATION_SUCCESSORS') for family in ('entry_cancel_wait','auxiliary')],
 ])
 @pytest.mark.parametrize('damage', [None, 'missing', 'bytes', 'path', 'authority', 'seal', 'symlink',
                                    'current_missing', 'current_bytes', 'current_code'])
@@ -468,23 +469,23 @@ def test_successor_requires_preserved_prior_fixture_and_independent_current_fixt
 @pytest.mark.parametrize('family', list(validation.PLANS))
 def test_latest_capability_pair_is_current_and_keeps_original_source(family):
     from src.engine.monitoring import policy_generation_code_handoff as handoff
-    if family in handoff.REVIEWED_DELAY_CLEANUP_SUCCESSORS:
-        old, current = handoff.REVIEWED_DELAY_CLEANUP_SUCCESSORS[family]
+    if family in handoff.REVIEWED_HOLDING_REPUBLICATION_SUCCESSORS:
+        old, current = handoff.REVIEWED_HOLDING_REPUBLICATION_SUCCESSORS[family]
+        prior = (handoff.REVIEWED_CLEANUP_SOURCE_SUCCESSORS if family == 'entry_cancel_wait'
+                 else handoff.REVIEWED_DELAY_CLEANUP_SUCCESSORS)
+        assert old == prior[family][1]
         assert current == generation.code_generation(family)
-        assert old == handoff.REVIEWED_RECEIPT_CUSTODY_SOURCE_SUCCESSORS[family][0]
         return
-    if family in handoff.REVIEWED_SOURCE_READER_SUCCESSORS:
-        old, current = handoff.REVIEWED_SOURCE_READER_SUCCESSORS[family]
-        assert current == generation.code_generation(family)
-        assert old == handoff.REVIEWED_RECEIPT_CUSTODY_SOURCE_SUCCESSORS[family][0]
+    if family == 'holding_vote':
+        # The regenerated 10/20 native report already uses this exact code.
+        # Its absent fixture uses the same-code reader, not an old report pair.
+        assert generation.code_generation(family) == '48b92485c831e215a1d7fe1ef8664113d68186e040a768087cbcb18ab0892ac3'
+        assert handoff.REVIEWED_DELAY_CLEANUP_SUCCESSORS[family][1] == 'b447ff4c7e39ed9f1d1884c3d032b567225d51b92d121c91e24c280c9e84c72b'
         return
-    old, current = handoff.REVIEWED_CLEANUP_SOURCE_SUCCESSORS[family]
-    if family=='holding_vote':
-        assert (current,generation.code_generation(family)) in handoff.REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS[family]
-    else:
-        assert current == generation.code_generation(family)
-    assert old == ( 'e28c76991bc6f09b02d44469d5238ca2d6b0f45f41c5a4414c67054197dd44ea'
-        if family == 'holding_vote' else handoff.REVIEWED_PREPARED_CODE_SOURCE_SUCCESSORS[family][0])
+    assert family == 'rising_missed'
+    old, current = handoff.REVIEWED_DELAY_CLEANUP_SUCCESSORS[family]
+    assert current == generation.code_generation(family)
+    assert old == handoff.REVIEWED_RECEIPT_CUSTODY_SOURCE_SUCCESSORS[family][0]
 
 
 @pytest.mark.parametrize('foreign', [False, True])

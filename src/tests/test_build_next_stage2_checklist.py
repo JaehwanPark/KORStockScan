@@ -1814,3 +1814,74 @@ def test_holding_repair_uses_one_stable_owner_without_reopening_natural_cost_wai
     assert text.count("[HoldingProfitExitSourceContractRepair]") == int(defect)
     second = mod.build_next_stage2_checklist(day)
     assert Path(second["path"]).read_text().count("[HoldingProfitExitSourceContractRepair]") == int(defect)
+
+
+@pytest.mark.parametrize("source_state,target_state", [(" ", None), ("x", None), (" ", " "), (" ", "x")])
+def test_semantic_owners_survive_rollover_without_reopening_completed_work(
+    tmp_path, monkeypatch, source_state, target_state,
+):
+    from src.engine.error_detectors.artifact_freshness import _current_semantic_owners, _project_semantic_owner
+
+    _patch_dirs(monkeypatch, tmp_path)
+    monkeypatch.setattr(mod, "PROJECT_ROOT", tmp_path)
+    day, target = "2026-10-20", "2026-10-21"
+    _write_json(mod._direct_summary_path(day), _direct_summary(day))
+    owners = {"holding_profit_exit": "HoldingProfitExitSourceContractRepair",
+              "initial_quantity": "InitialQuantityProducerConsumerRepair1010"}
+    source = mod.stage2_checklist_path(day)
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_text("\n".join(
+        f"- [{source_state}] `[{owner}] original acceptance` (`Due: {day}`, `Slot: POSTCLOSE`, "
+        "`TimeWindow: 16:30~23:59`, `Track: RuntimeStability`)\n"
+        "  - Acceptance: exact IDs, source hashes and native consumer; missing cost stays null.\n"
+        "  - History: original failure and authority remain unchanged.\n"
+        for owner in owners.values()), encoding="utf-8")
+    original = source.read_bytes()
+    if target_state is not None:
+        mod.stage2_checklist_path(target).write_text(
+            source.read_text().replace(f"[{source_state}]", f"[{target_state}]").replace(day, target))
+    result = mod.build_next_stage2_checklist(day)
+    first = Path(result["path"]).read_text()
+    mod.build_next_stage2_checklist(day)
+    assert Path(result["path"]).read_text().rstrip() == first.rstrip()
+    assert source.read_bytes() == original
+    expected_open = target_state == " " or target_state is None and source_state == " "
+    if target_state is None:
+        assert result["created"] and f"# {target} Stage2 To-Do Checklist" in first
+    current = _current_semantic_owners(tmp_path, target)
+    for stage, owner in owners.items():
+        assert (owner in current) == expected_open
+        assert first.count(f"[{owner}]") == int(source_state == " " or target_state is not None)
+        if expected_open:
+            assert "missing cost stays null" in first and "original failure" in first
+            alert = dict(stage=stage, owner=stage)
+            _project_semantic_owner(alert, current, target)
+            assert alert["owner"] == owner and alert["owner_status"] == "current_open"
+
+
+@pytest.mark.parametrize("defect", ["duplicate", "schedule_missing", "source_changed", "target_duplicate"])
+def test_semantic_owner_rollover_refuses_ambiguous_or_changing_source(tmp_path, monkeypatch, defect):
+    _patch_dirs(monkeypatch, tmp_path)
+    monkeypatch.setattr(mod, "PROJECT_ROOT", tmp_path)
+    day, target = "2026-10-20", "2026-10-21"
+    _write_json(mod._direct_summary_path(day), _direct_summary(day))
+    source = mod.stage2_checklist_path(day)
+    source.parent.mkdir(parents=True, exist_ok=True)
+    row = (f"- [ ] `[InitialQuantityProducerConsumerRepair1010] acceptance` (`Due: {day}`, "
+           "`Slot: POSTCLOSE`, `TimeWindow: 16:30~23:59`, `Track: RuntimeStability`)\n"
+           "  - Preserve original source loss and acceptance.\n")
+    source.write_text(row * 2 if defect == "duplicate" else
+                      row.replace(f"`Due: {day}`", "") if defect == "schedule_missing" else row)
+    target_path = mod.stage2_checklist_path(target)
+    target_before = row.replace(day, target) * 2 if defect == "target_duplicate" else "# Existing target preserved\n"
+    target_path.write_text(target_before)
+    if defect == "source_changed":
+        from src.engine.automation import postclose_summary_handoff as handoff
+        original = handoff.assert_sources_unchanged
+        def mutate(*args, **kwargs):
+            original(*args, **kwargs)
+            source.write_text(row + "\nConcurrent source edit\n")
+        monkeypatch.setattr(handoff, "assert_sources_unchanged", mutate)
+    with pytest.raises(RuntimeError, match="(source|target) semantic owner"):
+        mod.build_next_stage2_checklist(day)
+    assert target_path.read_text() == target_before

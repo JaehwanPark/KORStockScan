@@ -67,7 +67,12 @@ def test_parse_checklist_excludes_done_checkboxes(monkeypatch, tmp_path):
     assert all("[ParserTest0423] 닫힌 항목" not in title for title in titles)
 
 
-def test_parse_checklist_uses_env_override(monkeypatch):
+def test_parse_checklist_uses_env_override(monkeypatch, tmp_path):
+    monkeypatch.setattr(parser, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setenv("DOC_BACKLOG_TODAY", "2026-10-21")
+    current = tmp_path / DOC_CHECKLIST_DIR / "2026-10-21-stage2-todo-checklist.md"
+    current.parent.mkdir(parents=True)
+    current.write_text("- [ ] [CurrentOwner] current fallback\n")
     monkeypatch.setenv(
         "DOC_CHECKLIST_PATH",
         str(DOC_CHECKLIST_DIR / "2026-04-14-stage2-todo-checklist.md"),
@@ -213,7 +218,8 @@ def test_relative_explicit_override_is_anchored_but_cannot_redirect_semantic_own
     assert any("OfflineOwner" in task.title for task in parse_checklist_tasks())
     assert _current_semantic_owners(tmp_path, "2026-10-07") == {"CurrentOwner"}
     current.unlink()
-    assert _current_semantic_owners(tmp_path, "2026-10-07") == set()
+    with pytest.raises(ValueError, match="current_checklist_missing"):
+        _current_semantic_owners(tmp_path, "2026-10-07")
 
 
 def test_current_checklist_candidates_refresh_at_day_rollover(monkeypatch, tmp_path):
