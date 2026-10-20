@@ -2049,7 +2049,7 @@ def _load_buy_parent_handoff_projection(
     return result
 
 
-def _quantity_sell_receipt_observations(events: list[HoldingEvent]):
+def _quantity_sell_receipt_observations(events: list[HoldingEvent], *, record_id=None):
     """Collapse only unchanged, broker-clock-bound native receipt observations.
 
     Input bytes remain untouched. An order/execution collision without a complete
@@ -2072,7 +2072,12 @@ def _quantity_sell_receipt_observations(events: list[HoldingEvent]):
                 continue
             native = wrappers[0].fields
             native_fields = {k: v for k, v in native.items() if k.startswith("native_receipt_")}
-            record = str(native["id"])
+            # Structured pipeline rows carry the record outside fields; log
+            # readers retain their original in-field ID. A conflicting caller
+            # binding must never merge receipts across positions.
+            record = str(native.get("id") or record_id or "")
+            if not record or record_id is not None and record != str(record_id):
+                continue
             schema = native.get("native_receipt_identity_schema")
             identity_valid = (schema == "broker_position_sell_receipt_v1"
                 and native.get("native_receipt_position_key") == "record:" + record
@@ -2088,6 +2093,13 @@ def _quantity_sell_receipt_observations(events: list[HoldingEvent]):
                 from src.engine.sniper_execution_receipts import _native_sell_receipt_identity
                 restored = {k: (True if v == "True" else False if v == "False" else v)
                             for k, v in native.items() if not k.startswith("native_receipt_")}
+                # The pipeline logger renders integral lifecycle prices as
+                # e.g. "51300.0". Restore only that lossless typed context;
+                # official raw FIDs and the original payload remain untouched.
+                for name in ('main_lifecycle_exit_qty','main_lifecycle_exit_price'):
+                    value=restored.get(name)
+                    if isinstance(value,str) and re.fullmatch(r'[0-9]+(?:\.0+)?',value):
+                        restored[name]=int(value.partition('.')[0])
                 received_at = datetime.fromisoformat(str(native.get("native_receipt_observed_at")))
                 stock = {"id": record, "code": key[0]}
                 terminal_identity = _native_sell_receipt_identity(

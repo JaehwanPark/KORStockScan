@@ -196,7 +196,20 @@ def source_generation_matches(root, source_date, path, generation):
             return False
     if generation.get('schema') == INDEX_SCHEMA+':generation':
         try:
-            return index_generation(root,path)==generation
+            current=index_generation(root,path)
+            if current==generation:
+                return True
+            # Native gzip enrollment changes physical identity only. The
+            # complete raw-record hash chain, offsets and selected census must
+            # remain the exact frozen logical source; no append is admitted.
+            if Path(path).exists() or not Path(str(path)+'.gz').is_file():
+                return False
+            from .main_trailing_source_store import encode
+            if generation.get('sha256')!=hashlib.sha256(encode({
+                    k:v for k,v in generation.items() if k!='sha256'})).hexdigest():
+                return False
+            return ({k:v for k,v in current.items() if k not in {'source_stat','sha256'}}
+                == {k:v for k,v in generation.items() if k not in {'source_stat','sha256'}})
         except (OSError,ValueError):
             return False
     if generation.get('schema') == VOTE_INVENTORY_SCHEMA:

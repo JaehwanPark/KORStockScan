@@ -209,6 +209,17 @@ REVIEWED_RECEIPT_CUSTODY_SOURCE_SUCCESSORS = {'auxiliary': ('80497557e7be71c0eaf
  'rising_missed': ('1f524a5ad98e623501eaaa2d7c81773ac0ad6328237d72ea0c95c0c8cd1251bb',
                    'd23d80552d0453697e61757b2f0f1081509316868c02166afdb7adf848b20b32')}
 
+# Fresh native fixtures are mandatory for the frozen-input/census successor.
+# Each historical source retains its own original fixture and semantic state.
+REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS = {'holding_vote': (
+    ('69b00417b7396d7a15840c7f0a53ef91399d755d430fb3017a9d0596127d8b11',
+     'd23900de242886781b47158a016756bd8bbd56dab9a16ecef23ad8983713426f'),
+    ('e28c76991bc6f09b02d44469d5238ca2d6b0f45f41c5a4414c67054197dd44ea',
+     'd23900de242886781b47158a016756bd8bbd56dab9a16ecef23ad8983713426f'),
+    ('791757cb183525948b6378ee41deaa3ab03828ee4bdaea851bdfb653b804804b',
+     'd23900de242886781b47158a016756bd8bbd56dab9a16ecef23ad8983713426f'))}
+
+
 def _historical_fixture(contract, data, family):
     """Preserve a prior fixture without using it to certify the successor."""
     reference = contract.get('fixture_receipt')
@@ -284,6 +295,8 @@ def current_fixture_observation(observed, data):
     custody_match = custody is not None and actual_pair == custody
     if custody_match:
         pair = custody
+    if actual_pair in REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS.get(family, ()):
+        pair = actual_pair
     if not pair or actual_pair != pair:
         return validation.current_fixture_observation(observed, data)
     if (observed.get('status') != 'unverified' or observed.get('findings') != ['policy_generation_unverified']

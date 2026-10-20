@@ -290,6 +290,7 @@ def audit_profit_exit_flow(
     policy_gaps: list[dict[str, str]] = []
     runtime_gaps: list[dict[str, str]] = []
     counts = Counter()
+    receipt_observations = []
     lifecycles: list[dict] = []
     market_trigger = Counter()
     market_trigger_kind = Counter()
@@ -312,6 +313,24 @@ def audit_profit_exit_flow(
 
     for record_id, rows in scoped.items():
         rows = sorted(rows, key=lambda row: _epoch(row.emitted_at))
+        # The same durable broker terminal can be observed again while its
+        # attribution outbox waits for ACK. Use the existing native identity,
+        # clock and complete-payload verifier, never a timestamp/count heuristic.
+        terminals=[(index,row) for index,row in enumerate(rows) if row.stage=='sell_completed']
+        if len(terminals)>1:
+            from src.engine.sniper_trade_review_report import HoldingEvent, _quantity_sell_receipt_observations
+            normalized, receipts = _quantity_sell_receipt_observations([
+                HoldingEvent(row.emitted_at.isoformat(), row.stock_name, row.stock_code,
+                             row.stage, row.fields, str(index))
+                for index, row in terminals],record_id=record_id)
+            if receipts:
+                kept={int(row.raw_line) for row in normalized}
+                removed={index for index,_ in terminals}-kept
+                # Causal sequencing uses first observation time. The verified
+                # broker clock remains in the audit, never substituted for the
+                # local receipt time (broker seconds can precede submit logs).
+                rows=[row for index,row in enumerate(rows) if index not in removed]
+                receipt_observations.extend(receipts)
         row_order = {id(row): index for index, row in enumerate(rows)}
         counts["holding_started"] += int(any(
             getattr(row, "stage", "") == "holding_started" for row in rows))
@@ -405,13 +424,17 @@ def audit_profit_exit_flow(
             market = str(fields.get("market") or "")
             signal_id = str(fields.get("signal_id") or "")
             position_key = str(fields.get("position_key") or "")
-            buy_identity = str(fields.get("buy_fill_identity") or "")
+            raw_buy_identity = fields.get("buy_fill_identity")
+            buy_identity = '' if raw_buy_identity in (None,'','None','-') else str(raw_buy_identity)
             policy = selected.get(("EXIT_TRAILING_TP", market))
             if (signal_at is None or not signal_id or not policy
                     or market_type_at(signal_at) != market
                     or position_key != f"record:{record_id}"
-                    or len(buy_identity) != 64):
+                    or buy_identity and re.fullmatch(r'[0-9a-f]{64}',buy_identity) is None):
                 add(findings, record_id, "tp_signal_identity_or_market_invalid")
+                continue
+            if not buy_identity:
+                add(gaps, record_id, "tp_signal_buy_generation_missing")
                 continue
             if fields.get("policy_sha256") != input_snapshot_id(policy):
                 add(findings, record_id, "tp_signal_policy_hash_mismatch")
@@ -689,6 +712,7 @@ def audit_profit_exit_flow(
         "findings": findings,
         "source_gaps": gaps,
         "source_gap_details": gap_details,
+        "terminal_receipt_observations": receipt_observations,
         "policy_binding_gaps": policy_gaps,
         "runtime_consumption_gaps": runtime_gaps,
         "strict_completed_position_count": len(strict_ids),

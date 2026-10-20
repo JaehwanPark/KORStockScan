@@ -141,3 +141,87 @@ def test_native_read_budget_rejects_new_large_files_without_opening(tmp_path, mo
         monkeypatch.setattr(Path, 'open', guard)
         with pytest.raises(digests.ValidationDeferred, match='read_budget_exceeded'):
             byte_generation(path)
+
+
+@pytest.mark.parametrize('change', ['unchanged', 'historical_change', 'physical_conflict'])
+def test_logical_vote_and_physical_source_have_separate_proof_contracts(tmp_path, change):
+    from src.engine.lifecycle import research_storage as storage
+    from src.tests.test_main_trailing_source_assembler import _native_inventory_vote
+    data, origin, _, _ = approved(tmp_path)
+    path, row = _native_inventory_vote(data, DAY)
+    logical = assembler.historical_vote_generation(path, DAY)
+    physical = byte_generation(path)
+    value, _ = reuse.sealed(origin)
+    inventory = list(storage.iter_tree(origin.parent, value['assembly_inventory_ref']))
+    sources = list(storage.iter_tree(origin.parent, value['source_generations_ref']))
+    inventory.append(dict(path=str(path), generation=logical))
+    sources.append(dict(path=str(path), generation=physical))
+    if change == 'physical_conflict':
+        inventory.append(dict(path=str(path), generation=dict(physical, sha256='0'*64)))
+    value['assembly_inventory_ref'] = storage.write_tree(origin.parent, inventory)
+    value['source_generations_ref'] = storage.write_tree(origin.parent, sources)
+    value.pop('artifact_sha256'); value['artifact_sha256'] = digest(value)
+    write(origin, value)
+    if change == 'historical_change':
+        row['status'] = 'VALID'
+        path.write_text(json.dumps(row)+'\n')
+    if change == 'physical_conflict':
+        with pytest.raises(ValueError, match='original_source_conflict'):
+            reuse.collect_proofs(data, origin)
+        return
+    catalog = reuse.collect_proofs(data, origin)
+    assert catalog['logical_sources'] == [dict(path=str(path), generation=logical)]
+    assert next(r for r in catalog['unproved'] if r['path']==str(path))['generation'] == physical
+    if change == 'historical_change':
+        with pytest.raises(reuse.InputPending, match='logical_source_changed'):
+            with reuse.proof_session(data, origin):
+                pytest.fail('changed historical votes admitted')
+    else:
+        with reuse.proof_session(data, origin):
+            assert byte_generation(path) == physical
+
+
+@pytest.mark.parametrize('archived', [False,True])
+def test_snapshot_native_writer_or_archive_proof_preserves_original_logical_bytes(tmp_path,monkeypatch,archived):
+    from src.engine.lifecycle import research_storage as storage
+    from src.engine import compress_db_backfilled_files as archiver
+    data,origin,_,_=approved(tmp_path)
+    path=data/'report/monitor_snapshots'/f'trade_review_{DAY}.json'
+    write(path,dict(date=DAY,contents='original'))
+    generation=byte_generation(path)
+    if archived:
+        monkeypatch.setattr(archiver,'MONITOR_SNAPSHOT_DIR',path.parent)
+        assert archiver._gzip_file(path,dry_run=False)[0]
+    else:
+        digests.publish_native_bytes(data,path,generation)
+    value,_=reuse.sealed(origin)
+    rows=list(storage.iter_tree(origin.parent,value['source_generations_ref']))
+    rows.append(dict(path=str(path),generation=generation))
+    value['source_generations_ref']=storage.write_tree(origin.parent,rows)
+    value.pop('artifact_sha256');value['artifact_sha256']=digest(value);write(origin,value)
+    opened=Path.open
+    def guard(self,*args,**kwargs):
+        if self in {path,Path(str(path)+'.gz')}:
+            pytest.fail('native byte proof reopened the large source')
+        return opened(self,*args,**kwargs)
+    monkeypatch.setattr(Path,'open',guard)
+    with reuse.proof_session(data,origin):
+        assert byte_generation(path)==generation
+
+
+def test_frozen_inventory_delegates_large_future_journals_to_native_cohort_intake(tmp_path,monkeypatch):
+    from src.engine.lifecycle import research_storage as storage
+    data,origin,_,_=approved(tmp_path)
+    manifest=reuse.prepare(data,origin,tmp_path/'reused');value,_=reuse.sealed(manifest)
+    unrelated=data/'runtime/holding_path_votes'/'future.jsonl'
+    unrelated.parent.mkdir(parents=True);unrelated.touch()
+    original=list(storage.iter_tree(manifest.parent,value['assembly_inventory_ref']))
+    seen=[]
+    def intake(*args,**kwargs):
+        seen.append(True);return original
+    monkeypatch.setattr(assembler,'input_inventory',intake)
+    real_stat=reuse.file_stat
+    monkeypatch.setattr(reuse,'file_stat',lambda path:
+        [0,0,200*1024**3,0,0] if Path(path)==unrelated else real_stat(path))
+    reuse.verify_frozen_inventory(value,manifest.parent)
+    assert seen==[True]

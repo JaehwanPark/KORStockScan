@@ -2688,6 +2688,39 @@ REVIEWED_BROKER_CUSTODY_PAIRS = {'src/engine/ai/holding_exit_vote.py': (('69f1a9
                                               ('de4dd6cfc135d5d6c53f757151f32753f13ff780caca285886dba2dc285890d8',
                                                'af3f2273dc66d0da041bc64c8b5d79dc553558d369714d586609f0f6cbbd90f0'))}
 
+# Native frozen-source reuse and receipt census; prior generations stay sealed.
+REVIEWED_FROZEN_INPUT_HASHES = {'src/engine/automation/main_trailing_source_assembler.py': '2e965ba9172ab20269e3f9bdc097bd12fd1cece08276f28aee048e2423ec3b87',
+ 'src/engine/automation/main_trailing_source_reuse.py': 'b2542e5924e87107b5d3319f7e9787d09b3b6bddf85639a6d5f305e4a3c83944',
+ 'src/engine/scalping/holding_profit_exit_semantics.py': '586d26b7c6a9bd7041477f490c1f897f3d305d7dd07b2d56af3e368221af29de',
+ 'src/engine/sniper_trade_review_report.py': 'afbd53084fbf25dfa6f91c865d74b0327b02a38d9b3b3d7957c7a60a78874a1b'}
+REVIEWED_FROZEN_INPUT_DEPENDENCY_VARIANTS = {
+    key: {**value,
+        'selector_path': 'src/engine/automation/main_trailing_source_reuse.py',
+        'selector_sha256': REVIEWED_FROZEN_INPUT_HASHES['src/engine/automation/main_trailing_source_reuse.py'],
+        'dependencies': {**value['dependencies'], **REVIEWED_FROZEN_INPUT_HASHES},
+        'contract_extensions': {
+            origin: {name: REVIEWED_FROZEN_INPUT_HASHES.get(os.path.normpath(name), sha)
+                     for name, sha in paths.items()}
+            for origin, paths in value['contract_extensions'].items()},
+    } for key, value in REVIEWED_BROKER_CUSTODY_DEPENDENCY_VARIANTS.items()
+}
+REVIEWED_FROZEN_INPUT_PAIRS = {'src/engine/automation/main_trailing_source_assembler.py': (('edf4f62628db48829848fb12b6d5d3446c9c82d49223e3676e4d4dac18fe4b25',
+                                                              '2e965ba9172ab20269e3f9bdc097bd12fd1cece08276f28aee048e2423ec3b87'),
+                                                             ('e64c9943e0894558ded208637e4f2ef87565fa469745b299cc872ecd1d4c3bfa',
+                                                              '2e965ba9172ab20269e3f9bdc097bd12fd1cece08276f28aee048e2423ec3b87'),
+                                                             ('4ad0ea7a311c1ee6745f6bec364c92582fd3b2f7b591291970692fa28295951b',
+                                                              '2e965ba9172ab20269e3f9bdc097bd12fd1cece08276f28aee048e2423ec3b87')),
+ 'src/engine/automation/main_trailing_source_reuse.py': (('c190554546468617b2963e2ba013473e992f4d4ad638a5f4aee2f71027bc58ef',
+                                                          'b2542e5924e87107b5d3319f7e9787d09b3b6bddf85639a6d5f305e4a3c83944'),),
+ 'src/engine/scalping/holding_profit_exit_semantics.py': (('7512700df7e7d3bf705ec3e5d866bf9b916e564d60312fa3918f950c34431b78',
+                                                           '586d26b7c6a9bd7041477f490c1f897f3d305d7dd07b2d56af3e368221af29de'),),
+ 'src/engine/sniper_trade_review_report.py': (('d3e838423aeeaba629be4902b2aac533caceef3145ad747bdc78ff2900c230d8',
+                                               'afbd53084fbf25dfa6f91c865d74b0327b02a38d9b3b3d7957c7a60a78874a1b'),
+                                              ('8d07674031ac0ca0a08437c61490cd896d8810c30f57810ad53febb8cac0b57c',
+                                               'afbd53084fbf25dfa6f91c865d74b0327b02a38d9b3b3d7957c7a60a78874a1b'),
+                                              ('af3f2273dc66d0da041bc64c8b5d79dc553558d369714d586609f0f6cbbd90f0',
+                                               'afbd53084fbf25dfa6f91c865d74b0327b02a38d9b3b3d7957c7a60a78874a1b'))}
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -2741,7 +2774,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         dependencies = generations.get(trigger_sha, {})
         # New exact selectors precede their historical parent. The first match
         # selects one complete generation, never per-file SHA alternatives.
-        for variants in (REVIEWED_BROKER_CUSTODY_DEPENDENCY_VARIANTS,
+        for variants in (REVIEWED_FROZEN_INPUT_DEPENDENCY_VARIANTS,
+                         REVIEWED_BROKER_CUSTODY_DEPENDENCY_VARIANTS,
                          REVIEWED_VOTE_METADATA_DEPENDENCY_VARIANTS,
                          REVIEWED_PRE_ENTRY_OBSERVER_DEPENDENCY_VARIANTS,
                          REVIEWED_STOP_INDEXED_VOTE_DEPENDENCY_VARIANTS,
@@ -2860,7 +2894,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
                 or pair == REVIEWED_AUXILIARY_HISTORY_SOURCES.get(name)):
             changed.append(name)
             continue
-        if (pair in REVIEWED_BROKER_CUSTODY_PAIRS.get(repository_name(name), ())
+        if (pair in REVIEWED_FROZEN_INPUT_PAIRS.get(repository_name(name), ())
+                or pair in REVIEWED_BROKER_CUSTODY_PAIRS.get(repository_name(name), ())
                 or pair in REVIEWED_AVG_DOWN_INPUT_SOURCES.get(repository_name(name), ())
                 or pair in (REVIEWED_DELAY_PARENT_VERIFICATION_SOURCES.get(repository_name(name)),
                     REVIEWED_RESEARCH_BUDGET_INTEGRATION_SOURCES.get(repository_name(name)),

@@ -66,10 +66,22 @@ def collect_proofs(data_root, original_manifest_path):
     source_date,target_date=manifest['source_date'],manifest['target_date']
     if manifest.get('schema')!='main_all_scope_exit_input_manifest_v2':
         raise ValueError('trailing_reuse_original_manifest_invalid')
-    expected={}
+    from .main_trailing_source_assembler import VOTE_INVENTORY_SCHEMA
+    from .main_trailing_source_store import SCHEMA as INDEX_SCHEMA
+    expected={};logical={}
     for key in ('assembly_inventory_ref','source_generations_ref'):
         for row in storage.iter_tree(origin.parent,manifest[key]):
             path=str(Path(row['path']).absolute());generation=row['generation']
+            # These native digests describe a date-scoped view or an index
+            # chain, not the source's physical bytes. Never admit them into a
+            # full-byte digest cache, even when they share a path with a raw
+            # source reference. Their owners validate them in proof_session.
+            archived_snapshot = (Path(path).parent == root/'report/monitor_snapshots'
+                and Path(path).suffix == '.json' and not Path(path).exists()
+                and Path(path+'.gz.archive_receipt.json').is_file())
+            if generation.get('schema') in {VOTE_INVENTORY_SCHEMA, INDEX_SCHEMA+':generation'} or archived_snapshot:
+                logical[(path,digest(generation))]=dict(path=path,generation=generation)
+                continue
             old=expected.get(path)
             if old is not None and old!=generation:
                 # Native registry custody adds diagnostic fields to the same
@@ -94,6 +106,31 @@ def collect_proofs(data_root, original_manifest_path):
             path=name,generation=generation,stat=current,issuer_path=str(issuer_path),
             issuer_sha256=issuer_sha,original_manifest_sha256=origin_sha)
         proofs[name]={**body,'proof_sha256':digest(body)}
+
+    # The snapshot writer seals its digest while writing. Reuse that existing
+    # byte proof rather than requiring a second research producer to attest it.
+    from src.engine.infrastructure.validation_digest_session import _native_bytes,_native_proof_path
+    for name,generation in expected.items():
+        if Path(name).parent!=root/'report/monitor_snapshots' or Path(name).suffix!='.json':
+            continue
+        proof=_native_bytes(root,name)
+        if proof is not None and proof['generation']==generation:
+            proof_path=_native_proof_path(root,name)
+            _,sha=read_json(proof_path,private=True,limit=4096)
+            add(name,proof['source_stat'],proof_path,sha,'native_monitor_snapshot_writer')
+
+    # Older completed cohorts were enrolled once by the native streaming
+    # reader. Its exact code/epoch/source checks own those existing proofs.
+    from .main_trailing_completed_store import offline_binding
+    for day in manifest['consumed_dates']:
+        bound,body=offline_binding(root,day)
+        if body:
+            for name in body['offline_logical_generations']:
+                epoch=body['offline_source_epochs'][name]
+                gen=body['offline_logical_generations'][name]
+                if Path(name).is_file() and expected.get(name)==gen:
+                    add(name,_receipt_stat(epoch),bound['manifest_path'],
+                        bound['manifest_generation']['sha256'],'native_completed_source_enrollment')
 
     # A native issued research report binds each SHA to its observed stat epoch.
     pointer_path=root/'threshold_cycle/main_stop_confirmation'/f'committed_{source_date}.json'
@@ -181,7 +218,7 @@ def collect_proofs(data_root, original_manifest_path):
         unproved.append(dict(path=name,size=current[2],generation=generation))
     return dict(schema=SCHEMA+':proof_catalog',source_date=source_date,target_date=target_date,
         original_manifest=str(origin),original_manifest_sha256=origin_sha,
-        proofs=proofs,unproved=unproved,
+        proofs=proofs,unproved=unproved,logical_sources=list(logical.values()),
         unproved_bytes=sum(row['size'] for row in unproved),
         semantic_verdict_reused=False,runtime_effect=False,allowed_runtime_apply=False)
 
@@ -204,6 +241,10 @@ def proof_session(data_root, original_manifest_path):
             session.native_read_budget = dict(remaining=MAX_UNPROVED_BYTES)
         try:
             admit(session)
+            from .main_trailing_source_assembler import source_generation_matches
+            for row in catalog.get('logical_sources',[]):
+                if not source_generation_matches(data_root,catalog['source_date'],row['path'],row['generation']):
+                    raise InputPending('trailing_reuse_logical_source_changed:'+row['path'])
             yield catalog
         finally:
             session.native_read_budget = prior
@@ -359,13 +400,8 @@ def verify_frozen_inventory(manifest, assembly_root):
     from .main_trailing_source_assembler import input_inventory,source_generation_matches,VOTE_INVENTORY_SCHEMA,universe
     validate_manifest(manifest,assembly_root)
     root=Path(manifest['source_data_root']).resolve();source_date=manifest['source_date']
-    # Missing vote indexes cannot turn a large future journal population into
-    # an implicit scan. Native indexed/date-scoped intake owns that catch-up.
-    vote_paths=[p for p in (root/'runtime/holding_path_votes').glob('*.jsonl*')
-        if (p.name.endswith(('.jsonl','.jsonl.gz')) or '.jsonl.segment-' in p.name)
-        and not p.name.endswith(('.claims.jsonl','.lock'))]
-    if sum(file_stat(p)[2] for p in vote_paths)>MAX_UNPROVED_BYTES:
-        raise InputPending('trailing_reuse_scoped_vote_index_required')
+    # Native inventory owns cohort selection and its bounded unindexed budget.
+    # Total physical journal growth must not reject an already indexed cohort.
     _,master=universe(root,source_date)
     current=input_inventory(root,manifest['consumed_dates'],master['path'],
         root/'runtime/policy_bootstrap'/f'runtime_policy_bootstrap_{source_date}.json',
@@ -377,7 +413,7 @@ def verify_frozen_inventory(manifest, assembly_root):
     for name,generation in old.items():
         candidate=new.get(name)
         is_vote=Path(name).parent==root/'runtime/holding_path_votes'
-        if is_vote and (candidate is None or candidate.get('schema')==VOTE_INVENTORY_SCHEMA):
+        if is_vote and generation.get('schema')!=VOTE_INVENTORY_SCHEMA and (candidate is None or candidate.get('schema')==VOTE_INVENTORY_SCHEMA):
             try:
                 if _vote_prefix_unchanged(name,generation,source_date):
                     continue
@@ -452,7 +488,9 @@ def replay_session(manifest, assembly_root):
     validate_manifest(manifest,assembly_root)
     token = _REPLAY.set((manifest, Path(assembly_root), {}))
     try:
-        with proof_session(manifest['source_data_root'],binding['original_manifest']):
+        from .main_trailing_source_store import native_input_session
+        with native_input_session(manifest['source_data_root'],manifest['source_date']), \
+                proof_session(manifest['source_data_root'],binding['original_manifest']):
             yield
     finally:
         _REPLAY.reset(token)

@@ -415,6 +415,7 @@ def test_post_aux_guard_successor_does_not_transitively_promote_older_reports(tm
     *[(family,'REVIEWED_INTEGRATED_RESEARCH_SOURCE_SUCCESSORS') for family in validation.PLANS],
     *[(family,'REVIEWED_CLEANUP_SOURCE_SUCCESSORS') for family in validation.PLANS],
     *[(family,'REVIEWED_RECEIPT_CUSTODY_SOURCE_SUCCESSORS') for family in validation.PLANS],
+    ('holding_vote','REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS'),
 ])
 @pytest.mark.parametrize('damage', [None, 'missing', 'bytes', 'path', 'authority', 'seal', 'symlink',
                                    'current_missing', 'current_bytes', 'current_code'])
@@ -442,7 +443,7 @@ def test_successor_requires_preserved_prior_fixture_and_independent_current_fixt
     contract['contract_sha256']=generation.digest({k:v for k,v in contract.items() if k!='contract_sha256'})
     report.write_text(json.dumps(payload))
     observed=generation.observations(tmp_path,DAY,data_root=data)[0]
-    monkeypatch.setattr(handoff,review_map,{family:(old,current)})
+    monkeypatch.setattr(handoff,review_map,{family:((old,current),) if review_map=='REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS' else (old,current)})
     if damage=='missing':path.unlink()
     elif damage=='bytes':path.write_text('{}')
     elif damage=='symlink':
@@ -465,7 +466,10 @@ def test_successor_requires_preserved_prior_fixture_and_independent_current_fixt
 def test_cleanup_capability_pair_is_current_and_keeps_original_source(family):
     from src.engine.monitoring import policy_generation_code_handoff as handoff
     old, current = handoff.REVIEWED_CLEANUP_SOURCE_SUCCESSORS[family]
-    assert current == generation.code_generation(family)
+    if family=='holding_vote':
+        assert (current,generation.code_generation(family)) in handoff.REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS[family]
+    else:
+        assert current == generation.code_generation(family)
     assert old == ( 'e28c76991bc6f09b02d44469d5238ca2d6b0f45f41c5a4414c67054197dd44ea'
         if family == 'holding_vote' else handoff.REVIEWED_PREPARED_CODE_SOURCE_SUCCESSORS[family][0])
 

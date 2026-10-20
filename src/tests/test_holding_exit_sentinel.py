@@ -1436,6 +1436,36 @@ def test_unproven_terminal_never_advances_signal_to_completed(changes, offset, r
     assert report["lifecycle"][0]["economics_status"] != "verified"
 
 
+@pytest.mark.parametrize('identity,expected', [(None,'source_gap'), ('None','source_gap'), ('bad','semantic_contract_invalid'), ('z'*64,'semantic_contract_invalid')])
+def test_missing_buy_source_is_a_gap_and_malformed_identity_remains_invalid(identity,expected):
+    _,mechanical,rows,_,_=_semantic_flow()
+    rows[1].fields['buy_fill_identity']=identity
+    report=audit_profit_exit_flow(rows,target_date='2026-10-09',load_votes=lambda _:[],
+        mechanical_policy_receipt=mechanical,consumed_pid=42)
+    assert report['semantic_status']==expected
+    assert report['lifecycle']==[] and report['economics_status']=='pending'
+    if identity in (None,'None'):
+        assert report['source_gaps']==[dict(position_id='21',reason='tp_signal_buy_generation_missing')]
+
+
+@pytest.mark.parametrize('damage', [False,True])
+def test_terminal_funnel_counts_one_native_receipt_without_promoting_missing_buy_generation(damage):
+    from dataclasses import replace
+    from src.tests.test_trade_review_research_cost import reobserved_sell_fixture
+    _,events=reobserved_sell_fixture()
+    terminal=events[-2:]
+    from zoneinfo import ZoneInfo
+    rows=[sentinel.PipelineEvent(datetime.fromisoformat(e.timestamp).replace(tzinfo=ZoneInfo('Asia/Seoul')),
+        'HOLDING_PIPELINE',e.stage,e.name,e.code,'1',
+        {**{k:v for k,v in e.fields.items() if k!='id'},'exit_rule':'scalp_trailing_take_profit',
+         'pipeline_lifecycle_population_scope':'real_record_bound'}) for e in terminal]
+    if damage: rows[-1]=replace(rows[-1],fields={**rows[-1].fields,'sell_price':'different'})
+    report=audit_profit_exit_flow(rows,target_date='2026-10-08',load_votes=lambda _:[])
+    assert report['funnel']['tp_sell_completed']==(2 if damage else 1)
+    assert len(report['terminal_receipt_observations'])==(0 if damage else 1)
+    assert report['economics_status']=='pending'
+
+
 def test_bound_existing_sell_guard_reports_wait_then_new_permission_clears_wait():
     event, mechanical, rows, lineage, _ = _semantic_flow()
     rows += [event(2, "exit_signal", lineage), event(3, "sell_submit_pre_call_custody_blocked", lineage)]

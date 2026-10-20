@@ -246,6 +246,21 @@ def test_window_preparation_enrolls_once_and_keeps_future_sources_out(tmp_path,m
     assert store.prepare_window(tmp_path,'2026-10-19')==result
 
 
+@pytest.mark.parametrize('damage', [None, 'content', 'seal', 'append'])
+def test_frozen_plain_index_remains_bound_after_verified_gzip_enrollment(tmp_path, damage):
+    import gzip
+    from src.engine.automation.main_trailing_source_assembler import source_generation_matches
+    path=source(tmp_path);raw=json.dumps(row()).encode()+b'\n';path.write_bytes(raw)
+    store.build_step(tmp_path,path)
+    original=store.generation(tmp_path,path)
+    if damage=='content':raw=json.dumps(row('changed')).encode()+b'\n'
+    elif damage=='append':raw+=json.dumps(row('added')).encode()+b'\n'
+    elif damage=='seal':original=dict(original,sha256='0'*64)
+    Path(str(path)+'.gz').write_bytes(gzip.compress(raw));path.unlink()
+    store.migrate_frozen_source(tmp_path,path)
+    assert source_generation_matches(tmp_path,'2026-10-19',path,original) is (damage is None)
+
+
 def test_frozen_generation_replacement_preserves_prior_cache_and_append_inode(tmp_path):
     import sqlite3
     path=source(tmp_path);append(tmp_path,path,row('old'))

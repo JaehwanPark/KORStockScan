@@ -617,14 +617,15 @@ def test_large_prior_projection_never_promotes_invalid_provenance_or_census(tmp_
     assert receipts['2026-10-15']['status']!='sealed_entry_snapshot'
 
 
-def test_reobserved_broker_receipt_without_buy_lineage_collapses_without_restoring_economics():
+@pytest.mark.parametrize('source_format', ['typed','log_strings','structured','foreign_record'])
+def test_reobserved_broker_receipt_without_buy_lineage_collapses_without_restoring_economics(source_format):
     from datetime import datetime
     from src.engine.sniper_execution_receipts import _native_sell_receipt_identity
     _, events = unknown_venue_reobserved_sell_fixture()
     original = events[-2]
     fields = {k:v for k,v in original.fields.items() if not k.startswith('holding_path_')}
     fields.update(holding_path_terminal_signal_binding='source_gap_generation_mismatch',
-        order_no='0000012',execution_no='3',main_lifecycle_exit_qty=1,main_lifecycle_exit_price=10100,
+        order_no='0000012',execution_no='3',main_lifecycle_exit_qty=1,main_lifecycle_exit_price=10100.0,
         sell_qty=1,cumulative_sell_qty=1,
         **{'9203':'0000012','9001':'123456','900':'1','902':'0','903':'10100','905':'-매도',
            '907':'1','908':'100101','909':'3','910':'10100','911':'1','913':'체결',
@@ -634,8 +635,17 @@ def test_reobserved_broker_receipt_without_buy_lineage_collapses_without_restori
     assert identity and identity['native_receipt_entry_lineage_status']=='source_gap'
     original=replace(original,fields=fields)
     repeated=replace(original,timestamp='2026-10-08 10:20:00',fields={**fields,**identity})
+    if source_format in {'log_strings','structured'}:
+        def logged(event):
+            return replace(event,fields={k:str(v) for k,v in event.fields.items()
+                if source_format!='structured' or k!='id'})
+        original,repeated=logged(original),logged(repeated)
     rows=[original,repeated];before=deepcopy(rows)
-    normalized,audit=review._quantity_sell_receipt_observations(rows)
+    normalized,audit=review._quantity_sell_receipt_observations(rows,
+        record_id='1' if source_format=='structured' else '2' if source_format=='foreign_record' else None)
+    if source_format=='foreign_record':
+        assert normalized==rows and audit==[]
+        return
     assert len(normalized)==1 and audit[0]['reobserved_count']==1
     assert 'holding_path_buy_fill_identity' not in normalized[0].fields
     assert normalized[0].fields['broker_actual_execution_venue']=='UNKNOWN'
