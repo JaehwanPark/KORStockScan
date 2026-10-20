@@ -4,6 +4,8 @@ Ownership: monitoring, separate from native report/policy publication. Original
 contracts and source bytes remain historical; no strategy authority is granted.
 """
 from copy import deepcopy
+import hashlib
+import json
 from pathlib import Path
 
 from src.engine.monitoring import policy_generation_contract as generation
@@ -271,20 +273,20 @@ REVIEWED_HISTORICAL_RESOLUTION_SUCCESSORS = {
 }
 
 
-def _historical_fixture(contract, data, family):
+def _historical_fixture(contract, data, family, *, late_report=None):
     """Preserve a prior fixture without using it to certify the successor."""
     reference = contract.get('fixture_receipt')
-    if reference is None:
+    if reference is None and late_report is None:
         return None
     path = Path(data)/'report/postclose_generation_validation'/(
         family+'_'+contract['code_sha256']+'.json')
     referenced = Path(str((reference or {}).get('path') or '')) if isinstance(reference, dict) else Path('.')
     if not referenced.is_absolute():
         referenced = Path(data).parent / referenced
-    if not isinstance(reference, dict) or referenced.resolve() != path.resolve():
+    if reference is not None and (not isinstance(reference, dict) or referenced.resolve() != path.resolve()):
         raise ValueError('successor_historical_fixture_path_invalid')
     payload, sha = validation.bounded_object(path, 65536)
-    if (path.is_symlink() or sha != reference.get('sha256')
+    if (path.is_symlink() or reference is not None and sha != reference.get('sha256')
             or payload.get('schema') != 'postclose_generation_fixture_receipt_v1'
             or payload.get('family') != family or payload.get('status') != 'pass'
             or payload.get('code_sha256') != contract['code_sha256']
@@ -296,6 +298,29 @@ def _historical_fixture(contract, data, family):
             or payload.get('actual_profit_verified') is not False
             or payload.get('allowed_runtime_apply', False) is not False):
         raise ValueError('successor_historical_fixture_invalid')
+    if reference is None:
+        # A native fixture may be published after an immutable report. Accept
+        # only this exact reviewed successor and the fixture's own protected
+        # original report binding; do not invent a reference in that report.
+        report_path, report_sha = late_report
+        run = Path(payload.get('validation_run', ''))
+        evidence = payload.get('evidence') or {}
+        if (payload.get('protected_unchanged') is not True
+                or payload.get('protected_artifact_sha256', {}).get(str(report_path)) != report_sha
+                or payload.get('validation_plan') != validation.plan_identity(family)
+                or payload.get('closure_tests') != validation.PLANS[family]
+                or any(payload.get(k) is not False for k in validation.AUTHORITY_FALSE)
+                or type(payload.get('provider_calls')) is not int or payload['provider_calls'] != 0
+                or type(payload.get('orders')) is not int or payload['orders'] != 0
+                or run.is_symlink() or run.resolve().parent != (Path(data)/'report/postclose_generation_validation/runs').resolve()
+                or set(evidence) != {'tests.log', 'tests.xml', 'network.json'}):
+            raise ValueError('successor_late_fixture_unbound')
+        raw = {name: validation.file_bytes(run/name) for name in evidence}
+        if (any(hashlib.sha256(raw[name]).hexdigest() != sha for name,sha in evidence.items())
+                or json.loads(raw['network.json']) != {'blocked_attempts': 0}
+                or type(payload.get('passed_tests')) is not int
+                or validation.junit_counts(run/'tests.xml', family, raw=raw['tests.xml']) != payload['passed_tests']):
+            raise ValueError('successor_late_fixture_evidence_invalid')
     return dict(path=str(path), sha256=sha)
 
 
@@ -387,7 +412,8 @@ def current_fixture_observation(observed, data):
                 or report_sha != observed.get('report_sha256') or contract['code_sha256'] != pair[0]
                 or fixture['code_sha256'] != pair[1]):
             raise ValueError('successor_historical_contract_changed')
-        historical_fixture = _historical_fixture(contract, data, family)
+        late_report = ((path, report_sha) if actual_pair == REVIEWED_HISTORICAL_RESOLUTION_SUCCESSORS.get(family) else None)
+        historical_fixture = _historical_fixture(contract, data, family, late_report=late_report)
         if (integrated_match or readonly_match or cleanup_match or custody_match or reader_match or frozen_match) and historical_fixture is None:
             raise ValueError('successor_integrated_historical_fixture_required')
         current = generation.native(native, family=family, day=observed['source_date'], data_root=data,

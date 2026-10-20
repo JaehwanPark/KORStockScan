@@ -478,9 +478,9 @@ def test_latest_capability_pair_is_current_and_keeps_original_source(family):
         assert current == generation.code_generation(family)
         return
     if family == 'holding_vote':
-        # The regenerated 10/20 native report already uses this exact code.
-        # Its absent fixture uses the same-code reader, not an old report pair.
-        assert generation.code_generation(family) == '48b92485c831e215a1d7fe1ef8664113d68186e040a768087cbcb18ab0892ac3'
+        old, current = handoff.REVIEWED_HISTORICAL_RESOLUTION_SUCCESSORS[family]
+        assert old == '48b92485c831e215a1d7fe1ef8664113d68186e040a768087cbcb18ab0892ac3'
+        assert current == generation.code_generation(family)
         assert handoff.REVIEWED_DELAY_CLEANUP_SUCCESSORS[family][1] == 'b447ff4c7e39ed9f1d1884c3d032b567225d51b92d121c91e24c280c9e84c72b'
         return
     assert family == 'rising_missed'
@@ -504,3 +504,32 @@ def test_native_fixture_relative_reference_binds_data_owner_not_launcher_cwd(tmp
     else:
         result=generation.inspect(contract,family='auxiliary',day=DAY,payload=payload,data_root=data)
         assert result['status']=='verified'
+
+
+@pytest.mark.parametrize('damage', [None, 'report', 'missing', 'network', 'plan', 'count', 'wrong_pair'])
+def test_exact_successor_accepts_late_original_fixture_only_with_native_report_binding(tmp_path, monkeypatch, damage):
+    from src.engine.monitoring import policy_generation_code_handoff as handoff
+    data=tmp_path/'data';family='holding_vote'
+    _,report,run,current_path,current,seal=_fixture(data,family)
+    payload=json.loads(report.read_bytes());contract=payload['holding_path_vote_replay']['policy_generation']
+    old='a'*64;new=contract['code_sha256']
+    contract.update(code_sha256=old,fixture_receipt=None,
+        retry_key=generation.digest([family,contract['source_generation'],old,contract['source_state']]))
+    contract['contract_sha256']=generation.digest({k:v for k,v in contract.items() if k!='contract_sha256'})
+    report.write_text(json.dumps(payload));before=report.read_bytes()
+    prior=dict(current,code_sha256=old,protected_artifact_sha256={str(report):validation.file_sha(report)})
+    if damage=='report':prior['protected_artifact_sha256'][str(report)]='b'*64
+    if damage=='plan':prior['validation_plan']={}
+    if damage=='count':prior['passed_tests']=True
+    if damage=='network':
+        (run/'network.json').write_text('{"blocked_attempts":1}')
+        prior['evidence']={**prior['evidence'],'network.json':validation.file_sha(run/'network.json')}
+    prior['receipt_sha256']=generation.digest({k:v for k,v in prior.items() if k!='receipt_sha256'})
+    path=data/'report/postclose_generation_validation'/(family+'_'+old+'.json')
+    if damage!='missing':path.write_text(json.dumps(prior))
+    monkeypatch.setattr(handoff,'REVIEWED_HISTORICAL_RESOLUTION_SUCCESSORS',
+        {family: ('c'*64 if damage=='wrong_pair' else old,new)})
+    observed=generation.observations(tmp_path,DAY,data_root=data)[0]
+    result=handoff.current_fixture_observation(observed,data)
+    assert result['status']==('verified' if damage is None else 'unverified'),result
+    assert report.read_bytes()==before and contract['fixture_receipt'] is None
