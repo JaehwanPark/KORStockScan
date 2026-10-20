@@ -3904,6 +3904,122 @@ def test_exact_quiet_window_warns_without_pass_recovery_or_erasing_source_gaps(t
     assert list(iter_daemon_alert_events([result],state,target_date='2026-10-14'))==[]
     assert 'artifact_freshness' in state
 
+
+def _market_closed_quiet_observer_fixture(tmp_path, monkeypatch):
+    from src.tests.test_submission_bottleneck_monitor import _observation_health_fixture
+    from src.trading.market import session_contract
+    def payload():
+        original = _observation_health_fixture()
+        delta = datetime.fromisoformat('2026-10-14T19:59:00+09:00') - datetime.fromisoformat(original['as_of'])
+        def shift(value):
+            if isinstance(value, dict): return {k: shift(v) for k, v in value.items()}
+            if isinstance(value, list): return [shift(v) for v in value]
+            if isinstance(value, str) and 'T' in value:
+                try: return (datetime.fromisoformat(value) + delta).isoformat()
+                except ValueError: pass
+            return value
+        report = shift(original)
+        context = session_contract.resolve_market_session(datetime.fromisoformat(report['as_of']))
+        report['source_gap_semantics']['fixed_watch_waits'].update(
+            native_session_regime=context.session_regime, native_entry_allowed_by_clock=context.entry_allowed_by_clock)
+        return report
+    fixture = _quiet_current_observer_fixture(tmp_path, monkeypatch, payload_factory=payload)
+    mod, root, _, path, report, _, selection, _ = fixture
+    now = datetime.fromisoformat('2026-10-14T20:10:27+09:00')
+    heartbeat = root/'tmp/error_detector_heartbeat.json'
+    heartbeat.parent.mkdir(parents=True, exist_ok=True)
+    heartbeat.write_text(json.dumps(dict(main_loop=dict(pid=selection['actual_pid_receipt']['pid'], last_beat=now.isoformat()),
+        threads=dict(sniper_engine=dict(alive=False, last_beat='2026-10-14T20:00:00+09:00',
+            terminal_reason='market_close', unresolved_scalping_count=0, unresolved_scalping_codes='')))))
+    _isolate_submission_artifact_check(mod, root, now, monkeypatch)
+    return fixture, heartbeat, now
+
+
+@pytest.mark.parametrize('damage', ['none', 'missing_terminal', 'alive', 'reason', 'unresolved', 'missing_custody',
+    'terminal_date', 'terminal_future', 'terminal_before_close', 'heartbeat_pid', 'heartbeat_stale',
+    'old_report', 'old_body_fresh_file', 'future_completion', 'changed_generation', 'failed_execution',
+    'source_gap', 'projection', 'live_identity'])
+def test_closed_market_keeps_only_exact_quiet_observation_as_unverified_warning(tmp_path, monkeypatch, damage):
+    fixture, heartbeat, now = _market_closed_quiet_observer_fixture(tmp_path, monkeypatch)
+    mod, root, _, path, report, selector, selection, seal = fixture
+    state = json.loads(heartbeat.read_text()); terminal = state['threads']['sniper_engine']
+    if damage == 'alive': terminal['alive'] = True
+    elif damage == 'reason': terminal['terminal_reason'] = 'market_close_unresolved_scalping_positions'
+    elif damage == 'unresolved': terminal['unresolved_scalping_count'] = 1
+    elif damage == 'missing_custody': terminal.pop('unresolved_scalping_count')
+    elif damage == 'terminal_date': terminal['last_beat'] = '2026-10-13T20:00:00+09:00'
+    elif damage == 'terminal_future': terminal['last_beat'] = '2026-10-14T20:11:00+09:00'
+    elif damage == 'terminal_before_close': terminal['last_beat'] = '2026-10-14T19:59:30+09:00'
+    elif damage == 'heartbeat_pid': state['main_loop']['pid'] += 1
+    elif damage == 'heartbeat_stale': state['main_loop']['last_beat'] = '2026-10-14T19:00:00+09:00'
+    elif damage == 'old_report': os.utime(path, (now.replace(hour=19, minute=49).timestamp(),)*2)
+    elif damage == 'old_body_fresh_file':
+        report['as_of'] = '2026-10-14T19:49:00+09:00'; seal()
+        os.utime(path, (now.timestamp()-10,)*2)
+    elif damage == 'future_completion':
+        from src.engine.monitoring import submission_bottleneck_monitor as monitor
+        report['observer_generation']['completed_at'] = '2026-10-14T20:11:00+09:00'
+        report['observer_generation']['sha256'] = monitor._observer_seal(report['observer_generation'])
+        path.write_text(json.dumps(report))
+    elif damage == 'changed_generation': selector.write_text(json.dumps({**selection, 'actual_pid_consumed':False}))
+    elif damage == 'failed_execution': report['execution_status'] = 'failed'; seal()
+    elif damage == 'source_gap': report['source_gap_semantics']['issues'] = {'new_current_loss':1}; seal()
+    elif damage == 'projection': report['observation_health']['reason'] = 'forged'; path.write_text(json.dumps(report))
+    elif damage == 'live_identity': monkeypatch.setattr(mod, '_observer_live_identity', lambda pid: dict(pid=pid, start_ticks='999'))
+    heartbeat.write_text(json.dumps(state))
+    if damage == 'missing_terminal': heartbeat.unlink()
+    before = path.read_bytes()
+    outcome = mod.ArtifactFreshnessDetector(dry_run=True).check()
+    assert path.read_bytes() == before
+    assert outcome.details.get('submission_bottleneck_monitor_current_observation_verified') is not True
+    if damage != 'none':
+        assert outcome.severity == 'fail'
+        return
+    assert outcome.severity == 'warning'
+    assert outcome.details['submission_bottleneck_monitor_status'] == 'closed_window_observation_only'
+    dimensions = outcome.details['submission_bottleneck_monitor_observation_dimensions']
+    assert dimensions['freshness']['status'] == 'stale'
+    assert dimensions['closed_window']['status'] == 'native_market_close_observed'
+    assert dimensions['closed_window']['current_observation_verified'] is False
+    assert outcome.details['submission_bottleneck_monitor_observation_health']['full_coverage_proven'] is False
+    assert report['entry_execution_tuning_semantics']['entry_split']['primary_operating_ev_pct'] is None
+    from src.engine.error_detector import iter_daemon_alert_events
+    from src.engine.error_detectors.base import DetectionResult
+    state={}
+    prior=DetectionResult(detector_id='artifact_freshness',category='artifact',severity='fail',summary='prior genuine failure')
+    assert len(list(iter_daemon_alert_events([prior],state,target_date='2026-10-14')))==1
+    assert list(iter_daemon_alert_events([outcome],state,target_date='2026-10-14'))==[]
+    assert 'artifact_freshness' in state
+
+
+def test_closed_observation_rechecks_native_terminal_after_actor_verification(tmp_path, monkeypatch):
+    fixture, heartbeat, now = _market_closed_quiet_observer_fixture(tmp_path, monkeypatch)
+    mod, _, _, _, _, _, selection, _ = fixture
+    def identity(pid):
+        state = json.loads(heartbeat.read_text())
+        state['threads']['sniper_engine']['alive'] = True
+        heartbeat.write_text(json.dumps(state))
+        return dict(pid=pid, start_ticks='123', cwd=selection['actual_pid_receipt']['process_cwd'])
+    monkeypatch.setattr(mod, '_observer_live_identity', identity)
+    result = mod.ArtifactFreshnessDetector(dry_run=True).check()
+    assert result.severity == 'fail'
+    attempts = result.details['submission_bottleneck_monitor_publication_recheck']['attempts']
+    assert attempts[0]['stable'] is False
+    assert result.details['submission_bottleneck_monitor_status'] == 'fail'
+
+
+def test_live_heartbeat_progress_does_not_invalidate_observer_publication(tmp_path, monkeypatch):
+    mod, root, _, path, _, _, _, _ = _quiet_current_observer_fixture(tmp_path, monkeypatch)
+    heartbeat = root/'tmp/error_detector_heartbeat.json'
+    heartbeat.parent.mkdir(parents=True, exist_ok=True)
+    def put(second):
+        heartbeat.write_text(json.dumps(dict(main_loop=dict(pid=42, last_beat=f'15:36:{second}'),
+            threads=dict(sniper_engine=dict(alive=True, last_beat=f'15:36:{second}')))))
+    put(10)
+    before = mod._submission_observer_input_identity(path, root)
+    put(11)
+    assert mod._submission_observer_input_identity(path, root) == before
+
 @pytest.mark.parametrize('damage',[None,'missing_current','stale_current','wrong_pid','nontrading'])
 def test_closed_source_final_detector_uses_current_pid_observer_without_historical_fallback(tmp_path,monkeypatch,damage):
     mod,root,now,path,report,sp,selection,seal=_quiet_current_observer_fixture(tmp_path,monkeypatch)

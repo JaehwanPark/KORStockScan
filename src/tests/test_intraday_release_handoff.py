@@ -1792,12 +1792,13 @@ def test_source_reader_handoff_preserves_issued_policy_and_exact_dependencies(tm
         names.update(variant['dependencies'])
     names.update(handoff.REVIEWED_SOURCE_READER_HASHES)
     if generation!='source_reader':names.update(handoff.REVIEWED_SOURCE_INTEGRATION_HASHES)
-    if generation in ('original_gap','incident_order','product_intake','sqlite_lifecycle','retired_review','clean_sqlite','delay_cleanup','role_latency','startup_budget','delay_shutdown','routed_reuse','source_epoch'):names.update(handoff.REVIEWED_ORIGINAL_GAP_HASHES)
-    if generation in ('product_intake','sqlite_lifecycle','retired_review','clean_sqlite','delay_cleanup','role_latency','startup_budget','delay_shutdown','routed_reuse','source_epoch'):names.update(handoff.REVIEWED_PRODUCT_INTAKE_HASHES)
+    if generation in ('original_gap','incident_order','product_intake','sqlite_lifecycle','retired_review','clean_sqlite','delay_cleanup','role_latency','startup_budget','delay_shutdown','routed_reuse','source_epoch','closed_observer'):names.update(handoff.REVIEWED_ORIGINAL_GAP_HASHES)
+    if generation in ('product_intake','sqlite_lifecycle','retired_review','clean_sqlite','delay_cleanup','role_latency','startup_budget','delay_shutdown','routed_reuse','source_epoch','closed_observer'):names.update(handoff.REVIEWED_PRODUCT_INTAKE_HASHES)
     if generation in ('sqlite_lifecycle','clean_sqlite'):names.update(handoff.REVIEWED_SQLITE_LIFECYCLE_HASHES)
-    if generation in ('retired_review','clean_sqlite','delay_cleanup','role_latency','startup_budget','delay_shutdown','routed_reuse','source_epoch'):names.update(handoff.REVIEWED_RETIRED_REVIEW_HASHES)
-    if generation in ('delay_cleanup','role_latency','startup_budget','delay_shutdown','routed_reuse','source_epoch'):
-        for variant in (handoff.REVIEWED_SOURCE_EPOCH_DEPENDENCY_VARIANTS if generation=='source_epoch' else
+    if generation in ('retired_review','clean_sqlite','delay_cleanup','role_latency','startup_budget','delay_shutdown','routed_reuse','source_epoch','closed_observer'):names.update(handoff.REVIEWED_RETIRED_REVIEW_HASHES)
+    if generation in ('delay_cleanup','role_latency','startup_budget','delay_shutdown','routed_reuse','source_epoch','closed_observer'):
+        for variant in (handoff.REVIEWED_CLOSED_OBSERVER_DEPENDENCY_VARIANTS if generation=='closed_observer' else
+                handoff.REVIEWED_SOURCE_EPOCH_DEPENDENCY_VARIANTS if generation=='source_epoch' else
                 handoff.REVIEWED_ROUTED_REUSE_DEPENDENCY_VARIANTS if generation=='routed_reuse' else
                 handoff.REVIEWED_DELAY_SHUTDOWN_DEPENDENCY_VARIANTS if generation=='delay_shutdown' else
                 handoff.REVIEWED_STARTUP_BUDGET_DEPENDENCY_VARIANTS if generation=='startup_budget' else
@@ -1807,10 +1808,10 @@ def test_source_reader_handoff_preserves_issued_policy_and_exact_dependencies(tm
     names.add('src/engine/automation/intraday_release_handoff.py')
     for name in names:
         path = root/name; path.parent.mkdir(parents=True,exist_ok=True)
-        path.write_bytes((canonical/name).read_bytes() if generation=='source_epoch' or
+        path.write_bytes((canonical/name).read_bytes() if generation=='closed_observer' or
             name=='src/engine/automation/intraday_release_handoff.py' else subprocess.check_output(
                 ['git','-C',str(canonical),'show',
-                 ({'routed_reuse':'68213dd10','delay_shutdown':'49ef280dc','startup_budget':'105f6f031','role_latency':'6e037d078','source_reader':'0255cb05f','incident_order':'041caf05e','product_intake':'21d822a64',
+                 ({'source_epoch':'88351a078','routed_reuse':'68213dd10','delay_shutdown':'49ef280dc','startup_budget':'105f6f031','role_latency':'6e037d078','source_reader':'0255cb05f','incident_order':'041caf05e','product_intake':'21d822a64',
                    'sqlite_lifecycle':'c550a4c43','retired_review':'3d8abd012','clean_sqlite':'0ce816f7c','delay_cleanup':'661260e5f'}.get(generation,'99c51c85f'))
                  +':'+os.path.normpath(name)]))
     original = {key: hashlib.sha256(subprocess.check_output(
@@ -1883,3 +1884,14 @@ def test_routed_reuse_handoff_binds_reader_and_shutdown_generation(tmp_path, fam
 def test_source_epoch_handoff_requires_exact_deployment_owner(tmp_path, family, fault):
     test_source_reader_handoff_preserves_issued_policy_and_exact_dependencies(
         tmp_path, family, fault, 'src/engine/automation/ordered_intraday_deploy.py', 'source_epoch')
+
+
+@pytest.mark.parametrize('family', ['main_stop', 'holding_vote', 'pre_submit_delay'])
+@pytest.mark.parametrize('source,fault', [(source, fault)
+    for source in ('src/engine/error_detectors/artifact_freshness.py',
+                   'src/engine/automation/ordered_intraday_deploy.py')
+    for fault in (None, 'missing', 'dirty', 'committed_change', 'parent_mix')
+    if source.endswith('ordered_intraday_deploy.py') or fault != 'parent_mix'])
+def test_closed_observer_handoff_requires_exact_reader_and_source_epoch(tmp_path, family, source, fault):
+    test_source_reader_handoff_preserves_issued_policy_and_exact_dependencies(
+        tmp_path, family, fault, source, 'closed_observer')

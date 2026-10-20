@@ -123,6 +123,13 @@ def _submission_observer_input_identity(path, root):
         except OSError as exc:
             identity = (type(exc).__name__, exc.errno)
         result[name] = dict(path=str(candidate), signature=identity)
+    try:
+        heartbeat, _ = _observer_small_object(Path(root)/'tmp/error_detector_heartbeat.json')
+        terminal = (heartbeat.get('threads') or {}).get('sniper_engine') or {}
+        result['engine_terminal'] = dict(pid=(heartbeat.get('main_loop') or {}).get('pid'),
+            terminal=terminal if terminal.get('alive') is False else None)
+    except (OSError, ValueError, TypeError, AttributeError) as exc:
+        result['engine_terminal'] = dict(unavailable=type(exc).__name__)
     return result
 
 
@@ -3517,6 +3524,39 @@ def _postclose_main_absent():
         return False
 
 
+def _submission_observer_closed_window(payload, root, now, signature, *, window_end, max_staleness_sec):
+    """Retain a close-time observation; never turn it into current/full coverage."""
+    try:
+        from src.engine.error_detectors.process_health import _is_expected_thread_terminal
+        if now.tzinfo is None: now = now.replace(tzinfo=ZoneInfo('Asia/Seoul'))
+        now = now.astimezone(ZoneInfo('Asia/Seoul'))
+        close = now.replace(hour=window_end[0], minute=window_end[1], second=0, microsecond=0)
+        generation = payload.get('observer_generation') or {}
+        receipt = generation.get('selector_reported_pid_receipt') or {}
+        state, _ = _observer_small_object(Path(root)/'tmp/error_detector_heartbeat.json')
+        main = state.get('main_loop') or {}
+        terminal = (state.get('threads') or {}).get('sniper_engine') or {}
+        beat, ended = _observer_clock(main.get('last_beat')), _observer_clock(terminal.get('last_beat'))
+        started, completed = _observer_clock(payload.get('as_of')), _observer_clock(generation.get('completed_at'))
+        mtime = signature[7]/1_000_000_000
+        if (payload.get('date') != now.date().isoformat() or now < close
+                or type(receipt.get('pid')) is not int or main.get('pid') != receipt['pid']
+                or terminal.get('alive') is not False or type(terminal.get('unresolved_scalping_count')) is not int
+                or terminal['unresolved_scalping_count'] != 0 or terminal.get('unresolved_scalping_codes') != ''
+                or not _is_expected_thread_terminal('sniper_engine', terminal, now_ts=now.timestamp())
+                or any(at is None for at in (beat, ended, started, completed))
+                or not close <= ended <= beat <= now or not 0 <= (now-beat).total_seconds() <= max_staleness_sec
+                or not 0 <= (ended-completed).total_seconds() <= (ended-started).total_seconds() <= max_staleness_sec
+                or not 0 <= ended.timestamp()-mtime <= max_staleness_sec):
+            return None
+        return dict(status='native_market_close_observed', terminal_at=ended.isoformat(),
+            report_age_at_close_sec=ended.timestamp()-mtime, as_of_age_at_close_sec=(ended-started).total_seconds(),
+            assessment='retained_close_time_observation', current_observation_verified=False,
+            full_coverage_proven=False, runtime_effect=False, allowed_runtime_apply=False)
+    except (OSError, ValueError, TypeError, KeyError, AttributeError, IndexError):
+        return None
+
+
 def _closed_submission_observer_evidence(payload, root, source_day, current_day):
     """Attest a closed day's retained observation without claiming current coverage."""
     if (not source_day or source_day > current_day or payload.get('date') != source_day
@@ -3778,6 +3818,11 @@ class ArtifactFreshnessDetector(BaseDetector):
                             as_of_age_sec=body_age, completed_age_sec=completed_age,
                             max_staleness_sec=max_stale, clock='detector_wall_clock')
                         details[f'{aid}_observation_dimensions'] = dimensions
+                        if past_window_end:
+                            closed = _submission_observer_closed_window(observer_snapshot[0], PROJECT_ROOT,
+                                now_dt, observer_snapshot[2], window_end=we, max_staleness_sec=max_stale)
+                            if closed is not None:
+                                dimensions['closed_window'] = closed
                         json_error = ""
                     except (OSError, ValueError, TypeError) as exc:
                         json_error = str(exc)
@@ -3830,6 +3875,16 @@ class ArtifactFreshnessDetector(BaseDetector):
                     continue
                 if status_warning:
                     observation_health = details.get(f'{aid}_observation_health') or {}
+                    if (aid == observer_id and dimensions.get('closed_window')
+                            and observation_health.get('reason') == 'bounded_no_applicable_observations'
+                            and observation_health.get('status') == 'warning_pending'
+                            and observation_health.get('unmet_conditions') == []
+                            and details.get(f'{aid}_observation_health_projection_match') is True):
+                        details[f'{aid}_status'] = 'closed_window_observation_only'
+                        details[f'{aid}_current_observation_verified'] = False
+                        warnings.append(f'{aid}: native market close; bounded empty observation retained; '
+                            'partial validation and historical source gaps remain unverified')
+                        continue
                     if (aid == 'submission_bottleneck_monitor' and 0 <= age_sec <= max_stale
                             and observation_health.get('status') == 'warning_pending'
                             and details.get(f'{aid}_observation_health_projection_match') is True):
@@ -4376,14 +4431,15 @@ class ArtifactFreshnessDetector(BaseDetector):
                 return f'{aid}: observer execution incomplete or invalid'
             if payload.get('semantic_status') == 'partial':
                 # This pure projection never grants full validation. Recompute
-                # from the exact report; only the fresh/current caller may
-                # classify its narrowly proven empty observation as pending.
+                # from the exact report. A current report can retain its
+                # close-time empty observation only with the native terminal.
                 freshness = dimensions.get('freshness') or {}
-                if freshness.get('status') == 'fresh' and (freshness.get('body_clock') or {}).get('status') != 'fresh':
+                closed = bool(dimensions.get('closed_window'))
+                if not closed and freshness.get('status') == 'fresh' and (freshness.get('body_clock') or {}).get('status') != 'fresh':
                     return f'{aid}: observer_report_body_clock_not_current'
                 if (dimensions['generation'].get('current_generation_verified') is True
-                        and freshness.get('status') == 'fresh'
-                        and 0 <= freshness.get('age_sec', -1) <= freshness.get('max_staleness_sec', -1)):
+                        and (closed or freshness.get('status') == 'fresh'
+                        and 0 <= freshness.get('age_sec', -1) <= freshness.get('max_staleness_sec', -1))):
                     from src.engine.monitoring.submission_bottleneck_monitor import observation_health_projection
                     assessment = observation_health_projection(payload)
                     details[f'{aid}_observation_health'] = assessment

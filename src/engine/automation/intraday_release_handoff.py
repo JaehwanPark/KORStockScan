@@ -3124,6 +3124,30 @@ for (_trigger, _trigger_sha), _variant in REVIEWED_SOURCE_EPOCH_DEPENDENCY_VARIA
     REVIEWED_HOLDING_RESEARCH_DEPENDENCIES[_trigger][_trigger_sha] = _variant['dependencies']
 
 
+# Exact diagnostic close-time reader with the complete issued source epoch.
+REVIEWED_CLOSED_OBSERVER_HASHES = {
+    'src/engine/error_detectors/artifact_freshness.py': '7d75cb5f90844d42206b4e79714898442e15b7edc84649cb73fc97f7407e4376',
+}
+REVIEWED_CLOSED_OBSERVER_PAIRS = {
+    'src/engine/error_detectors/artifact_freshness.py': tuple((before,
+        REVIEWED_CLOSED_OBSERVER_HASHES['src/engine/error_detectors/artifact_freshness.py']) for before in (
+            'bc6c903c8a9ea08026103101bcefcaf8e18ea5a4e707408787bc26a15ebd150a',
+            '47897e387407c5d6472735463107d8e0ce7697aededa723c724973e4efc173a4')),
+}
+REVIEWED_CLOSED_OBSERVER_DEPENDENCY_VARIANTS = {
+    (trigger, REVIEWED_CLOSED_OBSERVER_HASHES.get(os.path.normpath(trigger), sha)): {**value,
+        'selector_path': 'src/engine/error_detectors/artifact_freshness.py',
+        'selector_sha256': REVIEWED_CLOSED_OBSERVER_HASHES['src/engine/error_detectors/artifact_freshness.py'],
+        'dependencies': {**{name: REVIEWED_CLOSED_OBSERVER_HASHES.get(os.path.normpath(name), digest)
+                           for name, digest in value['dependencies'].items()}, **REVIEWED_CLOSED_OBSERVER_HASHES},
+        'contract_extensions': {origin: {name: REVIEWED_CLOSED_OBSERVER_HASHES.get(os.path.normpath(name), digest)
+            for name, digest in paths.items()} for origin, paths in value['contract_extensions'].items()},
+    } for (trigger, sha), value in REVIEWED_SOURCE_EPOCH_DEPENDENCY_VARIANTS.items()
+}
+for (_trigger, _trigger_sha), _variant in REVIEWED_CLOSED_OBSERVER_DEPENDENCY_VARIANTS.items():
+    REVIEWED_HOLDING_RESEARCH_DEPENDENCIES[_trigger][_trigger_sha] = _variant['dependencies']
+
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -3187,6 +3211,9 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     source_epoch_present = any((root / name).is_file()
         and hashlib.sha256(candidate_bytes(name)).hexdigest() == sha
         for name, sha in REVIEWED_SOURCE_EPOCH_HASHES.items())
+    closed_observer_present = any((root / name).is_file()
+        and hashlib.sha256(candidate_bytes(name)).hexdigest() == sha
+        for name, sha in REVIEWED_CLOSED_OBSERVER_HASHES.items())
     contract_names = {repository_name(name) for name in paths.values()}
     for trigger, generations in REVIEWED_HOLDING_RESEARCH_DEPENDENCIES.items():
         if trigger not in contract_names:
@@ -3195,7 +3222,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         dependencies = generations.get(trigger_sha, {})
         # New exact selectors precede their historical parent. The first match
         # selects one complete generation, never per-file SHA alternatives.
-        for variants in (REVIEWED_SOURCE_EPOCH_DEPENDENCY_VARIANTS,
+        for variants in (REVIEWED_CLOSED_OBSERVER_DEPENDENCY_VARIANTS,
+                         REVIEWED_SOURCE_EPOCH_DEPENDENCY_VARIANTS,
                          REVIEWED_ROUTED_REUSE_DEPENDENCY_VARIANTS,
                          REVIEWED_DELAY_SHUTDOWN_DEPENDENCY_VARIANTS,
                          REVIEWED_STARTUP_BUDGET_DEPENDENCY_VARIANTS,
@@ -3298,6 +3326,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         if source_epoch_present:
             dependencies = {**dependencies, **REVIEWED_STARTUP_BUDGET_HASHES,
                 **REVIEWED_DELAY_SHUTDOWN_HASHES, **REVIEWED_ROUTED_REUSE_HASHES, **REVIEWED_SOURCE_EPOCH_HASHES}
+        if closed_observer_present:
+            dependencies = {**dependencies, **REVIEWED_CLOSED_OBSERVER_HASHES}
         dependencies_by_trigger[trigger] = (trigger_sha, dependencies)
     for key, name in paths.items():
         after = candidate_bytes(name)
@@ -3314,7 +3344,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         if before == after:
             continue
         pair = (hashlib.sha256(before).hexdigest(), hashlib.sha256(after).hexdigest())
-        if (pair in REVIEWED_SOURCE_EPOCH_PAIRS.get(repository_name(name), ())
+        if (pair in REVIEWED_CLOSED_OBSERVER_PAIRS.get(repository_name(name), ())
+                or pair in REVIEWED_SOURCE_EPOCH_PAIRS.get(repository_name(name), ())
                 or pair in REVIEWED_ROUTED_REUSE_PAIRS.get(repository_name(name), ())
                 or pair in REVIEWED_DELAY_SHUTDOWN_PAIRS.get(repository_name(name), ())
                 or pair in REVIEWED_STARTUP_BUDGET_PAIRS.get(repository_name(name), ())
