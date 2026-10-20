@@ -430,3 +430,5 @@ Combined diff versusa7c before this count record: {"agents": [40, 52], "docs": [
 - 통합 cccd0085a의 실제 P5/run2d922451은 intake에서 `startup_preserved_full_bootstrap_unbound`로 실패했다. 원본 final/실패 원천은 보존했고 Main PID4094188은 정지하지 않았다. 선택a7c native 전체 검증 자체는 PASS였으며 child 이전의 계약 결함이다.
 - 원 준비본 semantic hash a45fe9f1과 실제 장전 활성본4e2e42eb는 서로 다른 정상 세대다. native closure가 준비본 full 검증을 활성 hash로 조회한 것이 첫 파손 계약이다. 기존 두 owner에서 준비본 hash를 원 readiness에 결속하고 활성본은 consumed handoff의 별도 hash에 묶는다. 기존 구현 대체이며 새 모듈·경로·정책 변경은 없다. 같다고 요구하거나 어느 하나로 덮어쓰지 않는다.
 - 재생성된 source19 연구416c4c0a는20840 scope 전체 검증을45.38초에 완료했다. full hash21,942,769B, thread rchar770,828,808B, peak RSS174924KiB이며 의미 판정 재사용0이다. 준비·정책·strict/controller 원본은 보존했다.
+
+- 후속 실제 P5/run6c360700은 준비/활성 세대 구분을 통과했으나18,459B짜리 과거 gzip의 native hash 증명을 대용량 child 위임 목록에 포함해 intake가 실패했다. 기존 child의1MiB 하한은 유지하고 수집 owner에서 작은 증명을 제외하여 child가 원래 bounded native reader로 직접 읽게 한다. 실제 파일 변경·증명 오류는 없었으며 Main/원 정책은 불변이다. 원 final은 보존한다.

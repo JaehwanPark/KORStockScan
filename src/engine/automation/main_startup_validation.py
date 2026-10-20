@@ -215,6 +215,10 @@ if capture:
                 or session.binding.get('day') not in {source_date,sys.argv[-1]}):
             raise ValueError('startup_native_digest_session_owner_invalid')
         for name,entry in session.entries.items():
+            # Small native archive proofs remain ordinary bounded reads in
+            # the child; only the existing large-file delegation is captured.
+            if entry['identity'][4] < 1024 * 1024:
+                continue
             previous=closure['digest_entries'].get(name)
             if previous is not None and previous!=entry:
                 # A new observation of unchanged bytes can refresh created;

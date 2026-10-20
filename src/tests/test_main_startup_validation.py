@@ -872,7 +872,12 @@ def verify_bootstrap(day,write=True):return dict(status='pass',findings=[],targe
     H.verify(target_date,'d'*40)
     B.verify_bootstrap(target_date,write=False)
     with digest_owner.postclose_session(DATA_DIR,target_date):
-        digest_owner.reused_digest(DATA_DIR/'source.bin')''')
+        digest_owner.reused_digest(DATA_DIR/'source.bin')
+        small=DATA_DIR/'native-small.gz';small.write_bytes(b'native-small')
+        stat=small.stat()
+        digest_owner.ACTIVE.get().admit_native_generation(small,dict(path=small.name,size=stat.st_size,
+            sha256=__import__('hashlib').sha256(small.read_bytes()).hexdigest()),
+            [stat.st_dev,stat.st_ino,stat.st_size,stat.st_mtime_ns,stat.st_ctime_ns],proof_sha256='e'*64)''')
     if boundary == 'validate_rejected':
         bundle['reject'] = True
         (data/'bundle.json').write_text(json.dumps(bundle))
@@ -888,6 +893,7 @@ def verify_bootstrap(day,write=True):return dict(status='pass',findings=[],targe
     assert closure['bundles'][bundle['bundle_sha256']]['family_sha256']=='c'*64
     if boundary=='preserved':
         assert closure['manifests']=={}
+        assert str(data/'native-small.gz') not in closure['digest_entries']
         record=next(iter(closure['preserved_generations'].values()))
         assert record['full_bootstrap']['full_native_verification'] is True
         assert record['sources'][str(consumed)]==hashlib.sha256(consumed.read_bytes()).hexdigest()

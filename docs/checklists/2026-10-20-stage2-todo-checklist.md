@@ -237,3 +237,5 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
 - 원천 reader 변경으로 extractor 코드 세대가 바뀐09/30·10/15·10/16의 기존 normalized cache만 명시적 native predecessor로 재검증한다. 원문/과거 cache/정책/strict/controller를 보존하며 normal32MiB reader budget을 늘리거나 inline migration하지 않는다. native 연구/currentness, clean 후보 P512consumer·child종료·보호 원천 불변과 ordered 배포/PID는 아직 실제 영수증으로 닫아야 한다.
 
 - 10:55 실제 P5/run2d922451은 원 준비본a45fe9f1과 활성본4e2e42eb를 같은 hash로 요구한 intake 결함으로 실패했다. 원 실패를 보존하고 기존 closure owner에서 두 세대를 각자의 native 원본에 결속한다. source19 연구416c4c0a/20840scope의 전체 현재 검증은 완료했으며 새 P5·ordered 배포·PID 수용은 미완료다. Main4094188/start10221444는 유지했다.
+
+- P5/run6c360700의 추가 intake 실패는18,459B native gzip 증명과 기존1MiB delegation 하한의 불일치다. 작은 증명은 위임하지 않고 native child가 직접 읽도록 기존 수집 owner를 보완하며 원 실패/guard를 보존한다.

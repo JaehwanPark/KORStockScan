@@ -2788,7 +2788,7 @@ REVIEWED_SOURCE_READER_PAIRS = {'src/engine/error_detectors/artifact_freshness.p
 
 # Combined0255 source readers, frozen census and actual P5 preserved closure.
 # Select one complete reviewed generation before any incumbent drain.
-REVIEWED_SOURCE_INTEGRATION_HASHES = {**REVIEWED_FROZEN_INPUT_HASHES, **{'src/engine/automation/main_startup_validation.py': 'e1fc157bf6befa1be828111484bc868d9aad75c06eb2ee7edac982611a2eeeb0',
+REVIEWED_SOURCE_INTEGRATION_HASHES = {**REVIEWED_FROZEN_INPUT_HASHES, **{'src/engine/automation/main_startup_validation.py': '399ee38f0d22991d9761e5d301f8bc6af15b53fe2a8ba582cbc0435bd62daa67',
  'src/engine/infrastructure/startup_validation_code_context.py': 'c5df84bdf2ef6af0ab85d317aaafd4553064713871fe0c989a3f44659e01f2a2'}}
 REVIEWED_SOURCE_INTEGRATION_DEPENDENCY_VARIANTS = {
     key: {**value,
@@ -2802,9 +2802,9 @@ REVIEWED_SOURCE_INTEGRATION_DEPENDENCY_VARIANTS = {
     } for key, value in REVIEWED_SOURCE_READER_DEPENDENCY_VARIANTS.items()
 }
 REVIEWED_SOURCE_INTEGRATION_PAIRS = {'src/engine/automation/main_startup_validation.py': (('190855a642ca713fe53257eae2268eeb5786990c474f2b63904ace41b66c9661',
-                                                       'e1fc157bf6befa1be828111484bc868d9aad75c06eb2ee7edac982611a2eeeb0'),
+                                                       '399ee38f0d22991d9761e5d301f8bc6af15b53fe2a8ba582cbc0435bd62daa67'),
                                                       ('c39f9d5b8a68c297304c95b36a8ff7415fd413f3493e5584eb227adecc6ce84c',
-                                                       'e1fc157bf6befa1be828111484bc868d9aad75c06eb2ee7edac982611a2eeeb0')),
+                                                       '399ee38f0d22991d9761e5d301f8bc6af15b53fe2a8ba582cbc0435bd62daa67')),
  'src/engine/infrastructure/startup_validation_code_context.py': (('4d20ceaccb28ac3ab7e3521ded1603abb3587edb8b3ad828a5ae505d02da31c3',
                                                                    'c5df84bdf2ef6af0ab85d317aaafd4553064713871fe0c989a3f44659e01f2a2'),)}
 
