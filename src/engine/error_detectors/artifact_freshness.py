@@ -2493,15 +2493,14 @@ def _completed_semantic_source(root, now):
             day = path.stem[-10:]
             if day > as_of:
                 continue
-            result['artifact'] = str(path)
+            result.update(artifact=str(path), source_date=day)
             value, sha = _semantic_object(path, limit=4 * 1024 * 1024)
             if (value.get('date') != day or value.get('report_type') != 'postclose_done_controller'
                 or value.get('schema_version') != 2):
                 raise ValueError('completed_semantic_controller_date_invalid')
-            if value.get('status') not in {'done', 'failed', 'blocked'}:
-                continue
             result.update(status='receipt_selected', source_date=day,
-                          artifact=str(path), generation=sha)
+                          artifact=str(path), generation=sha,
+                          controller_status=value.get('status'))
             break
         index = root / 'data/runtime/policy_bootstrap/prepared' / target / 'latest.json'
         if index.exists() or index.is_symlink():
@@ -2555,8 +2554,14 @@ def _postclose_handoff_semantics(root, source_date, now):
         if controller_path.exists() or controller_path.is_symlink():
             controller, controller_sha = _semantic_object(controller_path)
             result["status"] = controller.get("status", "source_invalid")
-            if controller.get("status") in {"failed", "blocked"}:
+            state = controller.get('status')
+            if state in {"failed", "blocked", "blocked_predecessor_not_succeeded",
+                         "blocked_independent_producer", "blocked_direct_evidence_gap"}:
                 result["findings"].append("postclose_handoff_execution_failed")
+            elif state == 'summary_verified':
+                result.update(status='unobservable', reason='whole_native_chain_pending')
+            elif state != 'done':
+                result['findings'].append('postclose_handoff_contract_invalid')
             if controller.get("status") == "done":
                 errors = done_terminal_receipt_issues(controller_path, source_date, started_after_ns=0,
                                                      generation_only=True)

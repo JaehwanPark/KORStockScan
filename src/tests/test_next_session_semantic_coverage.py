@@ -77,6 +77,30 @@ def test_corrupt_latest_receipt_is_not_replaced_with_old_pass(tmp_path):
     assert result['status'] == 'source_invalid'
 
 
+@pytest.mark.parametrize('status', ['summary_verified', 'blocked_direct_evidence_gap',
+    'blocked_independent_producer', 'blocked_predecessor_not_succeeded', 'unknown', None])
+def test_latest_recovery_source_never_rolls_back_to_previous_done(tmp_path, monkeypatch, status):
+    folder = tmp_path / 'data/report/postclose_done_controller'
+    folder.mkdir(parents=True)
+    for day, state in [('2026-10-19', 'done'), ('2026-10-20', status)]:
+        (folder / f'postclose_done_controller_{day}.json').write_text(json.dumps(dict(
+            status=state, date=day, report_type='postclose_done_controller', schema_version=2)))
+    now = datetime.fromisoformat('2026-10-21T07:45:07+09:00')
+    selected = detector._completed_semantic_source(tmp_path, now)
+    assert selected['source_date'] == '2026-10-20'
+    monkeypatch.setattr(detector, '_semantic_stage_binding', lambda *args, **kwargs: dict(status='succeeded'))
+    from src.engine.automation import postclose_summary_handoff
+    monkeypatch.setattr(postclose_summary_handoff, 'stage_artifacts', lambda *args, **kwargs: {})
+    result = detector._postclose_handoff_semantics(tmp_path, selected['source_date'], now)
+    if status == 'summary_verified':
+        assert result['status'] == 'unobservable'
+        assert result['reason'] == 'whole_native_chain_pending'
+        assert result['findings'] == []
+    else:
+        assert result['status'] == 'source_invalid'
+        assert result['findings']
+
+
 
 
 
