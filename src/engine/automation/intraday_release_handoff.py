@@ -3363,6 +3363,11 @@ REVIEWED_LOGICAL_PIPELINE_PAIRS = {'src/engine/scalping/initial_quantity_monitor
                                                      '4567eed7de944395133eb6ebc975c823cf3840e6abe9424877455130feb55c87'),),
  'src/engine/scalping/initial_quantity_source_cache.py': (('77a7b57d5f752c760332fc6fd46a4fb121d4c0042ceb464a689fae1dc23c5704',
                                                            '353795e63675a34743f1bdf0823f684cbdcdd472cdf12790dc17896e1aa107db'),)}
+# Bind the direct prepared-bootstrap P5 repair in this unissued successor.
+REVIEWED_LOGICAL_PIPELINE_HASHES['src/engine/automation/main_startup_validation.py'] = 'b6bd145a6b7b1508a81667d35932dc802b3f1c4123df75ddf991738daea34d54'
+REVIEWED_LOGICAL_PIPELINE_PAIRS['src/engine/automation/main_startup_validation.py'] = tuple((old, 'b6bd145a6b7b1508a81667d35932dc802b3f1c4123df75ddf991738daea34d54') for old, _ in REVIEWED_POSTCLOSE_REPAIR_PAIRS['src/engine/automation/main_startup_validation.py']) + (('af3f290c4e0ff97216e7c2351c06b0314967d87c9cc0c54176b5850a94e65c5b', 'b6bd145a6b7b1508a81667d35932dc802b3f1c4123df75ddf991738daea34d54'),)
+REVIEWED_LOGICAL_PIPELINE_HASHES['src/engine/infrastructure/startup_validation_code_context.py'] = '8a5d817a90a9176ca5383fab0477583fe0d3d8ceef5e42c19010f4b4fea270bf'
+REVIEWED_LOGICAL_PIPELINE_PAIRS['src/engine/infrastructure/startup_validation_code_context.py'] = tuple((old, '8a5d817a90a9176ca5383fab0477583fe0d3d8ceef5e42c19010f4b4fea270bf') for old, _ in REVIEWED_POSTCLOSE_REPAIR_PAIRS['src/engine/infrastructure/startup_validation_code_context.py']) + (('01c1d63084444119e0de2589099f20e758758d3699d0ffb59a43a3f76e5fab8c', '8a5d817a90a9176ca5383fab0477583fe0d3d8ceef5e42c19010f4b4fea270bf'),)
 REVIEWED_LOGICAL_PIPELINE_DEPENDENCY_VARIANTS = {
     (trigger, REVIEWED_LOGICAL_PIPELINE_HASHES.get(os.path.normpath(trigger), sha)): {**value,
         'selector_path': 'src/engine/scalping/initial_quantity_policy.py',

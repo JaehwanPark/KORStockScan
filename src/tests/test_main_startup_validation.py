@@ -834,7 +834,7 @@ def test_parent_independently_rejects_malformed_or_unbound_child_semantics(defec
         validation._validate_child_result(child, CONSUMER_IDS, expected)
 
 
-@pytest.mark.parametrize("boundary", ["load", "validate", "validate_rejected", "preserved"])
+@pytest.mark.parametrize("boundary", ["load", "validate", "validate_rejected", "preserved", "prepared", "prepared_unbounded"])
 def test_native_cli_closure_is_collected_from_executed_native_boundaries(native_preparation_cli, boundary):
     code,data=native_preparation_cli
     package=code/'src/engine/scalping';package.mkdir();(package/'__init__.py').touch()
@@ -877,6 +877,34 @@ def validate_manifest(data_root,manifest,bundle,**kwargs):
     if boundary != 'load':
         calls = calls.replace('b=N.load(data_root=DATA_DIR,target_date=target_date)',
             'b=__import__("json").loads((DATA_DIR/"bundle.json").read_text()); N.validate(b,target_date=target_date)')
+    if boundary in {'prepared','prepared_unbounded'}:
+        prepared = data/'runtime/policy_bootstrap/prepared'/DAY/'generation'
+        prepared.mkdir(parents=True)
+        receipt = dict(status='prepared_verified', source_date='2026-10-16', target_date=DAY,
+            selected_release_commit='d'*40, manifest_content_sha256='c'*64,
+            activation_candidate=dict(bundle_sha256=bundle['bundle_sha256']), policy_receipts=[])
+        for name, digest in (('manifest_path','manifest_file_sha256'), ('env_path','env_sha256'),
+                ('verification_path','verification_sha256'), ('controller_path','controller_sha256'),
+                ('summary_path','summary_sha256')):
+            source=prepared/(name+'.json');source.write_text('{}')
+            receipt[name]=str(source);receipt[digest]=hashlib.sha256(source.read_bytes()).hexdigest()
+        receipt['manifest_path']=str(prepared/('runtime_policy_bootstrap_'+DAY+'.json'))
+        Path(receipt['manifest_path']).write_text(json.dumps(dict(manifest_sha256='c'*64)))
+        receipt['manifest_file_sha256']=hashlib.sha256(Path(receipt['manifest_path']).read_bytes()).hexdigest()
+        if boundary=='prepared_unbounded':
+            with Path(receipt['env_path']).open('wb') as handle:handle.truncate(64*1024*1024+1)
+            digest=hashlib.sha256()
+            for _ in range(64):digest.update(b'\0'*(1024*1024))
+            digest.update(b'\0');receipt['env_sha256']=digest.hexdigest()
+        (prepared/'readiness.json').write_text(json.dumps(receipt))
+        (code/'src/engine/automation/intraday_release_handoff.py').write_text('def verify(*a,**k): raise AssertionError("unissued intraday handoff")\n')
+        (code/'src/engine/automation/runtime_policy_bootstrap.py').write_text('''from pathlib import Path
+def manifest_path(day,output_dir=None):return Path(output_dir)/('runtime_policy_bootstrap_'+day+'.json')
+def verify_bootstrap(day,write=True,output_dir=None):return dict(status='pass',findings=[],target_date=day,manifest_sha256='c'*64)
+''')
+        calls=calls.replace('    A.validate_manifest(DATA_DIR,A.I.read('+repr(str(path))+'),b)',
+            "    from src.engine.automation import runtime_policy_bootstrap as B\n"
+            f"    B.verify_bootstrap(target_date,write=False,output_dir={str(prepared)!r})")
     if boundary=='preserved':
         # The incumbent predates invocation-wide reuse: its nested target-day
         # owner must be observed before it clears its actual native entries.
@@ -919,6 +947,10 @@ def verify_bootstrap(day,write=True):return dict(status='pass',findings=[],targe
         (data/'bundle.json').write_text(json.dumps(bundle))
     assert marker in text;cli.write_text(text.replace(marker,calls+marker,1))
     run_id='1'*32
+    if boundary=='prepared_unbounded':
+        with pytest.raises(ValueError,match='startup_native_preparation_failed'):
+            validation._native_preparation_check(code,DAY,'2026-10-16',run_id)
+        return
     if boundary == 'validate_rejected':
         with pytest.raises(ValueError, match='startup_native_preparation_failed'):
             validation._native_preparation_check(code,DAY,'2026-10-16',run_id)
@@ -927,6 +959,13 @@ def verify_bootstrap(day,write=True):return dict(status='pass',findings=[],targe
     closure=result['native_machine_closure']
     assert closure['run_id']==run_id
     assert closure['bundles'][bundle['bundle_sha256']]['family_sha256']=='c'*64
+    if boundary == 'prepared':
+        assert closure['manifests'] == {}
+        record=next(iter(closure['preserved_generations'].values()))
+        assert record['schema']=='startup_native_prepared_preopen_closure_v1'
+        assert record['full_bootstrap']['full_native_verification'] is True
+        assert record['prepared_receipt_path']==str(prepared/'readiness.json')
+        return
     if boundary=='preserved':
         assert closure['manifests']=={}
         assert str(data/'native-small.gz') not in closure['digest_entries']

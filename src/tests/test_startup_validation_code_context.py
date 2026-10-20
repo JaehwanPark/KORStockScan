@@ -1075,3 +1075,57 @@ assert admit_window(request['data_root'],request['target_date'])==0
 assert_no_forbidden_attempts()
 ''')
     assert (result.returncode==0) is (fault is None),result.stderr
+
+
+@pytest.mark.parametrize('fault', [None,'missing','scope','date','release','full','source',
+    'bootstrap','activation','source_date','native_pid','prepared_manifest','index','authority'])
+def test_isolated_prepared_native_closure_keeps_full_bootstrap_and_exact_sources(request_fixture,monkeypatch,fault):
+    f=request_fixture;main=_main_fixture(f,monkeypatch);proof=main['proof'];request=f['request']
+    data=Path(request['data_root']);commit=f['original_commit'];native=proof['native_verification']
+    closure=proof['closure'];closure['manifests']={};proof['historical_semantic_code_sources']={}
+    directory=data/'runtime/policy_bootstrap/prepared'/DAY/'original';directory.mkdir(parents=True)
+    prepared=directory/'readiness.json'
+    receipt=dict(schema='next_preopen_readiness_v1',status='prepared_verified',target_date=DAY,
+        source_date=native['source_date'],selected_release_commit=commit,runtime_effect=False,
+        actual_pid_consumed=False,manifest_content_sha256='b'*64,
+        activation_candidate=dict(bundle_sha256=proof['policy_sha256']),policy_receipts=[])
+    refs={}
+    for name,digest in (('manifest_path','manifest_file_sha256'),('env_path','env_sha256'),
+            ('verification_path','verification_sha256'),('controller_path','controller_sha256'),
+            ('summary_path','summary_sha256')):
+        source=directory/(name+'.json')
+        source.write_text(json.dumps(dict(manifest_sha256='b'*64,target_date=DAY,selected_release_sha=commit)))
+        receipt[name]=str(source);receipt[digest]=C._sha(source);refs[str(source)]=C._sha(source)
+    prepared.write_text(json.dumps(receipt));sha=C._sha(prepared);refs[str(prepared)]=sha
+    index=directory.parent/'latest.json'
+    index.write_text(json.dumps(dict(schema='next_preopen_readiness_index_v1',target_date=DAY,
+        receipt_path=str(prepared),receipt_sha256=sha)))
+    record=dict(schema='startup_native_prepared_preopen_closure_v1',target_date=DAY,
+        selected_release_commit=commit,prepared_receipt_path=str(prepared),sources=refs,
+        prepared_manifest_sha256='b'*64,full_bootstrap=dict(path=receipt['manifest_path'],
+            sha256=receipt['manifest_file_sha256'],write=False,full_native_verification=True,
+            result=dict(status='pass',findings=[],target_date=DAY,manifest_sha256='b'*64)))
+    closure['preserved_generations']={sha:record}
+    proof['source_hashes'].update(C._preserved_native_sources(proof));request['source_hashes'].update(proof['source_hashes'])
+    if fault=='missing':closure['preserved_generations']={}
+    elif fault=='scope':native['validation_scope']='intraday_preserved_historical_generation'
+    elif fault=='date':record['target_date']='2026-10-20'
+    elif fault=='release':record['selected_release_commit']='e'*40
+    elif fault=='full':record['full_bootstrap']=None
+    elif fault=='source':prepared.write_text('{}')
+    elif fault=='bootstrap':record['full_bootstrap']['result']['manifest_sha256']='e'*64
+    elif fault=='activation':proof['policy_sha256']='e'*64
+    elif fault=='source_date':native['source_date']='2026-10-15'
+    elif fault=='native_pid':closure['digest_binding']['pid']+=1
+    elif fault=='prepared_manifest':record['prepared_manifest_sha256']='e'*64
+    elif fault=='index':index.write_text('{}')
+    elif fault=='authority':record['full_bootstrap']['write']=True
+    _write_request(f,request)
+    result=_child(f,MAIN_CHILD_SETUP+'''
+proof=request['main_preparation_code_handoff']
+assert proof['closure']['manifests']=={}
+assert C.preparation_logical_sources()=={}
+assert C.validation_raw_vote_sources(request['data_root'],proof['native_verification']['source_date'])
+assert_no_forbidden_attempts()
+''')
+    assert (result.returncode==0) is (fault is None),result.stderr

@@ -261,18 +261,52 @@ if capture:
         original_bootstrap=B.verify_bootstrap
         original_handoff=H.verify
         bootstrap_checks={}
+        def prepared_sha(source):
+            source=Path(source);limit=64*1024*1024
+            if source.stat().st_size>limit:raise ValueError('startup_native_prepared_source_unbounded')
+            digest=hashlib.sha256();size=0
+            with source.open('rb') as handle:
+                for chunk in iter(lambda:handle.read(1024*1024),b''):
+                    size+=len(chunk)
+                    if size>limit:raise ValueError('startup_native_prepared_source_unbounded')
+                    digest.update(chunk)
+            return digest.hexdigest()
         def bootstrap(day,*args,**kwargs):
             result=original_bootstrap(day,*args,**kwargs)
             if (result.get('status')=='pass' and not result.get('findings')
                     and kwargs.get('write') is False and not kwargs.get('observer_reuse')):
                 path=B.manifest_path(day,output_dir=kwargs.get('output_dir'))
                 bootstrap_checks[result['manifest_sha256']]=dict(path=str(path.resolve()),
-                    sha256=hashlib.sha256(path.read_bytes()).hexdigest(),result=result,
+                    sha256=prepared_sha(path),result=result,
                     write=False,full_native_verification=True)
+                prepared=path.parent/'readiness.json'
+                base=Path(DATA_DIR).resolve()/'runtime/policy_bootstrap/prepared'/day
+                if day==sys.argv[-1] and prepared.is_file() and prepared.resolve().parent.parent==base:
+                    if prepared.stat().st_size>8*1024*1024:raise ValueError('startup_native_prepared_receipt_unbounded')
+                    with prepared.open('rb') as handle:raw=handle.read(8*1024*1024+1)
+                    if len(raw)>8*1024*1024:raise ValueError('startup_native_prepared_receipt_unbounded')
+                    receipt=json.loads(raw)
+                    refs={str(prepared.resolve()):hashlib.sha256(raw).hexdigest()}
+                    for name,digest in (('manifest_path','manifest_file_sha256'),('env_path','env_sha256'),
+                            ('verification_path','verification_sha256'),('controller_path','controller_sha256'),
+                            ('summary_path','summary_sha256')):
+                        source=Path(receipt[name]);actual=prepared_sha(source)
+                        if actual!=receipt[digest]:raise ValueError('startup_native_prepared_source_changed')
+                        refs[str(source)]=actual
+                    for source in receipt.get('policy_receipts',[]):
+                        if prepared_sha(source['path'])!=source['sha256']:
+                            raise ValueError('startup_native_prepared_policy_changed')
+                        refs[source['path']]=source['sha256']
+                    closure.setdefault('preserved_generations',{})[refs[str(prepared.resolve())]]=dict(
+                        schema='startup_native_prepared_preopen_closure_v1',target_date=day,
+                        selected_release_commit=receipt['selected_release_commit'],
+                        prepared_receipt_path=str(prepared.resolve()),sources=refs,
+                        prepared_manifest_sha256=receipt['manifest_content_sha256'],
+                        full_bootstrap=bootstrap_checks[result['manifest_sha256']])
             return result
         def handoff(day,commit,*args,**kwargs):
             result=original_handoff(day,commit,*args,**kwargs)
-            if result.get('status')=='pass' and not result.get('findings'):
+            if day==sys.argv[-1] and result.get('status')=='pass' and not result.get('findings'):
                 path,consumed=H._paths(day,commit)
                 if consumed.is_file():
                     refs={**result['handoff']['frozen_files'],str(path):H._sha(path),str(consumed):H._sha(consumed)}

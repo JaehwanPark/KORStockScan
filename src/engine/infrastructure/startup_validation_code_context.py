@@ -59,6 +59,7 @@ MAIN_PROOF_SCHEMA = 'startup_main_preparation_code_handoff_v1'
 # Preserve both the issued preparation and its reviewed same-day stopped carry.
 # Evidence: docs/audits/preopen-alert-repair-2026-10-19.md.
 REVIEWED_PREPARATION_HISTORY = {
+    'src/engine/scalping/reversal_code_handoff.py': {('6c5b8f3013e055ef54774c1e89be66fda93988aa5792e775bb82bac86636cbf0', '16776a22b99bff4054ba99914cd8f7c96e87f6ca9fb1ac041e6a8191723b929d')},
     #0255 source-reader successor: identical cumulative selection over a
     # one-symbol-at-a-time frozen source; require the exact reviewed bytes.
     'src/engine/scalping/reversal_cumulative_postclose.py': {
@@ -572,7 +573,7 @@ def _native_main_basis(native):
 
 
 def _preserved_native_sources(proof):
-    """Same-invocation consumed handoff plus full native bootstrap, not a PASS cache.
+    """Same-invocation full bootstrap with prepared or consumed source custody.
 
     Intraday Main can preserve a prepared policy without publishing an auxiliary
     transition manifest. That path must supply its own nonempty native closure;
@@ -582,6 +583,52 @@ def _preserved_native_sources(proof):
     records=closure.get('preserved_generations')
     if not records:
         return {}
+    if native.get('validation_scope')=='current_full_contract':
+        if not isinstance(records,dict) or len(records)!=1:
+            raise ValueError('startup_prepared_native_scope_invalid')
+        data=Path(proof['policy_path']).parents[3];day=proof['target_date']
+        index=data/'runtime/policy_bootstrap/prepared'/day/'latest.json'
+        view=_json(index);prepared=Path(view['receipt_path']);sha=_sha(prepared)
+        record=records.get(sha);value=_json(prepared)
+        if (prepared.resolve().parent.parent!=index.parent.resolve()
+                or view.get('schema')!='next_preopen_readiness_index_v1'
+                or view.get('target_date')!=day or view.get('receipt_sha256')!=sha
+                or not isinstance(record,dict)
+                or record.get('schema')!='startup_native_prepared_preopen_closure_v1'
+                or record.get('prepared_receipt_path')!=str(prepared)
+                or record.get('target_date')!=day or value.get('target_date')!=day
+                or value.get('schema')!='next_preopen_readiness_v1'
+                or value.get('status')!='prepared_verified'
+                or value.get('runtime_effect') is not False or value.get('actual_pid_consumed') is not False
+                or value.get('source_date')!=native.get('source_date')
+                or value.get('selected_release_commit')!=proof['selected_release_commit']
+                or record.get('selected_release_commit')!=proof['selected_release_commit']
+                or (value.get('activation_candidate') or {}).get('bundle_sha256')!=proof['policy_sha256']):
+            raise ValueError('startup_prepared_native_identity_invalid')
+        refs={str(prepared):sha}
+        for name,digest in (('manifest_path','manifest_file_sha256'),('env_path','env_sha256'),
+                ('verification_path','verification_sha256'),('controller_path','controller_sha256'),
+                ('summary_path','summary_sha256')):
+            refs[value[name]]=value[digest]
+        for source in value.get('policy_receipts',[]):refs[source['path']]=source['sha256']
+        if refs!=record.get('sources'):
+            raise ValueError('startup_prepared_native_source_set_changed')
+        _check_sources(refs)
+        full=record.get('full_bootstrap') or {};checked=full.get('result') or {}
+        manifest=_json(Path(value['manifest_path']))
+        if (full.get('path')!=value['manifest_path'] or full.get('sha256')!=value['manifest_file_sha256']
+                or full.get('write') is not False or full.get('full_native_verification') is not True
+                or checked.get('status')!='pass' or checked.get('findings')
+                or checked.get('target_date')!=day
+                or not _hex(value.get('manifest_content_sha256'))
+                or checked.get('manifest_sha256')!=value['manifest_content_sha256']
+                or record.get('prepared_manifest_sha256')!=value['manifest_content_sha256']
+                or manifest.get('manifest_sha256')!=value['manifest_content_sha256']
+                or manifest.get('target_date')!=day
+                or manifest.get('selected_release_sha')!=proof['selected_release_commit']):
+            raise ValueError('startup_prepared_full_bootstrap_unbound')
+        refs[str(index)]=_sha(index)
+        return refs
     if (native.get('validation_scope')!='intraday_preserved_historical_generation'
             or _native_main_basis(native)!='same_invocation_selected_intraday_native_validation'
             or not isinstance(records,dict) or len(records)!=1):
