@@ -494,6 +494,45 @@ def read_joint_cases(timeout):
     return result
 
 
+def _issued_replay_representation(rebuilt, timeout, root):
+    """Compare issued gzip receipts through the native lossless custody proof.
+
+    Only the in-memory comparison uses the issued representation. Producers
+    keep canonical logical receipts; no report, timeout or source is rewritten.
+    """
+    from pathlib import Path
+    from src.engine.automation.main_trailing_source_store import _archive_generation, _archive_logical_authority, signature
+    from src.engine.scalping.initial_quantity_policy import _digest, _file_sha256
+    current=rebuilt['pipeline_source_receipts'];issued=timeout['pipeline_source_receipts']
+    if current==issued:return rebuilt
+    if not isinstance(issued,dict) or current.keys()!=issued.keys():return None
+    for day,receipt in current.items():
+        if receipt==issued[day]:continue
+        logical=root/'pipeline_events'/f'pipeline_events_{day}.jsonl'
+        physical=Path(str(logical)+'.gz')
+        authority=Path(str(physical)+'.archive_receipt.json')
+        if logical.exists() or logical.is_symlink() or physical.is_symlink():return None
+        checked=_archive_logical_authority(logical)
+        if checked is None:return None
+        # Enrollment has independently checked the complete logical SHA and
+        # gzip CRC. A report reader never performs an offline migration.
+        _archive_generation(root,logical)
+        proof,epoch=checked;info=physical.stat()
+        generation=dict(device=info.st_dev,inode=info.st_ino,size_bytes=info.st_size,
+                        mtime_ns=info.st_mtime_ns,ctime_ns=info.st_ctime_ns)
+        if (proof['archive_generation']!=generation or receipt.get('path')!=str(logical)
+                or receipt.get('sha256')!=proof['logical_content_sha256']
+                or receipt.get('size_bytes')!=proof['logical_size_bytes']
+                or receipt.get('archive_identity_valid') is not None):return None
+        expected={**receipt,'path':str(physical),'size_bytes':info.st_size,
+                  'sha256':_file_sha256(physical),'archive_identity_valid':True}
+        if (issued[day]!=expected or signature(physical.stat())!=signature(info)
+                or signature(authority.lstat())!=epoch):return None
+    comparable={**rebuilt,'pipeline_source_receipts':issued}
+    comparable['report_content_sha256']=_digest({k:v for k,v in comparable.items() if k!='report_content_sha256'})
+    return comparable
+
+
 def joint_evidence_valid(timeout, *, replay=None):
     from pathlib import Path
     from src.engine.scalping.initial_quantity_policy import build_initial_quantity_replay, _SHAPES, _CAP_MODES
@@ -507,8 +546,9 @@ def joint_evidence_valid(timeout, *, replay=None):
         shared={}
         rebuilt=build_initial_quantity_replay(timeout['source_date'],data_dir=root,fact_rows=timeout['census']['input_fact_rows'],
             entry_on_or_after=timeout['entry_on_or_after'],path_cache=shared,source_census=timeout['census'])
-        if (rebuilt['report_content_sha256']!=timeout['joint_replay_content_sha256'] or rebuilt['census']!=timeout['census']
-            or replay is not None and rebuilt!=replay):return False
+        comparable=_issued_replay_representation(rebuilt,timeout,root)
+        if (comparable is None or comparable['report_content_sha256']!=timeout['joint_replay_content_sha256']
+            or rebuilt['census']!=timeout['census'] or replay is not None and comparable!=replay):return False
         facts={str(f['recommendation_id']):f for f in rebuilt['census']['input_fact_rows']}
         rows={r['trade_id']:r for r in rebuilt['trades']};expected_ids=iter((tid,key) for tid in rows for key in grid);count=0
         from src.engine.scalping.initial_quantity_policy import _digest

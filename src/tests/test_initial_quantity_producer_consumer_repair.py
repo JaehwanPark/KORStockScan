@@ -185,8 +185,9 @@ def test_actual_cost_census_accepts_broker_cost_not_configured_rate(tmp_path):
     assert len(good)==1 and census['excluded']=={'actual_cost_identity_or_amount_invalid':1}
 
 
-@pytest.mark.parametrize('damage', [None, 'seal', 'physical', 'logical', 'ctime', 'authority', 'receipt_symlink'])
-def test_native_pipeline_gzip_preserves_issued_quantity_timeout_generation(tmp_path, monkeypatch, damage):
+@pytest.mark.parametrize('issued_physical', [False, True])
+@pytest.mark.parametrize('damage', [None, 'seal', 'physical', 'logical', 'ctime', 'authority', 'receipt_symlink', 'issued_sha', 'issued_size', 'issued_path', 'issued_cost'])
+def test_native_pipeline_gzip_preserves_issued_quantity_timeout_generation(tmp_path, monkeypatch, damage, issued_physical):
     import gzip
     from src.engine.scalping.initial_quantity_timeout_research import build_timeout_research, timeout_research_valid
     from src.engine.scalping.micro_reversion.economic_reference import content_sha256
@@ -201,11 +202,30 @@ def test_native_pipeline_gzip_preserves_issued_quantity_timeout_generation(tmp_p
     assert timeout_research_valid(timeout,replay=before)
     archived=Path(str(pipeline)+'.gz'); archived.write_bytes(gzip.compress(original)); pipeline.unlink()
     info=archived.stat()
+    if issued_physical:
+        # An issued legacy report can bind gzip bytes while its successor
+        # reader binds the native archiver's identical logical input.
+        before['pipeline_source_receipts'][day].update(path=str(archived),size_bytes=info.st_size,
+            sha256=hashlib.sha256(archived.read_bytes()).hexdigest(),archive_identity_valid=True)
+        if damage=='issued_sha':before['pipeline_source_receipts'][day]['sha256']='0'*64
+        if damage=='issued_size':before['pipeline_source_receipts'][day]['size_bytes']+=1
+        if damage=='issued_path':before['pipeline_source_receipts'][day]['path']=str(archived.with_name('other.gz'))
+        if damage=='issued_cost':before['census']['cost_rate']+=0.001
+        before['report_content_sha256']=policy._digest({k:v for k,v in before.items() if k!='report_content_sha256'})
+        timeout['pipeline_source_receipts']=copy.deepcopy(before['pipeline_source_receipts'])
+        timeout['joint_replay_content_sha256']=before['report_content_sha256']
+        timeout['report_content_sha256']=policy._digest({k:v for k,v in timeout.items() if k!='report_content_sha256'})
     receipt=dict(schema='pipeline_raw_archive_identity_v1',logical_path=str(pipeline),
         logical_content_sha256=hashlib.sha256(original).hexdigest(),logical_size_bytes=len(original),
         archive_generation=dict(device=info.st_dev,inode=info.st_ino,size_bytes=info.st_size,
                                 mtime_ns=info.st_mtime_ns,ctime_ns=info.st_ctime_ns),
         verification_contract='logical_sha256_size_crc_to_eof_v1',runtime_effect=False,allowed_runtime_apply=False)
+    if issued_physical:
+        from src.engine.automation.main_trailing_source_store import migrate_frozen_source
+        receipt['artifact_content_sha256']=content_sha256(receipt)
+        Path(str(archived)+'.archive_receipt.json').write_text(json.dumps(receipt))
+        migrate_frozen_source(tmp_path,pipeline)
+        del receipt['artifact_content_sha256']
     if damage=='logical':receipt['logical_content_sha256']='0'*64
     if damage=='ctime':receipt['archive_generation']['ctime_ns']+=1
     if damage=='authority':receipt['allowed_runtime_apply']=True
@@ -221,8 +241,8 @@ def test_native_pipeline_gzip_preserves_issued_quantity_timeout_generation(tmp_p
         assert not timeout_research_valid(timeout,replay=before)
         return
     after=policy.build_initial_quantity_replay(day,data_dir=tmp_path,fact_rows=before['census']['input_fact_rows'],entry_on_or_after='2026-09-29')
-    if damage is None:
-        assert after==before
+    if damage is None or not issued_physical and damage.startswith('issued_'):
+        if not issued_physical:assert after==before
         assert timeout_research_valid(timeout,replay=before)
     else:
         assert after!=before

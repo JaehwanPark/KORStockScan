@@ -3377,6 +3377,9 @@ REVIEWED_LOGICAL_PIPELINE_HASHES['src/engine/infrastructure/startup_validation_c
 REVIEWED_LOGICAL_PIPELINE_PAIRS['src/engine/infrastructure/startup_validation_code_context.py'] = tuple((old, '8a5d817a90a9176ca5383fab0477583fe0d3d8ceef5e42c19010f4b4fea270bf') for old, _ in REVIEWED_POSTCLOSE_REPAIR_PAIRS['src/engine/infrastructure/startup_validation_code_context.py']) + (('01c1d63084444119e0de2589099f20e758758d3699d0ffb59a43a3f76e5fab8c', '8a5d817a90a9176ca5383fab0477583fe0d3d8ceef5e42c19010f4b4fea270bf'),)
 # Exact actual selected source20 producer before the closed-reader repair.
 REVIEWED_LOGICAL_PIPELINE_PAIRS['src/engine/automation/main_stop_postclose.py'] = (('d20e955fdbc79529efd72d10957cf329acc0d0447c54f798ebfd59ecb87a978b', 'ad0eb4c9eea9b260fb63bed150ff8882671ae126500d005dc00af5f3361dd3ae'),)
+# Native legacy gzip comparison retains issued research bytes and economics.
+REVIEWED_LOGICAL_PIPELINE_HASHES['src/engine/scalping/initial_quantity_refresh_evaluation.py'] = '6b052913a8a88b6780257bbfef0de9bae5c961039608e1cfa1ed25ab0412053f'
+REVIEWED_LOGICAL_PIPELINE_PAIRS['src/engine/scalping/initial_quantity_refresh_evaluation.py'] = (('921bac7fcf49a127f1a9f7e1f15d3641b4d8eab39fb054c506e68219f5cc8f43', '6b052913a8a88b6780257bbfef0de9bae5c961039608e1cfa1ed25ab0412053f'),)
 REVIEWED_LOGICAL_PIPELINE_DEPENDENCY_VARIANTS = {
     (trigger, REVIEWED_LOGICAL_PIPELINE_HASHES.get(os.path.normpath(trigger), sha)): {**value,
         'selector_path': 'src/engine/scalping/initial_quantity_policy.py',
