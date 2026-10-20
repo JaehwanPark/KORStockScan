@@ -1660,3 +1660,23 @@ def test_scalping_session_venue_provenance_blocks_post_effective_transition():
     assert fields["effective_venue"] == "UNKNOWN"
     assert fields["market_session_bucket"] == "SESSION_TRANSITION"
     assert fields["market_data_route"] == "unknown"
+
+
+@pytest.mark.parametrize("setting", [
+    "OPENAI_SCALPING_ENTRY_MODEL", "OPENAI_HOLDING_SCORE_MODEL", "OPENAI_HOLDING_EXIT_VOTE_MODEL",
+    "OPENAI_HOLDING_FLOW_MODEL", "OPENAI_REALTIME_REPORT_MODEL", "OPENAI_SWING_ANALYSIS_MODEL",
+    "OPENAI_SCALPING_SHARED_MODEL", "OPENAI_WATCHING_SHADOW_MODEL", "OPENAI_GATEKEEPER_SHADOW_MODEL",
+])
+def test_role_model_environment_override_is_single_setting(monkeypatch, setting):
+    roles = ("OPENAI_SCALPING_ENTRY_MODEL", "OPENAI_HOLDING_SCORE_MODEL", "OPENAI_HOLDING_EXIT_VOTE_MODEL",
+             "OPENAI_HOLDING_FLOW_MODEL", "OPENAI_REALTIME_REPORT_MODEL", "OPENAI_SWING_ANALYSIS_MODEL",
+             "OPENAI_SCALPING_SHARED_MODEL", "OPENAI_WATCHING_SHADOW_MODEL", "OPENAI_GATEKEEPER_SHADOW_MODEL")
+    for name in roles:
+        monkeypatch.delenv("KORSTOCKSCAN_" + name, raising=False)
+    before = constants._build_trading_rules()
+    monkeypatch.setenv("KORSTOCKSCAN_" + setting, "only-this-role")
+    after = constants._build_trading_rules()
+    assert {name for name in roles if getattr(before, name) != getattr(after, name)} == {setting}
+    assert getattr(after, setting) == "only-this-role"
+    for removed in ("GPT_FAST_MODEL", "GPT_REPORT_MODEL", "GPT_DEEP_MODEL"):
+        assert not hasattr(after, removed)

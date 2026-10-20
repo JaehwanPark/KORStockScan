@@ -1792,21 +1792,21 @@ def test_source_reader_handoff_preserves_issued_policy_and_exact_dependencies(tm
         names.update(variant['dependencies'])
     names.update(handoff.REVIEWED_SOURCE_READER_HASHES)
     if generation!='source_reader':names.update(handoff.REVIEWED_SOURCE_INTEGRATION_HASHES)
-    if generation in ('original_gap','incident_order','product_intake','sqlite_lifecycle','retired_review','clean_sqlite','delay_cleanup'):names.update(handoff.REVIEWED_ORIGINAL_GAP_HASHES)
-    if generation in ('product_intake','sqlite_lifecycle','retired_review','clean_sqlite','delay_cleanup'):names.update(handoff.REVIEWED_PRODUCT_INTAKE_HASHES)
+    if generation in ('original_gap','incident_order','product_intake','sqlite_lifecycle','retired_review','clean_sqlite','delay_cleanup','role_latency'):names.update(handoff.REVIEWED_ORIGINAL_GAP_HASHES)
+    if generation in ('product_intake','sqlite_lifecycle','retired_review','clean_sqlite','delay_cleanup','role_latency'):names.update(handoff.REVIEWED_PRODUCT_INTAKE_HASHES)
     if generation in ('sqlite_lifecycle','clean_sqlite'):names.update(handoff.REVIEWED_SQLITE_LIFECYCLE_HASHES)
-    if generation in ('retired_review','clean_sqlite','delay_cleanup'):names.update(handoff.REVIEWED_RETIRED_REVIEW_HASHES)
-    if generation=='delay_cleanup':
-        for variant in handoff.REVIEWED_DELAY_CLEANUP_DEPENDENCY_VARIANTS.values():
+    if generation in ('retired_review','clean_sqlite','delay_cleanup','role_latency'):names.update(handoff.REVIEWED_RETIRED_REVIEW_HASHES)
+    if generation in ('delay_cleanup','role_latency'):
+        for variant in (handoff.REVIEWED_ROLE_LATENCY_DEPENDENCY_VARIANTS if generation=='role_latency' else handoff.REVIEWED_DELAY_CLEANUP_DEPENDENCY_VARIANTS).values():
             names.update(variant['dependencies'])
     names.add('src/engine/automation/intraday_release_handoff.py')
     for name in names:
         path = root/name; path.parent.mkdir(parents=True,exist_ok=True)
-        path.write_bytes((canonical/name).read_bytes() if generation=='delay_cleanup' or
+        path.write_bytes((canonical/name).read_bytes() if generation=='role_latency' or
             name=='src/engine/automation/intraday_release_handoff.py' else subprocess.check_output(
                 ['git','-C',str(canonical),'show',
                  ({'source_reader':'0255cb05f','incident_order':'041caf05e','product_intake':'21d822a64',
-                   'sqlite_lifecycle':'c550a4c43','retired_review':'3d8abd012','clean_sqlite':'0ce816f7c'}.get(generation,'99c51c85f'))
+                   'sqlite_lifecycle':'c550a4c43','retired_review':'3d8abd012','clean_sqlite':'0ce816f7c','delay_cleanup':'661260e5f'}.get(generation,'99c51c85f'))
                  +':'+os.path.normpath(name)]))
     original = {key: hashlib.sha256(subprocess.check_output(
         ['git','-C',str(root),'show',origin+':'+os.path.normpath(name)])).hexdigest()
@@ -1831,3 +1831,15 @@ def test_source_reader_handoff_preserves_issued_policy_and_exact_dependencies(tm
             handoff._verify_entry_code_delta(root,revision,origin,inventory,expected)
     else:
         handoff._verify_entry_code_delta(root,revision,origin,inventory,expected)
+
+
+@pytest.mark.parametrize('family', ['main_stop', 'holding_vote', 'pre_submit_delay'])
+@pytest.mark.parametrize('source', [
+    'src/engine/ai_engine_openai.py', 'src/engine/ai/hot_path_ai_dispatcher.py',
+    'src/engine/scalping/avg_down_replay_capture.py', 'src/utils/constants.py',
+    'src/engine/scalping/opening_rotation.py',
+])
+@pytest.mark.parametrize('fault', [None, 'missing', 'committed_change', 'parent_mix'])
+def test_role_latency_handoff_requires_complete_reviewed_group(tmp_path, family, source, fault):
+    test_source_reader_handoff_preserves_issued_policy_and_exact_dependencies(
+        tmp_path, family, fault, source, 'role_latency')

@@ -16131,24 +16131,7 @@ def run_sniper(is_test_mode=False):
     ]
     if runtime_role == "main" and openai_api_keys:
         try:
-            ai_engine = GPTSniperEngine(
-                api_keys=openai_api_keys, announce_startup=False
-            )
-            fast_model = str(
-                getattr(TRADING_RULES, "GPT_FAST_MODEL", "gpt-5-nano") or "gpt-5-nano"
-            )
-            deep_model = str(
-                getattr(TRADING_RULES, "GPT_DEEP_MODEL", fast_model) or fast_model
-            )
-            report_model = str(
-                getattr(TRADING_RULES, "GPT_REPORT_MODEL", fast_model) or fast_model
-            )
-            ai_engine.set_model_names(
-                fast_model=fast_model,
-                deep_model=deep_model,
-                report_model=report_model,
-                announce=True,
-            )
+            ai_engine = GPTSniperEngine(api_keys=openai_api_keys)
             AI_ENGINE = ai_engine
             # Explicit Main owner: other roles and offline engines never start it.
             try:

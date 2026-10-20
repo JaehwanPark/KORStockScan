@@ -2974,6 +2974,59 @@ REVIEWED_DELAY_CLEANUP_DEPENDENCY_VARIANTS = {
 for (_trigger, _trigger_sha), _variant in REVIEWED_DELAY_CLEANUP_DEPENDENCY_VARIANTS.items():
     REVIEWED_HOLDING_RESEARCH_DEPENDENCIES[_trigger][_trigger_sha] = _variant['dependencies']
 
+# Reviewed local completion latency and role-only model configuration. Preserve
+# every issued dependency generation; one exact group prevents mixed rollbacks.
+# Evidence: SubmissionMonitorSyncLineage1019, review section 2026-10-20.
+REVIEWED_ROLE_LATENCY_HASHES = {'src/engine/ai/hot_path_ai_dispatcher.py': 'a7688b6d206035d66cd61303868ed20f9da3f334997b3e64fc1e2c8c7634330b',
+ 'src/engine/ai_engine_openai.py': 'bdcf09bf1f19e4cb649c01105c7aa363b04bddcb8749793a8f701cc06cc8d185',
+ 'src/engine/infrastructure/snapshot_copy.py': '6e40a74825ad11fdc84afde95d5080549d9b284644108919aa35adee7fc10e41',
+ 'src/engine/kiwoom_sniper_v2.py': '44133e57f1c20521b80cfa5fa1e7dadb7c89b010ab461cce3959fd1ba6fd4997',
+ 'src/engine/lifecycle/avg_down_policy_replay.py': '26ec5374924617f9beef1bda42a7b2433c583abbae73407da360e4d866ed35cd',
+ 'src/engine/scalping/ai_decision_trace.py': 'dfbb14a03971bcfa1f8a0b4c1f3b712d45e7da7fa7259cac125db7f5bb8747a0',
+ 'src/engine/scalping/avg_down_replay_capture.py': 'fb26fb1d9a2d834d5a626fb81e6a7bf97ab88042386630f9b7ed2a0237b1c49a',
+ 'src/engine/scalping/entry_context_intraday_probe.py': 'd5594fc0d9384cec15441c81f83be03bfdbf7b38fdd6de9e2ed8f7a02eea0c6f',
+ 'src/engine/scalping/opening_rotation.py': '405246b7429792a1a7bb1dc9fd12e35f2c1a9211de65208ecae4ac6f567e2e5d',
+ 'src/engine/scalping/scanner_async_eval.py': '9fb2ac9ff75f620f008fb38a6611e5f08c6984d552c475e3314fa6ad6f3fefdf',
+ 'src/engine/swing/bottom_rebound_policy_auto_loop.py': 'd674258f0fa3dad667bceec870c024177117973a7955d167004d60650f665a04',
+ 'src/utils/constants.py': '91b7840994ca13114176ced7cbc0ed23f9ecf53aad5dd9497956b9c991990252'}
+REVIEWED_ROLE_LATENCY_PAIRS = {'src/engine/ai/hot_path_ai_dispatcher.py': (('bec51a2d3e23baf4277066e57fcde81368aa6d53cb923470e58757bb8102d229',
+                                              'a7688b6d206035d66cd61303868ed20f9da3f334997b3e64fc1e2c8c7634330b'),),
+ 'src/engine/ai_engine_openai.py': (('703bc5e36bf23a02caf78a3fa8f9251e202979048e4ed1cd64aafed57e732d07',
+                                     'bdcf09bf1f19e4cb649c01105c7aa363b04bddcb8749793a8f701cc06cc8d185'),),
+ 'src/engine/infrastructure/snapshot_copy.py': (('1299ee9fecd33f8a2c7eca4762fbe5e26a0a3414f7c0c91f8b3e199f7e9489c0',
+                                                 '6e40a74825ad11fdc84afde95d5080549d9b284644108919aa35adee7fc10e41'),),
+ 'src/engine/kiwoom_sniper_v2.py': (('647f24d8805d0d9d6c1489df272b258706c7314111121e8660c01ee72930e713',
+                                     '44133e57f1c20521b80cfa5fa1e7dadb7c89b010ab461cce3959fd1ba6fd4997'),),
+ 'src/engine/lifecycle/avg_down_policy_replay.py': (('1340fc7a7afda1cfb6a46acf6be6f73318901098aab06fbff07044d86a4c8dc5',
+                                                     '26ec5374924617f9beef1bda42a7b2433c583abbae73407da360e4d866ed35cd'),),
+ 'src/engine/scalping/ai_decision_trace.py': (('ea62bfe70f124e71a59b74cf0b885326217ceb019b00da9f8af45c37105ca17e',
+                                               'dfbb14a03971bcfa1f8a0b4c1f3b712d45e7da7fa7259cac125db7f5bb8747a0'),),
+ 'src/engine/scalping/avg_down_replay_capture.py': (('dbb163f2f23c678f4a2343e8501b405166bd18f30b94b0de64f98e76c0a2645a',
+                                                     'fb26fb1d9a2d834d5a626fb81e6a7bf97ab88042386630f9b7ed2a0237b1c49a'),),
+ 'src/engine/scalping/entry_context_intraday_probe.py': (('b6c9fc8a0a96ce6055a8dffb64884e802aaea94bc58e987473d7b8ea43f3ebd3',
+                                                          'd5594fc0d9384cec15441c81f83be03bfdbf7b38fdd6de9e2ed8f7a02eea0c6f'),),
+ 'src/engine/scalping/opening_rotation.py': (('5f571f69ae8f999b7ccdf376132572a029abdf8ecbad7447872e54a8baebf58c',
+                                              '405246b7429792a1a7bb1dc9fd12e35f2c1a9211de65208ecae4ac6f567e2e5d'),),
+ 'src/engine/scalping/scanner_async_eval.py': (('bfd354bbfbc371e912e873a3cbb40fd1ec2b9f5a78427602f214cfb0543b1d21',
+                                                '9fb2ac9ff75f620f008fb38a6611e5f08c6984d552c475e3314fa6ad6f3fefdf'),),
+ 'src/engine/swing/bottom_rebound_policy_auto_loop.py': (('cfa0e7fb2de886845bdae5cc2f85c40886cce8d6f04e8eaa84b7c45f8df9d9ed',
+                                                          'd674258f0fa3dad667bceec870c024177117973a7955d167004d60650f665a04'),),
+ 'src/utils/constants.py': (('72021194611922de3e7c4399770fa98b488035753b24a9fce62f12115bb1c0c6',
+                             '91b7840994ca13114176ced7cbc0ed23f9ecf53aad5dd9497956b9c991990252'),)}
+REVIEWED_ROLE_LATENCY_DEPENDENCY_VARIANTS = {
+    key: {**value,
+        'selector_path': 'src/engine/ai_engine_openai.py',
+        'selector_sha256': REVIEWED_ROLE_LATENCY_HASHES['src/engine/ai_engine_openai.py'],
+        'dependencies': {**value['dependencies'], **REVIEWED_ROLE_LATENCY_HASHES},
+        'contract_extensions': {
+            origin: {name: REVIEWED_ROLE_LATENCY_HASHES.get(os.path.normpath(name), digest)
+                     for name, digest in paths.items()}
+            for origin, paths in value['contract_extensions'].items()},
+    } for key, value in REVIEWED_DELAY_CLEANUP_DEPENDENCY_VARIANTS.items()
+}
+for (_trigger, _trigger_sha), _variant in REVIEWED_ROLE_LATENCY_DEPENDENCY_VARIANTS.items():
+    REVIEWED_HOLDING_RESEARCH_DEPENDENCIES[_trigger][_trigger_sha] = _variant['dependencies']
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -3025,6 +3078,9 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     cleanup_present = any((root / name).is_file()
         and hashlib.sha256(candidate_bytes(name)).hexdigest() == sha
         for name, sha in REVIEWED_RETIRED_REVIEW_HASHES.items())
+    role_latency_present = any((root / name).is_file()
+        and hashlib.sha256(candidate_bytes(name)).hexdigest() == sha
+        for name, sha in REVIEWED_ROLE_LATENCY_HASHES.items())
     contract_names = {repository_name(name) for name in paths.values()}
     for trigger, generations in REVIEWED_HOLDING_RESEARCH_DEPENDENCIES.items():
         if trigger not in contract_names:
@@ -3033,7 +3089,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         dependencies = generations.get(trigger_sha, {})
         # New exact selectors precede their historical parent. The first match
         # selects one complete generation, never per-file SHA alternatives.
-        for variants in (REVIEWED_DELAY_CLEANUP_DEPENDENCY_VARIANTS,
+        for variants in (REVIEWED_ROLE_LATENCY_DEPENDENCY_VARIANTS,
+                         REVIEWED_DELAY_CLEANUP_DEPENDENCY_VARIANTS,
                          REVIEWED_CLEAN_SQLITE_DEPENDENCY_VARIANTS,
                          REVIEWED_SQLITE_LIFECYCLE_DEPENDENCY_VARIANTS,
                          REVIEWED_RETIRED_REVIEW_DEPENDENCY_VARIANTS,
@@ -3120,6 +3177,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
                 break
         if cleanup_present:
             dependencies = {**dependencies, **REVIEWED_RETIRED_REVIEW_HASHES}
+        if role_latency_present:
+            dependencies = {**dependencies, **REVIEWED_ROLE_LATENCY_HASHES}
         dependencies_by_trigger[trigger] = (trigger_sha, dependencies)
     for key, name in paths.items():
         after = candidate_bytes(name)
@@ -3136,7 +3195,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         if before == after:
             continue
         pair = (hashlib.sha256(before).hexdigest(), hashlib.sha256(after).hexdigest())
-        if (pair in REVIEWED_DELAY_CLEANUP_PAIRS.get(repository_name(name), ())
+        if (pair in REVIEWED_ROLE_LATENCY_PAIRS.get(repository_name(name), ())
+                or pair in REVIEWED_DELAY_CLEANUP_PAIRS.get(repository_name(name), ())
                 or pair in REVIEWED_VOTE_METADATA_PAIRS.get(name, ())
                 or pair in REVIEWED_PRE_ENTRY_OBSERVER_PAIRS.get(name, ())
                 or pair in REVIEWED_STOP_INDEXED_VOTE_PAIRS.get(name, ())

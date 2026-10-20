@@ -112,6 +112,120 @@ def _generation(*, promotion_id="PROMO-1", revision=1, venue="KRX"):
     )
 
 
+def test_worker_completion_publishes_original_result_without_main_poll(monkeypatch):
+    from src.engine.scalping import scanner_async_eval as M
+    monkeypatch.setattr(M, 'record_async_disposition', lambda *a, **k: True)
+    dispatcher = HotPathAIDispatcher(loaded_key_count=1)
+    coordinator = ScannerAsyncEvalCoordinator(ai_dispatcher=dispatcher)
+    now = time.time()
+    generation = _generation()
+    context = ScannerAsyncEvalContext.create(generation=generation, cache_key='direct',
+        submitted_epoch=now, deadline_epoch=now+2, stock_snapshot={}, ws_snapshot={}, state_version='original')
+    try:
+        assert coordinator.submit(ScannerAsyncEvalRequest(context=context,
+            prepare=lambda ctx: {'snapshot': {'price': 100}},
+            evaluate=lambda ctx, prepared: {'action': 'BUY'})).accepted
+        deadline = time.time()+1
+        while time.time() < deadline:
+            with coordinator._lock:
+                published = list(coordinator._ready.values())
+            if published:
+                break
+            time.sleep(.001)
+        assert len(published) == 1
+        result = published[0]
+        assert result.original_generation is generation and result.deadline_epoch == context.deadline_epoch
+        assert result.prepared_context['snapshot']['price'] == 100
+        assert result.request_id == context.request_id
+        # Immediate publication still has no authority to skip Main guards.
+        decision = validate_scanner_async_commit(result, current_generation=generation,
+            current_status='WATCHING', current_venue='KRX', current_source_signature='VALUE_TOP',
+            venue_resolution_valid=True, current_state_version='original', quote_fresh=False,
+            position_or_pending_order_present=False, cooldown_active=False, now_epoch=time.time())
+        assert not decision.allowed
+        assert coordinator.take_completed(generation_id=generation.generation_id, cache_key='direct') is result
+        assert coordinator.take_completed(generation_id=generation.generation_id, cache_key='direct') is None
+    finally:
+        coordinator.shutdown()
+
+
+def test_failed_immediate_completion_retains_result_and_prepared_source(monkeypatch):
+    from src.engine.scalping import scanner_async_eval as M
+    monkeypatch.setattr(M, 'record_async_disposition', lambda *a, **k: True)
+    dispatcher = HotPathAIDispatcher(loaded_key_count=1)
+    coordinator = ScannerAsyncEvalCoordinator(ai_dispatcher=dispatcher)
+    now = time.time()
+    context = ScannerAsyncEvalContext.create(generation=_generation(), cache_key='retained',
+        submitted_epoch=now, deadline_epoch=now+2, stock_snapshot={}, ws_snapshot={}, state_version='original')
+    original = coordinator._finish
+    failed = threading.Event()
+    def fail_once(*args, **kwargs):
+        if not failed.is_set():
+            failed.set()
+            raise ValueError('diagnostic_projection_failed')
+        return original(*args, **kwargs)
+    monkeypatch.setattr(coordinator, '_finish', fail_once)
+    try:
+        assert coordinator.submit(ScannerAsyncEvalRequest(context=context,
+            prepare=lambda ctx: {'source': 'original'}, evaluate=lambda ctx, p: {'action': 'WAIT'})).accepted
+        assert failed.wait(1)
+        # The callback publishes its failure before requeueing the same result.
+        deadline=time.time()+1
+        while time.time()<deadline:
+            with dispatcher._lock:
+                restored=bool(dispatcher._completed)
+            if restored:
+                break
+            time.sleep(.001)
+        assert restored
+        assert coordinator.poll() == 1
+        result=coordinator.take_completed(generation_id=context.generation.generation_id, cache_key='retained')
+        assert result.prepared_context['source'] == 'original'
+        assert result.deadline_epoch == context.deadline_epoch
+        assert coordinator.poll() == 0
+    finally:
+        coordinator.shutdown()
+
+
+def test_owned_async_snapshot_shares_only_proven_immutable_children(monkeypatch):
+    from types import MappingProxyType, SimpleNamespace
+    from src.engine.scalping import scanner_async_eval as M
+    raw = {'quote': {'bid': 99}, 'rows': [{'price': 100}], 'tags': {'source'}}
+    frozen = M._immutable_mapping(MappingProxyType(raw))
+    raw['quote']['bid'] = 1
+    raw['rows'][0]['price'] = 2
+    assert frozen['quote']['bid'] == 99 and frozen['rows'][0]['price'] == 100
+    assert M._immutable_mapping(frozen) is frozen
+    with pytest.raises(TypeError):
+        frozen['quote']['bid'] = 3
+    with pytest.raises(TypeError):
+        frozen._values = {}
+    thawed = M.thaw_scanner_async_value(frozen)
+    thawed['rows'][0]['price'] = 4
+    assert frozen['rows'][0]['price'] == 100
+    # Read-only mapping views and copied custom objects are not proof that
+    # their backing objects are immutable at the next ownership boundary.
+    box = SimpleNamespace(value=[1])
+    first = M._immutable_mapping({'box': box, 'quote': frozen['quote']})
+    second = M._immutable_mapping(first)
+    first['box'].value.append(2)
+    assert second['box'].value == [1]
+    assert second['quote'] is first['quote']
+    box.value.append(9)
+    assert first['box'].value == [1, 2]
+
+
+def test_async_scalar_snapshot_does_not_invoke_custom_copy_protocol(monkeypatch):
+    from src.engine.scalping import scanner_async_eval as M
+    def unexpected(value):
+        raise AssertionError('atomic deepcopy')
+    from src.engine.infrastructure import snapshot_copy as snapshots
+    monkeypatch.setattr(snapshots.copy, 'deepcopy', unexpected)
+    original = {'price': 100, 'rows': [{'source': '0B', 'ok': True, 'age': .5, 'missing': None}]}
+    frozen = M._immutable_mapping(original)
+    assert frozen['price'] == 100 and frozen['rows'][0]['missing'] is None
+
+
 def _wait_for_result(coordinator, timeout=1.0):
     deadline = time.time() + timeout
     while time.time() < deadline:
@@ -863,3 +977,46 @@ def test_ai_dispatch_exception_closes_pending_as_observation(monkeypatch):
         assert coordinator.pending_count() == 0
     finally:
         coordinator.shutdown(wait=True)
+
+
+def test_poll_publication_failure_retains_all_drained_results_in_original_order(monkeypatch):
+    from dataclasses import replace
+    from src.engine.scalping import scanner_async_eval as M
+    monkeypatch.setattr(M, 'record_async_disposition', lambda *a, **k: True)
+    dispatcher = HotPathAIDispatcher(loaded_key_count=1)
+    coordinator = ScannerAsyncEvalCoordinator(ai_dispatcher=dispatcher)
+    requests = [replace(_bounded_request('retain-'+str(i), prepare=lambda ctx: {'source': ctx.cache_key}),
+                        requires_ai_dispatch=True) for i in range(2)]
+    coordinator._poll_lock.acquire()
+    try:
+        for request in requests:
+            assert coordinator.submit(request).accepted
+        deadline = time.time()+1
+        while time.time()<deadline:
+            with dispatcher._lock:
+                original = list(dispatcher._completed)
+            if len(original)==2:
+                break
+            time.sleep(.001)
+        assert len(original)==2
+    finally:
+        coordinator._poll_lock.release()
+    finish = coordinator._finish
+    def failure(*args, **kwargs):
+        raise ValueError('publication_failed')
+    monkeypatch.setattr(coordinator, '_finish', failure)
+    try:
+        with pytest.raises(ValueError, match='publication_failed'):
+            coordinator.poll()
+        with dispatcher._lock:
+            assert list(dispatcher._completed)==original
+        monkeypatch.setattr(coordinator, '_finish', finish)
+        assert coordinator.poll()==2
+        for request in requests:
+            result=coordinator.take_completed(generation_id=request.context.generation.generation_id,
+                                              cache_key=request.context.cache_key)
+            assert result.deadline_epoch==request.context.deadline_epoch
+            assert result.prepared_context['source']==request.context.cache_key
+        assert coordinator.poll()==0
+    finally:
+        coordinator.shutdown()

@@ -605,14 +605,31 @@ def _native_claim_digest_is_public(value: dict, path: tuple[str, ...]) -> bool:
         return False
 
 
+def _sanitize_label(field: str, cache: dict):
+    cached = cache.get(field)
+    if cached is None:
+        safe, redacted = _sanitize_text(field)
+        cached = safe, redacted, _is_sensitive_key(field)
+        if len(cache) < 4096:
+            cache[field] = cached
+    return cached
+
+
 def _sanitize(
     value: Any,
     *,
     key: str = "",
     path: tuple[str, ...] = (),
+    _key_cache: dict | None = None,
 ) -> tuple[Any, bool]:
+    # Field-label work repeats for every quote/feature row. This cache lives
+    # only for one traversal, never retains values, and never caches path-
+    # dependent public-token or native-claim exemptions.
+    if _key_cache is None:
+        _key_cache = {}
     current_path = (*path, str(key)) if key else path
-    if _is_sensitive_key(key) and not _is_non_secret_internal_token(
+    sensitive = _sanitize_label(key, _key_cache)[2] if type(key) is str else _is_sensitive_key(key)
+    if sensitive and not _is_non_secret_internal_token(
         current_path, value
     ):
         return "[REDACTED]", True
@@ -620,7 +637,7 @@ def _sanitize(
         cleaned: dict[str, Any] = {}
         redacted = False
         for index, (child_key, child_value) in enumerate(value.items(), start=1):
-            safe_key, key_redacted = _sanitize_text(str(child_key))
+            safe_key, key_redacted, _ = _sanitize_label(str(child_key), _key_cache)
             if key_redacted:
                 safe_key = f"[REDACTED_KEY_{index}]"
                 safe_value, child_redacted = "[REDACTED]", True
@@ -631,6 +648,7 @@ def _sanitize(
                     child_value,
                     key=str(child_key),
                     path=current_path,
+                    _key_cache=_key_cache,
                 )
             cleaned[safe_key] = safe_value
             redacted = redacted or key_redacted or child_redacted
@@ -642,6 +660,7 @@ def _sanitize(
             safe_value, child_redacted = _sanitize(
                 child_value,
                 path=current_path,
+                _key_cache=_key_cache,
             )
             cleaned_list.append(safe_value)
             redacted = redacted or child_redacted

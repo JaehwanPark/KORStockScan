@@ -553,3 +553,71 @@ def test_frozen_policy_preserves_both_immutable_entry_catalog_sources():
         assert len(raw)==frozen["size"]
         assert hashlib.sha256(raw).hexdigest()==expected
     assert len(str(snapshot).encode()) <= capture.MAX_SNAPSHOT_BYTES
+
+
+@pytest.mark.parametrize("historical", [False, True])
+def test_model_state_capture_and_historical_reader_keep_roles_and_frozen_bytes(monkeypatch, historical):
+    from src.engine import ai_engine_openai as module
+    from src.engine.ai_engine_openai import GPTSniperEngine
+    from dataclasses import replace
+    import json
+    engine = GPTSniperEngine.__new__(GPTSniperEngine)
+    engine.ai_disabled = False
+    engine.consecutive_failures = 2
+    engine.max_consecutive_failures = 5
+    rules = replace(module.TRADING_RULES, OPENAI_HOLDING_FLOW_MODEL="frozen-flow")
+    monkeypatch.setattr(module, "TRADING_RULES", rules)
+    state = capture.ai_policy_state(engine)
+    if historical:
+        state.pop("role_models")
+        state.update(current_model_name="old-fast", model_tier1_fast="old-fast",
+                     model_tier2_balanced="old-report", model_tier3_deep="old-deep")
+    original = json.dumps(state, sort_keys=True)
+    normalized = capture.normalize_ai_policy_state(state, rules)
+    assert json.dumps(state, sort_keys=True) == original
+    assert set(normalized) == set(capture.AI_STATE_FIELDS)
+    models = normalized["role_models"]
+    assert models["OPENAI_HOLDING_FLOW_MODEL"] == "frozen-flow"
+    assert models["compact_auxiliary"] == "gpt-5.4-nano"
+    assert models["OPENAI_SCALPING_ENTRY_MODEL"] == rules.OPENAI_SCALPING_ENTRY_MODEL
+    assert models["OPENAI_REALTIME_REPORT_MODEL"] == ("old-report" if historical else rules.OPENAI_REALTIME_REPORT_MODEL)
+    assert models["OPENAI_SCALPING_SHARED_MODEL"] == ("old-fast" if historical else rules.OPENAI_SCALPING_SHARED_MODEL)
+    # The actual next source capture records only roles, not the old aliases.
+    monkeypatch.setattr(capture, "_AI_STATE", {})
+    capture.record_ai_state("005930", engine)
+    assert set(capture._AI_STATE["005930"]) == set(capture.AI_STATE_FIELDS)
+    assert "model_tier1_fast" not in capture._AI_STATE["005930"]
+    incomplete = deepcopy(state)
+    incomplete.pop("consecutive_failures")
+    with pytest.raises(ValueError):
+        capture.normalize_ai_policy_state(incomplete, rules)
+    if not historical:
+        tampered = deepcopy(state)
+        tampered["role_models"]["compact_auxiliary"] = "unapproved-model"
+        with pytest.raises(ValueError, match="recorded_role_model_contract_invalid"):
+            capture.normalize_ai_policy_state(tampered, rules)
+
+
+@pytest.mark.parametrize("historical", [False, True])
+def test_isolated_policy_worker_consumes_both_model_capture_schemas(historical):
+    from src.engine import ai_engine_openai as module
+    from src.engine.ai_engine_openai import GPTSniperEngine
+    observation, frames = policy_fixture()
+    engine = GPTSniperEngine.__new__(GPTSniperEngine)
+    engine.ai_disabled = False
+    engine.consecutive_failures = 0
+    engine.max_consecutive_failures = 5
+    state = capture.ai_policy_state(engine)
+    if historical:
+        state.pop("role_models")
+        state.update(current_model_name="historical-fast", model_tier1_fast="historical-fast",
+                     model_tier2_balanced="historical-report", model_tier3_deep="historical-deep")
+    observation["initial_policy_state"]["ai_engine_state"] = state
+    source = deepcopy(observation)
+    rules = module.TRADING_RULES
+    result = policy.isolated_replay(observation, frames)
+    assert "adapter_error" not in result, result
+    assert set(result["blockers"].values()) == {"pending_exit_outcome"}, result
+    assert result["actual_order_submitted"] is False and result["broker_order_forbidden"] is True
+    assert observation == source
+    assert module.TRADING_RULES is rules

@@ -2248,7 +2248,8 @@ def _run_endpoint_provider_compare(
     original_env = _temporary_env(_endpoint_provider_env(provider_mode))
     openai_module.TRADING_RULES = _RulesProxy(
         original_rules,
-        GPT_REPORT_MODEL=model,
+        OPENAI_REALTIME_REPORT_MODEL=model,
+        OPENAI_HOLDING_FLOW_MODEL=model,
         OPENAI_TRANSPORT_MODE="http",
         OPENAI_REASONING_EFFORT=effort,
         OPENAI_ENTRY_PRICE_TIMEOUT_MS=(

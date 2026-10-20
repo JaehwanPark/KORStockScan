@@ -19,13 +19,6 @@ def _build_engine():
     engine.current_api_key_index = 0
     engine.last_call_time = 0.0
     engine.min_interval = 0.0
-    engine.model_tier1_fast = "gpt-fast"
-    engine.model_tier2_balanced = "gpt-report"
-    engine.model_tier3_deep = "gpt-deep"
-    engine.current_model_name = engine.model_tier1_fast
-    engine.fast_model_name = engine.model_tier1_fast
-    engine.report_model_name = engine.model_tier2_balanced
-    engine.deep_model_name = engine.model_tier3_deep
     return engine
 
 

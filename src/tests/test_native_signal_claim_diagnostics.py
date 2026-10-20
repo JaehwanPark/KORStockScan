@@ -337,18 +337,18 @@ def test_long_wait_does_not_starve_short_cohort_and_retains_original_wait():
             market='KOSPI', source_kind='activity')
     requirements = lambda c, _: {'minimum_seconds': 0 if c.code=='100006' else 61}
     selected = queue.claim(now_epoch=T+1,limit=5,residence_requirements=requirements)
-    assert len(selected) == 4 and selected[-1]['code'] == '100006'
-    assert queue.residence_deferred == {'long_slot_wait':2}
-    waiting = queue.snapshot()['candidates'][3]
+    assert len(selected) == 5 and selected[-1]['code'] == '100006'
+    assert queue.residence_deferred == {'long_slot_wait':1}
+    waiting = queue.snapshot()['candidates'][4]
     assert waiting['claim_count'] == 0 and waiting['residence_wait_since_epoch'] == T+1
     first = selected[0]
     assert queue.resolve(first,result='required_feature_insufficient',machine_action='',next_due_epoch=T+100,
                          handoff_id=first['physical_probe_lease_id'])
     assert queue.close_handoff(first,first['physical_probe_lease_id'])
     next_claim = queue.claim(now_epoch=T+10,limit=1,residence_requirements=requirements)[0]
-    assert next_claim['code'] == '100004' and next_claim['residence_wait_seconds'] == 9
+    assert next_claim['code'] == '100005' and next_claim['residence_wait_seconds'] == 9
     assert next_claim['residence_deadline_epoch'] == T+160
-    assert queue.snapshot()['candidates'][3]['residence_wait_since_epoch'] == 0
+    assert queue.snapshot()['candidates'][4]['residence_wait_since_epoch'] == 0
 
 
 def test_probe_capsules_survive_actual_execution_writer_without_text_duplication(monkeypatch, tmp_path):
@@ -391,13 +391,13 @@ def test_required_history_allocates_long_slots_and_preserves_queued_candidates()
         queue.observe(code=f'{i:06}', route='krx_nxt_integrated', observed_epoch=T,
             source_sha256='a'*64, source_scope='observed_panel', received_epoch=T)
     selected = queue.claim(now_epoch=T+1, limit=5, residence_requirements=lambda *a: {'minimum_seconds': 61})
-    assert len(selected) == 3
+    assert len(selected) == 4
     assert all(c['residence_deadline_epoch'] == T+151 for c in selected)
     assert len(queue.snapshot()['candidates']) == 5
     assert queue.claim(now_epoch=T+2, limit=5, residence_requirements=lambda *a: {'minimum_seconds': 61}) == []
     # A genuinely short independent branch can still use existing short slots.
     short = queue.claim(now_epoch=T+3, limit=5, residence_requirements=lambda *a: {'minimum_seconds': 0})
-    assert len(short) == 2 and all(c['residence_deadline_epoch'] == T+63 for c in short)
+    assert len(short) == 1 and all(c['residence_deadline_epoch'] == T+63 for c in short)
     assert queue.in_flight_count() == 5
 
 

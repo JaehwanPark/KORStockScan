@@ -624,3 +624,63 @@ The subsequent regular consumer exposes three new report-capability warnings: fr
 Replacement/removal: exact successor selection consolidates into the existing reader_match branch; all issued predecessor maps remain for original receipts. No new module, validator, producer, entrypoint, worker or wrapper. Supplement versus10f: source1 file +15/-2; tests1 file +6/-0 before final count, docs3 progress/operating-owner records. Source growth is the explicit three-pair review allowlist, not a new matching mechanism. The immutable trailing/quantity code contracts are unchanged, so their existing native proofs may be rechecked rather than regenerated. Fresh candidate parity/P5 and ordered current-PID acceptance remain required for the final successor.
 
 Future v4 is natively rebuilt under the final code from the preserved minimal source19 projection (source decode passes0), published20/effective21 and prepared23 executable price-ready cells, policyc128bec5. Its isolated publication leaves today's canonical source19 pointer and all20 policy/PREOPEN bytes unchanged. Replacing that shared pointer intraday would break today's committed-policy loader binding, so source20 EOD/native family publication and next-session bootstrap own actual21 replacement. Do not claim21 PREOPEN/PID or economics from this future candidate. Existing PreSubmitDelaySituationResearch1017 owns that due acceptance.
+
+
+## Local completion latency and role model integration 2026-10-20
+
+Owner: `SubmissionMonitorSyncLineage1019`. Initial source `10f8d1ba6`; model work re-pinned selected `661260e5f4be406760820ee2001b953ad6adf25d`, PID2724137/start12485195. Isolated branch `perf/entry-local-latency-20261020` integrates requested `d8acaa0aa37086d9bfa07e6c9d5a81fccfadae86` and selected661 through merge3a120ac55. Authority is implementation, commit and candidate preparation; selection/restart/PID consumption remain separate.
+
+### Cause and implementation
+
+Original three PASS attempts expired by native first-downtick invalidation, not broker rejection. One attempt had about198ms worker-to-coordinator and102ms coordinator-to-Main delay. Diagnostic economics preparation also contains68-271ms identity/account source work; its clone takes below0.5ms, so this change does not move account decisions to a later source or claim to remove that whole interval.
+
+- Consolidate two recursive async freezer implementations into the existing infrastructure `snapshot_copy.immutable_mapping`. Share only owned recursively immutable containers; foreign proxies and custom mutable objects remain copied. Retain original source, request, generation, native claim and clocks.
+- Memoize sanitized field labels per traversal, maximum4096, without caching values or path-dependent public-token exemptions. Exact cleaned output matches the three original payloads. Paired15-round CPU medians: sanitizing22.28-23.18ms ->10.32-11.05ms; large completion handoff14.59-14.72ms ->2.62-2.68ms. These are offline component costs, not natural end-to-end improvement or submitted orders.
+- Publish a settled immutable result directly to the existing coordinator/event before ordinary Main polling. Callback acknowledgement transfers result custody only. Keep original poll fallback, FIFO, all undelivered results after publication failure, single consumption and original deadline. Do not execute Main COMMIT or broker work in the callback. Register callbacks outside the dispatcher lock, including already-settled Future cases.
+
+### Model ownership and unchanged defaults
+
+`TradingConfig`/`TRADING_RULES` role settings select each request's explicit model. Compact keeps its fixed function and registry contract. Transport refuses an absent explicit model before provider dispatch; requests cannot inherit a preceding request's model. Analysis/report caches bind only their own selected model, and response audit uses the model frozen for that request.
+
+| Consumer | Single configuration owner | Preserved default |
+| --- | --- | --- |
+| compact auxiliary | fixed function and registry | gpt-5.4-nano |
+| general watching entry | OPENAI_SCALPING_ENTRY_MODEL | gpt-5.4-nano |
+| holding score | OPENAI_HOLDING_SCORE_MODEL | gpt-5.4-nano |
+| holding path/exit vote | OPENAI_HOLDING_EXIT_VOTE_MODEL | gpt-5.4-nano |
+| OpenAI holding flow | OPENAI_HOLDING_FLOW_MODEL | gpt-5.4-mini |
+| realtime report/shared gatekeeper/entry-price compatibility | OPENAI_REALTIME_REPORT_MODEL | gpt-5.4-mini |
+| KOSPI_ML/KOSDAQ_ML analysis | OPENAI_SWING_ANALYSIS_MODEL | gpt-5.4-mini |
+| legacy shared/holding analysis | OPENAI_SCALPING_SHARED_MODEL | gpt-5-nano |
+| watching comparison shadow | OPENAI_WATCHING_SHADOW_MODEL | gpt-5-nano |
+| gatekeeper persona shadow | OPENAI_GATEKEEPER_SHADOW_MODEL | gpt-5-nano |
+
+The extra role settings preserve actual surviving Main/state-handler/condition/shadow callers; none is added for an unused DEEP/overnight feature. Startup emits one model configuration, including when a shadow engine also exists. It identifies ordinary watching entry explicitly and removes the generic tier and ENTRY_OTHER output. Provider routes, fallback selection, prompts, timeout/budget and compact parameters retain their previous values for the same effective role configuration.
+
+The offline endpoint comparison now injects its requested model into report and holding-flow roles; the previous report-only override did not control the actual holding-flow request. Swing policy review uses its existing AI_REVIEW_MODEL. New AVG_DOWN state captures contain circuit state plus role_models; the isolated worker converts exact legacy capture schemas into frozen role settings without attaching live tier aliases or changing original bytes. Missing/incomplete/conflicting model captures remain invalid. Old JSON and sealed releases are not rewritten.
+
+### Replacement and removal disposition
+
+| Old owner/path | Disposition and current consumer |
+| --- | --- |
+| dispatcher/scanner duplicate _deep_freeze/_immutable_mapping bodies | consolidated into infrastructure immutable_mapping; both active DTO owners import the same implementation |
+| inline coordinator poll conversion | consolidated into _complete_ai_result shared by acknowledged completion and poll; poll retains unacknowledged results |
+| GPT_FAST/REPORT/DEEP constants, tier1/2/3 getters and engine aliases | removed; surviving requests use the role table above |
+| current_model_name and set_model_names/Main resetting defaults | removed from the OpenAI engine; Main constructs once and shadow does not repeat model configuration |
+| GPT scanner briefing, overnight decision, submit_overnight_shadow and their private helpers/timeouts | removed; source/CLI/shell/registration inventory finds no operational caller; retired overnight gatekeeper and scanner no-report contract tests remain |
+| historical capture tier names | retained only in exact historical-schema reader; current capture/worker output uses role_models |
+| swing_model_tier2_review and review-stage labels | retained: independent research review stages, not model selectors |
+| MacroBriefingBuilder.current_model_name | retained: independent Gemini briefing owner; not an OpenAI request selector |
+| d8 Opening Rotation preview helpers | removed by the integrated user commit; permanent WATCH/HOLD retirement dispatch remains and is regression tested |
+
+No new Python module, report producer, validator framework, CLI, provider route or trading owner is introduced. Existing handoff verification adds the exact reviewed dependency group, preserves historical generations and rejects partial rollback, missing files and modified Git objects. The operating document records that this is reviewed code compatibility, not policy or PID activation.
+
+### Review, validation and remaining consumption
+
+Self-review found and fixed FIFO reversal, synchronous callback under the scheduling lock, publication-failure loss of drained results, and stale fixture assumptions (three long slots and removed ADM symbols). New regressions cover callback acknowledgement/failure, original deadlines/source/generation, Main quote rejection, foreign/custom snapshot isolation, sanitizer redaction, role environment isolation/actual transport value, request-bound audit, cache isolation, and both historical/new model states in the isolated worker. Negative Main/physical-send/native source guards remain in the integrated suite.
+
+Exact evidence: [source inventory](../../tmp/entry-local-latency-20261020/role-consumer-inventory.json), [component benchmark](../../tmp/entry-local-latency-20261020/benchmark.json), [integrated regression](../../tmp/entry-local-latency-20261020/integrated-regression.log), [reviewed dependency negatives](../../tmp/entry-local-latency-20261020/handoff-regression.log), [historical predecessor checks](../../tmp/entry-local-latency-20261020/handoff-predecessor-regression.log), [isolated replay consumer](../../tmp/entry-local-latency-20261020/replay-consumer-regression.log). Final counts and native candidate receipts are recorded in the preparation manifest after completion. Earlier failed test attempts remain in the same evidence directory; overlapping runs are not summed.
+
+Code validation, clean prepared release, native policy/code acceptance, selection, real PID loading, natural PASS-to-submit and cost-adjusted economics are separate acceptance states. No natural throughput gain, fill or economic result is inferred from the offline timings.
+
+Final offline validation: integrated2,225 PASS/5 live skips; new exact-group60 PASS and issued predecessor150 PASS; additional isolated model-schema consumer2 PASS and Main+shadow single-announcement1 PASS. The separate focused reruns overlap the integrated suite and are not summed. Changed Python compilation and diff whitespace checks pass; print-only backlog parser succeeds with one current SubmissionMonitorSyncLineage1019 owner. Against selected661, non-test source13 files +412/-767, tests13 files +527/-303, docs3 files +84/-0 (including the requested d8 delta); no moves, new module or public entrypoint. Source shrinks through removed dead methods, aliases and duplicate freezing; additions implement exact dependency binding, immutable custody and role compatibility tests. Native preparation evidence follows separately.
