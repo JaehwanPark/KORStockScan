@@ -3347,6 +3347,43 @@ def test_native_pre_entry_lazy_sources_are_pending_without_proving_coverage(monk
     assert json.dumps(result,sort_keys=True)==before
 
 
+@pytest.mark.parametrize('damage',[None,'unaccounted_probe','missing_probe','partial_probe','unknown_wait',
+    'missing_trace_io','assessment','async','birth','selection','payload_missing'])
+def test_complete_native_wait_census_explains_lazy_trace_without_source_validation(damage):
+    from copy import deepcopy
+    result=_observation_health_fixture();now=monitor.stamp(result['as_of']);actor=['9','900']
+    proof,generation=_health_birth_fixture(now,actor)
+    generation.update(status='current',generation_current=True,selector_reported_actual_pid_consumed=True)
+    result['observer_generation']=generation
+    inp=result['input_provenance'];at=monitor.stamp(inp['snapshot_as_of'])
+    inp.update(latest_event_status='no_recent_loaded_events',loaded_recent_event_count=0,
+        latest_event_at=(at-timedelta(days=1)).isoformat(),latest_event_age_seconds=(now-at).total_seconds()+86400)
+    for name in ('source_gap_semantics','machine_semantics'):
+        original=result[name];token=monitor._HEALTH_BIRTH.set(proof)
+        try:original['current_health_cohort']=monitor._health_cohort(deepcopy(original),actor,now)
+        finally:monitor._HEALTH_BIRTH.reset(token)
+    gap=result['source_gap_semantics']['current_health_cohort']['view']
+    machine=result['machine_semantics']['current_health_cohort']['view'];machine['tail_truncated']=True
+    absent=dict(status='unobservable',tail_truncated=False,window_covered=False,recent_count=0,reason='FileNotFoundError')
+    gap['sources']['trace']=deepcopy(absent);gap['sources']['pending']=deepcopy(absent)
+    gap['async_pass_projection_coverage']='partial'
+    if damage=='unaccounted_probe':gap['sources']['probe']['recent_count']+=1
+    elif damage=='missing_probe':gap['sources']['probe']=deepcopy(absent)
+    elif damage=='partial_probe':gap['sources']['probe'].update(status='partial',window_covered=False)
+    elif damage=='unknown_wait':gap['fixed_watch_waits']['unclassified_or_actionable_wait_count']=1
+    elif damage=='missing_trace_io':gap['sources']['trace']['reason']='PermissionError'
+    elif damage=='assessment':gap['observed']['entry_traces']=1
+    elif damage=='async':gap['async_pass_unmapped_count']=1
+    elif damage=='birth':proof['boot_epoch']+=1
+    elif damage=='selection':machine['selection']['representative']['score_contract_valid']=False
+    elif damage=='payload_missing':machine['source_status']='unobservable:FileNotFoundError'
+    health=monitor.observation_health_projection(result)
+    assert health['status']==('warning_pending' if damage is None else 'not_eligible'),health
+    if damage is None:assert health['reason']=='bounded_source_quality_observation'
+    assert not health['current_observation_verified'] and not health['full_coverage_proven']
+    assert not health['runtime_effect'] and not health['allowed_runtime_apply']
+
+
 def _derived_coverage_health_fixture(route='krx_nxt_integrated'):
     result,gap,machine,lineage=_bounded_outcome_health_fixture(partial=False)
     gap.update(status='gap_observed',issues={'machine_probe:coverage_degraded:'+route:1},

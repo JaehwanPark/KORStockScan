@@ -4489,24 +4489,37 @@ def observation_health_projection(result):
     # a broken reader. This never proves an empty population or source health.
     # The morning bound prevents an afternoon closed window from forgiving
     # sources that should already have existed during regular trading.
-    pre_entry_absence = (quiet_report_valid and event_marker
+    quiet_lazy_population = (quiet_report_valid and event_marker
+        and counts_valid and n == provider_n == 0 and observed_valid
+        and not any(observed.values()) and not diagnostics and not lineage and attempts == []
+        and gap.get('async_pass_projection') == [] and gap.get('async_transition_projection') == []
+        and count(gap.get('async_pass_unmapped_count'), maximum=0))
+    pre_entry_absence = (quiet_lazy_population
         and inp.get('sentinel_classification') == 'NOT_YET_DUE'
         and context is not None and context.entry_allowed_by_clock is False
-        and now.hour < 9 and counts_valid and n == provider_n == 0
-        and observed_valid and not any(observed.values()) and not diagnostics
-        and all(not rows for rows in route_counts) and not lineage and attempts == []
-        and gap.get('async_pass_projection') == [] and gap.get('async_transition_projection') == []
-        and count(gap.get('async_pass_unmapped_count'), maximum=0)
+        and now.hour < 9 and all(not rows for rows in route_counts)
         and all(obj(source).get('status') in ('complete','unobservable') for source in sources.values())
         and count(machine.get('source_invalid_count'), maximum=0)
         and count(machine.get('required_feature_guard_count'), maximum=0)
         and machine.get('source_invalid_blockers') == {}
         and any(obj(source).get('reason') == 'FileNotFoundError' for source in sources.values()))
 
+    # A complete native probe census may contain only verified fixed-watch
+    # waits (warmup/source guard), including after the market opens. No trace
+    # or outcome journal has been due for these pre-assessment waits. Require
+    # every source row to reconcile; absence of the probe itself never qualifies.
+    lazy_wait_trace_absence = (quiet_lazy_population
+        and count(waits.get('count'), minimum=1)
+        and waits['count'] == obj(sources.get('probe')).get('recent_count')
+        and 'excluded_fixed_watch_wait_not_proven_boundary' not in failed
+        and 'source_window_not_complete:probe' not in failed
+        and 'indexed_source_window_proof_invalid:probe' not in failed)
+
     def clean_reader(source, maximum, window=SOURCE_WINDOW_SEC, source_name=None):
         source=obj(source); identity=obj(source.get('source_identity'))
         if ((source_name in ('pending','requests') and lazy_auxiliary_absence
                 or source_name == 'pending' and quiet_pending_absence
+                or source_name in ('trace','pending') and lazy_wait_trace_absence
                 or source_name in ('probe','trace','pending') and pre_entry_absence)
                 and source.get('status') == 'unobservable'):
             return (set(source) == {'status','tail_truncated','window_covered','recent_count','reason'}

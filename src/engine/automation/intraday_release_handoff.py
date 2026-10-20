@@ -2601,7 +2601,7 @@ REVIEWED_STOP_INDEXED_VOTE_PAIRS = {
 
 # One complete report-only pre-entry observer generation. Preserve every
 # historical generation; no runtime entry-clock or policy behavior changes.
-REVIEWED_PRE_ENTRY_OBSERVER_HASHES = {'src/engine/monitoring/submission_bottleneck_monitor.py': '96b40833a213805c11c28353df651ff1cd5491f204f1191a6427b76960c9a36d'}
+REVIEWED_PRE_ENTRY_OBSERVER_HASHES = {'src/engine/monitoring/submission_bottleneck_monitor.py': 'bed604f22ae510af223e3363ef2b482bcb4a8ce9fa51d8f9574a1fbf8fc7a37c'}
 REVIEWED_PRE_ENTRY_OBSERVER_DEPENDENCY_VARIANTS = {
     key: {**value,
         'selector_path': 'src/engine/monitoring/submission_bottleneck_monitor.py',
@@ -2613,7 +2613,7 @@ REVIEWED_PRE_ENTRY_OBSERVER_DEPENDENCY_VARIANTS = {
             for origin, paths in value['contract_extensions'].items()},
     } for key, value in REVIEWED_STOP_INDEXED_VOTE_DEPENDENCY_VARIANTS.items()
 }
-REVIEWED_PRE_ENTRY_OBSERVER_PAIRS = {'src/engine/monitoring/submission_bottleneck_monitor.py': (('082d6e1af5276405fc493d2be739818ad7d9d55e5026a113029f66eaec0b4b2e', '96b40833a213805c11c28353df651ff1cd5491f204f1191a6427b76960c9a36d'), ('60ab1c4f07c71928f33523b49e8a4143fb1d4e01583dabf3beda6290758f4e23', '96b40833a213805c11c28353df651ff1cd5491f204f1191a6427b76960c9a36d'), ('b2ed455255bc7659d2959a5c6012fe052206de588f1932d57dde2e376d2fad18', '96b40833a213805c11c28353df651ff1cd5491f204f1191a6427b76960c9a36d'))}
+REVIEWED_PRE_ENTRY_OBSERVER_PAIRS = {'src/engine/monitoring/submission_bottleneck_monitor.py': (('082d6e1af5276405fc493d2be739818ad7d9d55e5026a113029f66eaec0b4b2e', 'bed604f22ae510af223e3363ef2b482bcb4a8ce9fa51d8f9574a1fbf8fc7a37c'), ('60ab1c4f07c71928f33523b49e8a4143fb1d4e01583dabf3beda6290758f4e23', 'bed604f22ae510af223e3363ef2b482bcb4a8ce9fa51d8f9574a1fbf8fc7a37c'), ('b2ed455255bc7659d2959a5c6012fe052206de588f1932d57dde2e376d2fad18', 'bed604f22ae510af223e3363ef2b482bcb4a8ce9fa51d8f9574a1fbf8fc7a37c'))}
 
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
