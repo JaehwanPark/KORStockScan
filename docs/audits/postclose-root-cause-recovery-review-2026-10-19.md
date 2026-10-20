@@ -496,3 +496,18 @@ Combined diff versusa7c before this count record: {"agents": [40, 52], "docs": [
 - 기동 전 보완: 변경된 kiwoom_utils는 기존 handler의 exact dependency다. 이전 발행 세대와041의 incident-order profile은 유지하고 필터+두 소비자3파일의 정확한 완전 후속 세대만 기존 native handoff owner에 추가했다. helper만 변경·누락·dirty·committed mutation한 혼합 세대는 거절한다. 원 profile fixture는0255/99c/041의 실제 발행 바이트로 고정했다. 새 module/CLI/정책 parameter/provider·WS/REG 변경은 없다.
 - 자체 리뷰→보완→재리뷰 후 통합 source/restore/dispatcher/prefetch/census·발행/후속 handoff462회귀 PASS(121.44초), exact probe73회귀 PASS(8.04초), compile·diff PASS다. original 4실패 재현은 원 작업 기록에 보존했다. 새 검증은 공급자·주문·구독을 호출하지 않는다. 선택본 정상 기동과 자연 소비는 native parity/P5/ordered 및 새 PID 보고서로 후속 검증한다.
 - 대체/제거: 별도 LOW_REBOUND_PREFETCH_EXCLUDED_NAME_KEYWORDS와 중복 이름 반복문 `removed`; 공통 상품 판정은 기존 kiwoom_utils로 `consolidated`; 가격/code 필터·queue ledger/기존 source dispatch는 현재 scanner/runtime consumers 때문에 `retained`; 모든 이전 complete profile은 과거 정책/P5/handoff consumers 때문에 `retained`다. wrapper/entrypoint/retired owner 복구·deferred removal은 없다. 기준96b011c49 대비 non-test source4파일 +46/-50, tests5파일 +42/-7이며 문서는 별도다. 소스 순감4는 중복 제거와 정확한 기동 세대 결속을 함께 반영한다.
+
+
+배포 종결:0aedc579d를 merge de138c952로 통합하고21d822a64로 exact dependency를 보완했다.041caf05e·c696890ed 수리는 실제 ancestor다. native Main128scope/76800row/598hit·signal958e47 일치, active/delay/stop/holding PASS, P5/d07c9abe 12consumer·금지행위0·child/load PASS다.13:10:43 구PID1054501 정상 drain 후13:12:22 ordered complete/pass, 실제 새PID1175053/start11403252를 확인했다. 원 bootstrap43363c8f·정책·strict/PREOPEN/controller/checklist7a91512b는 보존했다.
+
+자연 소비: 새 PID의15 source/dispatch 주기에서 product_ineligible_count3, fresh panel와 일반 주식 probe 지속을 확인했다. drain 직후 큐와 native restore 결과를 비교해385710/410870 claim0,485810 claim2와 원 name/source hash 보존·새 상품 claim0을 증명했다. pipeline의 canonical 문자열 필드를 해석했으며 원 이벤트/큐에는 쓰지 않았다. 읽기는4MiB bounded tail이다. [실제 소비](../../tmp/etf-intake-integration-20261020/native-product-consumption.json).
+
+기동 후 발견한 현재성 누락: kiwoom_utils는 trailing CODE_PATHS에도 포함돼 새 지문에서 기존 연구 현재성이 무효였다. 기존 native source_reuse preflight는 미증명21,809,006B/32MiB를 확인했다. 첫 --write는 공유 vote 색인의5ms readonly PRAGMA 잠금에서 prepare 전에 실패해 원 traceback을 보존했다. 같은5ms 한도로 읽기3회 성공이라는 외부 상태 변화를 확인한 뒤 준비부터1회 재시도했다.55.91초에 정책/범위 동일·20840scope 독립 native 검증을 완료해 report8ca431f4/codee123fdf3/currentnessadf94376을 발행했다. 기존 semantic PASS·원 정책/보고서 바이트 재작성이나 한도 확대는 없다. full hash21,946,690B/logical reused27,757,135,326B와 실제 rchar28,071,839,540B/read_bytes136,654,848B는 별개이며 총 I/O32MiB나 반복 계산 개선 완료로 주장하지 않는다.
+
+재발 방지 절차: report CODE_PATHS 변경 시 candidate의 기존 native bounded currentness부터 확인하고 미충족이면 incumbent을 유지한 채 해당 source/target dependency만 먼저 준비한다. source date는 검증된 prepared receipt에서 가져온다. 임시 preflight 원 시도는 별도 보존하고 같은 native 확인을 추가·검증했다. 새 production producer/validator/CLI는 없다.
+
+13:26:25 full은 새 actor/선택21d822a64의13:25:46 observer와 run/선언/재계산이 일치하며7detector fail0이다. Main stop의 원 committed19 정책·실제PID 로드 및20840 trailing currentness는 native_validated/findings0/generation_current다. 원49389 BUY2결손·관측 partial·과거 cron 복구·pinned 임시용량 warning은 별도 유지한다. [최종 통합 검증](../../tmp/etf-intake-integration-20261020/native/verification.json).
+
+잠금 이력: Main native 로그의 database-is-locked는 구PID13:10 1건이고 새 Main에서 검증 보류는 resource contention warning이었다. 별도로 위 report 준비 CLI에도 일시적 잠금1건이 있었다. 새 Main의 full은 정상이나 SQL 경합 근본 원인은 미확정 OPEN이다. 원 native 로그/prepare 실패/readiness/조건부 재시도를 보존하고 SQL 잠금 수리 완료로 주장하지 않는다. 이번 상품 수리·배포·현재성 복구는 자연 source/short-horizon/PASS→제출·경제성과 구분한다.
+
+최종 기준96b011c49: source4파일 +46/-50, tests5파일 +42/-7, docs3파일 +30/-0. 파일 이동/추가 production 모듈/owner/entrypoint는0이며21d822a64 배포 뒤에는 문서만 보완했다.
