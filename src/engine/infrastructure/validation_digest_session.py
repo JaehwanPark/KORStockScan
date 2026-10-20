@@ -189,9 +189,12 @@ class DigestSession:
         self.key = _sha(self.binding)
         self.path = self.directory/(self.key+'.json')
         self.entries = {}
+        self.semantic_objects = {}
+        self.semantic_bytes = 0
+        self.invocation_pid = os.getpid()
         self.native_read_budget = None
         self._loaded_entries_sha = None
-        self.stats = dict(full_reads=0, full_bytes=0, reused_reads=0, reused_bytes=0,
+        self.stats = dict(semantic_reused_reads=0, full_reads=0, full_bytes=0, reused_reads=0, reused_bytes=0,
                           cache_status='unused', role=role, generation_sha256=self.key,
                           pid=os.getpid(), wall_seconds=0.0, thread_io_delta=None)
 
@@ -401,6 +404,7 @@ class DigestSession:
             yield
         finally:
             ACTIVE.reset(token)
+            self.semantic_objects.clear();self.semantic_bytes = 0
             self.stats['wall_seconds'] += time.monotonic()-started
             self.stats['peak_process_rss_kib'] = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
             after = _thread_io()

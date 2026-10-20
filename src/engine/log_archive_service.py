@@ -60,20 +60,28 @@ def _snapshot_manifest_path(target_date: str, profile: str) -> Path:
     )
 
 
-def load_monitor_snapshot(kind: str, target_date: str) -> dict | None:
+def load_monitor_snapshot(kind: str, target_date: str, *, section_names=None) -> dict | None:
     """Load monitor snapshots from canonical JSON/GZip files only."""
     path = _snapshot_path(kind, target_date)
     if not path.exists() and Path(f"{path}.gz").exists():
         path = Path(f"{path}.gz")
     if path.exists():
         try:
-            if path.suffix == ".gz":
-                with gzip.open(path, "rt", encoding="utf-8") as handle:
-                    return json.load(handle)
-            with open(path, encoding="utf-8") as handle:
-                return json.load(handle)
+            from src.engine.lifecycle.research_json_stream import selected_object
+            opener = gzip.open if path.suffix == '.gz' else open
+            before = path.stat()
+            with opener(path, 'rt', encoding='utf-8') as handle:
+                value = (json.load(handle) if section_names is None else selected_object(
+                    handle, {'sections': {name: None for name in section_names}, 'meta': None}))
+            after = path.stat()
+            if (before.st_ino, before.st_size, before.st_mtime_ns, before.st_ctime_ns) != (
+                    after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns):
+                return None
+            return value
         except Exception:
             pass
+    if section_names is not None:
+        return None  # Do not silently fall back to decoding the entire census.
     return load_monitor_snapshot_file_first(kind, target_date)
 
 
@@ -826,16 +834,38 @@ def _read_matching_lines(
 ) -> list[str]:
     if not path.exists() or not path.is_file():
         return []
-
-    opener = gzip.open if path.suffix == ".gz" else open
+    from src.engine.infrastructure.validation_digest_session import ACTIVE, identity
+    import time
+    session = ACTIVE.get()
+    if session is not None and session.invocation_pid != os.getpid():
+        session = None
+    before = identity(path) if session is not None else None
+    key = ('dated_log_lines', str(path.absolute()), target_date)
+    entry = session.semantic_objects.get(key) if session is not None else None
+    if entry and entry[0] == before and time.monotonic() - entry[2] <= session.ttl:
+        return [line for line in entry[1] if not marker or marker in line]
+    opener = gzip.open if path.suffix == '.gz' else open
     lines: list[str] = []
-    with opener(path, "rt", encoding="utf-8", errors="ignore") as handle:
+    cached_lines = [] if session is not None else None
+    cached_bytes = 0
+    with opener(path, 'rt', encoding='utf-8', errors='ignore') as handle:
         for raw_line in handle:
-            if f"[{target_date}" not in raw_line:
+            if f'[{target_date}' not in raw_line:
                 continue
-            if marker and marker not in raw_line:
-                continue
-            lines.append(raw_line.strip())
+            line = raw_line.strip()
+            if not marker or marker in raw_line:
+                lines.append(line)
+            if cached_lines is not None:
+                cached_bytes += len(line.encode('utf-8'))
+                if cached_bytes <= 1024 * 1024:
+                    cached_lines.append(line)
+                else:
+                    cached_lines = None
+    if cached_lines is not None and identity(path) == before:
+        if session.semantic_bytes + cached_bytes > 4 * 1024 * 1024:
+            session.semantic_objects.clear();session.semantic_bytes = 0
+        session.semantic_objects[key] = (before, cached_lines, time.monotonic(), cached_bytes)
+        session.semantic_bytes += cached_bytes
     return lines
 
 
@@ -1129,3 +1159,15 @@ def save_monitor_snapshots_for_date_with_profile(
         return result
 
     return _finalize_snapshot_manifest()
+
+
+def tail_log_lines(path: Path, count: int = 5000) -> list[str]:
+    """Read the final newline-delimited log lines without loading the prefix."""
+    if count <= 0:return []
+    chunks=[];newlines=0
+    with Path(path).open('rb') as handle:
+        handle.seek(0,os.SEEK_END);offset=handle.tell()
+        while offset and newlines<=count:
+            size=min(offset,65536);offset-=size;handle.seek(offset)
+            block=handle.read(size);chunks.append(block);newlines+=block.count(b'\n')
+    return b''.join(reversed(chunks)).decode('utf-8',errors='replace').splitlines()[-count:]

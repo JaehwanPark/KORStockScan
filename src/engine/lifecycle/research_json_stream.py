@@ -7,6 +7,7 @@ Large timelines become content-addressed normalized events in a private root.
 import hashlib
 import json
 from pathlib import Path
+from contextlib import nullcontext
 from .research_input_budget import Claim
 from . import research_storage as storage
 
@@ -91,13 +92,18 @@ def resident_completed_rows(trades,output_root):
 
 
 class Reader:
-    def __init__(self,handle,expected_generation=None):
+    def __init__(self,handle,expected_generation=None,*,max_bytes=None,budgeted=True):
+        self.max_bytes=max_bytes;self.budgeted=budgeted;self.read_bytes=0
         self.expected_generation=expected_generation;self.source_sha=hashlib.sha256();self.source_size=0
         self.handle=handle;self.buffer='';self.offset=0;self.eof=False
         self.decoder=json.JSONDecoder()
     def fill(self):
         self.buffer=self.buffer[self.offset:];self.offset=0
         text=self.handle.read(65536)
+        if self.max_bytes is not None:
+            self.read_bytes+=len(text.encode('utf-8'))
+            if self.read_bytes>self.max_bytes:
+                raise ValueError('research_json_source_size_exceeded')
         if self.expected_generation is not None:
             raw=text.encode('utf-8');self.source_sha.update(raw);self.source_size+=len(raw)
         self.buffer+=text;self.eof=not text
@@ -107,20 +113,23 @@ class Reader:
             if not self.fill():return ''
         return self.buffer[self.offset]
     def spaces(self):
-        while self.peek() and self.peek().isspace():self.offset+=1
+        while self.peek() and self.peek() in ' \r\n\t':self.offset+=1
     def take(self,expected):
         self.spaces()
         if self.peek()!=expected:raise ValueError('research_legacy_json_structure_invalid')
         self.offset+=1
     def value(self,limit=2*1024*1024):
         self.spaces()
-        with Claim(limit*8):
+        with Claim(limit*8) if self.budgeted else nullcontext():
             while True:
                 try:
                     value,end=self.decoder.raw_decode(self.buffer,self.offset)
                     # A number at a chunk boundary may have more digits.
-                    if end==len(self.buffer) and not self.eof and isinstance(value,(int,float)):
-                        if self.fill():continue
+                    if not self.eof and isinstance(value,(int,float)) and not isinstance(value,bool):
+                        tail=self.buffer[end:]
+                        incomplete=(not tail or (tail[0] in '.eE' and
+                            not any(char in tail for char in ',]} \r\n\t')))
+                        if incomplete and self.fill():continue
                     if len(self.buffer[self.offset:end].encode('utf-8'))>limit:
                         raise ValueError('research_legacy_json_field_partition_required')
                     self.offset=end;return value
@@ -165,7 +174,7 @@ class Reader:
             if self.peek()==']':self.offset+=1;return
             if not first:self.take(',')
             yield project(self);first=False
-    def fields(self,visit):
+    def fields(self,visit,*,max_fields=256):
         self.take('{');first=True;seen=set()
         while True:
             self.spaces()
@@ -174,8 +183,46 @@ class Reader:
             key=self.value(1024)
             if not isinstance(key,str) or key in seen:raise ValueError('research_legacy_json_field_invalid')
             seen.add(key)
-            if len(seen)>256:raise ValueError('research_legacy_json_field_budget_invalid')
+            if max_fields is not None and len(seen)>max_fields:raise ValueError('research_legacy_json_field_budget_invalid')
             self.take(':');yield from visit(key,self);first=False
+    def finish(self):
+        self.spaces()
+        if self.peek():raise ValueError('research_json_trailing_data')
+
+    def discard(self):
+        """Validate unused JSON without retaining its arrays or strings."""
+        # Most discarded rows are small: let the C decoder validate a bounded
+        # value rather than walking each scalar/string character in Python.
+        try:
+            self.value(65536)
+            return
+        except ValueError as exc:
+            if str(exc) != 'research_legacy_json_field_partition_required':raise
+        self.spaces();char=self.peek()
+        if char=='{':
+            def field(key,r):
+                r.discard()
+                return ()
+            for _ in self.fields(field,max_fields=None):pass
+        elif char=='[':
+            for _ in self.array(lambda r:r.discard()):pass
+        elif char=='"':
+            self.offset+=1
+            while True:
+                char=self.peek()
+                if not char or ord(char)<32:raise ValueError('research_json_string_invalid')
+                self.offset+=1
+                if char=='"':return
+                if char=='\\':
+                    escape=self.peek();self.offset+=1
+                    if not escape or escape not in '"\\/bfnrtu':raise ValueError('research_json_escape_invalid')
+                    if escape=='u':
+                        for _ in range(4):
+                            digit=self.peek()
+                            if not digit or digit not in '0123456789abcdefABCDEF':raise ValueError('research_json_escape_invalid')
+                            self.offset+=1
+        else:self.value()
+
     def target(self,pointer,project):
         found=[False]
         def visit(key,reader):
@@ -255,3 +302,19 @@ def completed_rows(path,output_root,*,expected_generation=None):
                 reader.source_size!=expected_generation.get('size')
                 or reader.source_sha.hexdigest()!=expected_generation.get('sha256')):
             raise ValueError('research_legacy_json_logical_generation_changed')
+
+
+def selected_object(handle, selection):
+    """Project named JSON fields while validating every discarded value."""
+    reader=Reader(handle,budgeted=False)
+    def project(r,fields):
+        result={}
+        def field(key,child):
+            if key not in fields:child.discard()
+            elif fields[key] is None:result[key]=child.value(1024*1024*1024)
+            else:result[key]=project(child,fields[key])
+            return ()
+        for _ in r.fields(field,max_fields=None):pass
+        return result
+    value=project(reader,selection);reader.finish()
+    return value

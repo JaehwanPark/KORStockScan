@@ -200,3 +200,39 @@ def freeze_normalized_sources(data_root, day, out):
         runtime_effect=False,allowed_runtime_apply=False,actual_order_submitted=False))
 
     return outputs
+
+
+def iter_normalized_symbols(path):
+    """Decode a frozen partition once; retain only one symbol's rows in RAM.
+
+    The disk spool keeps legacy sorted-symbol order even when the producer's
+    first-observation order differs. Drain and verify gzip before yielding.
+    """
+    import tempfile
+    import pickle
+    from src.engine.lifecycle.research_json_stream import Reader
+    path=Path(path);before=path.stat();index={};found=False
+    with tempfile.TemporaryFile(mode='w+b') as spool:
+        with gzip.open(path,'rt',encoding='utf-8') as handle:
+            reader=Reader(handle,budgeted=False)
+            def field(key,r):
+                nonlocal found
+                if key!='symbols':r.discard();return
+                found=True
+                def symbol(code,child):
+                    start=spool.tell()
+                    rows=child.value(1024*1024*1024)
+                    if not isinstance(rows,list):raise ValueError('normalized_symbol_rows_invalid')
+                    pickle.dump(rows,spool,protocol=pickle.HIGHEST_PROTOCOL)
+                    index[code]=start
+                    return ()
+                yield from r.fields(symbol,max_fields=None)
+            for _ in reader.fields(field,max_fields=None):pass
+            reader.finish()
+        after=path.stat()
+        if (before.st_dev,before.st_ino,before.st_size,before.st_mtime_ns,before.st_ctime_ns)!=(after.st_dev,after.st_ino,after.st_size,after.st_mtime_ns,after.st_ctime_ns):
+            raise ValueError('normalized_source_changed_during_read')
+        if not found:raise ValueError('normalized_symbols_missing')
+        for symbol,offset in sorted(index.items()):
+            spool.seek(offset)
+            yield symbol,pickle.load(spool)  # Only this invocation's private spool.

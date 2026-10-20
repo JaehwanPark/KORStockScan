@@ -6,6 +6,7 @@ small immutable memberships, masks and aggregates. Daily evaluation cannot
 silently remove an operating policy.
 """
 from __future__ import annotations
+from src.engine.scalping.continuous_reversal_source import iter_normalized_symbols
 import copy
 import gzip
 import json
@@ -184,9 +185,8 @@ def machine_report(data_root,day,publication,parent,*,source=None,publish_output
             if cache:
                 records=cache['records'];masks=cache['masks'];local_coverage=cache['coverage']
             else:
-                raw=json.loads(gzip.decompress(Path(rec['path']).read_bytes()))['symbols']
                 records=[];masks=[];local_coverage=defaultdict(Counter)
-                for symbol,rows_all in sorted(raw.items()):
+                for symbol,rows_all in iter_normalized_symbols(rec['path']):
                     from src.trading.market.session_contract import market_source_partition_venue as _explicit_item_venue
                     for item in sorted({r[9] for r in rows_all if isinstance(r[9],str) and r[9].split('_',1)[0]==symbol and _explicit_item_venue(r[9])==route}):
                         rows=[r[:] for r in rows_all]

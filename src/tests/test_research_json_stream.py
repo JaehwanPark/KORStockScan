@@ -141,3 +141,39 @@ def test_original_stream_hashes_exact_utf8_and_crlf_without_second_read(tmp_path
     assert len(list(completed_rows(path,tmp_path/'out',expected_generation=generation)))==1
     with pytest.raises(ValueError,match='logical_generation_changed'):
         list(completed_rows(path,tmp_path/'changed',expected_generation={**generation,'sha256':'0'*64}))
+
+
+def test_selected_object_drains_large_census_without_resident_value():
+    import io
+    from src.engine.lifecycle.research_json_stream import selected_object
+    source = {'sections': {'recent_trades': [{'id': 1}], 'census': [{'id': i} for i in range(10000)]}, 'meta': {'warnings': ['w']}}
+    assert selected_object(io.StringIO(json.dumps(source)), {'sections': {'recent_trades': None}, 'meta': None}) == {
+        'sections': {'recent_trades': [{'id': 1}]}, 'meta': {'warnings': ['w']}}
+    with pytest.raises(ValueError):
+        selected_object(io.StringIO('{"ignored":[garbage],"meta":{}}'), {'meta': None})
+
+
+@pytest.mark.parametrize('raw', ['[1.25,2e-12,3.0]', '[123456789,1e+30,-2.2]', '{"value":1.23}'])
+def test_structural_reader_preserves_numbers_at_chunk_boundaries(raw):
+    import io
+    from src.engine.lifecycle.research_json_stream import Reader
+    class Chunks(io.StringIO):
+        def read(self, size=-1):return super().read(min(size, 2))
+    reader = Reader(Chunks(raw), budgeted=False)
+    if raw.startswith('['):
+        value = list(reader.array(lambda r: r.value()))
+    else:
+        value = {}
+        def visit(key, r):
+            value[key] = r.value()
+            return ()
+        for _ in reader.fields(visit):pass
+    reader.finish()
+    assert value == json.loads(raw)
+
+
+def test_structural_projection_rejects_non_json_whitespace():
+    import io
+    from src.engine.lifecycle.research_json_stream import selected_object
+    with pytest.raises(ValueError):
+        selected_object(io.StringIO('{\v"meta":{}}'), {'meta': None})

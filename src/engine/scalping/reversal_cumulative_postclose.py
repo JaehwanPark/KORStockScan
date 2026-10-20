@@ -1,5 +1,6 @@
 """One causal replay for frozen manual variants; no new hypotheses or AI calls."""
 from __future__ import annotations
+from src.engine.scalping.continuous_reversal_source import iter_normalized_symbols
 
 import copy
 import gzip
@@ -121,8 +122,8 @@ def build(data_root,day,publication,parent,*,source=None,publish_outputs=True):
             if cached:
                 records=cached['records'];counts=cached['census'];coverage=cached['coverage']
             else:
-                raw=json.loads(gzip.decompress(path.read_bytes()))['symbols'];records=[];counts=Counter();coverage=Counter()
-                for symbol,source_rows in sorted(raw.items()):
+                records=[];counts=Counter();coverage=Counter()
+                for symbol,source_rows in iter_normalized_symbols(path):
                     item=symbol+('_NX' if route=='NXT' else '_AL');rows=[r[:] for r in source_rows]
                     for r in rows:
                         if r[9]!=item:r[8]=0

@@ -1129,3 +1129,77 @@ def test_prefix_reuse_requires_original_current_producer_generation(tmp_path, mo
         path.write_text(json.dumps(body))
     assert service.verified_postclose_exit_prefix_manifest(day, data_root=tmp_path) is None
     if mutation == 'changed_current_code': assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize('compressed', [False, True])
+def test_snapshot_selected_sections_preserve_recent_rows_without_census(tmp_path, monkeypatch, compressed):
+    import gzip
+    import json
+    from src.engine import log_archive_service as owner
+    monkeypatch.setattr(owner, 'MONITOR_SNAPSHOT_DIR', tmp_path)
+    path = tmp_path / 'trade_review_2026-10-19.json'
+    original = {'sections': {'recent_trades': [{'id': 'a', 'profit_rate': None}], 'completed_trade_projection': [{'id': i} for i in range(3000)]}, 'meta': {'warnings': ['source_gap']}}
+    raw = json.dumps(original).encode()
+    if compressed:
+        path.with_suffix('.json.gz').write_bytes(gzip.compress(raw))
+    else:
+        path.write_bytes(raw)
+    result = owner.load_monitor_snapshot('trade_review', '2026-10-19', section_names=('recent_trades',))
+    assert result == {'sections': {'recent_trades': original['sections']['recent_trades']}, 'meta': original['meta']}
+
+
+def test_log_tail_is_bounded_and_matches_original_lines(tmp_path, monkeypatch):
+    from src.engine.log_archive_service import tail_log_lines
+    path = tmp_path / 'cron.log'
+    raw = ('prefix padding ' * 30000 + '\n' + '\n'.join(f'line {i} 한글' for i in range(6000))).encode()
+    path.write_bytes(raw)
+    assert tail_log_lines(path) == raw.decode().splitlines()[-5000:]
+    monkeypatch.setattr(Path, 'read_text', lambda *a, **k: pytest.fail('whole file read_text'))
+    assert tail_log_lines(path, 2) == ['line 5998 한글', 'line 5999 한글']
+
+
+def test_date_log_filter_keeps_late_rotation_and_archive_fallback(tmp_path, monkeypatch):
+    from src.engine import log_archive_service as owner
+    import gzip
+    monkeypatch.setattr(owner, 'LOG_ARCHIVE_DIR', tmp_path / 'archive')
+    log = tmp_path / 'live.log'
+    log.write_text('[2026-10-18 09:00] OLD\n[2026-10-19 09:00] NEW\n')
+    rotated = tmp_path / 'live.log.1'
+    rotated.write_text('[2026-10-19 08:00] LATE\n')
+    archive = owner.archived_log_path(log, '2026-10-19')
+    archive.parent.mkdir(parents=True)
+    archive.write_bytes(gzip.compress(b'[2026-10-19 07:00] ARCHIVED\n'))
+    assert owner.iter_target_log_lines([log], target_date='2026-10-19') == ['[2026-10-19 09:00] NEW', '[2026-10-19 08:00] LATE']
+    log.unlink();rotated.unlink()
+    assert owner.iter_target_log_lines([log], target_date='2026-10-19') == ['[2026-10-19 07:00] ARCHIVED']
+
+
+def test_date_log_reuse_is_bound_to_generation_and_keeps_late_rows(tmp_path, monkeypatch):
+    from src.engine import log_archive_service as owner
+    from src.engine.infrastructure.validation_digest_session import postclose_session
+    path = tmp_path / 'events.log'
+    path.write_text('[2026-10-18 10:00] OLD\n[2026-10-19 10:00] A\n[2026-10-19 10:01] B\n')
+    import builtins
+    native = builtins.open
+    opened = []
+    def counted(candidate, *args, **kwargs):
+        opened.append(candidate)
+        return native(candidate, *args, **kwargs)
+    monkeypatch.setattr(owner, 'open', counted, raising=False)
+    with postclose_session(tmp_path, '2026-10-19'):
+        assert owner._read_matching_lines(path, target_date='2026-10-19', marker='A') == ['[2026-10-19 10:00] A']
+        assert owner._read_matching_lines(path, target_date='2026-10-19', marker='B') == ['[2026-10-19 10:01] B']
+        assert len(opened) == 1
+        with path.open('a') as handle:handle.write('[2026-10-19 10:02] A late\n')
+        assert len(owner._read_matching_lines(path, target_date='2026-10-19', marker='A')) == 2
+        assert len(opened) == 2
+
+
+def test_dated_log_cache_does_not_retain_large_unselected_population(tmp_path):
+    from src.engine import log_archive_service as owner
+    from src.engine.infrastructure.validation_digest_session import postclose_session
+    path = tmp_path / 'events.log'
+    path.write_text(('[2026-10-19 09:00] OTHER ' + 'x' * 1000 + '\n') * 1100 + '[2026-10-19 09:01] SELECTED\n')
+    with postclose_session(tmp_path, '2026-10-19') as session:
+        assert owner._read_matching_lines(path, target_date='2026-10-19', marker='SELECTED') == ['[2026-10-19 09:01] SELECTED']
+        assert not session.semantic_objects
