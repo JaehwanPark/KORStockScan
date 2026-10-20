@@ -41,11 +41,12 @@ METRIC_CONTRACT = dict(
 
 
 def holding_gap_identity(semantics):
-    """Identify only fully enumerated, native v2 missing-crossing evidence.
+    """Identify only fully enumerated, native v2 original gap evidence.
 
     Report generations remain provenance, but a new clock/report location is
     not a new loss of the same original position, BUY fill and signal.
-    Unbound, partial or ambiguous populations keep generation-based alerting.
+    Original missing-BUY evidence uses exact signal/terminal source hashes;
+    partial or ambiguous populations keep generation-based alerting.
     """
     if (semantics.get('schema') != 'holding_profit_exit_semantics_v2'
             or semantics.get('status') != 'source_gap'
@@ -62,7 +63,9 @@ def holding_gap_identity(semantics):
     expected, entries = set(), []
     for gap in gaps:
         if (not isinstance(gap, dict) or not isinstance(gap.get('position_id'), str)
-                or not gap['position_id'] or gap.get('reason') != 'tp_first_crossing_transition_missing'):
+                or not gap['position_id'] or gap.get('reason') not in {
+                    'tp_first_crossing_transition_missing', 'tp_signal_buy_generation_missing',
+                    'tp_terminal_buy_generation_unbound'}):
             return None
         expected.add((gap['position_id'], gap['reason']))
     if len(expected) != len(gaps):
@@ -75,11 +78,27 @@ def holding_gap_identity(semantics):
             return None
         pair = (detail.get('position_id'), detail.get('reason'))
         if (pair not in expected or pair in seen
-                or detail.get('source_disposition') != 'sampled_grid_exhausted_before_signal'
                 or detail.get('historical_recovery_proven') is not False
                 or not isinstance(detail.get('signal_id'), str) or not detail['signal_id']):
             return None
         seen.add(pair)
+        if pair[1] != 'tp_first_crossing_transition_missing':
+            partner = 'tp_terminal_buy_generation_unbound' if pair[1] == 'tp_signal_buy_generation_missing' else 'tp_signal_buy_generation_missing'
+            if ((pair[0], partner) not in expected
+                    or detail.get('source_disposition') != 'original_buy_generation_absent'
+                    or detail.get('position_key') != 'record:' + pair[0]
+                    or not isinstance(detail.get('stock_code'), str)
+                    or len(detail['stock_code']) != 6 or not detail['stock_code'].isascii()
+                    or not detail['stock_code'].isdigit()
+                    or any(not isinstance(detail.get(k), str) or len(detail[k]) != 64
+                           or any(c not in '0123456789abcdef' for c in detail[k])
+                           for k in ('signal_source_sha256', 'terminal_source_sha256'))):
+                return None
+            entries.append([detail['position_key'], detail['stock_code'], detail['signal_id'],
+                detail['signal_source_sha256'], detail['terminal_source_sha256'], pair[1], detail['source_disposition']])
+            continue
+        if detail.get('source_disposition') != 'sampled_grid_exhausted_before_signal':
+            return None
         matches = [r for r in lifecycle if isinstance(r, dict)
                    and r.get('position_key') == 'record:' + pair[0]
                    and r.get('signal_id') == detail['signal_id']]
@@ -89,25 +108,41 @@ def holding_gap_identity(semantics):
         if not isinstance(buy, str) or len(buy) != 64 or any(c not in '0123456789abcdef' for c in buy):
             return None
         entries.append([matches[0]['position_key'], buy, detail['signal_id'], pair[1], detail['source_disposition']])
-    return {'schema': 'holding_source_gap_identity_v1', 'gaps': sorted(entries)}
+    identity = {'schema': 'holding_source_gap_identity_v2' if any(len(r) == 7 for r in entries)
+                else 'holding_source_gap_identity_v1', 'gaps': sorted(entries)}
+    return identity if _holding_identity(dict(stage='holding_profit_exit', scope='report',
+        reason='source_gap', status='source_gap', source_gap_identity=identity)) else None
 
 
 def _holding_identity(incident):
     identity = incident.get('source_gap_identity')
     if (incident.get('stage') != 'holding_profit_exit' or incident.get('scope') != 'report'
             or incident.get('reason') != 'source_gap' or incident.get('status') != 'source_gap'
-            or not isinstance(identity, dict) or identity.get('schema') != 'holding_source_gap_identity_v1'):
+            or not isinstance(identity, dict) or identity.get('schema') not in {
+                'holding_source_gap_identity_v1', 'holding_source_gap_identity_v2'}):
         return None
     rows = identity.get('gaps')
     if (not isinstance(rows, list) or not 0 < len(rows) <= 128
-            or any(not isinstance(r, list) or len(r) != 5
+            or any(not isinstance(r, list) or len(r) not in {5, 7}
                    or not all(isinstance(v, str) and v for v in r)
-                   or not r[0].startswith('record:') or len(r[1]) != 64
-                   or any(c not in '0123456789abcdef' for c in r[1])
-                   or r[3:] != ['tp_first_crossing_transition_missing', 'sampled_grid_exhausted_before_signal']
-                   for r in rows)
+                   or not r[0].startswith('record:') or not r[0][7:] for r in rows)
             or len({tuple(r) for r in rows}) != len(rows)):
         return None
+    for r in rows:
+        if len(r) == 5:
+            if (len(r[1]) != 64 or any(c not in '0123456789abcdef' for c in r[1])
+                    or r[3:] != ['tp_first_crossing_transition_missing', 'sampled_grid_exhausted_before_signal']):
+                return None
+        else:
+            if (identity['schema'] != 'holding_source_gap_identity_v2'
+                    or len(r[1]) != 6 or not r[1].isascii() or not r[1].isdigit()
+                    or any(len(v) != 64 or any(c not in '0123456789abcdef' for c in v) for v in r[3:5])
+                    or r[5] not in {'tp_signal_buy_generation_missing', 'tp_terminal_buy_generation_unbound'}
+                    or r[6] != 'original_buy_generation_absent'):
+                return None
+            partner = 'tp_terminal_buy_generation_unbound' if r[5] == 'tp_signal_buy_generation_missing' else 'tp_signal_buy_generation_missing'
+            if r[:5] + [partner, r[6]] not in rows:
+                return None
     return {'schema': identity['schema'], 'gaps': sorted(rows)}
 
 

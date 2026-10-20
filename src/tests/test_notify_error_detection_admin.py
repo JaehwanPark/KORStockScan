@@ -721,3 +721,39 @@ def test_holding_gap_identity_rejects_partial_ambiguous_or_other_losses():
     changed=json.loads(json.dumps(alert));changed['source_gap_identity']['gaps'].append(
         ['record:43','d'*64,'signal-2','tp_first_crossing_transition_missing','sampled_grid_exhausted_before_signal'])
     assert fingerprint(alert)!=fingerprint(changed)
+
+
+def test_original_missing_buy_gap_uses_native_delivery_dedup_and_keeps_changed_sources_actionable(tmp_path, monkeypatch):
+    import copy
+    from src.tests.test_holding_exit_sentinel import _missing_buy_flow_report
+    from src.engine.monitoring.semantic_incident_contract import holding_gap_identity, fingerprint
+    _, alert, observed, details = _holding_gap_fixture()
+    identity = holding_gap_identity(_missing_buy_flow_report())
+    alert['source_gap_identity'] = observed['source_gap_identity'] = identity
+    report, state = tmp_path/'report.json', tmp_path/'state.json'
+    sent = []
+    monkeypatch.setattr(notifier, '_load_telegram_config', lambda: ('fake', 'fake'))
+    monkeypatch.setattr(notifier, '_send_telegram', lambda *_: sent.append(1))
+    def notify():
+        report.write_text(json.dumps(dict(target_date='2026-10-16', results=[
+            dict(detector_id='artifact_freshness', details=details)])))
+        return notifier.notify_from_report(report, mode='full', log_file='', state_file=state)
+    assert notify() == 'sent'
+    alert.update(generation='c'*64, artifact='/new-release/report')
+    observed['report_sha256'] = alert['generation']
+    details['semantic_source_bindings'][0]['generation'] = alert['generation']
+    assert notify() == 'duplicate_incident'
+    persisted = json.loads(state.read_text())
+    assert persisted['active_incident_count'] == 1
+    assert persisted['semantic_incidents'][fingerprint(alert)]['status'] == 'source_gap'
+    changed = holding_gap_identity(_missing_buy_flow_report(damage='terminal'))
+    alert['source_gap_identity'] = observed['source_gap_identity'] = changed
+    assert notify() == 'sent' and len(sent) == 2
+    for defect in ('missing', 'mismatch', 'invalid', 'partial', 'new_gap'):
+        semantics = copy.deepcopy(_missing_buy_flow_report())
+        if defect == 'missing': semantics['source_gap_details'].pop()
+        if defect == 'mismatch': semantics['source_gap_details'][0]['terminal_source_sha256'] = 'f'*64
+        if defect == 'invalid': semantics['source_gap_details'][0]['signal_source_sha256'] = 'bad'
+        if defect == 'partial': semantics['runtime_consumption_gaps'] = ['unproven']
+        if defect == 'new_gap': semantics['source_gaps'].append(dict(position_id='99', reason='new_loss'))
+        assert holding_gap_identity(semantics) is None, defect

@@ -217,7 +217,16 @@ REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS = {'holding_vote': (
     ('e28c76991bc6f09b02d44469d5238ca2d6b0f45f41c5a4414c67054197dd44ea',
      '3eeed519ccccdc4f3f0285577f1a6a22c217a505b5157a64577fe09d8b2ffafc'),
     ('791757cb183525948b6378ee41deaa3ab03828ee4bdaea851bdfb653b804804b',
-     '3eeed519ccccdc4f3f0285577f1a6a22c217a505b5157a64577fe09d8b2ffafc'))}
+     '3eeed519ccccdc4f3f0285577f1a6a22c217a505b5157a64577fe09d8b2ffafc'),
+    ('69b00417b7396d7a15840c7f0a53ef91399d755d430fb3017a9d0596127d8b11',
+     'bf082809aeb6ea19715f20951d6459f9c015413dd8277c23d1b5b92d9aa4e4db'),
+    ('e28c76991bc6f09b02d44469d5238ca2d6b0f45f41c5a4414c67054197dd44ea',
+     'bf082809aeb6ea19715f20951d6459f9c015413dd8277c23d1b5b92d9aa4e4db'),
+    ('791757cb183525948b6378ee41deaa3ab03828ee4bdaea851bdfb653b804804b',
+     'bf082809aeb6ea19715f20951d6459f9c015413dd8277c23d1b5b92d9aa4e4db'),
+    ('3eeed519ccccdc4f3f0285577f1a6a22c217a505b5157a64577fe09d8b2ffafc',
+     'bf082809aeb6ea19715f20951d6459f9c015413dd8277c23d1b5b92d9aa4e4db'),
+)}
 
 # SourceReadReduction1020: preserved native reports need independent fixtures
 # for the exact report-reader successor, never a rewritten historical contract.

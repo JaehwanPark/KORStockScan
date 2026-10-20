@@ -1681,13 +1681,14 @@ def test_completion_census_handoff_binds_exact_complete_generation(
                 '7df7ea3b9' if generation == 'late_cost_revision' else
                 '082234567' if generation == 'prefix_code_binding' else 'bf8465b5d')
     for name, expected in hashes.items():
-        raw = (subprocess.check_output(['git','-C',str(canonical),'show','e3cb1d9ca:'+name]) if generation == 'frozen_input' else
+        raw = (subprocess.check_output(['git','-C',str(canonical),'show',
+                    ('04be13cf1' if name in handoff.REVIEWED_FROZEN_INPUT_HASHES else 'e3cb1d9ca')+':'+name]) if generation == 'frozen_input' else
                subprocess.check_output(['git','-C',str(canonical),'show','a7c0b0dc5:'+name]) if generation == 'broker_custody' else
                subprocess.check_output(['git','-C',str(canonical),'show','4b278bbb3:'+name]) if generation == 'vote_metadata' else
                subprocess.check_output(['git','-C',str(canonical),'show','a1748b409:'+name]) if generation == 'pre_entry_observer' else
                subprocess.check_output(['git','-C',str(canonical),'show','ab1c46633:'+name]) if generation == 'stop_indexed_votes' else
                subprocess.check_output(['git', '-C', str(canonical), 'show', revision+':'+name]))
-        assert hashlib.sha256(raw).hexdigest() == expected
+        assert hashlib.sha256(raw).hexdigest() == expected, name
         (root/name).write_bytes(raw)
     for name in handoff.REVIEWED_POSTCLOSE_READER_HASHES:
         if generation not in {'legacy_archive_authority','auxiliary_data_root','completed_offline','completed_empty','native_empty_cohorts','assembler_budget','calendar_physical','stop_shared_position','stop_forward_stream','stop_indexed_votes','pre_entry_observer','vote_metadata','broker_custody','frozen_input'} and name not in hashes:
@@ -1745,10 +1746,11 @@ def test_archive_authority_successor_accepts_the_issued_full_reader_origin(avg_d
 @pytest.mark.parametrize('family', ['main_stop', 'holding_vote', 'pre_submit_delay'])
 @pytest.mark.parametrize('fault', [None, 'missing', 'dirty', 'committed_change'])
 @pytest.mark.parametrize('generation,reader_path', [(generation,path)
-    for generation in ('source_reader','source_integration')
-    for path in ('src/engine/lifecycle/research_json_stream.py',
+    for generation in ('source_reader','source_integration','original_gap')
+    for path in (('src/engine/scalping/holding_profit_exit_semantics.py',) if generation=='original_gap' else
+        ('src/engine/lifecycle/research_json_stream.py',
         'src/engine/automation/main_startup_validation.py','src/engine/automation/next_preopen_readiness.py',
-        *(['src/engine/infrastructure/startup_validation_code_context.py'] if generation=='source_integration' else []))])
+        *(['src/engine/infrastructure/startup_validation_code_context.py'] if generation=='source_integration' else [])))])
 def test_source_reader_handoff_preserves_issued_policy_and_exact_dependencies(tmp_path, family, fault, reader_path,generation):
     import hashlib
     import os
@@ -1770,11 +1772,12 @@ def test_source_reader_handoff_preserves_issued_policy_and_exact_dependencies(tm
     for variant in handoff.REVIEWED_BROKER_CUSTODY_DEPENDENCY_VARIANTS.values():
         names.update(variant['dependencies'])
     names.update(handoff.REVIEWED_SOURCE_READER_HASHES)
-    if generation=='source_integration':names.update(handoff.REVIEWED_SOURCE_INTEGRATION_HASHES)
+    if generation!='source_reader':names.update(handoff.REVIEWED_SOURCE_INTEGRATION_HASHES)
+    if generation=='original_gap':names.update(handoff.REVIEWED_ORIGINAL_GAP_HASHES)
     names.add('src/engine/automation/intraday_release_handoff.py')
     for name in names:
         path = root/name; path.parent.mkdir(parents=True,exist_ok=True)
-        path.write_bytes((canonical/name).read_bytes() if generation=='source_integration' else
+        path.write_bytes((canonical/name).read_bytes() if generation!='source_reader' else
             subprocess.check_output(['git','-C',str(canonical),'show','0255cb05f:'+os.path.normpath(name)]))
     original = {key: hashlib.sha256(subprocess.check_output(
         ['git','-C',str(root),'show',origin+':'+os.path.normpath(name)])).hexdigest()

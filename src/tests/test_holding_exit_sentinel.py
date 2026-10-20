@@ -1448,6 +1448,40 @@ def test_missing_buy_source_is_a_gap_and_malformed_identity_remains_invalid(iden
         assert report['source_gaps']==[dict(position_id='21',reason='tp_signal_buy_generation_missing')]
 
 
+def _missing_buy_flow_report(*, damage=None):
+    from dataclasses import replace
+    event, mechanical, rows, lineage, at = _semantic_flow()
+    rows[1].fields['buy_fill_identity'] = 'None'
+    terminal = replace(rows[1], emitted_at=at + timedelta(seconds=4), stage='sell_completed', fields={
+        'pipeline_lifecycle_population_scope': 'real_record_bound', 'exit_rule': 'scalp_trailing_take_profit',
+        'holding_path_terminal_signal_binding': 'source_gap_generation_mismatch',
+        'order_no': '0017685', 'remaining_sell_qty': 0, 'execution_no': '9708'})
+    rows += [event(2, 'exit_signal', lineage),
+             event(3, 'sell_order_sent', {**lineage, 'ord_no': '0017685'}), terminal]
+    if damage == 'policy': rows[1].fields['policy_sha256'] = 'f' * 64
+    if damage == 'terminal': terminal.fields['execution_no'] = '9709'
+    if damage == 'duplicate': rows.append(terminal)
+    if damage == 'symbol': rows[-1] = replace(terminal, stock_code='999999')
+    if damage == 'unrelated': rows.append(replace(terminal, record_id='99', stage='holding_started', fields={}))
+    return audit_profit_exit_flow(rows, target_date='2026-10-09', load_votes=lambda _: [],
+        mechanical_policy_receipt=mechanical, consumed_pid=42)
+
+
+def test_original_missing_buy_evidence_is_stable_without_fabricating_lineage_or_policy_success():
+    from src.engine.monitoring.semantic_incident_contract import holding_gap_identity
+    report = _missing_buy_flow_report()
+    identity = holding_gap_identity(report)
+    assert identity and identity['schema'] == 'holding_source_gap_identity_v2'
+    assert len(identity['gaps']) == 2 and report['lifecycle'] == []
+    assert report['status'] == 'source_gap' and report['economics_status'] == 'pending'
+    assert identity == holding_gap_identity(_missing_buy_flow_report(damage='unrelated'))
+    assert identity != holding_gap_identity(_missing_buy_flow_report(damage='terminal'))
+    for damage in ('duplicate', 'symbol', 'policy'):
+        assert holding_gap_identity(_missing_buy_flow_report(damage=damage)) is None
+    assert _missing_buy_flow_report(damage='policy')['findings'] == [
+        dict(position_id='21', reason='tp_signal_policy_hash_mismatch')]
+
+
 @pytest.mark.parametrize('damage', [False,True])
 def test_terminal_funnel_counts_one_native_receipt_without_promoting_missing_buy_generation(damage):
     from dataclasses import replace

@@ -433,9 +433,6 @@ def audit_profit_exit_flow(
                     or buy_identity and re.fullmatch(r'[0-9a-f]{64}',buy_identity) is None):
                 add(findings, record_id, "tp_signal_identity_or_market_invalid")
                 continue
-            if not buy_identity:
-                add(gaps, record_id, "tp_signal_buy_generation_missing")
-                continue
             if fields.get("policy_sha256") != input_snapshot_id(policy):
                 add(findings, record_id, "tp_signal_policy_hash_mismatch")
                 continue
@@ -448,6 +445,29 @@ def audit_profit_exit_flow(
             elif (policy_bundle_sha256 is None
                   and fields.get("policy_load_status") in {"estimated_provisional_loaded","validated_successor_loaded","verified_incumbent_loaded"}):
                 add(policy_gaps, record_id, "tp_loaded_policy_bundle_missing")
+            if not buy_identity:
+                add(gaps, record_id, "tp_signal_buy_generation_missing")
+                # Identify the original missing-source incident, without
+                # inventing BUY lineage or advancing its lifecycle. Only a
+                # complete, unambiguous signal/terminal population qualifies.
+                # Hash original canonical rows, not the growing session/report.
+                if (len(snapshots) == len(completed) == 1 and not partial
+                        and getattr(completed[0], 'stock_code', None) == event.stock_code
+                        and re.fullmatch(r'[0-9]{6}', event.stock_code or '')
+                        and _epoch(completed[0].emitted_at) >= _epoch(event.emitted_at)
+                        and _fields(completed[0]).get('holding_path_terminal_signal_binding')
+                        == 'source_gap_generation_mismatch'
+                        and str(_fields(completed[0]).get('order_no') or '').isdigit()
+                        and _float(_fields(completed[0]).get('remaining_sell_qty')) == 0):
+                    proof = dict(position_id=record_id, position_key=position_key,
+                        stock_code=event.stock_code, signal_id=signal_id,
+                        signal_source_sha256=event_generation([event]),
+                        terminal_source_sha256=event_generation(completed),
+                        source_disposition='original_buy_generation_absent',
+                        historical_recovery_proven=False)
+                    for reason in ('tp_signal_buy_generation_missing', 'tp_terminal_buy_generation_unbound'):
+                        gap_details.append(dict(proof, reason=reason))
+                continue
             crossing_rows = [row for row in transitions
                              if _epoch(row.emitted_at) <= _epoch(event.emitted_at)
                              and _fields(row).get("position_key") == position_key

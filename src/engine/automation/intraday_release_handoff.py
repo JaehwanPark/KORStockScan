@@ -2808,6 +2808,24 @@ REVIEWED_SOURCE_INTEGRATION_PAIRS = {'src/engine/automation/main_startup_validat
  'src/engine/infrastructure/startup_validation_code_context.py': (('4d20ceaccb28ac3ab7e3521ded1603abb3587edb8b3ad828a5ae505d02da31c3',
                                                                    '5e78314e2105d6a8c645bda55aed36036db797ef447dc5085c87dd3cf91d8bed'),)}
 
+# Exact report-only original-gap evidence successor. Preserve all issued profiles.
+REVIEWED_ORIGINAL_GAP_HASHES = {'src/engine/scalping/holding_profit_exit_semantics.py': 'e76d509fa67cb46100d1fffd1b272fbc3355b3c729604a348e22f653f8b0d269'}
+REVIEWED_ORIGINAL_GAP_DEPENDENCY_VARIANTS = {
+    key: {**value,
+        'selector_path': 'src/engine/scalping/holding_profit_exit_semantics.py',
+        'selector_sha256': REVIEWED_ORIGINAL_GAP_HASHES['src/engine/scalping/holding_profit_exit_semantics.py'],
+        'dependencies': {**value['dependencies'], **REVIEWED_ORIGINAL_GAP_HASHES},
+        'contract_extensions': {
+            origin: {name: REVIEWED_ORIGINAL_GAP_HASHES.get(os.path.normpath(name), digest)
+                     for name, digest in paths.items()}
+            for origin, paths in value['contract_extensions'].items()},
+    } for key, value in REVIEWED_SOURCE_INTEGRATION_DEPENDENCY_VARIANTS.items()
+}
+REVIEWED_SOURCE_INTEGRATION_PAIRS['src/engine/scalping/holding_profit_exit_semantics.py'] = tuple(
+    (old, REVIEWED_ORIGINAL_GAP_HASHES['src/engine/scalping/holding_profit_exit_semantics.py'])
+    for old in ('7512700df7e7d3bf705ec3e5d866bf9b916e564d60312fa3918f950c34431b78',
+                '586d26b7c6a9bd7041477f490c1f897f3d305d7dd07b2d56af3e368221af29de'))
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -2861,7 +2879,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         dependencies = generations.get(trigger_sha, {})
         # New exact selectors precede their historical parent. The first match
         # selects one complete generation, never per-file SHA alternatives.
-        for variants in (REVIEWED_SOURCE_INTEGRATION_DEPENDENCY_VARIANTS,
+        for variants in (REVIEWED_ORIGINAL_GAP_DEPENDENCY_VARIANTS,
+                         REVIEWED_SOURCE_INTEGRATION_DEPENDENCY_VARIANTS,
                          REVIEWED_SOURCE_READER_DEPENDENCY_VARIANTS,
                          REVIEWED_FROZEN_INPUT_DEPENDENCY_VARIANTS,
                          REVIEWED_BROKER_CUSTODY_DEPENDENCY_VARIANTS,
@@ -2906,7 +2925,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
                 continue
             selector = variant['selector_path']
             path = root / selector
-            if (variants is REVIEWED_TRAILING_REUSE_DEPENDENCY_VARIANTS
+            if (variants in (REVIEWED_TRAILING_REUSE_DEPENDENCY_VARIANTS,
+                             REVIEWED_ORIGINAL_GAP_DEPENDENCY_VARIANTS)
                     and not path.exists() and not path.is_symlink()):
                 try:
                     revision_bytes(commit,selector)
