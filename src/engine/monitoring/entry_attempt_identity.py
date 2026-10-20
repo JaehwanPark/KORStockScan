@@ -23,6 +23,7 @@ _MACHINE_LINEAGE_FIELDS = frozenset(
         "machine_observation_sha256",
         "machine_capture_status",
         "machine_revision_schema",
+        "machine_revision_parent_sha256",
         "effective_venue",
         "market_session_bucket",
         "policy_bundle_hash",
@@ -165,7 +166,8 @@ def bind_submit_attempt_machine_lineage(stock, code, source, *, replace_existing
     lineage = {
         key: source[key]
         for key in _MACHINE_LINEAGE_FIELDS
-        if source.get(key) not in (None, "", "-", "unknown", "UNKNOWN")
+        if key in source and (key == "machine_revision_parent_sha256"
+            or source[key] not in (None, "", "-", "unknown", "UNKNOWN"))
     }
     required = {
         "entry_primary_decision_owner",

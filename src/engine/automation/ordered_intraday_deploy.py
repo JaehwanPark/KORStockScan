@@ -805,7 +805,9 @@ class Deployment:
                       '--verify', '--target-date', self.day)
         self.run_json(self.candidate, 'src.engine.automation.auxiliary_reader_readiness',
                       '--target-date', self.day)
-        self.checkpoint('prepared')
+        from src.engine.monitoring.sentinel_source_window import prepare
+        source_window = prepare(self.workspace / 'data')
+        self.checkpoint('prepared', sentinel_source_window=source_window)
 
     def start(self):
         self.assert_hold()

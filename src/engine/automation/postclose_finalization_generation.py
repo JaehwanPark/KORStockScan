@@ -74,8 +74,19 @@ def _snapshot_date(path: Path, *, compressed: bool) -> str | None:
     return match.group(1).decode() if match else None
 
 
-def capture_finalization_generation(project: Path, target_date: str) -> dict:
+def capture_finalization_generation(project: Path, target_date: str, *, consumed_checklist: bool = False) -> dict:
     """Bind the current controller generation and postclose exit source bytes."""
+    if consumed_checklist:
+        from src.engine.automation.intraday_release_handoff import historical_checklist_for_observer
+        from src.engine.automation.postclose_done_controller import done_terminal_receipt_issues
+        proof = historical_checklist_for_observer(project, target_date)
+        snapshot = Path(proof['path'])
+        controller = Path(project)/'data/report/postclose_done_controller'/f'postclose_done_controller_{target_date}.json'
+        issues = done_terminal_receipt_issues(controller, target_date, started_after_ns=0,
+                                             generation_only=True, checklist_snapshot=snapshot)
+        if issues:
+            raise FinalizationGenerationError('rebind_current_controller_invalid:'+','.join(issues))
+        return _capture_finalization_generation(project, target_date, checklist_snapshot=snapshot)
     return _capture_finalization_generation(project, target_date)
 
 
@@ -308,8 +319,100 @@ def capture_final_detector_receipt(
     }
 
 
-def capture_detector_retry_prefix(project: Path, target_date: str) -> dict:
-    """Reuse only an unchanged native prefix whose last detector failed.
+def _stable_finalization_source(path):
+    import os
+    import stat
+    before = path.lstat()
+    if not stat.S_ISREG(before.st_mode) or before.st_size > 16 * 1024 * 1024:
+        raise FinalizationGenerationError('retry_bounded_regular_source_required')
+    identity = lambda item: (item.st_dev,item.st_ino,item.st_size,item.st_mtime_ns,item.st_ctime_ns)
+    with os.fdopen(os.open(path,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK),'rb') as stream:
+        opened=os.fstat(stream.fileno())
+        if not stat.S_ISREG(opened.st_mode):
+            raise FinalizationGenerationError('retry_bounded_regular_source_required')
+        raw=stream.read(16*1024*1024+1)
+        if identity(opened)!=identity(os.fstat(stream.fileno())):
+            raise FinalizationGenerationError('retry_source_changed')
+    after = path.lstat()
+    if (not stat.S_ISREG(after.st_mode) or len(raw)!=before.st_size
+            or identity(before)!=identity(opened) or identity(before)!=identity(after)):
+        raise FinalizationGenerationError('retry_source_changed')
+    return raw
+
+
+def _completed_prefix_controller(project, target_date, lines, detector_raw):
+    """Authenticate the sealed predecessor; only summary/checklist may advance."""
+    done = f'[DONE] postclose_finalization target_date={target_date} '
+    final = f'[DONE] postclose_final_detector target_date={target_date} '
+    if len(lines) < 3 or not lines[-2].startswith(done) or not lines[-1].startswith(final):
+        raise FinalizationGenerationError('rebind_completed_native_prefix_required')
+    fields = dict(re.findall(r'(\w+)=([^ ]+)', lines[-2]))
+    last = dict(re.findall(r'(\w+)=([^ ]+)', lines[-1]))
+    for key in ('chain_sha256','snapshot_generation_sha256','detector_report_sha256'):
+        if not re.fullmatch('[0-9a-f]{64}', fields.get(key, '')) or last.get(key) != fields[key]:
+            raise FinalizationGenerationError('rebind_original_marker_invalid')
+    if (fields.get('cleanup') != 'done' or fields.get('detector') != 'done'
+            or last.get('detector') != 'done' or last.get('finalization') != 'done'
+            or fields.get('detector_run_id') != last.get('detector_run_id')
+            or fields.get('finished_at') != last.get('finished_at')
+            or hashlib.sha256(detector_raw).hexdigest() != fields['detector_report_sha256']):
+        raise FinalizationGenerationError('rebind_original_detector_changed')
+    detector = json.loads(detector_raw)
+    if (detector.get('run_id') != fields.get('detector_run_id')
+            or detector.get('summary_severity') not in ('pass','warning')):
+        raise FinalizationGenerationError('rebind_original_detector_invalid')
+    ready = [json.loads(line) for line in lines if line.startswith('{"schema": "next_preopen_readiness_v1"')]
+    if (len(ready) != 1 or ready[0].get('source_date') != target_date
+            or ready[0].get('status') != 'prepared_verified'
+            or not re.fullmatch('[0-9a-f]{64}', str(ready[0].get('controller_sha256') or ''))):
+        raise FinalizationGenerationError('rebind_original_controller_unbound')
+    report = (project/'data/report').resolve()
+    attempts = report/'postclose_done_controller/attempts'
+    candidates = list(attempts.glob(target_date+'_*.json'))
+    if len(candidates) > 256:
+        raise FinalizationGenerationError('rebind_controller_census_exceeded')
+    matches = []; total = 0
+    for path in candidates:
+        raw = _stable_finalization_source(path); total += len(raw)
+        if total > 32*1024*1024:
+            raise FinalizationGenerationError('rebind_controller_bytes_exceeded')
+        if hashlib.sha256(raw).hexdigest() == ready[0]['controller_sha256']:
+            matches.append((path, json.loads(raw)))
+    if len(matches) != 1:
+        raise FinalizationGenerationError('rebind_original_controller_missing')
+    path, old = matches[0]
+    strict_path = Path(str(old.get('verification_attempt_path') or ''))
+    if (Path(str(old.get('attempt_path') or '')).resolve() != path.resolve()
+            or old.get('date') != target_date or old.get('status') != 'done'
+            or old.get('whole_native_chain_done_claimed') is not True
+            or old.get('final_verifier_status') != 'pass'
+            or strict_path.parent.resolve() != (report/'threshold_cycle_postclose_verification/attempts'/target_date)
+            or strict_path.is_symlink()):
+        raise FinalizationGenerationError('rebind_original_controller_invalid')
+    raw = _stable_finalization_source(strict_path)
+    strict = json.loads(raw); binding = strict.get('generation_binding')
+    current = _load(report/'threshold_cycle_postclose_verification'/f'threshold_cycle_postclose_verification_{target_date}.json',
+                    'rebind_current_strict_missing')
+    if (hashlib.sha256(raw).hexdigest() != old.get('verification_attempt_sha256')
+            or strict.get('date') != target_date or strict.get('status') != 'pass'
+            or strict.get('verification_scope') != 'whole_native_chain'
+            or strict.get('whole_native_chain_done_claimed') is not True
+            or strict.get('run_id') != old.get('main_run_id')
+            or not isinstance(binding, dict) or binding.get('source_date') != target_date
+            or binding.get('main_run_id') != old.get('main_run_id')
+            or _logical_sha(binding) != fields['chain_sha256']
+            or not isinstance(current.get('generation_binding'), dict)
+            or {k:v for k,v in binding.items() if k not in ('summary_sha256','checklist_sha256')}
+               != {k:v for k,v in current['generation_binding'].items() if k not in ('summary_sha256','checklist_sha256')}):
+        raise FinalizationGenerationError('rebind_source_or_execution_generation_changed')
+    finished = datetime.fromisoformat(fields['finished_at'])
+    if finished.tzinfo is None or datetime.fromisoformat(detector['timestamp']) > finished:
+        raise FinalizationGenerationError('rebind_original_clock_invalid')
+    return old, fields
+
+
+def capture_detector_retry_prefix(project: Path, target_date: str, *, rebind_completed: bool = False) -> dict:
+    """Reuse a verified native prefix; optionally rebind completed summary closure.
 
     This runs under the finalizer lock before its next START. It grants no
     activation authority and never writes controller, policy or DONE markers.
@@ -317,7 +420,6 @@ def capture_detector_retry_prefix(project: Path, target_date: str) -> dict:
     from src.engine.automation.postclose_done_controller import done_terminal_receipt_issues
     from src.engine.infrastructure.runtime_release_router import selected_release
     import os
-    import stat
     import uuid
 
     project = Path(project).resolve(strict=True)
@@ -330,21 +432,7 @@ def capture_detector_retry_prefix(project: Path, target_date: str) -> dict:
         'cleanup_log': project / 'logs/log_rotation_cleanup_cron.log',
         'failed_detector': data / 'report/error_detection' / f'error_detection_{target_date}.json',
     }
-    def stable_read(path):
-        before = path.lstat()
-        if not stat.S_ISREG(before.st_mode) or before.st_size > 16 * 1024 * 1024:
-            raise FinalizationGenerationError('retry_bounded_regular_source_required')
-        identity = lambda item: (item.st_dev,item.st_ino,item.st_size,item.st_mtime_ns,item.st_ctime_ns)
-        with os.fdopen(os.open(path,os.O_RDONLY|os.O_NOFOLLOW),'rb') as stream:
-            opened=os.fstat(stream.fileno());raw=stream.read(16*1024*1024+1)
-            if identity(opened)!=identity(os.fstat(stream.fileno())):
-                raise FinalizationGenerationError('retry_source_changed')
-        after = path.lstat()
-        if (not stat.S_ISREG(after.st_mode) or len(raw)!=before.st_size
-                or identity(before)!=identity(opened) or identity(before)!=identity(after)):
-            raise FinalizationGenerationError('retry_source_changed')
-        return raw
-    frozen = {name:stable_read(path) for name,path in paths.items()}
+    frozen = {name:_stable_finalization_source(path) for name,path in paths.items()}
     log = frozen['finalization_log'].decode()
     start = f'[START] postclose_finalization target_date={target_date} '
     segment = log[log.rfind(start):] if start in log else ''
@@ -371,13 +459,14 @@ def capture_detector_retry_prefix(project: Path, target_date: str) -> dict:
                     or not re.fullmatch('[0-9a-f]{32}', path.parent.name)
                     or path.resolve() != path or path.parent.is_symlink()):
                 raise FinalizationGenerationError('retry_preserved_path_invalid')
-            raw = stable_read(path)
+            raw = _stable_finalization_source(path)
             if hashlib.sha256(raw).hexdigest() != ref.get('sha256'):
                 raise FinalizationGenerationError('retry_preserved_hash_changed')
             return raw
         prior = json.loads(preserved(dict(path=reference['receipt_path'],
             sha256=reference['receipt_sha256']), 'receipt.json'))
         if (prior.get('schema') != 'postclose_detector_suffix_recovery_v1'
+                or (prior.get('recovery_mode') == 'completed_generation_rebinding') != rebind_completed
                 or prior.get('source_date') != target_date or prior.get('runtime_effect') is not False
                 or prior.get('allowed_runtime_apply') is not False or prior.get('actual_pid_consumed') is not False):
             raise FinalizationGenerationError('retry_preserved_receipt_invalid')
@@ -392,7 +481,11 @@ def capture_detector_retry_prefix(project: Path, target_date: str) -> dict:
             raise FinalizationGenerationError('retry_preserved_generation_invalid')
         original_log = anchor['finalization_log'].decode()
         lines = original_log[original_log.rfind(start):].splitlines() if start in original_log else []
-    if (not lines or lines[-1] != failure or 'recovery=true' not in lines[0]
+    original_controller = original_fields = None
+    if rebind_completed:
+        original_controller, original_fields = _completed_prefix_controller(
+            project, target_date, lines, anchor['failed_detector'])
+    if not rebind_completed and (not lines or lines[-1] != failure or 'recovery=true' not in lines[0]
             or 'recovery=true' not in latest_started
             or '[INFO] postclose_finalization controller_terminal_receipt={"issues": [], "status": "pass"}' not in lines
             or f'[INFO] postclose_finalization cleanup_done target_date={target_date}' not in lines
@@ -422,26 +515,36 @@ def capture_detector_retry_prefix(project: Path, target_date: str) -> dict:
     retry_started = stamp(latest_started, 'started_at')
     controller_path = data / 'report/postclose_done_controller' / f'postclose_done_controller_{target_date}.json'
     controller = _load(controller_path, 'retry_controller_missing')
-    generated = datetime.fromisoformat(controller['generated_at'])
+    generated = datetime.fromisoformat((original_controller or controller)['generated_at'])
     if (failed.get('mode') != 'full' or failed.get('target_date') != target_date
-            or failed.get('postclose_recovery') is not True or failed.get('summary_severity') != 'fail'
+            or failed.get('postclose_recovery') is not True
+            or failed.get('summary_severity') not in ({'pass','warning'} if rebind_completed else {'fail'})
             or failed_at.tzinfo is None or generated.tzinfo is None
             or not started <= generated <= cleanup_started <= cleanup_finished <= failed_at
             or latest_failed.get('mode') != 'full' or latest_failed.get('target_date') != target_date
-            or latest_failed.get('postclose_recovery') is not True or latest_failed.get('summary_severity') != 'fail'
+            or latest_failed.get('postclose_recovery') is not True
+            or latest_failed.get('summary_severity') not in ({'pass','warning'} if rebind_completed and native_prefix is None else {'fail'})
             or latest_failed_at.tzinfo is None or not retry_started <= latest_failed_at
             or native_prefix is not None and not failed_at <= retry_started
             or latest_failed_at.timestamp() > paths['finalization_log'].stat().st_mtime + 1):
         raise FinalizationGenerationError('retry_prefix_clock_or_detector_invalid')
-    generation = capture_finalization_generation(project, target_date)
+    generation = capture_finalization_generation(project, target_date, consumed_checklist=True) if rebind_completed else capture_finalization_generation(project, target_date)
+    if rebind_completed:
+        if (generation['snapshot_sha256'] != original_fields['snapshot_generation_sha256']
+                or generation['chain_sha256'] == original_fields['chain_sha256']):
+            raise FinalizationGenerationError('rebind_snapshot_changed_or_no_change')
+        if native_prefix is None:
+            native = capture_final_detector_receipt(project, target_date, started_after_ns=0)
+            if native['report_sha256'] != original_fields['detector_report_sha256']:
+                raise FinalizationGenerationError('rebind_original_detector_changed')
     if prior_generation is not None and prior_generation != generation:
         raise FinalizationGenerationError('retry_native_generation_changed')
-    issues = done_terminal_receipt_issues(controller_path, target_date, started_after_ns=0,
-                                         generation_only=True)
+    issues = [] if rebind_completed else done_terminal_receipt_issues(
+        controller_path, target_date, started_after_ns=0, generation_only=True)
     if issues:
         raise FinalizationGenerationError('retry_controller_invalid:' + ','.join(issues))
     if (selected_release(data.parent) != (selected, commit)
-            or any(stable_read(path) != frozen[name] for name, path in paths.items())):
+            or any(_stable_finalization_source(path) != frozen[name] for name, path in paths.items())):
         raise FinalizationGenerationError('retry_source_changed')
     folder = data / 'report/postclose_finalization_recovery' / target_date / uuid.uuid4().hex
     folder.mkdir(parents=True, exist_ok=False)
@@ -452,6 +555,8 @@ def capture_detector_retry_prefix(project: Path, target_date: str) -> dict:
             stream.write(raw); stream.flush(); os.fsync(stream.fileno())
         originals[name] = dict(path=str(destination), sha256=hashlib.sha256(raw).hexdigest())
     receipt = dict(schema='postclose_detector_suffix_recovery_v1', source_date=target_date,
+        recovery_mode='completed_generation_rebinding' if rebind_completed else 'failed_detector_suffix',
+        cleanup_reexecuted=False, controller_reexecuted=False,
         selected_release_root=str(selected), selected_release_commit=commit,
         original_started_at=started.isoformat(), cleanup_finished_at=cleanup_finished.isoformat(),
         failed_detector_at=failed_at.isoformat(), originals=originals, generation=generation,
@@ -471,8 +576,10 @@ def capture_detector_retry_prefix(project: Path, target_date: str) -> dict:
 if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser(description='Validate and preserve a failed native detector suffix.')
-    parser.add_argument('--resume-prefix', action='store_true', required=True)
+    mode = parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument('--resume-prefix', action='store_true')
+    mode.add_argument('--rebind-completed', action='store_true')
     parser.add_argument('project', type=Path)
     parser.add_argument('source_date')
     arguments = parser.parse_args()
-    print(json.dumps(capture_detector_retry_prefix(arguments.project, arguments.source_date), sort_keys=True))
+    print(json.dumps(capture_detector_retry_prefix(arguments.project, arguments.source_date, rebind_completed=arguments.rebind_completed), sort_keys=True))

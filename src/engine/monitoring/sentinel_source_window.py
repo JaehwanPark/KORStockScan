@@ -148,7 +148,7 @@ def read(data_root, now, *, lower_epoch, limit=LIMIT):
         fcntl.flock(lock, fcntl.LOCK_SH | fcntl.LOCK_NB)
         meta = _metadata(meta_path)
         generation = stamp(cache)
-        if (meta.get('schema_version') not in (19, 20) or meta.get('cache_generation') != generation
+        if (meta.get('schema_version') not in (19, 20, 21, 22) or meta.get('cache_generation') != generation
                 or meta.get('cache_projection_skip_reason') or not meta.get('compact_index_enabled')):
             raise ValueError('source_window_cache_unverified')
         raw = data_root/'pipeline_events'/f'pipeline_events_{day}.jsonl'
@@ -296,19 +296,20 @@ def prepare(data_root, *, max_batches=4):
         raw = data_root/'pipeline_events'/f'pipeline_events_{day}.jsonl'
         raw_stat = raw.stat()
         old_schema = meta.get('schema_version')
-        if (old_schema not in (17,18,19,20) or meta.get('cache_generation') != stamp(cache)
+        if (old_schema not in (17,18,19,20,21,22) or meta.get('cache_generation') != stamp(cache)
                 or meta.get('raw_path') != str(raw) or meta.get('raw_inode') != raw_stat.st_ino
                 or not 0 <= raw_stat.st_size-int(meta.get('raw_offset',-1)) <= LIMIT*max_batches
                 or meta.get('cache_projection_skip_reason')
                 or meta.get('cache_projection_version') != 'economic_source_refs_v1'):
             raise ValueError('source_window_prepare_existing_cursor_unverified')
-        schema = 20 if old_schema in (18,20) else 19
+        schema = buy.LOSSLESS_EVENT_CACHE_SCHEMA_VERSION if old_schema % 2 == 0 else buy.EVENT_CACHE_SCHEMA_VERSION
         migration = None
         if old_schema != schema:
             migration = dict(from_schema=old_schema,to_schema=schema,
                 raw_generation=dict(device=raw_stat.st_dev,inode=raw_stat.st_ino,
                     size_bytes=raw_stat.st_size,mtime_ns=raw_stat.st_mtime_ns,ctime_ns=raw_stat.st_ctime_ns),
-                raw_offset=meta['raw_offset'],newly_admitted_stages=sorted(STAGES-{'entry_async_disposition'}),
+                raw_offset=meta['raw_offset'],newly_admitted_stages=(['pre_submit_liquidity_guard_block'] +
+                    (sorted(STAGES-{'entry_async_disposition'}) if old_schema < 19 else [])),
                 population_proof='forward_only_stage_extension',
                 historical_stage_coverage='not_backfilled_before_raw_offset')
         previous_offset = meta['raw_offset']
@@ -319,7 +320,7 @@ def prepare(data_root, *, max_batches=4):
             _native_index_state(cache, prior_generation, batch_meta['cache_event_count'])
             _, updated = _update_and_load_cached_event_rows(raw_path=raw,cache_dir=cache_dir,
                 cache_name=buy.EVENT_CACHE_NAME,target_date=day,schema_version=schema,
-                parse_payload=lambda row:buy._payload_to_cache_row(row,exclude_summary_stages=schema==20),
+                parse_payload=lambda row:buy._payload_to_cache_row(row,exclude_summary_stages=schema==buy.LOSSLESS_EVENT_CACHE_SCHEMA_VERSION),
                 verified_schema_migration=migration if batch == 0 else None,
                 project_loaded_payload=buy._slim_economic_cache_row,
                 cache_projection_version='economic_source_refs_v1',load_rows=False,compact_index=True,

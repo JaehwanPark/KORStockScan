@@ -5177,7 +5177,8 @@ def _old_scanner_observation(now, birth, actor):
 @pytest.mark.parametrize('damage',[None,'hash','actor','start','at','date','scope','rule','count','missing',
     'unknown','duplicate','promotion','new_issue','birth','oversize','conflicting_native'])
 @pytest.mark.parametrize('coverage_order',['none','first','last'])
-def test_historical_scanner_health_requires_all_exact_original_evidence(damage,coverage_order):
+@pytest.mark.parametrize('notification_pending', [False, True])
+def test_historical_scanner_health_requires_all_exact_original_evidence(damage,coverage_order,notification_pending):
     from src.engine.scalping.ai_decision_trace import _json_bytes
     if coverage_order=='none':
         result,_,_,_=_bounded_outcome_health_fixture(partial=False)
@@ -5193,6 +5194,8 @@ def test_historical_scanner_health_requires_all_exact_original_evidence(damage,c
         first_seen=row['captured_at'],last_seen=now.isoformat(),count=1,evidence_ids=[identity],
         notified_status='active',examples=[{'economic_source':{'status':'source_gap'}}])
     result['incidents'][key]=item
+    if notification_pending:
+        result['notification_pending'].append(key)
     evidence={identity:row};result['machine_semantics']['historical_scanner_observations']=evidence
     if damage=='hash':row['machine_observation_sha256']='f'*64
     elif damage=='actor':row['runtime_consumption'].update(pid=actor[0],process_start_ticks=actor[1])
@@ -5222,7 +5225,7 @@ def test_historical_scanner_health_requires_all_exact_original_evidence(damage,c
     assert health['runtime_effect'] is False and health['full_coverage_proven'] is False
     if coverage_order!='none':
         assert gap['issues']=={'machine_probe:coverage_degraded:krx_nxt_integrated':1}
-        assert result['notification_pending']==['machine_auxiliary_intraday_source_gap']
+        assert result['notification_pending']==['machine_auxiliary_intraday_source_gap'] + ([key] if notification_pending else [])
         assert result['incidents']['machine_auxiliary_intraday_source_gap']['status']=='active'
 
 
@@ -5293,3 +5296,35 @@ def test_preprovider_input_deadline_is_diagnostic_only_with_exact_safe_terminal(
     key='machine_trace:'+row.get('machine_source_gap_kind','entry_machine_input_deadline_expired')
     assert result['diagnostics'].get(key,0)==int(damage is None)
     assert result['issues'].get(key,0)==int(damage is not None)
+
+
+@pytest.mark.parametrize('key', [{}, [], None, True, 'unknown_new_incident'])
+def test_pending_notification_unknown_or_malformed_key_remains_actionable(key):
+    result,*_=_bounded_outcome_health_fixture(partial=False)
+    result['notification_pending']=[key]
+    assert monitor.observation_health_projection(result)['status']=='not_eligible'
+
+
+@pytest.mark.parametrize('format', ['dict','json','literal'])
+def test_native_feature_gap_false_branch_with_missing_features_is_verified(tmp_path, format):
+    from src.engine.scalping.zero_base_probe import native_wait_result
+    now = monitor.stamp('2026-10-21T08:32:48+09:00')
+    row = _native_feature_gap_probe(now)
+    f = row['fields']; receipt = f['native_observation_receipt']
+    readiness = f['zero_base_branch_readiness']
+    readiness['branch_descriptors']['G1'].update(feature_availability='incomplete',
+        missing_inputs=['ret', 'backward_window'])
+    assert native_wait_result(receipt, readiness) == (
+        'required_feature_insufficient', 'required_branch_feature_missing')
+    for key in ('native_observation_receipt', 'zero_base_branch_readiness'):
+        value = f[key]
+        if format != 'dict': f[key] = json.dumps(value) if format == 'json' else repr(value)
+    before = json.dumps(row, sort_keys=True)
+    assert monitor._probe_verified_pending(row, feature_gap=True)['unknown_count'] == 37
+    _source_gap_files(tmp_path, now, probes=[row])
+    gap = monitor.source_gap_semantics(tmp_path, now)
+    census = gap['native_feature_gap_observations']
+    assert census['count'] == census['verified_count'] == 1 and census['unclassified_count'] == 0
+    assert not census['source_coverage_proven'] and not census['machine_admission_proven']
+    assert gap['probe_route_assessed_counts'] == gap['probe_route_source_covered_counts'] == {}
+    assert json.dumps(row, sort_keys=True) == before

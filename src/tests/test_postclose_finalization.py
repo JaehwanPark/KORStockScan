@@ -525,3 +525,40 @@ def test_late_summary_refresh_precedes_cleanup_and_failure_cannot_reuse_done(
     )
     if receipt_status != "done" and refresh_rc == 0:
         assert "controller_terminal_receipt_invalid" in result.stdout
+
+
+@pytest.mark.parametrize('mode', ['--resume-final-detector', '--rebind-final-generation'])
+@pytest.mark.parametrize('detector_exit', [0, 1])
+def test_bounded_finalization_suffix_skips_completed_producers(tmp_path, monkeypatch, mode, detector_exit):
+    monkeypatch.setattr(sys.modules[__name__], 'TARGET_DATE', '2026-10-20')
+    project=tmp_path/'project';project.mkdir();_write_ready_predecessors(project)
+    cleanup=project/'bin/cleanup';detector=project/'bin/detector';python=project/'bin/python'
+    _write_executable(cleanup, 'exit 99\n')
+    _write_executable(detector, f'echo detector >> "$PROJECT_DIR/order.txt"\nexit {detector_exit}\n')
+    _write_executable(python, '''
+if [[ "$1" == *postclose_finalization_generation.py ]]; then
+  echo "$2" >> "$PROJECT_DIR/order.txt"
+  echo '{"chain_sha256":"aaa","snapshot_sha256":"bbb"}'
+  exit 0
+fi
+if [[ "$1" == - ]]; then
+  body="$(cat)"
+  if [[ "$body" == *capture_final_detector_receipt* ]]; then
+    echo 'cron-fixture ccc'; exit 0
+  elif [[ "$body" == *capture_finalization_generation* ]]; then
+    [[ "$4" == "$EXPECTED_CONSUMED" ]]
+    echo 'aaa bbb'; exit 0
+  fi
+  printf '%s' "$body" | "$REAL_PY" "$@"
+  exit $?
+fi
+exec "$REAL_PY" "$@"
+''')
+    env={**_base_env(project,cleanup,detector), 'VENV_PY':str(python),'REAL_PY':sys.executable,
+         'EXPECTED_CONSUMED':str(mode=='--rebind-final-generation').lower()}
+    result=subprocess.run(['bash',str(WRAPPER),TARGET_DATE,'--recover-closed-target',mode],
+        env=env,capture_output=True,text=True,timeout=10)
+    assert result.returncode==detector_exit,result.stdout+result.stderr
+    assert (project/'order.txt').read_text().splitlines()==[
+        '--rebind-completed' if mode=='--rebind-final-generation' else '--resume-prefix', 'detector']
+    assert ('[DONE] postclose_finalization' in result.stdout)==(detector_exit==0)

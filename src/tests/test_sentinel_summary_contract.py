@@ -552,7 +552,7 @@ def test_new_parser_cannot_inherit_unproduced_intermediate_owner_pair(tmp_path):
 @pytest.mark.parametrize('parser_callback',[False,True])
 def test_projection_reader_successor_migrates_existing_prefix_without_raw_rebuild(tmp_path,monkeypatch,parser_callback):
     raw,options,manifest,original,rows=predecessor(tmp_path,parser_callback=parser_callback,
-        parser_contract=C.PRE_READ_REUSE_PARSER,buy_owner=C.CURRENT_BUY_OWNER)
+        parser_contract=C.PRE_READ_REUSE_PARSER,buy_owner=C.PRE_LIQUIDITY_BUY_OWNER)
     offset=raw.stat().st_size
     with raw.open('a') as handle:handle.write(json.dumps(event(2))+'\n')
     real_open=builtins.open
@@ -586,3 +586,28 @@ def test_projection_reuse_successor_preserves_all_parser_and_aggregation_source(
     assert previous.count(old)==1 and previous.replace(old,new)==current
     assert hashlib.sha256(previous).hexdigest()==C.PRE_READ_REUSE_PARSER
     assert hashlib.sha256(current).hexdigest()==C.CURRENT_PARSER
+
+
+def test_liquidity_cache_successor_keeps_native_summary_and_only_reads_new_suffix(tmp_path, monkeypatch):
+    raw, options, manifest, original, rows = predecessor(tmp_path,
+        parser_contract=C.CURRENT_PARSER, buy_owner=C.PRE_LIQUIDITY_BUY_OWNER)
+    offset = raw.stat().st_size
+    with raw.open('a') as stream: stream.write(json.dumps(event(2))+'\n')
+    real_open = builtins.open
+    class SuffixOnly:
+        def __init__(self, stream): self.stream = stream
+        def __getattr__(self, name): return getattr(self.stream, name)
+        def __enter__(self): return self
+        def __exit__(self, *args): return self.stream.__exit__(*args)
+        def readline(self, *args):
+            assert self.stream.tell() >= offset
+            return self.stream.readline(*args)
+    def guarded(path, *args, **kwargs):
+        stream = real_open(path, *args, **kwargs)
+        return SuffixOnly(stream) if Path(path)==raw and args and args[0]=='rb' else stream
+    monkeypatch.setattr(builtins, 'open', guarded)
+    result, meta = P.update_and_load_pipeline_event_summaries(**options)
+    assert not meta['rebuilt'] and meta['start_raw_offset'] == offset
+    assert sum(row['event_count'] for row in result) == 2
+    assert Path(meta['contract_migration']['original_manifest_archive']).read_bytes() == original
+    assert meta['contract_migration']['from_parser'] == meta['contract_migration']['to_parser'] == C.CURRENT_PARSER

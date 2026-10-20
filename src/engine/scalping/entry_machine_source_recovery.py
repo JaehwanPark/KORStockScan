@@ -456,7 +456,25 @@ def validated_observer_snapshot(observation, *, now, receipt_out=None):
             ("event_id", "signal_id", "epoch", "native_epoch", "native_sequence", "source_item", "entry_ask"))
             or not set(current[0].get("branch_signals") or {}) <= set(root.get("branch_signals") or {})
             or any(signal != root["branch_signals"][bid] for bid, signal in (current[0].get("branch_signals") or {}).items())):
-        raise ValueError("machine_source_quote_observer_native_root_changed")
+        # The rejection is also reached during the initial observer assessment.
+        # Keep both native roots and the same-lock selection reason in the
+        # existing rejected-source trace; a bare exception cannot distinguish
+        # source loss from a valid FIRST/ready lifecycle transition.
+        keys = ("symbol", "venue", "market", "event_id", "signal_id", "epoch",
+                "native_epoch", "native_sequence", "source_item", "entry_ask", "branch_signals")
+        receipt = dict(schema="entry_source_quote_observer_rejection_v1", status="observed",
+            failure_cause="machine_source_quote_observer_native_root_changed",
+            process_pid=observation["observer_pid"], process_start_ticks=observation["observer_start_ticks"],
+            family_sha256=observation["family_sha256"], observed_epoch=selection.get("observed_epoch"),
+            original_deadline_epoch=observation["deadline_epoch"],
+            original_root={key:deepcopy(root.get(key)) for key in keys},
+            current_root={key:deepcopy(current[0].get(key)) for key in keys} if current else None,
+            native_selection=deepcopy(selection), runtime_effect=False,
+            allowed_runtime_apply=False, actual_order_submitted=False, broker_order_forbidden=True)
+        receipt["sha256"] = _digest(receipt)
+        error = ValueError("machine_source_quote_observer_native_root_changed")
+        error.reversal_source_receipt = receipt
+        raise error
     if receipt_out is not None:
         receipt_out.update(selection)
     return current

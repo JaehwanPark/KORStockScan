@@ -1272,3 +1272,31 @@ def test_report_preflight_reuses_native_currentness_and_preserves_economic_gaps(
         assert result['quantity']['findings']==['initial_quantity_economic_source_gap']
         assert result['runtime_effect'] is False and result['policy_effect']=='unchanged'
     assert seen==([] if fault=='code' else [(tmp_path/'candidate',source)])
+
+
+@pytest.mark.parametrize('failure', [False, True])
+def test_prepare_binds_native_source_window_before_start(monkeypatch, tmp_path, failure):
+    from src.engine.monitoring import sentinel_source_window as window
+    driver = object.__new__(D.Deployment)
+    driver.workspace = tmp_path
+    driver.candidate = tmp_path/'candidate'
+    driver.previous = tmp_path/'previous'
+    driver.day = '2026-10-21'
+    driver.identity = {'pid':123}
+    calls = []
+    driver.assert_hold = lambda: calls.append('hold')
+    driver.run_json = lambda root, module, *args: calls.append(module)
+    driver.checkpoint = lambda phase, **kw: calls.append((phase, kw))
+    proof = {'schema':'sentinel_source_window_preparation_v1','runtime_effect':False}
+    def prepare(data):
+        assert data == tmp_path/'data' and calls[-1].endswith('auxiliary_reader_readiness')
+        calls.append('source_window')
+        if failure: raise ValueError('source_window_cache_unverified')
+        return proof
+    monkeypatch.setattr(window, 'prepare', prepare)
+    if failure:
+        with pytest.raises(ValueError, match='source_window_cache_unverified'): driver.prepare()
+        assert calls[-1] == 'source_window'
+    else:
+        driver.prepare()
+        assert calls[-1] == ('prepared', {'sentinel_source_window':proof})

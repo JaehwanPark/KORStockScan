@@ -3437,6 +3437,57 @@ for (_trigger, _trigger_sha), _variant in REVIEWED_HISTORICAL_RESOLUTION_DEPENDE
     REVIEWED_HOLDING_RESEARCH_DEPENDENCIES[_trigger][_trigger_sha] = _variant['dependencies']
 
 
+# Exact finalization suffix and pending historical notification successor.
+# Preserve the issued historical-resolution profile for predecessor receipts.
+REVIEWED_FINALIZATION_HEALTH_HASHES = {'src/engine/monitoring/submission_bottleneck_monitor.py': 'd3a344923d590f55cdd08ed14c3eba67de149c8e5fef1c89a28fba7d00a68cd7',
+ 'src/engine/automation/postclose_finalization_generation.py': 'e4454cb3da9c7542177cb49f30579970978717538baae4fd3bab9dfbdf269b63',
+ 'deploy/run_postclose_finalization.sh': 'f0256308c44cad1f30d3f1f2bea43192f797c72aa93c3970d9ec65ef8c712fe9',
+ 'src/engine/scalping/entry_machine_source_recovery.py': '43fd0b6edf45ce92a9ff07364683385804445296608c63455ad5f9b9c57cba55',
+ 'src/engine/monitoring/entry_attempt_identity.py': '5bd57a8d235e360ba5a9ea953256164722c267931e7d8caf55816c3a819b7d63',
+ 'src/engine/buy_funnel_sentinel.py': '4918513346f28c8908b0fe18085663ef662ba2dc03349b4b7822ff1656b908d1',
+ 'src/engine/monitoring/sentinel_source_window.py': '876d89e26f8fbf819417357d5065bbc213c1e41e479f1b0f4c8f4ec8dc3a7572',
+ 'src/engine/sentinel_event_cache.py': '7367cf13033fc3ed8134b504d65da53fa6921098b9640b2b9a619b85ae6367c3',
+ 'src/engine/monitoring/sentinel_summary_contract.py': '06fb351581ad704aae6374589f6b4db288c802dc030e3dcde036ac217c5b8a80',
+ 'src/engine/automation/ordered_intraday_deploy.py': '85671b2217e554dd573d23fe8616ce177726bcfdd771bc3893a37dae2b19f9b6'}
+REVIEWED_FINALIZATION_HEALTH_PAIRS = {'src/engine/monitoring/submission_bottleneck_monitor.py': (('b2ed455255bc7659d2959a5c6012fe052206de588f1932d57dde2e376d2fad18',
+                                                             'd3a344923d590f55cdd08ed14c3eba67de149c8e5fef1c89a28fba7d00a68cd7'),
+                                                            ('9b6066255a77a38bd869bfcf2e3aacd4814bf7742f306428d04ed1f1741908d1',
+                                                             'd3a344923d590f55cdd08ed14c3eba67de149c8e5fef1c89a28fba7d00a68cd7')),
+ 'src/engine/automation/postclose_finalization_generation.py': (('d4d4d0819c4a1845baf10bcaf7935137aa9d925544a374a8c47ead6259f51e43',
+                                                                 'e4454cb3da9c7542177cb49f30579970978717538baae4fd3bab9dfbdf269b63'),
+                                                                ('1ac7c5d9a4269f73a9a9f82656d22a277689813b32c94b3a526e0b37452d3041',
+                                                                 'e4454cb3da9c7542177cb49f30579970978717538baae4fd3bab9dfbdf269b63')),
+ 'deploy/run_postclose_finalization.sh': (('719a2f90670011ae9d8411609fe9f0ea51c70a47656a9028768a00745d227766',
+                                           'f0256308c44cad1f30d3f1f2bea43192f797c72aa93c3970d9ec65ef8c712fe9'),),
+ 'src/engine/scalping/entry_machine_source_recovery.py': (('89845a56178c7b2a7322317a5f0c3f9ea2344b0514efc7241d0c5a846acea712',
+                                                           '43fd0b6edf45ce92a9ff07364683385804445296608c63455ad5f9b9c57cba55'),),
+ 'src/engine/monitoring/entry_attempt_identity.py': (('a18c0b96de81dcb17f6717703f5e5ebc46c29a579e7e85f257c5d6f0251d7f5e',
+                                                      '5bd57a8d235e360ba5a9ea953256164722c267931e7d8caf55816c3a819b7d63'),),
+ 'src/engine/buy_funnel_sentinel.py': (('6c41ee5823caa738bdc40c6da07e8b5fe4714976a9efc7668e90dac33a325993',
+                                        '4918513346f28c8908b0fe18085663ef662ba2dc03349b4b7822ff1656b908d1'),),
+ 'src/engine/monitoring/sentinel_source_window.py': (('927073bc71d5c4dab4fa903924d31ccd57aa3f4bedf52ec3166103ec9f080f71',
+                                                      '876d89e26f8fbf819417357d5065bbc213c1e41e479f1b0f4c8f4ec8dc3a7572'),),
+ 'src/engine/sentinel_event_cache.py': (('3254bb5044b610330e27ec59d6fd3fe59c58b780013887a82871301f0cb72e9a',
+                                         '7367cf13033fc3ed8134b504d65da53fa6921098b9640b2b9a619b85ae6367c3'),),
+ 'src/engine/monitoring/sentinel_summary_contract.py': (('63966b549566771cc7bff12ea742fc0017bfc37c0c00ac648d6dfd63bfdc06d9',
+                                                         '06fb351581ad704aae6374589f6b4db288c802dc030e3dcde036ac217c5b8a80'),
+                                                        ('28e0a5f8a32283c0f9503e1bae045ac2f9129c8bb00a291d3da40c22a9e9d565',
+                                                         '06fb351581ad704aae6374589f6b4db288c802dc030e3dcde036ac217c5b8a80')),
+ 'src/engine/automation/ordered_intraday_deploy.py': (('4345d7b8ea95b13b7c7862bc54c24b9add92e6da79806190308bfb17b15ba3b9',
+                                                       '85671b2217e554dd573d23fe8616ce177726bcfdd771bc3893a37dae2b19f9b6'),
+                                                      ('2b25345a2cc0711a42a2a39898961c157dfb927c0b1eb4929b74fe3c624af626',
+                                                       '85671b2217e554dd573d23fe8616ce177726bcfdd771bc3893a37dae2b19f9b6'))}
+REVIEWED_FINALIZATION_HEALTH_DEPENDENCY_VARIANTS = {
+    key: {**value,
+        'selector_path': 'src/engine/monitoring/submission_bottleneck_monitor.py',
+        'selector_sha256': REVIEWED_FINALIZATION_HEALTH_HASHES['src/engine/monitoring/submission_bottleneck_monitor.py'],
+        'dependencies': {**value['dependencies'], **REVIEWED_FINALIZATION_HEALTH_HASHES},
+        'contract_extensions': {origin: {name: REVIEWED_FINALIZATION_HEALTH_HASHES.get(os.path.normpath(name), digest)
+            for name, digest in paths.items()} for origin, paths in value['contract_extensions'].items()},
+    } for key, value in REVIEWED_HISTORICAL_RESOLUTION_DEPENDENCY_VARIANTS.items()
+}
+
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -3512,6 +3563,9 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     historical_resolution_present = any((root / name).is_file()
         and hashlib.sha256(candidate_bytes(name)).hexdigest() == sha
         for name, sha in REVIEWED_HISTORICAL_RESOLUTION_HASHES.items())
+    finalization_health_present = any((root / name).is_file()
+        and hashlib.sha256(candidate_bytes(name)).hexdigest() == sha
+        for name, sha in REVIEWED_FINALIZATION_HEALTH_HASHES.items())
     contract_names = {repository_name(name) for name in paths.values()}
     for trigger, generations in REVIEWED_HOLDING_RESEARCH_DEPENDENCIES.items():
         if trigger not in contract_names:
@@ -3520,7 +3574,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         dependencies = generations.get(trigger_sha, {})
         # New exact selectors precede their historical parent. The first match
         # selects one complete generation, never per-file SHA alternatives.
-        for variants in (REVIEWED_HISTORICAL_RESOLUTION_DEPENDENCY_VARIANTS,
+        for variants in (REVIEWED_FINALIZATION_HEALTH_DEPENDENCY_VARIANTS,
+                         REVIEWED_HISTORICAL_RESOLUTION_DEPENDENCY_VARIANTS,
                          REVIEWED_LOGICAL_PIPELINE_DEPENDENCY_VARIANTS,
                          REVIEWED_POSTCLOSE_REPAIR_DEPENDENCY_VARIANTS,
                          REVIEWED_CLOSED_OBSERVER_DEPENDENCY_VARIANTS,
@@ -3635,6 +3690,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
             dependencies = {**dependencies, **REVIEWED_LOGICAL_PIPELINE_HASHES}
         if historical_resolution_present:
             dependencies = {**dependencies, **REVIEWED_HISTORICAL_RESOLUTION_HASHES}
+        if finalization_health_present:
+            dependencies = {**dependencies, **REVIEWED_FINALIZATION_HEALTH_HASHES}
         dependencies_by_trigger[trigger] = (trigger_sha, dependencies)
     for key, name in paths.items():
         after = candidate_bytes(name)
@@ -3651,7 +3708,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         if before == after:
             continue
         pair = (hashlib.sha256(before).hexdigest(), hashlib.sha256(after).hexdigest())
-        if (pair in REVIEWED_HISTORICAL_RESOLUTION_PAIRS.get(repository_name(name), ())
+        if (pair in REVIEWED_FINALIZATION_HEALTH_PAIRS.get(repository_name(name), ())
+                or pair in REVIEWED_HISTORICAL_RESOLUTION_PAIRS.get(repository_name(name), ())
                 or pair in REVIEWED_LOGICAL_PIPELINE_PAIRS.get(repository_name(name), ())
                 or pair in REVIEWED_POSTCLOSE_REPAIR_PAIRS.get(repository_name(name), ())
                 or pair in REVIEWED_CLOSED_OBSERVER_PAIRS.get(repository_name(name), ())

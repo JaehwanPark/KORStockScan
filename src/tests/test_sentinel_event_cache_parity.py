@@ -498,3 +498,34 @@ def test_bounded_cache_decoder_preserves_json_semantics_and_container_isolation(
     for index in range(10000):
         expected = {f'unique_field_{index}': f'unique_value_{index}', 'long': 'x' * 1000}
         assert json.loads(json.dumps(expected), object_pairs_hook=decoder) == expected
+
+
+def test_native_liquidity_stage_migration_preserves_prefix_without_replay(tmp_path, monkeypatch):
+    from pathlib import Path
+    raw = _raw_path(tmp_path)
+    _write_lines(raw, [_event('10:00:00', 'ai_confirmed'),
+                      _event('10:01:00', 'pre_submit_liquidity_guard_block')])
+    cache_dir = tmp_path / 'cache'
+    monkeypatch.setattr(buy, '_event_cache_dir', lambda: cache_dir)
+    args = dict(raw_path=raw, cache_dir=cache_dir, cache_name=buy.EVENT_CACHE_NAME,
+        target_date=TARGET_DATE, schema_version=20,
+        parse_payload=lambda r: buy._payload_to_cache_row(r, exclude_summary_stages=True)
+            if r['stage'] != 'pre_submit_liquidity_guard_block' else None)
+    original, old = update_and_load_cached_event_rows(**args)
+    prefix = Path(old['cache_path']).read_bytes()
+    with raw.open('a') as stream:
+        stream.write(json.dumps(_event('10:02:00', 'pre_submit_liquidity_guard_block'))+'\n')
+    proof = buy._previous_cache_schema_proof(TARGET_DATE, raw, 20)
+    assert proof['newly_admitted_stages'] == ['pre_submit_liquidity_guard_block']
+    parsed = []
+    def parse(row):
+        parsed.append(row)
+        return buy._payload_to_cache_row(row, exclude_summary_stages=True)
+    rows, meta = update_and_load_cached_event_rows(**{**args,
+        'schema_version':buy.LOSSLESS_EVENT_CACHE_SCHEMA_VERSION, 'parse_payload':parse},
+        verified_schema_migration=proof)
+    assert rows[:len(original)] == original and len(rows) == len(original)+1
+    assert len(parsed) == 1 and rows[-1]['stage'] == 'pre_submit_liquidity_guard_block'
+    assert Path(old['cache_path']).read_bytes().startswith(prefix)
+    assert not meta['rebuilt'] and meta['appended_raw_lines'] == 1
+    assert meta['schema_migration_receipt']['historical_stage_coverage'] == 'not_backfilled_before_raw_offset'

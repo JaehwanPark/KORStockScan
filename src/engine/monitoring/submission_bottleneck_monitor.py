@@ -1016,6 +1016,9 @@ def _probe_verified_pending(row, *, feature_gap=False):
                            ('item','family_sha256','scope_execution_hash','native_epoch','native_sequence'))
                     or not isinstance(branches, dict) or set(branches) != set(truth)):
                 return None
+            # Native feature availability and detector truth are independent:
+            # a FALSE prerequisite can be known before every feature is ready.
+            # Keep UNKNOWN and exact receipt binding mandatory for this census.
             missing = 0
             for branch, descriptor in branches.items():
                 inputs = descriptor.get('missing_inputs') if isinstance(descriptor, dict) else None
@@ -1024,7 +1027,7 @@ def _probe_verified_pending(row, *, feature_gap=False):
                         or descriptor.get('detector_truth') != truth[branch]
                         or descriptor.get('feature_availability') not in ('complete','incomplete')
                         or bool(inputs) != (descriptor.get('feature_availability') == 'incomplete')
-                        or inputs and truth[branch] != 'UNKNOWN'):
+                        or inputs and truth[branch] == 'TRUE'):
                     return None
                 missing += len(inputs)
             if not missing:
@@ -4080,7 +4083,7 @@ def observation_health_projection(result):
                 lower_epoch = max(lower_epoch,birth) if birth is not None and lower_epoch is not None else None
             require(name == 'probe' and start is not None and lower is not None and now is not None
                     and start <= lower and lower.timestamp() == lower_epoch
-                    and source.get('cache_schema_version') in (19,20)
+                    and source.get('cache_schema_version') in (19,20,21,22)
                     and isinstance(source.get('projection_contract'), str)
                     and re.fullmatch('[0-9a-f]{64}', source['projection_contract']) is not None
                     and source.get('historical_stage_coverage') == 'not_backfilled_before_cache_offset'
@@ -4618,7 +4621,10 @@ def observation_health_projection(result):
             and all(stage.get('provider_lineage_source_status') in (None,'') for stage in (gap,execution))
             and machine.get('provider_lineage_source_status') in (None,'','partial_source_gap')
             and isinstance(result.get('notification_pending'),list)
-            and all(key == 'machine_auxiliary_intraday_source_gap' for key in result['notification_pending']))
+            # Pending delivery does not change exact prior-PID membership.
+            # Keep the queue and original incident; unknown/current keys fail.
+            and all(isinstance(key, str) and (key == 'machine_auxiliary_intraday_source_gap'
+                    or key in historical_incident_keys) for key in result['notification_pending']))
         source_shape=(gap.get('schema') == 'machine_auxiliary_intraday_source_semantics_v1'
             and clock(gap.get('as_of')) == now and gap.get('status') == expected_gap
             and gap.get('runtime_effect') is False and gap.get('decision_authority') == 'report_only'

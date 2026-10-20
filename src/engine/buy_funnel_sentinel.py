@@ -112,6 +112,7 @@ BLOCKER_STAGES = {
     "entry_local_not_sent",
     "entry_physical_send_guard_block",
     "pre_submit_weak_context_late_entry_guard_block",
+    "pre_submit_liquidity_guard_block",
     "real_weak_pullback_entry_block",
     *UPSTREAM_BLOCK_STAGES,
     *BUDGET_BLOCKER_STAGES,
@@ -130,8 +131,8 @@ SUBMIT_DROUGHT_MIN_BUDGET_UNIQUE = 3
 SUBMIT_TO_AI_CRITICAL_PCT = 20.0
 SUBMIT_TO_BUDGET_CRITICAL_PCT = 10.0
 REPORT_DIRNAME = "buy_funnel_sentinel"
-EVENT_CACHE_SCHEMA_VERSION = 19
-LOSSLESS_EVENT_CACHE_SCHEMA_VERSION = 20
+EVENT_CACHE_SCHEMA_VERSION = 21
+LOSSLESS_EVENT_CACHE_SCHEMA_VERSION = 22
 EVENT_CACHE_NAME = "buy_funnel_sentinel_events"
 FORBIDDEN_AUTOMATIONS = [
     "score_threshold_relaxation",
@@ -494,45 +495,30 @@ def _event_from_cache_row(row: dict[str, Any]) -> PipelineEvent | None:
 def _previous_cache_schema_proof(target_date, raw_path, previous_schema):
     """A native stage census can prove that newly retained stages were absent."""
     from src.engine import observation_source_quality_audit as audit
-    if previous_schema not in {11, 13, 15, 16, 17, 18}:
+    if previous_schema not in {11, 13, 15, 16, 17, 18, 19, 20}:
         return None
     try:
         meta_path = _event_cache_dir() / f"{EVENT_CACHE_NAME}_{target_date}.meta.json"
         meta = json.loads(meta_path.read_text())
         actual_schema = meta.get("schema_version")
-        if previous_schema in {17, 18}:
-            if actual_schema not in {previous_schema, previous_schema - 2}:
-                return None
+        if previous_schema >= 15:
             stat = raw_path.stat()
-            if (str(meta.get('raw_path')) != str(raw_path)
+            if (actual_schema not in range(15 + int(previous_schema % 2 == 0), previous_schema + 1, 2)
+                    or str(meta.get('raw_path')) != str(raw_path)
                     or meta.get('raw_inode') != stat.st_ino
                     or not 0 <= int(meta.get('raw_offset', -1)) <= stat.st_size):
                 return None
-            stages = ['zero_base_probe_result', 'main_fixed_watch_observation_wait']
-            if actual_schema == previous_schema - 2:
-                stages += ['pre_submit_weak_context_late_entry_guard_block', 'real_weak_pullback_entry_block']
-            return dict(from_schema=actual_schema, to_schema=previous_schema + 2,
+            admissions = (
+                (17, ['pre_submit_weak_context_late_entry_guard_block', 'real_weak_pullback_entry_block']),
+                (19, ['zero_base_probe_result', 'main_fixed_watch_observation_wait']),
+                (21, ['pre_submit_liquidity_guard_block']),
+            )
+            stages = [stage for version, values in admissions
+                      if actual_schema < version <= previous_schema + 2 for stage in values]
+            return dict(from_schema=actual_schema, to_schema=previous_schema+2,
                 raw_generation=audit._raw_generation(raw_path), raw_offset=int(meta['raw_offset']),
                 newly_admitted_stages=stages, population_proof='forward_only_stage_extension',
                 historical_stage_coverage='not_backfilled_before_raw_offset')
-        if previous_schema in {15, 16}:
-            if actual_schema != previous_schema:
-                return None
-            stat = raw_path.stat()
-            if (str(meta.get("raw_path")) != str(raw_path)
-                    or meta.get("raw_inode") != stat.st_ino
-                    or not 0 <= int(meta.get("raw_offset", -1)) <= stat.st_size):
-                return None
-            # Existing rows retain identical semantics. New guard stages begin
-            # at this verified append cursor; missing historical stages stay gaps.
-            return {"from_schema": previous_schema,
-                    "to_schema": previous_schema + 2,
-                    "raw_generation": audit._raw_generation(raw_path),
-                    "raw_offset": int(meta["raw_offset"]),
-                    "newly_admitted_stages": ["pre_submit_weak_context_late_entry_guard_block",
-                                              "real_weak_pullback_entry_block"],
-                    "population_proof": "forward_only_stage_extension",
-                    "historical_stage_coverage": "not_backfilled_before_raw_offset"}
         if actual_schema not in ({12, 13} if previous_schema == 13 else {10, 11}):
             return None
         previous_schema = actual_schema
@@ -579,7 +565,7 @@ def load_pipeline_events(
             target_date=target_date,
             schema_version=cache_schema_version,
             verified_schema_migration=_previous_cache_schema_proof(
-                target_date, path, 18 if exclude_summary_stages else 17),
+                target_date, path, 20 if exclude_summary_stages else 19),
             parse_payload=lambda payload: _payload_to_cache_row(
                 payload,
                 exclude_summary_stages=exclude_summary_stages,
@@ -1012,7 +998,7 @@ def _submit_drought_axis_for_event(event: PipelineEvent) -> str | None:
         if mode != expected:
             return None
         return "BROKER_RECEIPT" if attempts else "UPSTREAM_GATE"
-    if event.stage in UPSTREAM_BLOCK_STAGES:
+    if event.stage in UPSTREAM_BLOCK_STAGES or event.stage == "pre_submit_liquidity_guard_block":
         return "UPSTREAM_GATE"
     if event.stage == "latency_block" and (
         _field_first(event.fields, ("reason", "latency_danger_reasons", "decision"))
@@ -1046,6 +1032,7 @@ def _exact_submit_drought_axis_summary(
         | {
             "latency_block",
             "order_bundle_failed",
+            "pre_submit_liquidity_guard_block",
         }
         | ENTRY_AI_AUTHORITY_GUARD_STAGES
         | ENTRY_PRICE_GUARD_STAGES
