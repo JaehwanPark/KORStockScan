@@ -38,6 +38,7 @@ _VOTE_BACKFILL = OrderedDict()
 _PENDING_APPENDS = OrderedDict()
 _PENDING_LOCK = threading.RLock()
 _PENDING_BYTES = 0
+_READERS = ContextVar('trailing_source_read_connections', default=None)
 
 
 def _after_fork():
@@ -48,6 +49,7 @@ def _after_fork():
     _MAINTENANCE_LOCK = threading.Lock()
     _MAINTENANCE.clear();_CHECKPOINTS.clear();_VOTE_BACKFILL.clear()
     _PENDING_LOCK=threading.RLock();_PENDING_APPENDS.clear();_PENDING_BYTES=0
+    _READERS.set(None)
 
 
 os.register_at_fork(after_in_child=_after_fork)
@@ -299,6 +301,10 @@ def prepare_for_day(data_root,day):
         path=Path(data_root)/namespace/(namespace+'_'+day+'.jsonl')
         with _database(data_root,path,writer=True):
             pass
+    target=_index_path(Path(data_root).resolve(),'holding_path_votes',None)
+    if target.is_file():
+        with _connection(target,writer=True,existing_only=True):
+            pass
     maintain(data_root,day)
 
 
@@ -306,6 +312,7 @@ def _maintain_once(data_root, day, turn=0):
     """No broker/provider/strategy authority; at most one 8 MiB catch-up."""
     if not Path(data_root).is_dir():
         return
+    _index_path(Path(data_root).resolve(),'pipeline_events',day)
     _drain_pending(data_root)
     key=(str(data_root), day)
     now=time.monotonic()
@@ -314,19 +321,37 @@ def _maintain_once(data_root, day, turn=0):
     _MAINTENANCE[key]=now
     while len(_MAINTENANCE)>3:
         _MAINTENANCE.pop(next(iter(_MAINTENANCE)))
-    if now-_CHECKPOINTS.get(key,float('-inf'))>=60:
-        _CHECKPOINTS.clear();_CHECKPOINTS[key]=now
-        for namespace in STREAM_NAMESPACES:
-            path=Path(data_root)/namespace/(namespace+'_'+day+'.jsonl')
-            try:
-                with _database(data_root,path,writer=True):
-                    pass
-                # Checkpoint outside the native append lock, at most once per
-                # minute. Catch-up turns are independent from this disk work.
-                with _database(data_root,path) as (db,_,_):
-                    db.execute('PRAGMA wal_checkpoint(PASSIVE)').fetchone()
-            except (InputPending,sqlite3.OperationalError):
-                continue
+    for namespace in NAMESPACES:
+        target=_index_path(Path(data_root).resolve(),namespace,day)
+        name=str(target)
+        # The vote DB is global, including across day rollover. Never create
+        # an empty vote DB on behalf of a report reader or maintenance turn.
+        if namespace=='holding_path_votes' and not target.is_file():
+            continue
+        due=now-_CHECKPOINTS.get(name,float('-inf'))>=60
+        if not due and namespace!='holding_path_votes':
+            continue
+        if due:
+            _CHECKPOINTS[name]=now
+            while len(_CHECKPOINTS)>12:_CHECKPOINTS.pop(next(iter(_CHECKPOINTS)))
+        started=time.monotonic()
+        try:
+            with _connection(target,writer=True,existing_only=target.is_file()):
+                pass
+            if not due:
+                continue  # Re-pin a vote connection evicted by other-day preparation.
+            # Separate background connection: no native append mutex, schema
+            # writes or blocking FULL/RESTART/TRUNCATE checkpoint.
+            with _connection(target,existing_only=True) as db:
+                busy,frames,copied=db.execute('PRAGMA wal_checkpoint(PASSIVE)').fetchone()
+            progress=dict(complete=busy==0 and frames==copied,
+                busy=busy,wal_frames=frames,checkpointed_frames=copied)
+        except (InputPending,sqlite3.OperationalError) as exc:
+            progress=dict(complete=False,reason=str(exc)[:160],
+                **getattr(exc,'sqlite_context',{}))
+        _MAINTENANCE_STATUS[name]=dict(progress,wall_seconds=time.monotonic()-started,
+            observed_epoch=time.time())
+        while len(_MAINTENANCE_STATUS)>12:_MAINTENANCE_STATUS.popitem(last=False)
     path=None
     if turn % (len(STREAM_NAMESPACES)+1)==len(STREAM_NAMESPACES):
         with _MAINTENANCE_LOCK:
@@ -480,6 +505,16 @@ def project(namespace, row):
     return value
 
 
+def _index_path(root,namespace,day):
+    directory=root/'report/main_trailing_source_index'
+    if namespace=='holding_path_votes':return directory/'holding_path_votes.sqlite'
+    from datetime import date
+    if (namespace not in STREAM_NAMESPACES or not isinstance(day,str)
+            or date.fromisoformat(day).isoformat()!=day):
+        raise ValueError('trailing_index_source_date_invalid')
+    return directory/day/(namespace+'.sqlite')
+
+
 def _location(data_root, path):
     lexical=Path(data_root).absolute();root=lexical.resolve(strict=True);path=Path(path).absolute()
     if path.is_relative_to(lexical):
@@ -501,25 +536,61 @@ def _location(data_root, path):
         import re
         if re.fullmatch(r'[0-9a-f]{64}\.jsonl(?:\.segment-[0-9]+)?',path.name) is None:
             raise ValueError('trailing_index_vote_path_invalid')
-        return path,namespace,root/'report/main_trailing_source_index/holding_path_votes.sqlite'
+        return path,namespace,_index_path(root,namespace,None)
     day=path.name[len(namespace)+1:len(namespace)+11]
-    from datetime import date
-    if date.fromisoformat(day).isoformat()!=day or not path.name.startswith(namespace+'_'):
+    if not path.name.startswith(namespace+'_'):
         raise ValueError('trailing_index_source_date_invalid')
-    directory=root/'report/main_trailing_source_index'/day
-    return path,namespace,directory/(namespace+'.sqlite')
+    return path,namespace,_index_path(root,namespace,day)
+
+
+def _close_reader(entry):
+    try:entry['db'].close()
+    finally:entry['claim'].close()
+
+
+@contextmanager
+def read_session(data_root):
+    """Reuse bounded connections, never rows/verdicts or read transactions."""
+    root=Path(data_root).resolve()
+    owner=(os.getpid(),threading.get_ident())
+    active=_READERS.get()
+    if active is not None and active['root']==root and active['owner']==owner:
+        yield
+        return
+    session=dict(root=root,owner=owner,entries=OrderedDict())
+    token=_READERS.set(session)
+    try:
+        yield
+    finally:
+        _READERS.reset(token)
+        if session['owner']==(os.getpid(),threading.get_ident()):
+            for entry in session['entries'].values():_close_reader(entry)
+
+
+def _sqlite_context(exc,target,phase):
+    if not hasattr(exc,'sqlite_context'):
+        exc.sqlite_context=dict(database=str(target),database_phase=phase,
+            sqlite_errorcode=getattr(exc,'sqlite_errorcode',None),
+            sqlite_errorname=getattr(exc,'sqlite_errorname',None))
+        exc.add_note('trailing_source_database='+str(target)+' phase='+phase)
 
 
 @contextmanager
 def _database(data_root, path, *, readonly=False, writer=False, existing_only=False):
     path, namespace, target = _location(data_root, path)
+    with _connection(target,readonly=readonly,writer=writer,existing_only=existing_only) as db:
+        yield db,path,namespace
+
+
+@contextmanager
+def _connection(target, *, readonly=False, writer=False, existing_only=False):
     if (readonly or existing_only) and not target.is_file():
         raise InputPending('trailing_index_coverage_incomplete')
     if not readonly and not existing_only and not target.parent.is_dir():
         target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     if target.is_file():
         owner=target.stat()
-        if owner.st_uid!=os.getuid() or owner.st_mode&0o077:
+        if not stat.S_ISREG(owner.st_mode) or owner.st_uid!=os.getuid() or owner.st_mode&0o077:
             raise InputPending('trailing_index_database_untrusted')
     if target.is_symlink() or any(p.is_symlink() for p in target.parents):
         raise ValueError('trailing_index_database_path_invalid')
@@ -552,33 +623,64 @@ def _database(data_root, path, *, readonly=False, writer=False, existing_only=Fa
     if lock is not None and not lock.acquire(blocking=False):
         raise InputPending('trailing_index_writer_busy')
     db=entry[0] if entry is not None else None
+    cached=None;borrowed=False
     try:
+        session=_READERS.get() if readonly else None
+        if (session is not None and session['owner']==(os.getpid(),threading.get_ident())
+                and target.is_relative_to(session['root'])):
+            entries=session['entries']
+            cached=entries.get(str(target))
+            identity=(target.stat().st_dev,target.stat().st_ino)
+            if cached is not None and cached['identity']!=identity:
+                raise InputPending('trailing_index_database_generation_changed')
+            if cached is None:
+                if len(entries)>=6:
+                    old=next((name for name,value in entries.items() if not value['users']),None)
+                    if old is None:raise InputPending('trailing_index_read_session_partition_required')
+                    _close_reader(entries.pop(old))
+                from src.engine.lifecycle.research_input_budget import Claim
+                claim=Claim(2*1024*1024)
+                try:db=_open_database(target,readonly=True,writer=False)
+                except BaseException:
+                    claim.close();raise
+                cached=dict(db=db,identity=identity,users=0,claim=claim)
+                entries[str(target)]=cached
+            db=cached['db'];cached['users']+=1;borrowed=True
+            entries.move_to_end(str(target))
         if db is None:
-            db=_open_database(target,readonly=readonly,writer=False)
-        yield db, path, namespace
+            db=_open_database(target,readonly=readonly,writer=False,initialize=not existing_only)
+        yield db
+        if borrowed and (target.is_symlink()
+                or (target.stat().st_dev,target.stat().st_ino)!=cached['identity']):
+            raise InputPending('trailing_index_database_generation_changed')
+    except sqlite3.Error as exc:
+        _sqlite_context(exc,target,'read' if readonly else 'write')
+        raise
     finally:
-        if db is not None and not writer:
+        if borrowed:
+            cached['users']-=1
+            if not cached['users'] and db.in_transaction:
+                db.rollback()
+        elif db is not None and not writer:
             db.close()
         if lock is not None:
             lock.release()
 
 
 def _open_database(target, *, readonly, writer, initialize=True):
-    db = (sqlite3.connect('file:'+str(target)+'?mode=ro', uri=True, timeout=.005)
-          if readonly else sqlite3.connect('file:'+str(target)+('?mode=rwc' if initialize else '?mode=rw'),uri=True,timeout=.005,check_same_thread=not writer))
+    db=None;phase='connect'
     try:
+        db = (sqlite3.connect('file:'+str(target)+'?mode=ro', uri=True, timeout=.005)
+              if readonly else sqlite3.connect('file:'+str(target)+('?mode=rwc' if initialize else '?mode=rw'),uri=True,timeout=.005,check_same_thread=not writer))
+        phase='configure'
         db.execute('PRAGMA cache_size=-2048')
-        if not readonly and not initialize:
-            if db.execute('PRAGMA user_version').fetchone()[0] != 1:
+        version=db.execute('PRAGMA user_version').fetchone()[0] if not readonly else None
+        if not readonly and version!=1:
+            if not initialize or version!=0:
                 raise InputPending('trailing_index_schema_not_prepared')
-            db.execute('PRAGMA synchronous=NORMAL')
-            db.execute('PRAGMA wal_autocheckpoint=0')
-        if not readonly and initialize:
+            phase='initialize'
             os.chmod(target,0o600)
             db.execute('PRAGMA journal_mode=WAL')
-            db.execute('PRAGMA synchronous=NORMAL')
-            if writer:
-                db.execute('PRAGMA wal_autocheckpoint=0')
             db.execute('CREATE TABLE IF NOT EXISTS sources(path TEXT PRIMARY KEY, signature TEXT, '
                 'catchup_end INTEGER, cursor INTEGER, producer_end INTEGER, records INTEGER, invalid TEXT, '
                 'prefix_sha TEXT, append_sha TEXT, selected_records INTEGER)')
@@ -589,9 +691,16 @@ def _open_database(target, *, readonly, writer, initialize=True):
             db.execute('CREATE INDEX IF NOT EXISTS selected_window ON rows(source,kind,emitted_at)')
             db.execute('CREATE TABLE IF NOT EXISTS minutes(source TEXT, minute TEXT, stage TEXT, records INTEGER, identity_sum TEXT, PRIMARY KEY(source,minute,stage))')
             db.execute('PRAGMA user_version=1')
+        if not readonly:
+            phase='configure'
+            if db.execute('PRAGMA journal_mode').fetchone()[0]!='wal':
+                raise InputPending('trailing_index_schema_not_prepared')
+            db.execute('PRAGMA synchronous=NORMAL')
+            if writer or not initialize:db.execute('PRAGMA wal_autocheckpoint=0')
         return db
-    except BaseException:
-        db.close()
+    except BaseException as exc:
+        if isinstance(exc,sqlite3.Error):_sqlite_context(exc,target,phase)
+        if db is not None:db.close()
         raise
 
 
@@ -1170,53 +1279,55 @@ def read_at(data_root,path,offset,expected_generation):
 
 def vote_rows(data_root,path,position_key,*,source_date=None,segments=True):
     """Exact position/date lookup; validates native coverage of each segment."""
-    from src.engine.ai.holding_exit_vote import path_vote_store_path,validate_path_event
-    base=path_vote_store_path(Path(data_root).resolve(),position_key)
-    path=Path(path).resolve()
-    if path.name!=base.name and not path.name.startswith(base.name+'.segment-'):
-        raise ValueError('trailing_index_vote_position_mismatch')
-    paths=(sorted(base.parent.glob(base.name+'.segment-*'))+([base] if base.is_file() else [])
-        if segments else [path])
-    if not paths:return
-    for part in paths:
-        before=generation(data_root,part)
-        with _database(data_root,part,readonly=True) as (db,part,_):
-            gaps=db.execute("SELECT count(*) FROM rows WHERE source=? AND kind='source_gap'",
-                (str(part),)).fetchone()[0]
-            if gaps:raise InputPending('trailing_index_vote_native_contract_gap')
-            query="SELECT body_sha,body FROM rows WHERE source=? AND kind='holding_vote'"
-            args=[str(part)]
-            if source_date is not None:
-                query+=' AND emitted_at<=?';args.append(source_date)
-            for body_sha,body in db.execute(query+' ORDER BY offset',args):
-                if len(body)>MAX_ROW_BYTES or hashlib.sha256(body).hexdigest()!=body_sha:
-                    raise ValueError('trailing_index_projection_changed')
-                value=json.loads(body)
-                if value.get('schema')!=SCHEMA or value.get('kind')!='holding_vote':
-                    raise ValueError('trailing_index_projection_schema_invalid')
-                event=validate_path_event(value['row'],position_key)
-                if event is not None:yield event
-        if generation(data_root,part)!=before:
-            raise InputPending('trailing_index_vote_generation_changed')
+    with read_session(data_root):
+        from src.engine.ai.holding_exit_vote import path_vote_store_path,validate_path_event
+        base=path_vote_store_path(Path(data_root).resolve(),position_key)
+        path=Path(path).resolve()
+        if path.name!=base.name and not path.name.startswith(base.name+'.segment-'):
+            raise ValueError('trailing_index_vote_position_mismatch')
+        paths=(sorted(base.parent.glob(base.name+'.segment-*'))+([base] if base.is_file() else [])
+            if segments else [path])
+        if not paths:return
+        for part in paths:
+            before=generation(data_root,part)
+            with _database(data_root,part,readonly=True) as (db,part,_):
+                gaps=db.execute("SELECT count(*) FROM rows WHERE source=? AND kind='source_gap'",
+                    (str(part),)).fetchone()[0]
+                if gaps:raise InputPending('trailing_index_vote_native_contract_gap')
+                query="SELECT body_sha,body FROM rows WHERE source=? AND kind='holding_vote'"
+                args=[str(part)]
+                if source_date is not None:
+                    query+=' AND emitted_at<=?';args.append(source_date)
+                for body_sha,body in db.execute(query+' ORDER BY offset',args):
+                    if len(body)>MAX_ROW_BYTES or hashlib.sha256(body).hexdigest()!=body_sha:
+                        raise ValueError('trailing_index_projection_changed')
+                    value=json.loads(body)
+                    if value.get('schema')!=SCHEMA or value.get('kind')!='holding_vote':
+                        raise ValueError('trailing_index_projection_schema_invalid')
+                    event=validate_path_event(value['row'],position_key)
+                    if event is not None:yield event
+            if generation(data_root,part)!=before:
+                raise InputPending('trailing_index_vote_generation_changed')
 
 
 def scoped_vote_generation(data_root,path,source_date):
     """A logical position journal remains stable across later-session appends."""
-    from src.engine.ai.holding_exit_vote import path_vote_store_path
-    from src.engine.lifecycle import research_storage
-    with _database(data_root,path,readonly=True) as (db,path,_):
-        first=db.execute("SELECT body FROM rows WHERE source=? AND kind='holding_vote' ORDER BY offset LIMIT 1",
-            (str(path),)).fetchone()
-    if first is None:
-        raise InputPending('trailing_index_vote_position_unobserved')
-    position=json.loads(first[0])['row']['position_key']
-    base=path_vote_store_path(Path(data_root).resolve(),position)
-    sha=hashlib.sha256();count=size=0
-    for row in vote_rows(data_root,path,position,source_date=source_date):
-        raw=research_storage.encoded(row)+b'\n';sha.update(raw);count+=1;size+=len(raw)
-    if not count:return None
-    return dict(schema='main_trailing_historical_vote_inventory_v1',path=base.name,
-        source_date=source_date,event_count=count,size=size,sha256=sha.hexdigest())
+    with read_session(data_root):
+        from src.engine.ai.holding_exit_vote import path_vote_store_path
+        from src.engine.lifecycle import research_storage
+        with _database(data_root,path,readonly=True) as (db,path,_):
+            first=db.execute("SELECT body FROM rows WHERE source=? AND kind='holding_vote' ORDER BY offset LIMIT 1",
+                (str(path),)).fetchone()
+        if first is None:
+            raise InputPending('trailing_index_vote_position_unobserved')
+        position=json.loads(first[0])['row']['position_key']
+        base=path_vote_store_path(Path(data_root).resolve(),position)
+        sha=hashlib.sha256();count=size=0
+        for row in vote_rows(data_root,path,position,source_date=source_date):
+            raw=research_storage.encoded(row)+b'\n';sha.update(raw);count+=1;size+=len(raw)
+        if not count:return None
+        return dict(schema='main_trailing_historical_vote_inventory_v1',path=base.name,
+            source_date=source_date,event_count=count,size=size,sha256=sha.hexdigest())
 
 
 def _append_successor(before,after):

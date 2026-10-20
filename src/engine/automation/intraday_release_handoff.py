@@ -2859,6 +2859,25 @@ REVIEWED_PRODUCT_INTAKE_DEPENDENCY_VARIANTS = {
     } for key, value in REVIEWED_INCIDENT_ORDER_DEPENDENCY_VARIANTS.items()
 }
 
+# SQL connection lifecycle and its diagnostic consumer are one complete
+# successor. Issued product/observer profiles remain byte-bound independently.
+REVIEWED_SQLITE_LIFECYCLE_HASHES = {
+    'src/engine/automation/main_trailing_source_store.py': 'a27ce958c053023e920ac23e6369126bdc7d77eb2d73fd713cc5c109e212d593',
+    'src/engine/infrastructure/validation_digest_session.py': '87ea421cd28cd81d06fabecbfeed4c03d041b771f31dba6057857283a53828da',
+    'src/engine/error_detector.py': 'c4d2e89d6e257d4c9cd7d819a2592fd4e31a73fb3806662ab97911542c471f56',
+}
+REVIEWED_SQLITE_LIFECYCLE_DEPENDENCY_VARIANTS = {
+    key: {**value,
+        'selector_path': 'src/engine/automation/main_trailing_source_store.py',
+        'selector_sha256': REVIEWED_SQLITE_LIFECYCLE_HASHES['src/engine/automation/main_trailing_source_store.py'],
+        'dependencies': {**value['dependencies'], **REVIEWED_SQLITE_LIFECYCLE_HASHES},
+        'contract_extensions': {
+            origin: {name: REVIEWED_SQLITE_LIFECYCLE_HASHES.get(os.path.normpath(name), digest)
+                     for name, digest in paths.items()}
+            for origin, paths in value['contract_extensions'].items()},
+    } for key, value in REVIEWED_PRODUCT_INTAKE_DEPENDENCY_VARIANTS.items()
+}
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -2912,7 +2931,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         dependencies = generations.get(trigger_sha, {})
         # New exact selectors precede their historical parent. The first match
         # selects one complete generation, never per-file SHA alternatives.
-        for variants in (REVIEWED_PRODUCT_INTAKE_DEPENDENCY_VARIANTS,
+        for variants in (REVIEWED_SQLITE_LIFECYCLE_DEPENDENCY_VARIANTS,
+                         REVIEWED_PRODUCT_INTAKE_DEPENDENCY_VARIANTS,
                          REVIEWED_INCIDENT_ORDER_DEPENDENCY_VARIANTS,
                          REVIEWED_ORIGINAL_GAP_DEPENDENCY_VARIANTS,
                          REVIEWED_SOURCE_INTEGRATION_DEPENDENCY_VARIANTS,
@@ -2960,7 +2980,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
                 continue
             selector = variant['selector_path']
             path = root / selector
-            if (variants in (REVIEWED_TRAILING_REUSE_DEPENDENCY_VARIANTS,
+            if (variants in (REVIEWED_SQLITE_LIFECYCLE_DEPENDENCY_VARIANTS,
+                             REVIEWED_TRAILING_REUSE_DEPENDENCY_VARIANTS,
                              REVIEWED_ORIGINAL_GAP_DEPENDENCY_VARIANTS)
                     and not path.exists() and not path.is_symlink()):
                 try:

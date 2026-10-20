@@ -872,3 +872,190 @@ def test_empty_native_sidecar_identity_mismatch_remains_source_gap(tmp_path):
     sidecar.write_text(json.dumps(value))
     assert completed.prepare_window(tmp_path,[day])[0]['status']=='source_gap'
     assert completed.offline_binding(tmp_path,day)==(None,None)
+
+
+@pytest.mark.parametrize('pinned_reader', [False, True])
+def test_background_checkpoints_shared_vote_database_and_retains_partial_progress(tmp_path, pinned_reader):
+    import sqlite3
+    from src.engine.ai.holding_exit_vote import path_vote_store_path
+    path = path_vote_store_path(tmp_path, 'record:7')
+    with store._database(tmp_path, path, writer=True) as (writer, _, _):
+        with writer:
+            writer.execute('CREATE TABLE sample(body BLOB)')
+            writer.execute('INSERT INTO sample VALUES(zeroblob(65536))')
+    target = store._location(tmp_path, path)[2]
+    reader = sqlite3.connect('file:'+str(target)+'?mode=ro', uri=True)
+    try:
+        if pinned_reader:
+            reader.execute('BEGIN')
+            reader.execute('SELECT count(*) FROM sample').fetchone()
+        with writer:
+            writer.execute('INSERT INTO sample VALUES(zeroblob(65536))')
+        store._maintain_once(tmp_path, '2026-10-20', turn=5)
+        state = store._MAINTENANCE_STATUS[str(target)]
+        assert state['complete'] is (not pinned_reader)
+        assert state['wal_frames'] >= state['checkpointed_frames'] >= 0
+        assert state['wal_frames'] > state['checkpointed_frames'] if pinned_reader else True
+        # The global DB must not be checkpointed again for another day.
+        store._maintain_once(tmp_path, '2026-10-19', turn=5)
+        assert store._MAINTENANCE_STATUS[str(target)] is state
+        assert (__import__('os').getpid(),str(target)) in store._WRITERS
+    finally:
+        reader.close()
+    store._CHECKPOINTS[str(target)]-=61
+    store._MAINTENANCE[(str(tmp_path),'2026-10-20')]-=1
+    store._maintain_once(tmp_path,'2026-10-20',turn=5)
+    assert store._MAINTENANCE_STATUS[str(target)]['complete']
+    with store._database(tmp_path,path,readonly=True) as (current,_,_):
+        assert current.execute('SELECT count(*) FROM sample').fetchone()[0]==2
+
+
+def test_validation_session_reuses_sqlite_connections_but_checks_each_new_source_generation(tmp_path, monkeypatch):
+    import sqlite3
+    from src.engine.infrastructure.validation_digest_session import postclose_session
+    path = source(tmp_path); append(tmp_path, path, row('before'))
+    native = store._open_database; opened = []
+    def observe(*args, **kwargs):
+        db = native(*args, **kwargs)
+        if kwargs.get('readonly'): opened.append(db)
+        return db
+    monkeypatch.setattr(store, '_open_database', observe)
+    with postclose_session(tmp_path, '2026-10-19'):
+        original = store.generation(tmp_path, path)
+        assert len(list(store.read_rows(tmp_path, path))) == 1
+        append(tmp_path, path, row('after'))
+        assert store.generation(tmp_path, path) != original
+        assert len(list(store.read_rows(tmp_path, path))) == 2
+        assert len(opened) == 1
+    with pytest.raises(sqlite3.ProgrammingError, match='closed'):
+        opened[0].execute('SELECT 1')
+
+
+def test_open_prepared_database_never_repeats_schema_writes_under_another_writer(tmp_path):
+    import sqlite3
+    path = source(tmp_path)
+    with store._database(tmp_path, path, writer=True): pass
+    target = store._location(tmp_path, path)[2]
+    locker = sqlite3.connect(target)
+    db = None
+    try:
+        locker.execute('BEGIN IMMEDIATE')
+        db = store._open_database(target, readonly=False, writer=True)
+        assert db.execute('PRAGMA user_version').fetchone()[0] == 1
+        assert not db.in_transaction
+        with pytest.raises(sqlite3.OperationalError, match='locked'):
+            db.execute('PRAGMA user_version=1')
+    finally:
+        if db is not None: db.close()
+        locker.close()
+
+
+@pytest.mark.parametrize('fault', ['none', 'exception', 'replaced_before', 'replaced_during', 'changed_body'])
+def test_reader_session_cleanup_and_database_identity_fail_closed(tmp_path, fault):
+    import sqlite3
+    from src.engine.lifecycle.research_input_budget import health
+    path = source(tmp_path); append(tmp_path, path, row())
+    target = store._location(tmp_path, path)[2]
+    prior = health()['used_bytes']
+    db = None
+    expected = RuntimeError if fault == 'exception' else (store.InputPending if fault.startswith('replaced') else ValueError)
+    def replace():
+        copied = target.with_suffix('.replacement')
+        saved = sqlite3.connect(copied)
+        try:db.backup(saved)
+        finally:saved.close()
+        copied.chmod(0o600);copied.replace(target)
+    def run():
+        nonlocal db
+        with store.read_session(tmp_path):
+            with store._database(tmp_path, path, readonly=True) as (db, _, _):
+                if fault == 'replaced_during': replace()
+            if fault == 'exception': raise RuntimeError('consumer failed')
+            if fault == 'replaced_before': replace()
+            if fault == 'changed_body':
+                with store._database(tmp_path, path, writer=True) as (writer, _, _), writer:
+                    writer.execute('UPDATE rows SET body=?', (b'{}',))
+                list(store.read_rows(tmp_path, path))
+            store.generation(tmp_path, path)
+    if fault == 'none': run()
+    else:
+        with pytest.raises(expected): run()
+    assert health()['used_bytes'] == prior
+    with pytest.raises(sqlite3.ProgrammingError, match='closed'):db.execute('SELECT 1')
+
+
+def test_reader_pool_bounds_eviction_and_keeps_borrowed_connections(tmp_path):
+    from contextlib import ExitStack
+    from src.engine.lifecycle.research_input_budget import health
+    paths = [tmp_path/'ai_decision_trace'/f'ai_decision_trace_2026-10-{day:02d}.jsonl' for day in range(12, 20)]
+    for path in paths:
+        path.parent.mkdir(exist_ok=True);path.touch();append(tmp_path, path, row())
+    prior = health()['used_bytes']
+    with store.read_session(tmp_path):
+        for path in paths: assert store.generation(tmp_path, path)['raw_records'] == 1
+        assert len(store._READERS.get()['entries']) == 6
+        with ExitStack() as stack:
+            for path in paths[-6:]:stack.enter_context(store._database(tmp_path, path, readonly=True))
+            with pytest.raises(store.InputPending, match='read_session_partition_required'):
+                store.generation(tmp_path, paths[0])
+        assert store.generation(tmp_path, paths[0])['raw_records'] == 1
+    assert health()['used_bytes'] == prior
+
+
+def test_reader_connections_never_cross_inherited_thread_or_fork_context(tmp_path):
+    import os, threading
+    from contextvars import copy_context
+    path = source(tmp_path);append(tmp_path, path, row())
+    with store.read_session(tmp_path):
+        before = store.generation(tmp_path, path)
+        entries = store._READERS.get()['entries'];db = next(iter(entries.values()))['db']
+        results = []
+        thread = threading.Thread(target=copy_context().run, args=(lambda: results.append(store.generation(tmp_path, path)),))
+        thread.start();thread.join(timeout=5);assert not thread.is_alive()
+        assert results == [before] and next(iter(entries.values()))['db'] is db
+        child = os.fork()
+        if child == 0:
+            try:
+                assert store._READERS.get() is None
+                assert store.generation(tmp_path, path) == before
+            except BaseException:os._exit(2)
+            os._exit(0)
+        assert os.waitpid(child, 0)[1] == 0
+        assert store.generation(tmp_path, path) == before
+
+
+def test_startup_prepares_existing_global_vote_index_before_first_reader(tmp_path):
+    from src.engine.ai.holding_exit_vote import path_vote_store_path
+    path = path_vote_store_path(tmp_path, 'record:7')
+    with store._database(tmp_path, path, writer=True): pass
+    # Force that cached connection out, as happens during other-day preparation.
+    for day in range(12, 19):
+        stream = tmp_path/'ai_decision_trace'/f'ai_decision_trace_2026-10-{day:02d}.jsonl'
+        with store._database(tmp_path, stream, writer=True): pass
+    key = (__import__('os').getpid(), str(store._location(tmp_path, path)[2]))
+    assert key not in store._WRITERS
+    store.prepare_for_day(tmp_path, '2026-10-20')
+    assert key in store._WRITERS
+    # No fabricated vote DB is created when this source family is absent.
+    empty = tmp_path/'empty';empty.mkdir()
+    store.prepare_for_day(empty, '2026-10-20')
+    assert not store._index_path(empty, 'holding_path_votes', None).exists()
+
+
+def test_failed_read_transaction_releases_snapshot_before_connection_reuse(tmp_path):
+    path = source(tmp_path);append(tmp_path, path, row('before'))
+    with store.read_session(tmp_path):
+        with pytest.raises(store.InputPending, match='original_failure'):
+            with store._database(tmp_path, path, readonly=True) as (db, _, _):
+                db.execute('BEGIN')
+                db.execute('SELECT count(*) FROM rows').fetchone()
+                raise store.InputPending('original_failure')
+        assert not db.in_transaction
+        append(tmp_path, path, row('after'))
+        assert len(list(store.read_rows(tmp_path, path))) == 2
+
+
+@pytest.mark.parametrize('day', ['2026-10-20/../../escape', '20261020', '2026-W43-2', None])
+def test_maintenance_rejects_noncanonical_dates_before_preparing_any_database(tmp_path, day):
+    with pytest.raises(ValueError):store._maintain_once(tmp_path, day)
+    assert not (tmp_path/'report').exists()

@@ -1748,15 +1748,16 @@ def test_archive_authority_successor_accepts_the_issued_full_reader_origin(avg_d
 
 
 @pytest.mark.parametrize('family', ['main_stop', 'holding_vote', 'pre_submit_delay'])
-@pytest.mark.parametrize('fault', [None, 'missing', 'dirty', 'committed_change'])
-@pytest.mark.parametrize('generation,reader_path', [(generation,path)
-    for generation in ('source_reader','source_integration','original_gap','incident_order','product_intake')
-    for path in (tuple(handoff.REVIEWED_PRODUCT_INTAKE_HASHES) if generation=='product_intake' else
+@pytest.mark.parametrize('generation,reader_path,fault', [(generation,path,fault)
+    for generation in ('source_reader','source_integration','original_gap','incident_order','product_intake','sqlite_lifecycle')
+    for path in (tuple(handoff.REVIEWED_SQLITE_LIFECYCLE_HASHES) if generation=='sqlite_lifecycle' else
+        tuple(handoff.REVIEWED_PRODUCT_INTAKE_HASHES) if generation=='product_intake' else
         ('src/engine/monitoring/submission_bottleneck_monitor.py',) if generation=='incident_order' else
         ('src/engine/scalping/holding_profit_exit_semantics.py',) if generation=='original_gap' else
         ('src/engine/lifecycle/research_json_stream.py',
         'src/engine/automation/main_startup_validation.py','src/engine/automation/next_preopen_readiness.py',
-        *(['src/engine/infrastructure/startup_validation_code_context.py'] if generation=='source_integration' else [])))])
+        *(['src/engine/infrastructure/startup_validation_code_context.py'] if generation=='source_integration' else [])))
+    for fault in ([None,'missing','dirty','committed_change']+(['parent_mix'] if generation=='sqlite_lifecycle' else []))])
 def test_source_reader_handoff_preserves_issued_policy_and_exact_dependencies(tmp_path, family, fault, reader_path,generation):
     import hashlib
     import os
@@ -1779,15 +1780,16 @@ def test_source_reader_handoff_preserves_issued_policy_and_exact_dependencies(tm
         names.update(variant['dependencies'])
     names.update(handoff.REVIEWED_SOURCE_READER_HASHES)
     if generation!='source_reader':names.update(handoff.REVIEWED_SOURCE_INTEGRATION_HASHES)
-    if generation in ('original_gap','incident_order','product_intake'):names.update(handoff.REVIEWED_ORIGINAL_GAP_HASHES)
-    if generation=='product_intake':names.update(handoff.REVIEWED_PRODUCT_INTAKE_HASHES)
+    if generation in ('original_gap','incident_order','product_intake','sqlite_lifecycle'):names.update(handoff.REVIEWED_ORIGINAL_GAP_HASHES)
+    if generation in ('product_intake','sqlite_lifecycle'):names.update(handoff.REVIEWED_PRODUCT_INTAKE_HASHES)
+    if generation=='sqlite_lifecycle':names.update(handoff.REVIEWED_SQLITE_LIFECYCLE_HASHES)
     names.add('src/engine/automation/intraday_release_handoff.py')
     for name in names:
         path = root/name; path.parent.mkdir(parents=True,exist_ok=True)
-        path.write_bytes((canonical/name).read_bytes() if generation=='product_intake' or
+        path.write_bytes((canonical/name).read_bytes() if generation=='sqlite_lifecycle' or
             name=='src/engine/automation/intraday_release_handoff.py' else subprocess.check_output(
                 ['git','-C',str(canonical),'show',
-                 ({'source_reader':'0255cb05f','incident_order':'041caf05e'}.get(generation,'99c51c85f'))
+                 ({'source_reader':'0255cb05f','incident_order':'041caf05e','product_intake':'21d822a64'}.get(generation,'99c51c85f'))
                  +':'+os.path.normpath(name)]))
     original = {key: hashlib.sha256(subprocess.check_output(
         ['git','-C',str(root),'show',origin+':'+os.path.normpath(name)])).hexdigest()
@@ -1801,6 +1803,9 @@ def test_source_reader_handoff_preserves_issued_policy_and_exact_dependencies(tm
     revision = commit()
     reader = root/reader_path
     if fault == 'missing': reader.unlink()
+    elif fault == 'parent_mix':
+        reader.write_bytes(subprocess.check_output(['git','-C',str(canonical),'show','21d822a64:'+reader_path]))
+        revision=commit()
     elif fault:
         reader.write_bytes(reader.read_bytes()+b'\nUNREVIEWED_READER = True\n')
         if fault == 'committed_change': revision = commit()
