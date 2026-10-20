@@ -339,3 +339,23 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
 - Python compile 3파일, 제거 심볼 참조 0, 보존 AST 동등성, 문서 링크/owner/print-only parser·`git diff --check` 통과. Ruff `F811/F821` 0; 기존 두 파일의 `F401` 18건은 기준본과 동일하며 신규 지적 0. 수정 handoff 테스트는 `F401/F811/F821` 통과. 기존 pandas 경고 1건은 그대로다. shell/cron 변경이 없어 shell 계약·`bash -n`은 해당 없음.
 - 증감(base `0ce816f7c`): non-test source **+0/-368**, test **+81/-165**(순감84), docs **+25/-0**. 새 모듈·wrapper·framework·보고서 producer·파일 이동 없음. 테스트 추가는 역사 입력 고정과 퇴역 경계 보존에 사용했다.
 - 코드 세대 경계: `avg_down_policy_replay`는 삭제한 함수도 loaded-code identity에 포함했으므로 원 역사 fingerprint/정책 영수증은 그대로 보존한다. 현재 snapshot 수용과 변경된 implementation 거절 회귀는 통과했지만 이 후보용 운영 handoff를 발행한 것은 아니다. 향후 배포 준비 owner는 해당 시점의 incumbent·정책·후보 commit에 대한 새 native parity/delay/stop/holding handoff를 검증해야 한다. 기존 PASS 재사용·hash 치환·실제 배포/재기동·자연 소비 완료는 이번 종료점에 포함하지 않는다.
+
+## Opening Rotation 미사용 helper 제거 — CodeRefactorOpeningRotation1020
+
+- [x] **CodeRefactorOpeningRotation1020** — 후속 조사에서 확정한 runtime helper 4개 제거와 격리 후보 검증.
+  - Source: 사용자 `다음액션 실행`; 범위는 `scalping/opening_rotation.py`의 미사용 함수와 직접 영향 검증뿐이다. entry 관측 reader 통합이나 다른 퇴역 모듈 정리는 포함하지 않는다.
+  - Owner: Opening Rotation metadata/retirement. 기준은 선택 commit `10f8d1ba69ca513bc2ec25f64a91204a4a655258`, release `delay-cleanup-final-20261020-10f8d1ba6`. 격리 작업본 `/home/ubuntu/KORStockScan-worktrees/refactor-opening-rotation-20261020`, branch `codex/refactor-opening-rotation-20261020`.
+  - 종료점: 아래 4개 runtime 함수 제거·잔여 호출자 0, 보존 AST와 역사 reader 원본 동일, 영향 테스트·compile·문서 parser·diff 검사 통과 및 clean 후보 커밋. 기본 작업본의 병행 문서 변경·운영 shell·선택 포인터·PID·정책은 수정하지 않는다.
+
+| 기존 대상 | 대체 | 판정·소비 근거 |
+| --- | --- | --- |
+| runtime `_blocked`, `_entry_micro_gate_preview` | none | removed; public evaluator는 영구 퇴역 반환만 수행. 정적 import·별칭·attribute/getattr·CLI/등록 확인에서 별도 실행 호출 없음 |
+| runtime `_number`, `_boolean` | none | removed; preview만 사용하던 전용 변환 함수. 2개 상위 helper 제거 후 남을 중복도 함께 정리 |
+| `lifecycle/archive/opening_rotation_readers.py`의 동명 함수 | 기존 역사 구현 | retained; 역사 `evaluate_entry`와 backtest reader가 실제 호출. 파일 bytes/SHA와 과거 평가 규칙을 보존 |
+| runtime public evaluator·profile·position tag·시각/가격·정책 reader | 기존 구현 | retained; scanner·state handlers·sync·execution receipts·역사 backtest/tuning metadata 소비자. 보존 소스 AST 전체가 기준본과 동일하고 신규 고아 import/global 없음 |
+
+- 자체 리뷰→보완→재리뷰: 기존 `test_opening_rotation.py`의 autouse fixture가 Main evaluator를 역사 구현으로 바꾸는 점을 확인했다. 기존 retirement/tuning 테스트 파일에서 원 runtime module을 직접 호출하는 검증 2건을 보완해 `enabled=False/True` 모두 WATCH/HOLD·`allowed_runtime_apply=False`, 상태 보존과 파일 I/O 없음까지 확인했다. 새 module·wrapper·framework·보고서 producer·파일 이동 없음.
+- 검증: `test_opening_rotation.py`, `test_opening_rotation_backtest.py`, `test_opening_rotation_tuning.py` 전체 **184 PASS**, 제외/skip 0. scanner의 `test_watch_budget_opening_config_ignores_legacy_per_field_env` **1 PASS**로 총 **185 PASS**. 기존 seccomp runner로 connect/send를 차단했으며 운영 원천·provider·주문 호출은 없다. 재현 로그와 AST/import 검토는 후보 `tmp/refactor-opening-rotation-20261020/`에 보존한다.
+- Python compile 2파일·Ruff `F401/F811/F821`·문서 링크/owner/print-only parser·`git diff --check` 통과. runtime 제거 함수의 import/attribute/getattr 참조 0, public import 9곳의 계약 보존 확인. shell/cron 및 broker API/parser/계좌/주문 callsite 변경이 없어 shell 검사와 Official Kiwoom Reference Gate는 해당 없음.
+- 증감(base `10f8d1ba6`): non-test source **+0/-158**, test **+30/-0**, docs **+20/-0**. 테스트 증가는 역사 fixture에 가려졌던 원 runtime 퇴역 경계 검증이며 생산 코드는 삭제만 했다.
+- 검토 범위의 미해결 코드 결함 0으로 구현 종결. 정책 handoff 발행·불변 배포 패키지·선택/PID 전환·재기동·자연 소비는 수행하지 않았다. 향후 배포 준비에서는 당시 선택본과 후보 commit의 기존 native handoff 계약을 검증하며, 이번 pytest 결과를 운영 적용 영수증으로 사용하지 않는다.
