@@ -2080,7 +2080,8 @@ def _quantity_sell_receipt_observations(events: list[HoldingEvent]):
                 and native.get("native_receipt_execution_no") == key[2]
                 and native.get("native_receipt_buy_fill_identity") == native.get("holding_path_buy_fill_identity"))
             observation_provenance_valid = str(native.get("broker_execution_provenance_complete")).lower() == "true"
-            if schema == "native_entry_sell_receipt_v1" or not observation_provenance_valid:
+            lineage_gap = native.get("native_receipt_entry_lineage_status") == "source_gap"
+            if schema == "native_entry_sell_receipt_v1" or not observation_provenance_valid or lineage_gap:
                 # Revalidate the producer's terminal custody identity. An unknown
                 # execution venue remains unknown; it does not make unchanged
                 # observations of one acknowledged receipt multiple fills.
@@ -2102,7 +2103,7 @@ def _quantity_sell_receipt_observations(events: list[HoldingEvent]):
             if (not identity_valid
                     or str(native.get("native_receipt_record_id")) != record
                     or native.get("native_receipt_stock_code") != key[0]
-                    or not re.fullmatch(r"[0-9a-f]{64}", str(native.get("holding_path_buy_fill_identity") or ""))
+                    or not (lineage_gap or re.fullmatch(r"[0-9a-f]{64}", str(native.get("holding_path_buy_fill_identity") or "")))
                     or not observation_provenance_valid
                     or native.get("broker_execution_time_source") != "official_fid_908"
                     or native.get("decision_authority") != "broker_sell_fill_observation_only"

@@ -452,6 +452,43 @@ def test_read_only_selection_does_not_relax_prepare_or_consume_cwd(fixture, monk
     assert all(Path(path).read_bytes() == value for path, value in frozen.items())
 
 
+@pytest.mark.parametrize('damage', [None, 'snapshot', 'strict', 'consumed', 'pid', 'source'])
+def test_historical_observer_accepts_consumed_strict_bound_operating_snapshot(fixture, monkeypatch, damage):
+    data, previous, selected, _ = fixture
+    source_day='2026-10-01'
+    checklist=data.parent/'docs/checklists'/f'{DAY}-stage2-todo-checklist.md'
+    checklist.parent.mkdir(parents=True);checklist.write_text('sealed generation\n')
+    strict=data/'report/strict.json';_json(strict,dict(generation_binding=dict(checklist_sha256=handoff._sha(checklist))))
+    controller=data/'report/postclose_done_controller'/f'postclose_done_controller_{source_day}.json'
+    summary=data/'report/runtime_approval_summary'/f'runtime_approval_summary_{source_day}.json'
+    _json(controller,dict(status='done',verification_attempt_path=str(strict)));_json(summary,dict(status='verified'))
+    index=data/'runtime/policy_bootstrap/prepared'/DAY/'latest.json';receipt=Path(handoff._read(index)['receipt_path'])
+    policies=[dict(family='main',path='/policy.json',sha256='d'*64)]
+    _json(receipt,dict(schema='next_preopen_readiness_v1',status='prepared_verified',target_date=DAY,source_date=source_day,
+        actual_pid_consumed=False,policy_receipts=policies))
+    _json(index,dict(receipt_path=str(receipt),receipt_sha256=handoff._sha(receipt)))
+    monkeypatch.setattr(readiness,'_source_receipts',lambda *a,**k:dict(controller_path=str(controller),
+        controller_sha256=handoff._sha(controller),summary_path=str(summary),summary_sha256=handoff._sha(summary),policy_receipts=policies))
+    assert handoff.prepare(DAY,old_pid=1,previous_root=previous,confirm=handoff.CONFIRM,now=NOW,
+        reseal_postclose_source=True,freeze_operating_checklist=True)['status']=='pass'
+    assert handoff.consume(DAY,pid=2,now=NOW)['status']=='pass'
+    checklist.write_text('current operational work changed after consumption\n')
+    path,consumed=handoff._paths(DAY,NEW)
+    snapshot=handoff._read(path)['postclose_source_reseal']['operating_checklist']
+    if damage=='snapshot':Path(snapshot['path']).write_text('corrupt')
+    if damage=='strict':_json(strict,dict(generation_binding=dict(checklist_sha256='changed')))
+    if damage=='consumed':consumed.unlink()
+    if damage=='pid':monkeypatch.setattr(handoff,'_identity',lambda pid:dict(pid=pid,start_ticks='reused',cwd=str(selected/'src')))
+    if damage:
+        with pytest.raises(ValueError,match='intraday_observer_'):
+            handoff.historical_checklist_for_observer(data.parent,DAY if damage=='source' else source_day,now=NOW)
+    else:
+        result=handoff.historical_checklist_for_observer(data.parent,source_day,now=NOW)
+        assert result['path']==snapshot['path'] and result['sha256']==snapshot['sha256']
+        assert result['pid_identity']['pid']==2
+        assert result['runtime_effect'] is result['new_finalization_claimed'] is False
+
+
 @pytest.mark.parametrize('damage', [None, 'status', 'schema', 'pid', 'start_ticks',
                                   'root', 'date', 'commit', 'not_consumed', 'handoff',
                                   'manifest_binding', 'env', 'prepared'])
@@ -1526,7 +1563,7 @@ def avg_down_input_git_candidate(cleanup_git_candidate):
     for name in handoff.REVIEWED_AVG_DOWN_INPUT_HASHES:
         path = root/name
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes((canonical/name).read_bytes())
+        path.write_bytes(subprocess.check_output(['git','-C',str(canonical),'show','a98ff7a95:'+name]))
     # This older immutable release already contained the report. The new
     # selector must see its original bytes, not a synthetic missing module or
     # this working tree's newer report implementation.
@@ -1580,7 +1617,7 @@ def test_avg_down_input_handoff_preserves_policy_and_binds_new_inputs(
             assert 'src/engine/scalping/ai_market_snapshot.py' in changed
 
 
-@pytest.mark.parametrize('generation', ['producer_census', 'complete_consumers', 'prefix_code_binding', 'late_cost_revision', 'postclose_readers', 'archive_authority', 'legacy_archive_authority', 'auxiliary_data_root', 'completed_offline', 'completed_empty', 'native_empty_cohorts','assembler_budget','calendar_physical','stop_shared_position','stop_forward_stream','stop_indexed_votes','pre_entry_observer','vote_metadata'])
+@pytest.mark.parametrize('generation', ['producer_census', 'complete_consumers', 'prefix_code_binding', 'late_cost_revision', 'postclose_readers', 'archive_authority', 'legacy_archive_authority', 'auxiliary_data_root', 'completed_offline', 'completed_empty', 'native_empty_cohorts','assembler_budget','calendar_physical','stop_shared_position','stop_forward_stream','stop_indexed_votes','pre_entry_observer','vote_metadata','broker_custody'])
 @pytest.mark.parametrize('origin', ['7f2552aedde8fec6ef904a43105827907e50dfc8',
                                     '8940ea4ad0d3b64d30f67f986a75715ee24c1d95'])
 @pytest.mark.parametrize('family', ['main_stop', 'holding_vote', 'pre_submit_delay'])
@@ -1593,38 +1630,40 @@ def test_completion_census_handoff_binds_exact_complete_generation(
     canonical = Path(handoff.__file__).resolve().parents[3]
     hashes = (handoff.REVIEWED_COMPLETION_CENSUS_HASHES if generation == 'producer_census'
               else handoff.REVIEWED_COMPLETION_CONSUMER_HASHES)
-    if generation in {'prefix_code_binding','late_cost_revision','postclose_readers','archive_authority','legacy_archive_authority','auxiliary_data_root','completed_offline','completed_empty','native_empty_cohorts','assembler_budget','calendar_physical','stop_shared_position','stop_forward_stream','stop_indexed_votes','pre_entry_observer','vote_metadata'}:
+    if generation in {'prefix_code_binding','late_cost_revision','postclose_readers','archive_authority','legacy_archive_authority','auxiliary_data_root','completed_offline','completed_empty','native_empty_cohorts','assembler_budget','calendar_physical','stop_shared_position','stop_forward_stream','stop_indexed_votes','pre_entry_observer','vote_metadata','broker_custody'}:
         hashes = {**hashes, **handoff.REVIEWED_PREFIX_PRODUCER_HASHES}
-    if generation in {'late_cost_revision','postclose_readers','archive_authority','legacy_archive_authority','auxiliary_data_root','completed_offline','completed_empty','native_empty_cohorts','assembler_budget','calendar_physical','stop_shared_position','stop_forward_stream','stop_indexed_votes','pre_entry_observer','vote_metadata'}:
+    if generation in {'late_cost_revision','postclose_readers','archive_authority','legacy_archive_authority','auxiliary_data_root','completed_offline','completed_empty','native_empty_cohorts','assembler_budget','calendar_physical','stop_shared_position','stop_forward_stream','stop_indexed_votes','pre_entry_observer','vote_metadata','broker_custody'}:
         hashes = {**hashes, **handoff.REVIEWED_LATE_COST_HASHES}
-    if generation in {'postclose_readers','archive_authority','legacy_archive_authority','auxiliary_data_root','completed_offline','completed_empty','native_empty_cohorts','assembler_budget','calendar_physical','stop_shared_position','stop_forward_stream','stop_indexed_votes','pre_entry_observer','vote_metadata'}:
+    if generation in {'postclose_readers','archive_authority','legacy_archive_authority','auxiliary_data_root','completed_offline','completed_empty','native_empty_cohorts','assembler_budget','calendar_physical','stop_shared_position','stop_forward_stream','stop_indexed_votes','pre_entry_observer','vote_metadata','broker_custody'}:
         hashes = {**hashes, **handoff.REVIEWED_POSTCLOSE_READER_HASHES}
-    if generation in {'archive_authority','legacy_archive_authority','auxiliary_data_root','completed_offline','completed_empty','native_empty_cohorts','assembler_budget','calendar_physical','stop_shared_position','stop_forward_stream','stop_indexed_votes','pre_entry_observer','vote_metadata'}:
+    if generation in {'archive_authority','legacy_archive_authority','auxiliary_data_root','completed_offline','completed_empty','native_empty_cohorts','assembler_budget','calendar_physical','stop_shared_position','stop_forward_stream','stop_indexed_votes','pre_entry_observer','vote_metadata','broker_custody'}:
         hashes = {**hashes, **handoff.REVIEWED_ARCHIVE_AUTHORITY_HASHES}
-    if generation in {'legacy_archive_authority','auxiliary_data_root','completed_offline','completed_empty','native_empty_cohorts','assembler_budget','calendar_physical','stop_shared_position','stop_forward_stream','stop_indexed_votes','pre_entry_observer','vote_metadata'}:
+    if generation in {'legacy_archive_authority','auxiliary_data_root','completed_offline','completed_empty','native_empty_cohorts','assembler_budget','calendar_physical','stop_shared_position','stop_forward_stream','stop_indexed_votes','pre_entry_observer','vote_metadata','broker_custody'}:
         hashes = {**hashes, **handoff.REVIEWED_LEGACY_ARCHIVE_AUTHORITY_HASHES}
-    if generation in {'auxiliary_data_root','completed_offline','completed_empty','native_empty_cohorts','assembler_budget','calendar_physical','stop_shared_position','stop_forward_stream','stop_indexed_votes','pre_entry_observer','vote_metadata'}:
+    if generation in {'auxiliary_data_root','completed_offline','completed_empty','native_empty_cohorts','assembler_budget','calendar_physical','stop_shared_position','stop_forward_stream','stop_indexed_votes','pre_entry_observer','vote_metadata','broker_custody'}:
         hashes = {**hashes, **handoff.REVIEWED_AUXILIARY_DATA_ROOT_HASHES}
-    if generation in {'completed_offline','completed_empty','native_empty_cohorts','assembler_budget','calendar_physical','stop_shared_position','stop_forward_stream','stop_indexed_votes','pre_entry_observer','vote_metadata'}:
+    if generation in {'completed_offline','completed_empty','native_empty_cohorts','assembler_budget','calendar_physical','stop_shared_position','stop_forward_stream','stop_indexed_votes','pre_entry_observer','vote_metadata','broker_custody'}:
         hashes = {**hashes, **handoff.REVIEWED_COMPLETED_OFFLINE_HASHES}
-    if generation in {'completed_empty','native_empty_cohorts','assembler_budget','calendar_physical','stop_shared_position','stop_forward_stream','stop_indexed_votes','pre_entry_observer','vote_metadata'}:
+    if generation in {'completed_empty','native_empty_cohorts','assembler_budget','calendar_physical','stop_shared_position','stop_forward_stream','stop_indexed_votes','pre_entry_observer','vote_metadata','broker_custody'}:
         hashes = {**hashes, **handoff.REVIEWED_COMPLETED_EMPTY_HASHES}
-    if generation in {'native_empty_cohorts','assembler_budget','calendar_physical','stop_shared_position','stop_forward_stream','stop_indexed_votes','pre_entry_observer','vote_metadata'}:
+    if generation in {'native_empty_cohorts','assembler_budget','calendar_physical','stop_shared_position','stop_forward_stream','stop_indexed_votes','pre_entry_observer','vote_metadata','broker_custody'}:
         hashes = {**hashes, **handoff.REVIEWED_NATIVE_EMPTY_HASHES}
-    if generation in {'assembler_budget','calendar_physical','stop_shared_position','stop_forward_stream','stop_indexed_votes','pre_entry_observer','vote_metadata'}:
+    if generation in {'assembler_budget','calendar_physical','stop_shared_position','stop_forward_stream','stop_indexed_votes','pre_entry_observer','vote_metadata','broker_custody'}:
         hashes = {**hashes, **handoff.REVIEWED_ASSEMBLER_BUDGET_HASHES}
-    if generation in {'calendar_physical','stop_shared_position','stop_forward_stream','stop_indexed_votes','pre_entry_observer','vote_metadata'}:
+    if generation in {'calendar_physical','stop_shared_position','stop_forward_stream','stop_indexed_votes','pre_entry_observer','vote_metadata','broker_custody'}:
         hashes = {**hashes, **handoff.REVIEWED_CALENDAR_PHYSICAL_HASHES}
-    if generation in {'stop_shared_position','stop_forward_stream','stop_indexed_votes','pre_entry_observer','vote_metadata'}:
+    if generation in {'stop_shared_position','stop_forward_stream','stop_indexed_votes','pre_entry_observer','vote_metadata','broker_custody'}:
         hashes = {**hashes, **handoff.REVIEWED_STOP_SHARED_POSITION_HASHES}
-    if generation in {'stop_forward_stream','stop_indexed_votes','pre_entry_observer','vote_metadata'}:
+    if generation in {'stop_forward_stream','stop_indexed_votes','pre_entry_observer','vote_metadata','broker_custody'}:
         hashes = {**hashes, **handoff.REVIEWED_STOP_FORWARD_STREAM_HASHES}
-    if generation in {'stop_indexed_votes','pre_entry_observer','vote_metadata'}:
+    if generation in {'stop_indexed_votes','pre_entry_observer','vote_metadata','broker_custody'}:
         hashes = {**hashes, **handoff.REVIEWED_STOP_INDEXED_VOTE_HASHES}
-    if generation in {'pre_entry_observer','vote_metadata'}:
+    if generation in {'pre_entry_observer','vote_metadata','broker_custody'}:
         hashes.update(handoff.REVIEWED_PRE_ENTRY_OBSERVER_HASHES)
-    if generation == 'vote_metadata':
+    if generation in {'vote_metadata','broker_custody'}:
         hashes.update(handoff.REVIEWED_VOTE_METADATA_HASHES)
+    if generation == 'broker_custody':
+        hashes.update(handoff.REVIEWED_BROKER_CUSTODY_HASHES)
     revision = ('3fde8b0e6' if generation == 'stop_forward_stream' else
                 'dd44b63cb' if generation == 'stop_shared_position' else
                 '30210fff6' if generation == 'calendar_physical' else
@@ -1640,14 +1679,15 @@ def test_completion_census_handoff_binds_exact_complete_generation(
                 '7df7ea3b9' if generation == 'late_cost_revision' else
                 '082234567' if generation == 'prefix_code_binding' else 'bf8465b5d')
     for name, expected in hashes.items():
-        raw = ((canonical/name).read_bytes() if generation == 'vote_metadata' else
+        raw = ((canonical/name).read_bytes() if generation == 'broker_custody' else
+               subprocess.check_output(['git','-C',str(canonical),'show','4b278bbb3:'+name]) if generation == 'vote_metadata' else
                subprocess.check_output(['git','-C',str(canonical),'show','a1748b409:'+name]) if generation == 'pre_entry_observer' else
                subprocess.check_output(['git','-C',str(canonical),'show','ab1c46633:'+name]) if generation == 'stop_indexed_votes' else
                subprocess.check_output(['git', '-C', str(canonical), 'show', revision+':'+name]))
         assert hashlib.sha256(raw).hexdigest() == expected
         (root/name).write_bytes(raw)
     for name in handoff.REVIEWED_POSTCLOSE_READER_HASHES:
-        if generation not in {'legacy_archive_authority','auxiliary_data_root','completed_offline','completed_empty','native_empty_cohorts','assembler_budget','calendar_physical','stop_shared_position','stop_forward_stream','stop_indexed_votes','pre_entry_observer','vote_metadata'} and name not in hashes:
+        if generation not in {'legacy_archive_authority','auxiliary_data_root','completed_offline','completed_empty','native_empty_cohorts','assembler_budget','calendar_physical','stop_shared_position','stop_forward_stream','stop_indexed_votes','pre_entry_observer','vote_metadata','broker_custody'} and name not in hashes:
             (root/name).write_bytes(subprocess.check_output(['git','-C',str(canonical),'show',revision+':'+name]))
     subprocess.run(['git', '-C', str(root), 'add', *hashes,*handoff.REVIEWED_POSTCLOSE_READER_HASHES], check=True)
     subprocess.run(['git', '-C', str(root), '-c', 'user.name=fixture',

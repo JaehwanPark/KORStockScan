@@ -414,6 +414,7 @@ def test_post_aux_guard_successor_does_not_transitively_promote_older_reports(tm
     ('holding_vote', 'REVIEWED_DELAY_RESEARCH_SOURCE_SUCCESSORS'),
     *[(family,'REVIEWED_INTEGRATED_RESEARCH_SOURCE_SUCCESSORS') for family in validation.PLANS],
     *[(family,'REVIEWED_CLEANUP_SOURCE_SUCCESSORS') for family in validation.PLANS],
+    *[(family,'REVIEWED_RECEIPT_CUSTODY_SOURCE_SUCCESSORS') for family in validation.PLANS],
 ])
 @pytest.mark.parametrize('damage', [None, 'missing', 'bytes', 'path', 'authority', 'seal', 'symlink',
                                    'current_missing', 'current_bytes', 'current_code'])
@@ -467,3 +468,20 @@ def test_cleanup_capability_pair_is_current_and_keeps_original_source(family):
     assert current == generation.code_generation(family)
     assert old == ( 'e28c76991bc6f09b02d44469d5238ca2d6b0f45f41c5a4414c67054197dd44ea'
         if family == 'holding_vote' else handoff.REVIEWED_PREPARED_CODE_SOURCE_SUCCESSORS[family][0])
+
+
+@pytest.mark.parametrize('foreign', [False, True])
+def test_native_fixture_relative_reference_binds_data_owner_not_launcher_cwd(tmp_path, monkeypatch, foreign):
+    data=tmp_path/'workspace/data'
+    _,report,_,fixture,_,_=_fixture(data,'auxiliary')
+    payload=json.loads(report.read_text());contract=payload['policy_generation']
+    contract['fixture_receipt']=dict(path=('outside/'+fixture.name if foreign else 'data/report/postclose_generation_validation/'+fixture.name),
+        sha256=validation.file_sha(fixture))
+    contract['contract_sha256']=generation.digest({k:v for k,v in contract.items() if k!='contract_sha256'})
+    other=tmp_path/'unrelated-launcher';other.mkdir();monkeypatch.chdir(other)
+    if foreign:
+        with pytest.raises(ValueError,match='fixture_path_invalid'):
+            generation.inspect(contract,family='auxiliary',day=DAY,payload=payload,data_root=data)
+    else:
+        result=generation.inspect(contract,family='auxiliary',day=DAY,payload=payload,data_root=data)
+        assert result['status']=='verified'

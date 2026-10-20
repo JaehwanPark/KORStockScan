@@ -15,6 +15,7 @@
 - provider transport/provenance 확인은 threshold 값, 주문가/수량 guard, 스윙 dry-run guard 변경과 분리한다.
 - `actual_order_submitted=false`인 sim/probe 표본은 EV/source-quality 입력이며 실주문 전환 근거가 아니다.
 - Project/Calendar 동기화는 사용자가 표준 동기화 명령으로 수행한다.
+- 에러 수리에는 [AGENTS §6 공통 에러처리 절차](../../AGENTS.md#6-error-resolution-procedure)를 적용한다. 최초 원인·회귀 검증·실제 소비 근거 없이 경보 해소나 과거 결손 제외만으로 완료하지 않는다.
 
 <!-- AUTO_NEXT_STAGE2_CHECKLIST_START -->
 <!-- POSTCLOSE_SUMMARY_SOURCES {"allowed_runtime_apply": false, "runtime_effect": false, "schema": "postclose_summary_sources_v1", "source_date": "2026-10-19", "sources": {"entry_cancel_wait_policy": {"sha256": "3da051f5ad37fce14d19dd7892518241eb0405d3012eddede9e0f10a43b7af5a"}, "entry_cancel_wait_tuning": {"sha256": "34f96e135b1c4242edaabdcf34b5301ad0e77c2f18a13ec1e8e8ac2230e912f4"}, "holding_path_vote_policy": {"sha256": "8518c4cbb56057733b8f490abedef7dea78605cbf82b33296aa22bd02744a3db"}, "initial_quantity_refresh_stage": {"sha256": "4f3e04811174fa6fe7c8559c65994103d26d99116c572f16b159a9bd1577e82c"}, "runtime_approval_summary": {"sha256": "4612b1791a70f73a3b64e093cafc86c8eb69b711afb93345544364e206c72101"}, "stage_legacy_machine_report": {"sha256": "8f5572329b7572d2e16589c01905b373f1d5eadb45e63b8e09770b26f7e6f079"}, "stage_main_auxiliary_policy": {"sha256": "faa3e0e4a6c0d9a5978c21993916c42fcd8b71a81341f7b1d4bb5fd58a1e27d6"}, "stage_main_machine_policy": {"sha256": "097d5e7100ca4db70808a04234422228e7fdf339863e411989f355843fe64626"}, "stage_main_stop_confirmation": {"sha256": "b9a898822ea0553056fd5c1491f7ded382bd7cff0c7f1d129210a69b9480a307"}, "stage_outcome_labels": {"sha256": "1530370ca9e90c57f8bd1a8320e23d35e40b402b49fc8caf64f3d405648ab394"}, "stage_pre_submit_delay": {"sha256": "eb1ebd42638694003561c0dabd5180820fec1b78cc8c91c3a651edcd4ffb1bf7"}}} -->
@@ -43,6 +44,8 @@
 ## 실행 항목
 
 - [ ] `[DirectFamilyPreopenPolicyHandoff] direct family 날짜별 정책·bootstrap 장전 소비 확인` (`Due: 2026-10-20`, `Slot: PREOPEN`, `TimeWindow: 07:35~08:05`, `Track: RuntimeStability`)
+  - 09:35 신규 결함으로 재개: 소비 후 운영 체크리스트 변경 시 원 strict 세대와 launch snapshot의 조회 연결 누락을 수리한다. 403870/49389 매도는 주문0017685/체결9708/9주 terminal 이후 outbox ACK 결함이며 새 주문 없이 native 복구를 검증한다. 정수 잔고 표시가와 정확한 분할체결 평균가 사이의 매수 identity 복원 결함, fixture 상대경로·코드 세대 연결도 함께 리뷰한다. 새 선택/PID·원 finalization DONE 재검증 전에는 완료로 닫지 않는다.
+  - 10/20 완료: 원07:35 실패 보존, native 복구08:36 종료·PREOPEN08:42:40 성공. 최종 코드 `a98ff7a95d533b8ba33222c206bc77f941fffe99`, PID3964551/start10071650의 같은 manifest `4e2e42ebe1e4c4eb7b929d80d726b275d155c2559e75152e6aca1e485ae63d78` 소비와09:30:34 현재 관측을 확인. source19 최종화·detector09:32:03 native DONE. 원 strict-bound 체크리스트는 native archive로 보존. 실제 진입/체결/비용 후 EV와 관측 full coverage는 이 완료에 포함하지 않는다. [전체 원인 수리·종료 검토](../audits/postclose-root-cause-recovery-review-2026-10-19.md)
   - Source: [runtime_approval_summary_2026-10-19.json](/home/ubuntu/KORStockScan/data/report/runtime_approval_summary/runtime_approval_summary_2026-10-19.json)
   - 판정 기준: source_date=`2026-10-19`, apply_date=`2026-10-20`, preopen_state=`pending`, due_policy_receipts=`compact_auxiliary(valid=True, handoff=incumbent_preserved); entry_cancel_wait(valid=True, handoff=blocked); entry_split(valid=True, handoff=blocked); main_mechanistic_entry(valid=True, handoff=incumbent_preserved); pre_submit_delay(valid=True, handoff=initial_quote_timing_policy_published); rising_missed(valid=True, handoff=not_applicable); scale_in_split(valid=True, handoff=not_applicable); main_stop_confirmation(policy=e136d47f46547b79c8b48c84a5aa5661e9da59e680a4cdc75adc3f567858cb19, pid_unobserved)`의 schema·semantic hash·scope와 bootstrap accepted/rejected 결과를 확인한다.
   - incumbent 정책은 runtime override가 0이어야 하고 validated edge는 단일축 allowlist·operator lock·retired OFF·same-stage guard를 통과해야 한다.
@@ -64,6 +67,14 @@
 
 <!-- AUTO_NEXT_STAGE2_CHECKLIST_END -->
 
+## 기준 정비 완료
+
+- [x] `[ErrorRootCauseProcedure] 반복 에러의 원인 수리·재발 검증 기준 통합`
+  - 범위: 기준 commit `7d6565f1dcb71f11a33040e1e93f35da4999b19a`의 작업본에서 기존 변경을 보존하고 문서 5개만 수정. AGENTS §6을 공통 절차 owner로 추가하고 Plan Rebase·장중·장후·당일 기준에서 참조한다. 이 기록은 문서 완료이며 개별 장애 수리·배포·자연 수용 완료가 아니다.
+  - 대체/보존: 장중 §4.3의 중복 일반 단계와 §7의 요약 루프는 공통 절차로 통합(`consolidated`). 장중 실제 원천 경로, 장후 §6의 권한·최소 재생성·terminal 절차는 현행 소비자용으로 보존(`retained`). 새 실행 코드·보고서·검증기·framework는 만들지 않는다.
+  - 증감: 작업 시작 시점 대비 비테스트 소스 `+0/-0`, 테스트 `+0/-0`, 문서 `+30/-11`(순증19줄), 이동0. 새 공통 절차와 소비 문서 링크·완료 기록이 순증 원인이며 기존 장중 중복 단계는 제거했다.
+  - 검증: 자체 리뷰→보완→재리뷰, 링크/owner/authority, print-only parser·`git diff --check` 통과. parser의 기존 OPEN 19건은 내용·owner 그대로이며 새 중복 OPEN은 없다. strict-bound 원 체크리스트는 기존 SHA256 archive를 검증해 보존했다. Python/매매 suite·provider·재생성·배포·재기동은 문서 범위 밖으로 실행하지 않았다.
+
 ## Project/Calendar 동기화
 
 문서/checklist를 수정했으면 parser 검증은 실행하고, Project/Calendar 동기화는 사용자가 아래 명령으로 수동 실행한다.
@@ -83,3 +94,21 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
 - 자연 원천/model/미사용 holdout·정규 PREOPEN/PID·비용 후 성과는 기존 owner `KiwoomCommonHealthOpportunityCostAcceptance0917`의 Acceptance다. 전체 native DONE/PID 소비를 주장하지 않는다.
 
 <!-- entry_cancel_wait_handoff:end -->
+
+
+## 장후 원천·자연 수용 이관
+
+- [ ] `[InitialQuantityProducerConsumerRepair1010] 매수수량 원천·fact·시간창·장후 소비 결손 수리와 자연 수용` (`Due: 2026-10-20`, `Slot: POSTCLOSE`, `TimeWindow: 16:30~23:59`, `Track: RuntimeStability`)
+  - 10/20 이관: 기능 수리·리뷰·native 재생·source19 strict/controller·20일 정책/PID 소비 완료. 수량 stage `4f3e04811174fa6fe7c8559c65994103d26d99116c572f16b159a9bd1577e82c`의 실제 마지막 소비를 확인했다. 6유형 기존 10/15/20/25/25% 부모 정책 유지; 실제 비용·terminal이 없는 과거 행은 null/제외로 보존한다. 아래 기존 Acceptance·실패·자연 수용 이력은 보존하며 다음 자연 완료 비용 표본만 대조한다. 코드 완료를 새 EV/실주문 성과로 해석하지 않는다.
+  - 10/20 07:30: R19 native holding 18.623s와 최종 원천검사 결속 수량86c16e96을 확인. 손절은18 position 계산 후 indexed vote와 raw byte 세대의 비교 결함으로 최종 게시 실패. 원 실패 보존 후 기존 native typed verifier로 수리 중이며21 focused/48 handoff PASS. 전체 회귀·새 선택·재생성·20-date PREOPEN/PID는 미완료. [원인 수리 리뷰](../audits/postclose-root-cause-recovery-review-2026-10-19.md)
+  - 적용 수용: e7f4e2e8f/PID1495185/start3859414 ordered complete, 원 정책5파일 SHA 불변.16:18:50 자연 full에서 initial_quantity alert0·resource PASS, 과거 제외5/유효8/원 source_gap·null 보존. 새 결손·현재 수집 실패 경보 및 다음 자연 완료 비용 표본의 수용은 계속 유지한다.
+  - 16시 반복경고 수리: full native 검증을 통과한 원16일 고정 제외5건은 exact stage/report/input_manifest·ID/행 SHA·사유에 묶어 역사 감사 진단으로 분리한다. 새 결손/새 세대/원천·비용 변경/현재 계약 실패는 경보 유지, PnL null·원 보고서·선택 수량 정책 불변. 원 SELL 재관측 중복 오판은 현재 코드의 native custody/시각/payload 대조로 수리되어 있으며 다음 자연 표본은 별도 수용이다. [코드 검토·적용 근거](../audits/preopen-alert-repair-2026-10-19.md#16시-역사-수량-제외와-현재-장애-분리).
+  - 10:50 후속: 큰 실행 행의 bounded 필드 복원·이월 snapshot의 native SHA 검증 후 부분 디코드·과거 registry prefix의 날짜 없는 native 대사 이벤트를 수리했다. 431+3,132회귀 PASS와 정식 완료 prefix→fact→수량 재생성/현재 trailing 연구/PID 수용은 분리한다. [진행 근거](../audits/preopen-alert-repair-2026-10-19.md#1050-원천-계약-경보-후속-수리).
+  - 재기동 복구: 보존 hard link가 원문 바이트 변경 없이 ctime을 변경하여 99e158af1 기동의 Main stop 검증이 실패했다. 실패 전환·시작 보류를 보존하고 원문 전체 hash 검증 및 정확한 starting/timeout 복구를 새 검토 릴리스로 수행한다. 원 정책/PREOPEN/strict/controller는 수정하지 않는다.
+  - 10:01 후속: 이월 snapshot 전체 디코드로 인한 swap/I/O 경보와 SELL 재관측 중복 판정을 함께 수리한다. 연구 비용3건의 격리 복원·475회귀 통과와 운영 재생성/PID 수용을 분리하며 원 비용·custody·정책 결속 결손은 유지한다. [후속 근거](../audits/preopen-alert-repair-2026-10-19.md#1001-io-경보와-수량-원천-후속-수리).
+  - 10/19 추가 경고: 기존 완료13건의 비용/수량 결손과 운영 research-cost index 부재를 확인했다. native completion prefix→fact→quantity를 재생성하고 연구 배분/실제 비용/복구 불가 결손을 구분한다. [실행 검토](../audits/preopen-alert-repair-2026-10-19.md).
+  - 재개 근거: [10/17 수량 정밀 점검](../audits/initial-quantity-runtime-postclose-result-review-2026-10-17.md)의 IQ171~IQ175와 [전체 장후 후속 수리](../audits/postclose-complete-semantic-repair-2026-10-17.md). 기존 계획의 완료 이력은 보존하고 새로 재현된 producer/consumer·유효 빈 모집단 오판만 재개한다.
+  - Source: [원 producer/consumer 계획](../proposals/initial-quantity-runtime-postclose-producer-consumer-repair-plan-2026-10-10.md), source date `2026-10-16`의 봉인된 completion snapshot·native fact·수량 refresh report/evaluation 및 원 attempt/PID/start ticks에 연결된 수집 영수증.
+  - Acceptance: 완료거래 prefix→동일 세대 fact→수량 연구→AI writer 종료 후 holding suffix 순서를 검증한다. 표시 300건 제한 이전 전체 모집단, emitted_date 보존, 대용량/gzip 원천의 bounded native 계약, DB 교체 중 변경 rollback, 후보 시간창별 finished/interrupted 구분과 늦은 영수증 cache 무효화를 확인한다.
+  - 원천 비용·terminal·과거 중단 자료 부재는 `null`/제외/명시적 `source_gap`으로 남기며 `valid_empty` 또는 0원으로 대체하지 않는다. 기존 6개 유형 10/15/20/25/25%와 분할·timeout 프로필을 보존하고 추가 경제성 승인 gate·주문·provider·threshold 변경을 만들지 않는다.
+  - 코드/장후 재생성 완료와 다음 자연 수집 수용은 별개다. 새 배포 이후 실제 시작/종료/중단 영수증과 비용 원천의 정확한 대사를 확인하며, 10/19 PREOPEN·PID 소비는 기존 `DirectFamilyPreopenPolicyHandoff`만 소유한다.

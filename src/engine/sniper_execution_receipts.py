@@ -53,6 +53,7 @@ from src.engine.scalping.main_lifecycle_journal import (
     BROKER_EXECUTION_SOURCE_TYPE,
     MAX_DATA_STRING_LENGTH as MAIN_LIFECYCLE_MAX_DATA_STRING_LENGTH,
     PIPELINE_IDENTITY_SCHEMA,
+    build_broker_execution_provenance,
     mint_main_lifecycle_id,
     pipeline_lifecycle_fields_safe,
     pipeline_lifecycle_stage_mapped,
@@ -1465,21 +1466,43 @@ def _native_sell_receipt_identity(stock, code, target_id, stage, fields, observe
             and fields.get("broker_execution_received_at") == fields.get("exit_execution_received_at")
             and fields.get("exit_market_session_time_source") == "websocket_packet_ingress"
             and fields.get("session_contract_version") == "market_session_contract_v2")
-        if (stage != "sell_completed"
-                or fields.get("exit_rule") != "scalp_trailing_take_profit"
-                or fields.get("holding_path_terminal_signal_binding") != "same_position_buy_generation"
-                or fields.get("holding_path_position_key") != f"record:{int(target_id)}"
-                or not isinstance(fields.get("holding_path_signal_id"), str)
-                or not fields["holding_path_signal_id"]
-                or any(not re.fullmatch(r"[0-9a-f]{64}", str(fields.get(key) or ""))
-                       for key in ("holding_path_buy_fill_identity", "holding_path_policy_bundle_sha256"))
-                or not (fields.get("broker_execution_provenance_complete") is True or known_venue_gap)
+        signal_bound = bool(
+            fields.get("exit_rule") == "scalp_trailing_take_profit"
+            and fields.get("holding_path_terminal_signal_binding") == "same_position_buy_generation"
+            and fields.get("holding_path_position_key") == f"record:{int(target_id)}"
+            and isinstance(fields.get("holding_path_signal_id"), str)
+            and fields["holding_path_signal_id"]
+            and all(re.fullmatch(r"[0-9a-f]{64}", str(fields.get(key) or ""))
+                    for key in ("holding_path_buy_fill_identity", "holding_path_policy_bundle_sha256")))
+        final = stage == "sell_completed"
+        # Broker custody and research entry/signal coverage are separate.
+        # Reuse the canonical raw receipt validator; never invent a BUY trace,
+        # BUY generation, venue or actual cost to acknowledge an existing fill.
+        raw = build_broker_execution_provenance(
+            fields, expected_qty=fields.get("main_lifecycle_exit_qty"),
+            expected_price=fields.get("main_lifecycle_exit_price"),
+            expected_stock_code=code, expected_side="SELL",
+            lifecycle_venue=fields.get("exit_effective_venue", fields.get("effective_venue")),
+            expected_fill_state="full" if final else "partial")
+        raw_bound = bool(
+            raw.get("broker_execution_identity_complete") is True
+            and raw.get("broker_execution_order_no") == str(fields.get("order_no"))
+            and raw.get("broker_execution_no") == str(fields.get("execution_no"))
+            and raw.get("broker_execution_remaining_qty") == _safe_int(fields.get("remaining_sell_qty"), -1)
+            and 0 < _safe_int(fields.get("main_lifecycle_exit_qty"), 0) <= _safe_int(fields.get("sell_qty"), 0)
+            and (final or fields.get("main_lifecycle_exit_qty") == fields.get("sell_qty")))
+        # Keep the original sealed terminal reader for pre-canonical legs.
+        legacy_bound = bool(final and signal_bound and (
+            fields.get("broker_execution_provenance_complete") is True or known_venue_gap))
+        quantity_prefix = "sell_execution_receipt" if final else "sell_receipt"
+        if (not (raw_bound or legacy_bound)
+                or fields.get("main_lifecycle_broker_reconciled") is not final
+                or fields.get("main_lifecycle_reconciled_final_exit") is not final
                 or any(fields.get(key) is not True for key in (
-                    "main_lifecycle_broker_reconciled",
-                    "main_lifecycle_reconciled_final_exit", "sell_execution_receipt_quantity_contract_complete",
-                    "sell_execution_receipt_unit_fill_consistent", "exit_receipt_submission_custody_committed"))
+                    quantity_prefix + "_quantity_contract_complete",
+                    quantity_prefix + "_unit_fill_consistent", "exit_receipt_submission_custody_committed"))
                 or fields.get("exit_receipt_submission_custody_source_gap") is not False
-                or _safe_int(fields.get("remaining_sell_qty"), -1) != 0):
+                or (final and _safe_int(fields.get("remaining_sell_qty"), -1) != 0)):
             return {}
         try:
             received_at = datetime.fromisoformat(str(fields.get("exit_execution_received_at") or ""))
@@ -1489,14 +1512,18 @@ def _native_sell_receipt_identity(stock, code, target_id, stage, fields, observe
             return {}
         identity = {
             "native_receipt_identity_schema": "broker_position_sell_receipt_v1",
-            "native_receipt_position_key": fields["holding_path_position_key"],
-            "native_receipt_buy_fill_identity": fields["holding_path_buy_fill_identity"],
+            "native_receipt_position_key": f"record:{int(target_id)}",
+            "native_receipt_buy_fill_identity": fields.get("holding_path_buy_fill_identity") if signal_bound else None,
             "native_receipt_order_no": str(fields["order_no"]),
             "native_receipt_execution_no": str(fields["execution_no"]),
             "native_receipt_record_id": int(target_id),
             "native_receipt_stock_code": str(code),
             "native_receipt_observed_at": observed_at.astimezone(_KST).isoformat(timespec="microseconds"),
         }
+        if not signal_bound:
+            identity.update(native_receipt_entry_lineage_status="source_gap",
+                native_receipt_entry_lineage_reason=str(fields.get("holding_path_terminal_signal_binding")
+                    or "entry_buy_generation_unavailable"))
         if known_venue_gap:
             identity.update(native_receipt_execution_venue_status="unknown_preserved",
                 native_receipt_broker_provenance_complete=False,

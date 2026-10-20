@@ -2651,6 +2651,43 @@ REVIEWED_VOTE_METADATA_DEPENDENCY_VARIANTS = {
 }
 REVIEWED_VOTE_METADATA_PAIRS = {'src/engine/automation/main_stop_postclose.py': (('531f1498332196f0e54d17b76ed8d30295009a5e5ee9363ad9397613f0740ad2', 'd20e955fdbc79529efd72d10957cf329acc0d0447c54f798ebfd59ecb87a978b'), ('616a22f236d89de67e18001dbb3564aca6ed5b87e1b26ade3a119a711e1ab057', 'd20e955fdbc79529efd72d10957cf329acc0d0447c54f798ebfd59ecb87a978b'), ('c020c831fcc3e33776d2c19154fc5cd3892e4bb98f8b19db7c9eeab83b847ab5', 'd20e955fdbc79529efd72d10957cf329acc0d0447c54f798ebfd59ecb87a978b'))}
 
+# Broker receipt ACK and exact fractional BUY identity; no order guard changes.
+REVIEWED_BROKER_CUSTODY_HASHES = {'src/engine/ai/holding_exit_vote.py': 'd8c9de0ae5270c0e40f8494941def50c69d52fbab887b5c38c6b1fd73129514c',
+ 'src/engine/monitoring/policy_generation_contract.py': '8e71ab5797bf950f0bb8161304e23b5b3788a3e252c2a1eb4316b095ec5f52be',
+ 'src/engine/sniper_execution_receipts.py': '20d1f9b5403440f10571199bd33e1ba103aa611512e6b7d5151fbe07acd94620',
+ 'src/engine/sniper_trade_review_report.py': 'af3f2273dc66d0da041bc64c8b5d79dc553558d369714d586609f0f6cbbd90f0'}
+REVIEWED_BROKER_CUSTODY_DEPENDENCY_VARIANTS = {
+    key: {**value,
+        'selector_path': 'src/engine/sniper_execution_receipts.py',
+        'selector_sha256': REVIEWED_BROKER_CUSTODY_HASHES['src/engine/sniper_execution_receipts.py'],
+        'dependencies': {**value['dependencies'], **REVIEWED_BROKER_CUSTODY_HASHES},
+        'contract_extensions': {
+            origin: {name: REVIEWED_BROKER_CUSTODY_HASHES.get(os.path.normpath(name), sha)
+                     for name, sha in paths.items()}
+            for origin, paths in value['contract_extensions'].items()},
+    } for key, value in REVIEWED_VOTE_METADATA_DEPENDENCY_VARIANTS.items()
+}
+REVIEWED_BROKER_CUSTODY_PAIRS = {'src/engine/ai/holding_exit_vote.py': (('69f1a9a63a79d38e3a9986156800d883fab98b86a78ceb12a603040227cb2c81',
+                                         'd8c9de0ae5270c0e40f8494941def50c69d52fbab887b5c38c6b1fd73129514c'),
+                                        ('9d516e9dd068613765944d7ab78d65fe561905046c38d45c0d0a835078d98a7b',
+                                         'd8c9de0ae5270c0e40f8494941def50c69d52fbab887b5c38c6b1fd73129514c')),
+ 'src/engine/monitoring/policy_generation_contract.py': (('5f41ee2c9f8a3df2ac5f00b1d972673505266b598303ea787db533336eb79290',
+                                                          '8e71ab5797bf950f0bb8161304e23b5b3788a3e252c2a1eb4316b095ec5f52be'),
+                                                         ('abdbc156884a627671b95965d0985103ab720561a4b4ebfdf092b509116b563f',
+                                                          '8e71ab5797bf950f0bb8161304e23b5b3788a3e252c2a1eb4316b095ec5f52be')),
+ 'src/engine/sniper_execution_receipts.py': (('179948c3eb4a0bd7bab6d121ae6d90a0817b82dbef557dea72a25db62c0b8e05',
+                                              '20d1f9b5403440f10571199bd33e1ba103aa611512e6b7d5151fbe07acd94620'),
+                                             ('978dcd47d83709b245dfe8e2983b450d6559f39c9716fe47cce5a475b1eee4b6',
+                                              '20d1f9b5403440f10571199bd33e1ba103aa611512e6b7d5151fbe07acd94620'),
+                                             ('a169bb2c9d48b0ce289488985e7df6c6a8d83df9fc9257b63ef4bbf0e2fbbe80',
+                                              '20d1f9b5403440f10571199bd33e1ba103aa611512e6b7d5151fbe07acd94620')),
+ 'src/engine/sniper_trade_review_report.py': (('8d07674031ac0ca0a08437c61490cd896d8810c30f57810ad53febb8cac0b57c',
+                                               'af3f2273dc66d0da041bc64c8b5d79dc553558d369714d586609f0f6cbbd90f0'),
+                                              ('d3e838423aeeaba629be4902b2aac533caceef3145ad747bdc78ff2900c230d8',
+                                               'af3f2273dc66d0da041bc64c8b5d79dc553558d369714d586609f0f6cbbd90f0'),
+                                              ('de4dd6cfc135d5d6c53f757151f32753f13ff780caca285886dba2dc285890d8',
+                                               'af3f2273dc66d0da041bc64c8b5d79dc553558d369714d586609f0f6cbbd90f0'))}
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -2704,7 +2741,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         dependencies = generations.get(trigger_sha, {})
         # New exact selectors precede their historical parent. The first match
         # selects one complete generation, never per-file SHA alternatives.
-        for variants in (REVIEWED_VOTE_METADATA_DEPENDENCY_VARIANTS,
+        for variants in (REVIEWED_BROKER_CUSTODY_DEPENDENCY_VARIANTS,
+                         REVIEWED_VOTE_METADATA_DEPENDENCY_VARIANTS,
                          REVIEWED_PRE_ENTRY_OBSERVER_DEPENDENCY_VARIANTS,
                          REVIEWED_STOP_INDEXED_VOTE_DEPENDENCY_VARIANTS,
                          REVIEWED_STOP_FORWARD_STREAM_DEPENDENCY_VARIANTS,
@@ -2822,7 +2860,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
                 or pair == REVIEWED_AUXILIARY_HISTORY_SOURCES.get(name)):
             changed.append(name)
             continue
-        if (pair in REVIEWED_AVG_DOWN_INPUT_SOURCES.get(repository_name(name), ())
+        if (pair in REVIEWED_BROKER_CUSTODY_PAIRS.get(repository_name(name), ())
+                or pair in REVIEWED_AVG_DOWN_INPUT_SOURCES.get(repository_name(name), ())
                 or pair in (REVIEWED_DELAY_PARENT_VERIFICATION_SOURCES.get(repository_name(name)),
                     REVIEWED_RESEARCH_BUDGET_INTEGRATION_SOURCES.get(repository_name(name)),
                     REVIEWED_COMPLETED_RESEARCH_INTEGRATION_SOURCES.get(repository_name(name)),
@@ -3337,7 +3376,8 @@ def _verify_handoff(day, commit, *, now=None, historical_observer=False):
             # to the operational checklist. Its sealed snapshot and all other
             # sources remain required. Public verify/consume/activation never
             # take this branch, and the observer binds the live PID separately.
-            if not reseal or not reseal.get('historical_checklist') or not consumed_path.exists():
+            if (not reseal or not (reseal.get('historical_checklist') or reseal.get('operating_checklist'))
+                    or not consumed_path.exists()):
                 raise ValueError('intraday_observer_consumed_historical_handoff_required')
             historical_document = reseal['checklist_path'] if not reseal.get('operating_checklist') else None
         if set(frozen) != required or any(_sha(name) != sha for name, sha in frozen.items()
@@ -3516,10 +3556,18 @@ def _historical_checklist_for_observer(project, source_date, *, now=None):
         raise ValueError('intraday_observer_handoff_invalid:' + ','.join(check['findings']))
     preserved = check['handoff']
     reseal = preserved.get('postclose_source_reseal') or {}
-    historical = reseal.get('historical_checklist') or {}
+    historical = reseal.get('historical_checklist') or reseal.get('operating_checklist') or {}
     if (reseal.get('source_date') != source_date or reseal.get('target_date') != day
             or not historical or reseal.get('policy_effect') != 'unchanged'):
         raise ValueError('intraday_observer_source_scope_mismatch')
+    # A launch snapshot can already be the original strict-bound document.
+    # It needs no second historical copy, but must match that exact generation.
+    if not reseal.get('historical_checklist'):
+        controller = _read(reseal['current_source_receipts']['controller_path'])
+        strict = _read(controller['verification_attempt_path'])
+        if (historical.get('sha256') != strict['generation_binding']['checklist_sha256']
+                or _sha(historical['path']) != historical['sha256']):
+            raise ValueError('intraday_observer_strict_checklist_binding_invalid')
     consumed_sha = _sha(consumed_path)
     consumed = _read(consumed_path)
     identity = consumed.get('pid_identity') or {}

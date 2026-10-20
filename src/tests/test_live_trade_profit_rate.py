@@ -311,6 +311,61 @@ def test_native_receipt_identity_rejects_unbound_entry_trace(trace):
         datetime(2026, 10, 15, tzinfo=timezone.utc)) == {}
 
 
+@pytest.mark.parametrize('partial', [False, True])
+@pytest.mark.parametrize('fault', [None, 'raw_qty', 'order', 'execution', 'custody',
+    'source_gap', 'quantity', 'clock', 'scanner', 'simulation', 'append', 'tamper'])
+def test_broker_custody_outbox_does_not_require_research_buy_lineage(monkeypatch, partial, fault):
+    from copy import deepcopy
+    at = datetime(2026, 10, 20, 9, 32, 17, 107620, tzinfo=timezone(timedelta(hours=9)))
+    stock = dict(id=49389, code='403870', name='HPSP')
+    fields = dict(order_no='0017685', execution_no='9708', sell_qty=9, remaining_sell_qty=1 if partial else 0,
+        main_lifecycle_exit_qty=9, main_lifecycle_exit_price=51300,
+        main_lifecycle_broker_reconciled=not partial, main_lifecycle_reconciled_final_exit=not partial,
+        actual_order_submitted=True, broker_order_forbidden=False,
+        exit_receipt_submission_custody_committed=True, exit_receipt_submission_custody_source_gap=False,
+        exit_execution_received_at=at.isoformat(), effective_venue='KRX',
+        holding_path_terminal_signal_binding='source_gap_generation_mismatch',
+        main_lifecycle_broker_raw_envelope_schema='kiwoom_websocket_order_execution_00_values_v1',
+        main_lifecycle_broker_raw_source_type='00',
+        **{'9203':'0017685','9001':'403870','900':str(10 if partial else 9),'902':str(1 if partial else 0),
+           '903':'461700','905':'-매도','907':'1','908':'093216','909':'9708','910':'51300',
+           '911':'9','913':'체결','914':'51300','915':'9','2134':'1','2135':'KRX','2136':'N'})
+    prefix = 'sell_receipt' if partial else 'sell_execution_receipt'
+    fields.update({prefix+'_quantity_contract_complete':True, prefix+'_unit_fill_consistent':True})
+    mutations = dict(raw_qty=('915','8'), order=('order_no','9999999'), execution=('execution_no','1'),
+        custody=('exit_receipt_submission_custody_committed',False),
+        source_gap=('exit_receipt_submission_custody_source_gap',True),
+        quantity=(prefix+'_quantity_contract_complete',False),
+        clock=('exit_execution_received_at',at.replace(second=18).isoformat()))
+    if fault in mutations:
+        k,v=mutations[fault];fields[k]=v
+    if fault=='scanner':stock['scanner_promotion_id']='scanner-original'
+    if fault=='simulation':stock['simulation_book']='probe'
+    leg=receipts._build_sell_lifecycle_outbox_leg(stock,code=stock['code'],target_id=stock['id'],now=at,
+        stage='sell_partial_fill_progress' if partial else 'sell_completed',event_fields=fields)
+    original=deepcopy(leg);captured=[]
+    def emit(pipeline,name,code,stage,*,record_id,fields):
+        normalized={str(k):str(v) for k,v in fields.items()}
+        if fault=='tamper':normalized['native_receipt_entry_lineage_reason']='invented'
+        captured.append(normalized)
+        return dict(pipeline=pipeline,stock_code=code,stage=stage,record_id=record_id,fields=normalized,
+            structured_append_succeeded=fault!='append',structured_append_status='raw_appended')
+    monkeypatch.setattr(receipts,'emit_pipeline_event',emit)
+    # A scanner receipt keeps its independent canonical lifecycle identity.
+    assert receipts._emit_standard_sell_partial_lifecycle_outbox_leg(leg) is (fault in (None,'scanner'))
+    assert leg==original
+    if fault is None:
+        assert captured[0]['native_receipt_entry_lineage_status']=='source_gap'
+        assert captured[0]['native_receipt_buy_fill_identity']=='None'
+        assert 'main_lifecycle_id' not in captured[0] and 'attempt_id' not in captured[0]
+        stock[receipts._SELL_EXECUTION_RECEIPT_STATE_KEY]={receipts._SELL_PARTIAL_LIFECYCLE_OUTBOX_KEY:{leg['leg_sha256']:leg}}
+        monkeypatch.setattr(receipts,'_persist_sell_receipt_recovery_or_interlock',lambda *a,**k:True)
+        assert receipts.replay_pending_sell_partial_lifecycle_outbox(stock)
+        count=len(captured)
+        assert receipts.replay_pending_sell_partial_lifecycle_outbox(stock)
+        assert len(captured)==count
+
+
 def test_sell_lifecycle_outbox_ack_requires_every_durable_field_exact(
     monkeypatch,
 ):

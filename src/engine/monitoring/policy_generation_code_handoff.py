@@ -190,14 +190,24 @@ REVIEWED_STARTUP_READONLY_SOURCE_SUCCESSORS = {
 # Reviewed cleanup successor, bound directly to the preserved 10/16 reports.
 # A historical fixture and an independent current fixture are both mandatory.
 REVIEWED_CLEANUP_SOURCE_SUCCESSORS = {'auxiliary': ('d04bcb11a28f731c1af5c332d33d49774f977a01a2ac90463df50865186fa6b0',
-               '306f746371e53e2e495eccdd9dbfe8888b9bb9e7f74815e709387e7816713945'),
+               'b54dc1696e819566a5c9c785c24d171caed2887aace05297e391bd1722ea995d'),
  'entry_cancel_wait': ('2e0ba14946a5e9e191a95529971e103136679957ddd7458678ed6c27a0e4a234',
-                       'ee34f305129b8dab55eb12c006af6bb395e639d650ac6e1c5e45282e7fd8879b'),
+                       '47eb1ef2e45d3c48e663f6b3df505bc95da07fc6bcd168394441840af4764fff'),
  'holding_vote': ('e28c76991bc6f09b02d44469d5238ca2d6b0f45f41c5a4414c67054197dd44ea',
-                  'b0b5d90d310511bd12366ce021115496485ad43ae67c8d2cd3b37f1b623075eb'),
+                  '791757cb183525948b6378ee41deaa3ab03828ee4bdaea851bdfb653b804804b'),
  'rising_missed': ('e9f1620fd55d335d1db3ccad52f1211440b5d2df57ddf45988e2012ecf6ed874',
-                   'a01b315001a72c6fb1735e3ed7d4662e3cd60a1dc88c76f26a0921f657d6c1c3')}
+                   'd23d80552d0453697e61757b2f0f1081509316868c02166afdb7adf848b20b32')}
 
+
+# Exact reviewed receipt/identity repair; source bytes and prior fixtures stay sealed.
+REVIEWED_RECEIPT_CUSTODY_SOURCE_SUCCESSORS = {'auxiliary': ('80497557e7be71c0eafcdaa4bd7256250c66899a791510efa2f98f81cbcbbc05',
+               'b54dc1696e819566a5c9c785c24d171caed2887aace05297e391bd1722ea995d'),
+ 'entry_cancel_wait': ('3acc183fa1d6675d4113b6f8faeccbb52bb58e214461508578e5b7e475cd6270',
+                       '47eb1ef2e45d3c48e663f6b3df505bc95da07fc6bcd168394441840af4764fff'),
+ 'holding_vote': ('69b00417b7396d7a15840c7f0a53ef91399d755d430fb3017a9d0596127d8b11',
+                  '791757cb183525948b6378ee41deaa3ab03828ee4bdaea851bdfb653b804804b'),
+ 'rising_missed': ('1f524a5ad98e623501eaaa2d7c81773ac0ad6328237d72ea0c95c0c8cd1251bb',
+                   'd23d80552d0453697e61757b2f0f1081509316868c02166afdb7adf848b20b32')}
 
 def _historical_fixture(contract, data, family):
     """Preserve a prior fixture without using it to certify the successor."""
@@ -206,7 +216,10 @@ def _historical_fixture(contract, data, family):
         return None
     path = Path(data)/'report/postclose_generation_validation'/(
         family+'_'+contract['code_sha256']+'.json')
-    if not isinstance(reference, dict) or reference.get('path') != str(path):
+    referenced = Path(str((reference or {}).get('path') or '')) if isinstance(reference, dict) else Path('.')
+    if not referenced.is_absolute():
+        referenced = Path(data).parent / referenced
+    if not isinstance(reference, dict) or referenced.resolve() != path.resolve():
         raise ValueError('successor_historical_fixture_path_invalid')
     payload, sha = validation.bounded_object(path, 65536)
     if (path.is_symlink() or sha != reference.get('sha256')
@@ -221,7 +234,7 @@ def _historical_fixture(contract, data, family):
             or payload.get('actual_profit_verified') is not False
             or payload.get('allowed_runtime_apply', False) is not False):
         raise ValueError('successor_historical_fixture_invalid')
-    return reference
+    return dict(path=str(path), sha256=sha)
 
 
 def current_fixture_observation(observed, data):
@@ -267,6 +280,10 @@ def current_fixture_observation(observed, data):
                      and observed.get('source_date') == '2026-10-16')
     if cleanup_match:
         pair = cleanup
+    custody = REVIEWED_RECEIPT_CUSTODY_SOURCE_SUCCESSORS.get(family)
+    custody_match = custody is not None and actual_pair == custody
+    if custody_match:
+        pair = custody
     if not pair or actual_pair != pair:
         return validation.current_fixture_observation(observed, data)
     if (observed.get('status') != 'unverified' or observed.get('findings') != ['policy_generation_unverified']
@@ -298,7 +315,7 @@ def current_fixture_observation(observed, data):
                 or fixture['code_sha256'] != pair[1]):
             raise ValueError('successor_historical_contract_changed')
         historical_fixture = _historical_fixture(contract, data, family)
-        if (integrated_match or readonly_match or cleanup_match) and historical_fixture is None:
+        if (integrated_match or readonly_match or cleanup_match or custody_match) and historical_fixture is None:
             raise ValueError('successor_integrated_historical_fixture_required')
         current = generation.native(native, family=family, day=observed['source_date'], data_root=data,
             source_state=contract['source_state'], comparison_state=contract['comparison_state'],

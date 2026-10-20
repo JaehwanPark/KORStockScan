@@ -1042,8 +1042,7 @@ def restore_buy_fill_receipt(stock: dict[str, Any], data_dir: str | Path) -> str
         receipt_price = float(payload.get("buy_price"))
         position_price = float(stock.get("buy_price"))
         if (not math.isfinite(receipt_price) or not math.isfinite(position_price)
-                or receipt_price <= 0 or position_price <= 0
-                or abs(receipt_price - position_price) > 0.01):
+                or receipt_price <= 0 or position_price <= 0):
             return "position_price_mismatch"
     except (TypeError, ValueError):
         return "position_price_missing"
@@ -1058,6 +1057,30 @@ def restore_buy_fill_receipt(stock: dict[str, Any], data_dir: str | Path) -> str
     if (legs is None or sum(leg["qty"] for leg in legs) != stock["buy_qty"]
             or buy_fill_identity_from_legs(legs) != payload.get("buy_fill_identity")):
         return "receipt_identity_conflict"
+    if abs(receipt_price - position_price) > 0.01:
+        # Inventory synchronization stores the broker's integer display price.
+        # Recover identity only when every original execution independently
+        # proves the fractional average and its exact integer display. This is
+        # not a wider price tolerance and does not replace the live price basis.
+        amount = 0
+        for leg in legs:
+            signatures = [
+                (fields.get(f"_{prefix}_receipt_executions_by_order_no") or {})
+                .get(leg["order_no"], {}).get(leg["execution_no"])
+                for prefix in ("entry", "add")]
+            signatures = [value for value in signatures if value is not None]
+            if len(signatures) != 1:
+                return "position_price_mismatch"
+            signature = signatures[0]
+            qty, price = signature.get("unit_exec_qty"), signature.get("unit_exec_price")
+            if (type(qty) is not int or qty != leg["qty"]
+                    or type(price) is not int or price <= 0):
+                return "position_price_mismatch"
+            amount += qty * price
+        if (not position_price.is_integer() or int(receipt_price) != position_price
+                or abs(amount / stock["buy_qty"] - receipt_price) > 0.0001):
+            return "position_price_mismatch"
+        stock["buy_fill_identity_price_binding"] = "exact_fills_with_integer_inventory_display"
     stock.update(copy.deepcopy(fields))
     stock["holding_buy_fill_legs"] = copy.deepcopy(legs)
     stock.pop("buy_fill_identity_store_gap", None)

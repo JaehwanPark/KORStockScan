@@ -615,3 +615,28 @@ def test_large_prior_projection_never_promotes_invalid_provenance_or_census(tmp_
         [dict(id=7,rec_date='2026-10-15',status='COMPLETED')],'2026-10-16')
     assert not events
     assert receipts['2026-10-15']['status']!='sealed_entry_snapshot'
+
+
+def test_reobserved_broker_receipt_without_buy_lineage_collapses_without_restoring_economics():
+    from datetime import datetime
+    from src.engine.sniper_execution_receipts import _native_sell_receipt_identity
+    _, events = unknown_venue_reobserved_sell_fixture()
+    original = events[-2]
+    fields = {k:v for k,v in original.fields.items() if not k.startswith('holding_path_')}
+    fields.update(holding_path_terminal_signal_binding='source_gap_generation_mismatch',
+        order_no='0000012',execution_no='3',main_lifecycle_exit_qty=1,main_lifecycle_exit_price=10100,
+        sell_qty=1,cumulative_sell_qty=1,
+        **{'9203':'0000012','9001':'123456','900':'1','902':'0','903':'10100','905':'-매도',
+           '907':'1','908':'100101','909':'3','910':'10100','911':'1','913':'체결',
+           '914':'10100','915':'1','2134':'0','2135':'SOR','2136':'Y'})
+    at=datetime.fromisoformat(fields['exit_execution_received_at'])
+    identity=_native_sell_receipt_identity({'id':1,'code':'123456'},'123456',1,'sell_completed',fields,at)
+    assert identity and identity['native_receipt_entry_lineage_status']=='source_gap'
+    original=replace(original,fields=fields)
+    repeated=replace(original,timestamp='2026-10-08 10:20:00',fields={**fields,**identity})
+    rows=[original,repeated];before=deepcopy(rows)
+    normalized,audit=review._quantity_sell_receipt_observations(rows)
+    assert len(normalized)==1 and audit[0]['reobserved_count']==1
+    assert 'holding_path_buy_fill_identity' not in normalized[0].fields
+    assert normalized[0].fields['broker_actual_execution_venue']=='UNKNOWN'
+    assert rows==before

@@ -220,6 +220,10 @@ def inspect(contract, *, family, day, payload=None, data_root=None):
 
         reference = c["fixture_receipt"]
         path = Path(reference["path"])
+        # Older producers stored workspace-relative references. Their owner is
+        # the supplied data root, independent of a bot/report launcher's cwd.
+        if not path.is_absolute():
+            path = Path(data_root).parent / path
         directory = Path(data_root) / "report/postclose_generation_validation"
         if path.resolve().parent != directory.resolve():
             raise ValueError("policy_generation_fixture_path_invalid")
