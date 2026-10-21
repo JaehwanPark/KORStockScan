@@ -45,7 +45,7 @@ def test_quantity_consumer_trusts_sealed_pipeline_but_producer_and_other_sources
     raw = tmp_path/'pipeline_events/pipeline_events_2026-10-15.jsonl'
     report = dict(census={}, pipeline_source_receipts={'2026-10-15':dict(path=str(raw), sha256='a'*64)})
     Q.verify_refresh_source_generations(report, pipeline_reference_only=True)
-    with pytest.raises(FileNotFoundError):
+    with pytest.raises(ValueError, match='quantity_pipeline_source_generation_changed'):
         Q.verify_refresh_source_generations(report)
     report['pipeline_source_receipts']['2026-10-15']['sha256'] = 'bad'
     with pytest.raises(ValueError, match='pipeline_source_generation_changed'):
@@ -192,6 +192,48 @@ def test_postclose_reuse_has_a_bounded_non_sliding_lifetime(tmp_path, source, mo
         D.reused_digest(source)
     assert invocation.stats['full_reads'] == 2
     assert invocation.stats['reused_reads'] == 1
+
+
+@pytest.mark.parametrize('damage', [None, 'source', 'missing_proof', 'changed_proof', 'clock_rollback'])
+def test_stop_final_dependencies_reverify_expired_native_writer_proof(tmp_path, monkeypatch, damage):
+    from src.engine.automation.main_stop_postclose import verified_dependency_stats
+    from src.engine.lifecycle.holding_window_generation import byte_generation
+    day = '2026-10-21'
+    path = tmp_path/'report/monitor_snapshots'/f'trade_review_{day}.json'
+    path.parent.mkdir(parents=True)
+    path.write_bytes(b'a'*(D.MIN_BYTES+1))
+    generation = byte_generation(path)
+    D.publish_native_bytes(tmp_path, path, generation)
+    now = [time.time()]
+    monkeypatch.setattr(D.time, 'time', lambda: now[0])
+    opened = Path.open
+    def guarded(source, *args, **kwargs):
+        if source == path:
+            pytest.fail('expired native proof reopened source bytes')
+        return opened(source, *args, **kwargs)
+    with D.postclose_session(tmp_path, day) as invocation:
+        assert byte_generation(path) == generation
+        original = invocation.entries[str(path)]['created']
+        if damage == 'source':
+            path.write_bytes(b'b'*(D.MIN_BYTES+1))
+        proof_path = D._native_proof_path(tmp_path, path)
+        if damage == 'missing_proof':
+            proof_path.unlink()
+        elif damage == 'changed_proof':
+            value = json.loads(proof_path.read_bytes())
+            value['generation']['sha256'] = 'b'*64
+            value['proof_sha256'] = D._sha({k:v for k,v in value.items() if k!='proof_sha256'})
+            proof_path.write_text(json.dumps(value))
+        now[0] += -1 if damage == 'clock_rollback' else 601
+        monkeypatch.setattr(Path, 'open', guarded)
+        if damage is not None:
+            with pytest.raises(D.ValidationDeferred):
+                verified_dependency_stats({str(path): generation}, root=tmp_path, day=day)
+        else:
+            assert verified_dependency_stats({str(path): generation}, root=tmp_path, day=day)
+            assert invocation.entries[str(path)]['created'] > original
+            assert invocation.stats['full_reads'] == 0
+            assert invocation.ttl == 600
 
 
 def test_postclose_rechecks_changed_bytes_inside_invocation(tmp_path, source):

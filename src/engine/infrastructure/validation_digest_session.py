@@ -239,6 +239,19 @@ class DigestSession:
         path = Path(path).absolute()
         before = identity(path)
         entry = self.entries.get(str(path), {})
+        # Expiration ends digest reuse, not the native writer's byte proof.
+        # Reauthenticate that same issuer/identity before a fresh admission;
+        # a changed epoch or an unrenewable proof must still fail closed.
+        created = entry.get('created') if isinstance(entry, dict) else None
+        expired_native = (isinstance(entry, dict) and entry.get('native_generation_proof')
+            and entry.get('identity') == before and isinstance(created, (int, float))
+            and time.time()-created > self.ttl)
+        if self.binding['role']=='postclose' and expired_native:
+            proof = _native_bytes(self.data_root, path)
+            if proof is not None and proof['proof_sha256']==entry['native_generation_proof']:
+                self.admit_native_generation(path, proof['generation'], proof['source_stat'],
+                    proof_sha256=proof['proof_sha256'])
+                entry = self.entries[str(path)]
         if (self.binding['role']=='postclose' and before[4]>=MIN_BYTES
                 and not (isinstance(entry,dict) and entry.get('native_generation_proof'))):
             proof=_native_bytes(self.data_root,path)
