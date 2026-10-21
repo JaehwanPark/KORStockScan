@@ -116,6 +116,7 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
 ## 미완료 원천 진단 인계
 
 - [ ] `[InitialQuantityProducerConsumerRepair1010] 매수수량 원천·fact·시간창·장후 소비 결손 수리와 자연 수용` (`Due: 2026-10-21`, `Slot: POSTCLOSE`, `TimeWindow: 16:30~23:59`, `Track: RuntimeStability`)
+  - 12시 수량 원천 수리: 큰 native context의 전체 SHA streaming 검증/필수 필드 전달과 실제 SELL writer→capture 종료 영수증을 연결했다. 회귀871 PASS, 원 과거 interrupted/frozen stage 보존. 현재 ea68/PID1724066은 유지하며 최초 native 장 종료 전환·새 PID/정상 수집창·복원 비용3건의 후속 generation은 별도 OPEN. [검토](../audits/postclose-root-cause-recovery-review-2026-10-19.md#수량-실행-원천의-bounded-전달과-종료-영수증--2026-10-21).
   - Source closure deployment: candidate81 preflight retained Main904787; exact-AI archive/index handoff repaired with116 source-store and133 producer tests. Bounded four-file historical enrollment, native trailing currentness, final ordered deployment and detector consumption remain pending under the same owner.
   - Candidate preflight repair: code-addressed native monitor proof with `publish_current=False` preserves incumbent visibility; 534 targeted tests pass. Actual ordered deployment/PID acceptance remains separate.
   - 2026-10-21 복구 검증: 원본 ID/해시와 현재 수집 계약을 검증한 역사 진단 분리. 이 세션 배포·재기동 승인. 코드/원천 복구와 실제 배포·PID 및 금일 새 결손 탐지 확인은 별도 수용. [원인·복구·회귀·소비 근거](../audits/postclose-root-cause-recovery-review-2026-10-19.md#historical-source-resolution-and-authorized-release--2026-10-21).

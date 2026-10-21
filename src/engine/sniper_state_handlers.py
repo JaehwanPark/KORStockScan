@@ -11962,7 +11962,7 @@ def _observe_initial_quantity_cap_following_tick(
     stock: dict, code: str, ws_data: dict | None, *, now_ts: float,
 ) -> None:
     """Record a bounded source-only 0B print for later cap fill research."""
-    if not isinstance(stock, dict) or not isinstance(ws_data, dict):
+    if not isinstance(stock, dict):
         return
     trace = stock.get("_initial_quantity_cap_trace")
     if not isinstance(trace, dict):
@@ -11970,6 +11970,11 @@ def _observe_initial_quantity_cap_following_tick(
     from src.engine.scalping.initial_quantity_cap_observation import trace_metadata_valid
     if not trace_metadata_valid(trace):
         trace['capture_clock_status']='capture_metadata_invalid'
+        return
+    from src.engine.scalping.initial_quantity_cap_observation import capture_active
+    native_identity = trace.get('capture_lifecycle_identity')
+    if isinstance(native_identity, dict) and not capture_active(native_identity.get('capture_id')):
+        _mutate_stock_state(stock, pop_fields=('_initial_quantity_cap_trace',))
         return
     if type(now_ts) not in (int, float) or not math.isfinite(now_ts) or now_ts<=0:
         # Retain the gap until a real clock value can durably record it.
@@ -12013,6 +12018,8 @@ def _observe_initial_quantity_cap_following_tick(
             # normal observation pass retries the same terminal source only.
             trace['capture_terminal_pending']=True
             trace['queue_rejected_count']=trace.get('queue_rejected_count',0)+1
+        return
+    if not isinstance(ws_data, dict):
         return
     tick = ws_data.get("last_trade_tick")
     if not isinstance(tick, dict) or tick.get("aggressor_source") != (
@@ -20208,12 +20215,6 @@ def _log_holding_pipeline(stock, code, stage, **fields):
     if stage == 'sell_completed':
         from src.engine.scalping.trailing_entry_research_source import clear as clear_trailing_plan
         clear_trailing_plan(stock)
-    if stage=='sell_completed' and isinstance(stock.get('_initial_quantity_cap_trace'),dict):
-        from src.engine.scalping.initial_quantity_cap_observation import interrupt
-        trace=stock['_initial_quantity_cap_trace']
-        if interrupt(code=code,name=stock.get('name'),record_id=stock.get('id'),trace=trace,
-                reason='position_completed_before_capture_horizon'):
-            _mutate_stock_state(stock,pop_fields=('_initial_quantity_cap_trace',))
     if (stage in {"exit_signal", "sell_order_sent", "sell_completed"} | EXIT_WAIT_STAGES
             and str(fields.get("exit_rule") or stock.get("last_exit_rule") or "")
                 == "scalp_trailing_take_profit"):

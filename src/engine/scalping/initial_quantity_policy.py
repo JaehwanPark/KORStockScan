@@ -725,7 +725,7 @@ def _quantity_pipeline_rows(handle, records, receipt):
     Full raw generations remain byte-bound by the caller. Only fields consumed
     by quantity path reconstruction enter this bounded offline projection.
     """
-    from src.engine.lifecycle.research_json_stream import Reader
+    from src.engine.lifecycle.research_json_stream import Reader, sealed_sorted_object_projection
 
     class Line:
         def __init__(self, first):
@@ -744,10 +744,11 @@ def _quantity_pipeline_rows(handle, records, receipt):
 
     while raw := handle.readline(64 * 1024 + 1):
         if len(raw.encode('utf-8')) <= 64 * 1024:
-            yield raw
+            yield raw, None
             continue
         identity, projected = {}, {}
         blocked = [False]
+        verified_context = [None]
 
         def project_fields(reader):
             reader.spaces()
@@ -773,6 +774,30 @@ def _quantity_pipeline_rows(handle, records, receipt):
                 seen.add(key)
                 reader.take(':')
                 if key in _QUANTITY_PIPELINE_FIELDS and not blocked[0]:
+                    if key == 'entry_cancel_wait_submission_context':
+                        reader.spaces()
+                        if reader.peek() != '"':
+                            blocked[0] = True; reader.skip()
+                            first = False
+                            continue
+                        stream = reader.string_stream()
+                        try:
+                            context = sealed_sorted_object_projection(stream,
+                                {'schema', 'stock_code', 'frozen_at', 'actual_timeout_sec', 'child_id'})
+                        except ValueError as exc:
+                            if str(exc) == 'shared_research_budget_partition_resume_required':raise
+                            # Only this identified row is unusable. Drain its
+                            # encoded field before reading the next envelope.
+                            context = None
+                        while stream.read(65536):pass
+                        verified_context[0] = context
+                        if context is None:
+                            blocked[0] = True
+                        else:
+                            retained_bytes += len(json.dumps(context).encode('utf-8'))
+                            if retained_bytes > 64 * 1024:blocked[0] = True
+                        first = False
+                        continue
                     try:
                         result[key] = reader.value(64 * 1024)
                         retained_bytes += len(json.dumps({key: result[key]},
@@ -818,7 +843,9 @@ def _quantity_pipeline_rows(handle, records, receipt):
                 if len(encoded.encode('utf-8')) <= 64 * 1024:
                     receipt['oversized_projected_rows'] = receipt.get('oversized_projected_rows', 0) + 1
                     receipt['oversized_projection_contract'] = 'quantity_execution_fields_v1'
-                    yield encoded
+                    # Verified metadata stays in memory beside the projection;
+                    # raw fields cannot claim that their own hash was checked.
+                    yield encoded, verified_context[0]
                     continue
             affected = receipt.setdefault('oversized_in_cohort_record_ids', [])
             if identity['record_id'] not in affected:
@@ -997,7 +1024,7 @@ def _join_post_fill_paths_uncached(trades: list[dict[str, Any]], *, data_dir: Pa
                 result[trade["trade_id"]]["source_path"] = str(path)
         with open_text_auto(path) as handle:
             scan_receipt = source_receipts[day] if source_receipts is not None else {}
-            for raw in _quantity_pipeline_rows(handle, records, scan_receipt):
+            for raw, verified_context in _quantity_pipeline_rows(handle, records, scan_receipt):
                 rid = _record_id(raw)
                 group = records.get(rid)
                 if not group:
@@ -1055,7 +1082,8 @@ def _join_post_fill_paths_uncached(trades: list[dict[str, Any]], *, data_dir: Pa
                     if stage == "entry_cancel_wait_submission" and within_entry_join:
                         context_raw = fields.get("entry_cancel_wait_submission_context")
                         try:
-                            context = json.loads(context_raw) if isinstance(context_raw, str) else {}
+                            context = (verified_context if verified_context is not None else
+                                       json.loads(context_raw) if isinstance(context_raw, str) else {})
                         except ValueError:
                             context = {}
                         order_start = _timestamp(context.get("frozen_at"))
@@ -1068,7 +1096,8 @@ def _join_post_fill_paths_uncached(trades: list[dict[str, Any]], *, data_dir: Pa
                                 "source": "entry_cancel_wait_submission_context_frozen_at",
                                 "total_wait_sec": context.get('actual_timeout_sec'),
                                 "frozen_context_valid": bool(context.get('schema')=='entry_cancel_wait_submitted_paired_v2'
-                                    and context.get('sha256')==_digest({k:v for k,v in context.items() if k!='sha256'})),
+                                    and (verified_context is not None
+                                         or context.get('sha256')==_digest({k:v for k,v in context.items() if k!='sha256'}))),
                                 "probe_applied": str(context.get("child_id") or "").startswith(
                                     "entry_split_probe"),
                                 "emitted_at": emitted})

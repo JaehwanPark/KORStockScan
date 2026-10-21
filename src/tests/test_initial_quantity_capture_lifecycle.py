@@ -108,21 +108,64 @@ def test_order_start_is_frozen_and_queued_once(capture):
     assert body['fields']['capture_end_epoch']==1792110010.
 
 
-def test_early_completed_position_emits_interrupted_without_changing_position(capture,monkeypatch):
-    from src.engine import sniper_state_handlers as handler
+@pytest.mark.parametrize('damage', [None, 'queue', 'raw', 'sim', 'record', 'code', 'pid', 'unproven', 'late'])
+def test_native_sell_writer_closes_current_capture_without_state_handler(capture,monkeypatch,damage):
+    from src.utils import pipeline_event_logger as logger
+    from types import SimpleNamespace
     root,sink,events,trace,stock=capture
     register(capture);sink.drain()
-    monkeypatch.setattr(handler,'_holding_pipeline_stable_block_log_decision',lambda *a:(False,{}))
-    handler._log_holding_pipeline(stock,stock['code'],'sell_completed')
-    assert '_initial_quantity_cap_trace' not in stock
-    assert (stock['status'],stock['buy_qty'])==('HOLDING',5)
-    assert len(pending(root))==1
+    from src.engine import sniper_state_handlers as handler
+    stock['initial_quantity_bundle']={'attempt_id':trace['entry_submit_attempt_id'],
+        'schedule':{'order_start_at_epoch':trace['started_at_epoch']+10}}
+    handler._start_initial_quantity_cap_capture(stock,attempt_id=trace['entry_submit_attempt_id'],submission_fields={})
     sink.drain()
-    assert pending(root)==[] and len(closed(root))==1
-    body=json.loads(closed(root)[0].read_text())
-    assert body['status']=='interrupted'
-    assert body['fields']['capture_interruption_reason']=='position_completed_before_capture_horizon'
-    assert events[-1][0][-1]=='initial_quantity_cap_capture_interrupted'
+    native=logger.emit_pipeline_event.native
+    monkeypatch.setattr(logger,'DATA_DIR',root)
+    monkeypatch.setattr(logger,'_get_producer_compactor',lambda:None)
+    monkeypatch.setattr(logger,'log_info',lambda *a:None)
+    monkeypatch.setattr(logger,'TRADING_RULES',SimpleNamespace(PIPELINE_EVENT_JSONL_ENABLED=True))
+    fields=dict(pipeline_lifecycle_population_scope='real_record_bound',actual_order_submitted=True,
+                broker_order_forbidden=False)
+    if damage=='queue':sink.accept=False
+    if damage=='raw':monkeypatch.setattr(logger,'_append_pipeline_event_jsonl',lambda *a,**k:(_ for _ in ()).throw(OSError('injected')))
+    if damage=='sim':fields['pipeline_lifecycle_population_scope']='sim_observation_only'
+    if damage=='unproven':fields['actual_order_submitted']=False
+    if damage=='pid':
+        observer._ACTIVE[trace['capture_lifecycle_identity']['capture_id']]['fields']['capture_runtime_pid']+=1
+    record=stock['id']+1 if damage=='record' else stock['id']
+    code='005930' if damage=='code' else stock['code']
+    at=trace['order_capture_end_epoch']+1 if damage=='late' else trace['started_at_epoch']+60
+    original=copy.deepcopy(stock)
+    native('HOLDING_PIPELINE',stock['name'],code,'sell_completed',record_id=record,
+           fields=fields,observed_at_epoch=at)
+    assert stock==original  # Source closure grants no position/order mutation.
+    assert len(pending(root))==1 and closed(root)==[]
+    sink.drain()
+    if damage not in (None,'late'):
+        assert len(pending(root))==1 and closed(root)==[]
+        assert observer.capture_active(trace['capture_lifecycle_identity']['capture_id'])
+    else:
+        body=json.loads(closed(root)[0].read_text())
+        assert pending(root)==[] and body['status']=='interrupted'
+        assert body['fields']['capture_interruption_reason']==(
+            'capture_horizon_terminal_missing_at_position_completion' if damage=='late'
+            else 'position_completed_before_capture_horizon')
+        assert len(body['fields']['capture_position_terminal_sha256'])==64
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        from src.engine.scalping.initial_quantity_policy import _quantity_capture_lifecycle_sources, _capture_source_issue
+        _, receipts=_quantity_capture_lifecycle_sources(root,'2026-10-16',decode=True)
+        assert receipts==[body]
+        source=dict(attempt_id=trace['entry_submit_attempt_id'],plan_sha256=trace['entry_execution_sizing_plan_sha256'],
+            record_id=stock['id'],stock_code=stock['code'],capture_terminal_required=True,capture_exit_epoch=at,
+            capture_receipts=[dict(stage=body['raw_event_stage'],
+                at=datetime.fromtimestamp(at,ZoneInfo('Asia/Seoul')).isoformat(),fields=body['fields'])])
+        assert _capture_source_issue(source)==('capture_interrupted' if damage=='late' else None)
+        assert not observer.capture_active(trace['capture_lifecycle_identity']['capture_id'])
+        count=len(events)
+        native('HOLDING_PIPELINE',stock['name'],code,'sell_completed',record_id=record,
+               fields=fields,observed_at_epoch=at)
+        sink.drain();assert len(events)==count
 
 
 def test_finished_requires_raw_durability_before_pending_is_closed(capture,monkeypatch):
@@ -141,10 +184,10 @@ def test_finished_requires_raw_durability_before_pending_is_closed(capture,monke
     assert json.loads(pending(root)[0].read_text())['status']=='pending'
 
 
-def test_refused_interruption_keeps_trace_and_pending_gap(capture,monkeypatch):
+def test_unpersisted_handler_label_cannot_censor_or_remove_capture(capture,monkeypatch):
     from src.engine import sniper_state_handlers as handler
     root,sink,_,trace,stock=capture
-    register(capture);sink.drain();sink.accept=False
+    register(capture);sink.drain()
     monkeypatch.setattr(handler,'_holding_pipeline_stable_block_log_decision',lambda *a:(False,{}))
     handler._log_holding_pipeline(stock,stock['code'],'sell_completed')
     assert stock['_initial_quantity_cap_trace'] is trace
@@ -369,7 +412,7 @@ def test_malformed_trace_cannot_interrupt_live_sell_or_cancel_cleanup(capture,mo
     monkeypatch.setattr(handler,'_clear_entry_arm',lambda *a:None)
     handler._clear_pending_entry_meta(stock)
     assert stock['status']=='BUY_ORDERED' and stock['buy_qty']==0
-    assert observer.snapshot()['capture_metadata_invalid']==2
+    assert observer.snapshot()['capture_metadata_invalid']==1  # Only the real cancellation path inspects the trace.
 
 
 @pytest.mark.parametrize('clock',[None,True,float('nan'),float('inf'),-1,1e100])
@@ -389,3 +432,24 @@ def test_malformed_registered_identity_does_not_throw_from_runtime_observers(cap
     handler._observe_initial_quantity_cap_following_tick(stock,stock['code'],{},now_ts=1792108801.)
     assert trace['capture_clock_status']=='capture_metadata_invalid'
     assert stock['status']=='HOLDING' and stock['buy_qty']==5
+
+
+@pytest.mark.parametrize('quote', [None, {}])
+def test_native_horizon_completion_does_not_depend_on_a_terminal_quote(capture, monkeypatch, quote):
+    from src.engine import sniper_state_handlers as handler
+    from src.engine.scalping.initial_quantity_policy import _quantity_capture_lifecycle_sources
+    root,sink,events,trace,stock=capture
+    register(capture);sink.drain()
+    stock['initial_quantity_bundle']={'attempt_id':trace['entry_submit_attempt_id'],
+        'schedule':{'order_start_at_epoch':trace['started_at_epoch']+10}}
+    handler._start_initial_quantity_cap_capture(stock,attempt_id=trace['entry_submit_attempt_id'],submission_fields={})
+    sink.drain()
+    handler._observe_initial_quantity_cap_following_tick(stock,stock['code'],quote,
+        now_ts=trace['order_capture_end_epoch']+1)
+    assert closed(root)==[]  # Queue acceptance alone is not completion.
+    sink.drain()
+    _, receipts=_quantity_capture_lifecycle_sources(root,'2026-10-16',decode=True)
+    assert len(receipts)==1 and receipts[0]['status']=='finished'
+    assert receipts[0]['fields']['capture_disposition']=='horizon_reached'
+    assert receipts[0]['fields']['observation_coverage']=='sampled_last_trade_tick'
+    assert (stock['status'],stock['buy_qty'])==('HOLDING',5)

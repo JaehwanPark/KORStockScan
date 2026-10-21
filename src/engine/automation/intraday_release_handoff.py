@@ -3728,6 +3728,47 @@ REVIEWED_COLLECTOR_FIRST_TRANSITION_DEPENDENCY_VARIANTS = {
 }
 
 
+# Quantity capture and offline context projection repair; trading rules are
+# unchanged. Pin one reviewed successor while preserving issued generations.
+REVIEWED_QUANTITY_CAPTURE_HASHES = {'src/engine/lifecycle/research_json_stream.py': 'f3c0e5c4facfa4e6cc63c99d13c0e22c26c35ceffc1ad571ba200c63b042b8bb',
+ 'src/engine/scalping/initial_quantity_cap_observation.py': 'b812ebdb125283b7f2e80e840edfb8f84fbd2160b73428bd5ae319c1f3c38560',
+ 'src/engine/scalping/initial_quantity_policy.py': 'b8559a2a6818478c5905adf8d7c1e9d5ae875a1da5aa3089e0ef251621388c38',
+ 'src/engine/scalping/initial_quantity_source_cache.py': 'b3bc59626fd28be5a5979751a96a23f95e534611f6c6bea5531f36b4d2c00e77',
+ 'src/engine/sniper_state_handlers.py': '8cc435544ceeda76309b9051179af20022f100c8b1bad48356636fb51b9f101c',
+ 'src/utils/pipeline_event_logger.py': '2e1c150e1b7d21adcb6fa586a15c1e018cdf2e6a2aab13daa067f414d9b4e6d3'}
+REVIEWED_QUANTITY_CAPTURE_PAIRS = {'src/engine/lifecycle/research_json_stream.py': (('1ea671f8ba5b5397257c2d1da513dee653b05379133073d1412ee4edf7a07a11',
+                                                   'f3c0e5c4facfa4e6cc63c99d13c0e22c26c35ceffc1ad571ba200c63b042b8bb'),
+                                                  ('53bd6a0cec6435ff0cfb399ad75fc9edd0b479463c06dea77bc5cae5e59db4b6',
+                                                   'f3c0e5c4facfa4e6cc63c99d13c0e22c26c35ceffc1ad571ba200c63b042b8bb')),
+ 'src/engine/scalping/initial_quantity_cap_observation.py': (('11d5fe453033bfdc158d64f423f2d299443401b6782955440d643079ad864667',
+                                                              'b812ebdb125283b7f2e80e840edfb8f84fbd2160b73428bd5ae319c1f3c38560'),),
+ 'src/engine/scalping/initial_quantity_policy.py': (('806875b857f58895a39ec116ed0a3b619539f7d782fc1996581c1af84c201a34',
+                                                     'b8559a2a6818478c5905adf8d7c1e9d5ae875a1da5aa3089e0ef251621388c38'),
+                                                    ('4567eed7de944395133eb6ebc975c823cf3840e6abe9424877455130feb55c87',
+                                                     'b8559a2a6818478c5905adf8d7c1e9d5ae875a1da5aa3089e0ef251621388c38')),
+ 'src/engine/scalping/initial_quantity_source_cache.py': (('77a7b57d5f752c760332fc6fd46a4fb121d4c0042ceb464a689fae1dc23c5704',
+                                                           'b3bc59626fd28be5a5979751a96a23f95e534611f6c6bea5531f36b4d2c00e77'),
+                                                          ('353795e63675a34743f1bdf0823f684cbdcdd472cdf12790dc17896e1aa107db',
+                                                           'b3bc59626fd28be5a5979751a96a23f95e534611f6c6bea5531f36b4d2c00e77')),
+ 'src/engine/sniper_state_handlers.py': (('885af7dd480a520e98502bcd6729586b4d21016de8254a4a7d9e299389f09ed4',
+                                          '8cc435544ceeda76309b9051179af20022f100c8b1bad48356636fb51b9f101c'),
+                                         ('c47a60dccf7266e27880b94cb9bccf3b2c23c6c513ede76cce33bce212abfd55',
+                                          '8cc435544ceeda76309b9051179af20022f100c8b1bad48356636fb51b9f101c')),
+ 'src/utils/pipeline_event_logger.py': (('02d713d72647ce18e49c13f40843415611260a4fd5ba6be34712d6bfb9b83416',
+                                         '2e1c150e1b7d21adcb6fa586a15c1e018cdf2e6a2aab13daa067f414d9b4e6d3'),
+                                        ('fde49c9a27dfc5c858d765353a0a898ac45728d57ecfa0526c4a6df4fef4c99e',
+                                         '2e1c150e1b7d21adcb6fa586a15c1e018cdf2e6a2aab13daa067f414d9b4e6d3'))}
+REVIEWED_QUANTITY_CAPTURE_DEPENDENCY_VARIANTS = {
+    key: {**value,
+        'selector_path': 'src/engine/scalping/initial_quantity_cap_observation.py',
+        'selector_sha256': REVIEWED_QUANTITY_CAPTURE_HASHES['src/engine/scalping/initial_quantity_cap_observation.py'],
+        'dependencies': {**value['dependencies'], **REVIEWED_QUANTITY_CAPTURE_HASHES},
+        'contract_extensions': {origin: {name: REVIEWED_QUANTITY_CAPTURE_HASHES.get(os.path.normpath(name), digest)
+            for name, digest in paths.items()} for origin, paths in value['contract_extensions'].items()},
+    } for key, value in REVIEWED_COLLECTOR_FIRST_TRANSITION_DEPENDENCY_VARIANTS.items()
+}
+
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -3806,6 +3847,9 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     finalization_health_present = any((root / name).is_file()
         and hashlib.sha256(candidate_bytes(name)).hexdigest() == sha
         for name, sha in REVIEWED_FINALIZATION_HEALTH_HASHES.items())
+    quantity_capture_present = (root / 'src/engine/scalping/initial_quantity_cap_observation.py').is_file() and (
+        hashlib.sha256(candidate_bytes('src/engine/scalping/initial_quantity_cap_observation.py')).hexdigest()
+        == REVIEWED_QUANTITY_CAPTURE_HASHES['src/engine/scalping/initial_quantity_cap_observation.py'])
     first_transition_present = (root / 'src/engine/automation/ordered_intraday_deploy.py').is_file() and (
         hashlib.sha256(candidate_bytes('src/engine/automation/ordered_intraday_deploy.py')).hexdigest()
         == REVIEWED_COLLECTOR_FIRST_TRANSITION_HASHES['src/engine/automation/ordered_intraday_deploy.py'])
@@ -3832,7 +3876,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         dependencies = generations.get(trigger_sha, {})
         # New exact selectors precede their historical parent. The first match
         # selects one complete generation, never per-file SHA alternatives.
-        for variants in (REVIEWED_COLLECTOR_FIRST_TRANSITION_DEPENDENCY_VARIANTS,
+        for variants in (REVIEWED_QUANTITY_CAPTURE_DEPENDENCY_VARIANTS,
+                         REVIEWED_COLLECTOR_FIRST_TRANSITION_DEPENDENCY_VARIANTS,
                          REVIEWED_COLLECTOR_CLOSE_DEPENDENCY_VARIANTS,
                          REVIEWED_BUY_IDENTITY_DEPENDENCY_VARIANTS,
                          REVIEWED_ENTRY_RECEIPT_DEPENDENCY_VARIANTS,
@@ -3968,6 +4013,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
             dependencies = {**dependencies, **REVIEWED_COLLECTOR_CLOSE_HASHES}
         if first_transition_present:
             dependencies = {**dependencies, **REVIEWED_COLLECTOR_FIRST_TRANSITION_HASHES}
+        if quantity_capture_present:
+            dependencies = {**dependencies, **REVIEWED_QUANTITY_CAPTURE_HASHES}
         dependencies_by_trigger[trigger] = (trigger_sha, dependencies)
     for key, name in paths.items():
         after = candidate_bytes(name)
@@ -3984,7 +4031,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         if before == after:
             continue
         pair = (hashlib.sha256(before).hexdigest(), hashlib.sha256(after).hexdigest())
-        if (pair in REVIEWED_COLLECTOR_FIRST_TRANSITION_PAIRS.get(repository_name(name), ())
+        if (pair in REVIEWED_QUANTITY_CAPTURE_PAIRS.get(repository_name(name), ())
+                or pair in REVIEWED_COLLECTOR_FIRST_TRANSITION_PAIRS.get(repository_name(name), ())
                 or pair in REVIEWED_COLLECTOR_CLOSE_PAIRS.get(repository_name(name), ())
                 or pair in REVIEWED_BUY_IDENTITY_PAIRS.get(repository_name(name), ())
                 or pair in REVIEWED_ENTRY_RECEIPT_PAIRS.get(repository_name(name), ())

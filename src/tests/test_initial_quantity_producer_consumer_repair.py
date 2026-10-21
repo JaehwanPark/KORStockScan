@@ -40,7 +40,7 @@ def test_oversized_unrelated_pipeline_row_preserves_next_record(late_identity, p
     relevant = json.dumps({'record_id': 7, 'fields': {}}) + '\n'
     source = relevant + json.dumps(fields, ensure_ascii=False) + '\n' + relevant
     receipt = {}
-    assert list(policy._quantity_pipeline_rows(io.StringIO(source), {'7': []}, receipt)) == [relevant, relevant]
+    assert list(policy._quantity_pipeline_rows(io.StringIO(source), {'7': []}, receipt)) == [(relevant, None), (relevant, None)]
     assert receipt == {'oversized_out_of_cohort_records': 1}
 
 
@@ -87,7 +87,7 @@ def test_large_native_quantity_row_preserves_policy_fields(late_identity, paddin
     if late_identity:
         row = dict(reversed(list(row.items())))
     receipt = {}
-    parsed = [json.loads(value) for value in policy._quantity_pipeline_rows(
+    parsed = [json.loads(value) for value, _ in policy._quantity_pipeline_rows(
         io.StringIO(json.dumps(row, ensure_ascii=False)+'\n'), {'7': []}, receipt)]
     assert len(parsed)==1 and parsed[0]['record_id']==7
     assert parsed[0]['fields']=={k:v for k,v in fields.items() if k in policy._QUANTITY_PIPELINE_FIELDS}
@@ -134,6 +134,54 @@ def test_large_required_quantity_field_remains_an_identified_gap():
     receipt={}
     assert list(policy._quantity_pipeline_rows(io.StringIO(json.dumps(row)+'\n'),{'7':[]},receipt))==[]
     assert receipt['oversized_in_cohort_record_ids']==['7']
+
+
+@pytest.mark.parametrize('damage', [None, 'hash', 'nested', 'duplicate', 'truncated', 'nonfinite'])
+def test_native_large_cancel_wait_context_reaches_quantity_order_clock(tmp_path, damage):
+    from src.engine.scalping.entry_cancel_wait_runtime import submission_fields
+    from src.engine.scalping.strategy_owner_components import digest
+    day='2026-10-08'; _quality(tmp_path, day)
+    directory=tmp_path/'pipeline_events';directory.mkdir()
+    frozen=datetime.fromisoformat(day+'T09:29:59+09:00')
+    stock=dict(code='005930',position_tag='SCALP_BASE',entry_mode='normal')
+    seed=dict(plan_sha256='a'*64,operating_contract={str(i).zfill(4): {'source':'x'*130,'value':i} for i in range(759)},
+        mixed=[None,True,-1,1.5,1e-25,'quote\" slash\\ line\n',chr(0x1f600),'x'*8191])
+    fields=submission_fields(stock,dict(tag='entry_leg'),seed=seed,qty=1,price=100000,
+                             route='KRX',timeout_sec=60,now_ts=frozen.timestamp())
+    fields.update(actual_order_submitted=True,broker_order_no='11')
+    context=json.loads(fields['entry_cancel_wait_submission_context'])
+    if damage=='hash':context['sha256']='0'*64
+    if damage=='nested':context['seed']['operating_contract']['0000']['value']=99
+    if damage=='nonfinite':context['seed']['bad']=float('nan')
+    fields['entry_cancel_wait_submission_context']=json.dumps(context,sort_keys=True,separators=(',',':'))
+    if damage=='duplicate':fields['entry_cancel_wait_submission_context']=fields['entry_cancel_wait_submission_context'].replace('"stock_code":','"stock_code":"009999","stock_code":')
+    if damage=='truncated':fields['entry_cancel_wait_submission_context']=fields['entry_cancel_wait_submission_context'][:-1]
+    event=dict(record_id=1,stock_code='005930',stage='entry_cancel_wait_submission',
+               emitted_at=day+'T09:29:59.500000+09:00',fields=fields)
+    path=directory/f'pipeline_events_{day}.jsonl'
+    path.write_text(json.dumps(event)+'\n')
+    rows,_=policy.completed_trade_fact_census(day,data_dir=tmp_path,fact_rows=[actual_fact()],entry_on_or_after='2026-09-29')
+    receipts={}; result=policy._join_post_fill_paths_uncached(rows,data_dir=tmp_path,source_receipts=receipts)['fact:1']
+    if damage:
+        assert result['source_gap']==['pipeline_record_partition_required']
+        assert result['order_starts']==[]
+    else:
+        assert not result['source_gap']
+        assert result['order_starts']==[dict(at=frozen,order_no='11',
+            source='entry_cancel_wait_submission_context_frozen_at',total_wait_sec=60,
+            frozen_context_valid=True,probe_applied=False,
+            emitted_at=datetime.fromisoformat(event['emitted_at']))]
+        assert context['sha256']==digest({k:v for k,v in context.items() if k!='sha256'})
+        assert len(path.read_bytes())>65536
+
+
+def test_streamed_context_validity_cannot_be_supplied_by_a_raw_event(tmp_path):
+    import io
+    row=dict(record_id=7,stock_code='005930',stage='entry_cancel_wait_submission',
+        emitted_at='2026-10-16T09:00:00+09:00',verified_context={'sha256':'claimed'},
+        fields={'entry_cancel_wait_submission_context':'{}','verified_context':True})
+    raw=json.dumps(row)+'\n'
+    assert list(policy._quantity_pipeline_rows(io.StringIO(raw),{'7':[]},{}))==[(raw,None)]
 
 
 def test_native_fact_sync_preserves_null_real_zero_and_provenance(monkeypatch,tmp_path):

@@ -193,6 +193,47 @@ class Reader:
         self.spaces()
         if self.peek():raise ValueError('research_json_trailing_data')
 
+    def string_stream(self):
+        """Decode one JSON string in bounded chunks for a nested native JSON owner."""
+        self.take('"')
+        def chunks():
+            chunk=[]
+            escapes={'"':'"', '\\':'\\', '/':'/', 'b':'\b', 'f':'\f', 'n':'\n', 'r':'\r', 't':'\t'}
+            while True:
+                char=self.peek()
+                if not char or ord(char)<32:raise ValueError('research_json_string_invalid')
+                self.offset+=1
+                if char=='"':
+                    if chunk:yield ''.join(chunk)
+                    return
+                if char=='\\':
+                    escape=self.peek();self.offset+=1
+                    if escape=='u':
+                        digits=''
+                        for _ in range(4):
+                            digit=self.peek()
+                            if not digit or digit not in '0123456789abcdefABCDEF':raise ValueError('research_json_escape_invalid')
+                            self.offset+=1;digits+=digit
+                        char=chr(int(digits,16))
+                    elif escape in escapes:char=escapes[escape]
+                    else:raise ValueError('research_json_escape_invalid')
+                chunk.append(char)
+                if len(chunk)>=8192:
+                    yield ''.join(chunk);chunk=[]
+        class Stream:
+            def __init__(self):self.parts=chunks();self.pending='';self.done=False
+            def read(self,size):
+                result=[];remaining=size
+                while remaining:
+                    if not self.pending:
+                        if self.done:break
+                        self.pending=next(self.parts,'')
+                        if not self.pending:self.done=True;break
+                    result.append(self.pending[:remaining])
+                    used=min(remaining,len(self.pending));remaining-=used;self.pending=self.pending[used:]
+                return ''.join(result)
+        return Stream()
+
     def discard(self):
         """Validate unused JSON without retaining its arrays or strings."""
         # Most discarded rows are small: let the C decoder validate a bounded
@@ -322,3 +363,51 @@ def selected_object(handle, selection):
         return result
     value=project(reader,selection);reader.finish()
     return value
+
+
+def sealed_sorted_object_projection(handle, fields):
+    """Verify a native sorted-JSON content hash while retaining selected fields.
+
+    The producer's complete canonical object, excluding its root sha256, is
+    hashed incrementally. Containers never become resident; scalar and selected
+    fields keep the existing 64 KiB bound. This is not a new source receipt.
+    """
+    reader=Reader(handle);digest=hashlib.sha256();projection={};declared=None
+    def encoded(value):
+        return json.dumps(value,sort_keys=True,ensure_ascii=True,separators=(',',':'),allow_nan=False).encode('ascii')
+    def value(r,depth=0,root=False):
+        nonlocal declared
+        if depth>64:raise ValueError('research_json_depth_invalid')
+        r.spaces();char=r.peek()
+        if char=='{':
+            digest.update(b'{');previous=None;count=0
+            def field(key,child):
+                nonlocal previous,count,declared
+                if previous is not None and key<=previous:raise ValueError('research_json_canonical_key_order_invalid')
+                previous=key
+                if root and key=='sha256':declared=child.value(1024);return ()
+                if count:digest.update(b',')
+                count+=1;digest.update(encoded(key)+b':')
+                if root and key in fields:
+                    projection[key]=child.value(65536);digest.update(encoded(projection[key]))
+                else:value(child,depth+1)
+                return ()
+            # Runtime rule snapshots use the existing pipeline's 4096-key
+            # contract, rather than the small research object's default256.
+            for _ in r.fields(field,max_fields=4096):pass
+            digest.update(b'}')
+        elif char=='[':
+            digest.update(b'[');first=True
+            def item(child):
+                nonlocal first
+                if not first:digest.update(b',')
+                first=False;value(child,depth+1)
+            for _ in r.array(item):pass
+            digest.update(b']')
+        else:digest.update(encoded(r.value(65536)))
+    reader.spaces()
+    if reader.peek()!='{':raise ValueError('research_json_sealed_object_required')
+    value(reader,root=True);reader.finish()
+    if not isinstance(declared,str) or digest.hexdigest()!=declared:
+        return None
+    return {**projection,'sha256':declared}
