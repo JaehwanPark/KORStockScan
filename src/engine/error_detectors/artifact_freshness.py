@@ -2789,6 +2789,9 @@ def _project_semantic_owner(alert, current_owners, as_of_date):
     if alert['stage']=='policy_generation':
         from src.engine.monitoring.policy_generation_contract import OWNERS
         owner=OWNERS.get(alert.get('scope'))
+        if (alert.get('scope')=='holding_vote' and owner not in current_owners
+                and 'DirectFamilyPreopenPolicyHandoff' in current_owners):
+            owner='DirectFamilyPreopenPolicyHandoff'
     alert.update(producer_owner=alert['owner'], historical_owner=alert['owner'],
                      owner=owner if owner in current_owners else 'UNRESOLVED_CURRENT_OWNER:' + str(owner),
                      owner_status='current_open' if owner in current_owners else 'unresolved',

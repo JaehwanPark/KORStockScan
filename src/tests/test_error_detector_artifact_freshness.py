@@ -239,15 +239,16 @@ def test_unstarted_reversal_stage_wait_requires_native_bounded_parent(tmp_path, 
         assert result['findings']==['continuous_reversal_execution_not_completed:'+missing]
 
 
-@pytest.mark.parametrize('stage,family_owner', [
-    ('main_machine_policy','DirectFamilySourceRepairMainMechanisticEntry'),
-    ('legacy_machine_report','DirectFamilySourceRepairMainMechanisticEntry'),
-    ('main_auxiliary_policy','DirectFamilySourceRepairCompactAuxiliary')])
+@pytest.mark.parametrize('stage,scope,family_owner', [
+    ('main_machine_policy','report','DirectFamilySourceRepairMainMechanisticEntry'),
+    ('legacy_machine_report','report','DirectFamilySourceRepairMainMechanisticEntry'),
+    ('main_auxiliary_policy','report','DirectFamilySourceRepairCompactAuxiliary'),
+    ('policy_generation','holding_vote','MainStopLossRetirementRuntimeTuning1010')])
 @pytest.mark.parametrize('owners', [set(), {'DirectFamilyPreopenPolicyHandoff'}, {'family','DirectFamilyPreopenPolicyHandoff'}])
-def test_reversal_alert_preserves_family_owner_or_uses_current_handoff(stage, family_owner, owners):
+def test_reversal_alert_preserves_family_owner_or_uses_current_handoff(stage, scope, family_owner, owners):
     from src.engine.error_detectors.artifact_freshness import _project_semantic_owner
     active = (owners-{'family'}) | ({family_owner} if 'family' in owners else set())
-    alert=dict(stage=stage, owner=stage, target_date='2026-10-22')
+    alert=dict(stage=stage, scope=scope, owner=stage, target_date='2026-10-22')
     _project_semantic_owner(alert, active, '2026-10-21')
     expected = family_owner if family_owner in active else ('DirectFamilyPreopenPolicyHandoff'
         if 'DirectFamilyPreopenPolicyHandoff' in active else 'UNRESOLVED_CURRENT_OWNER:'+family_owner)
