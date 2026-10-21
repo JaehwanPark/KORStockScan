@@ -721,7 +721,10 @@ def completed_evidence(root, days):
             for _ in reader.fields(visit):pass
             row['source_date']=day;row['source_sha256']=before['sha256']
             return row
-        with sidecar.open() as handle:
+        # byte_generation and the native projection verifier above retain the
+        # logical source contract when the archive owner removes plain bytes.
+        with (sidecar.open(encoding='utf-8') if sidecar.exists() else
+                gzip.open(Path(str(sidecar)+'.gz'),'rt',encoding='utf-8')) as handle:
             yield from Reader(handle).target(('sections','completed_trade_projection'),project)
         if byte_generation(sidecar)!=before:raise ValueError('stop_cost_projection_changed')
 

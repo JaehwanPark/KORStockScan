@@ -476,3 +476,24 @@ def test_snapshot_metadata_change_requires_complete_original_bytes(tmp_path,monk
     else:
         with pytest.raises(ValueError,match='stop_native_source_generation_changed'):
             post.read_committed(tmp_path,'2026-10-12')
+@pytest.mark.parametrize('compressed,damage', [(False,None),(True,None),
+    (True,'receipt_removed'),(True,'archive_changed')])
+def test_completed_evidence_reads_native_logical_archive_without_restoring_plain_source(tmp_path,monkeypatch,compressed,damage):
+    from pathlib import Path
+    from src.tests.test_main_trailing_source_store import _original_completed_source
+    from src.engine.lifecycle.holding_window_generation import byte_generation
+    root=tmp_path/'source'
+    day,raw,sidecar=_original_completed_source(root,monkeypatch,'native',compressed)
+    if damage=='receipt_removed':Path(str(sidecar)+'.gz.archive_receipt.json').unlink()
+    if damage=='archive_changed':
+        packed=Path(str(sidecar)+'.gz');packed.write_bytes(packed.read_bytes()+b'changed')
+    if damage:
+        with pytest.raises((OSError,ValueError)):
+            list(post.completed_evidence(root,[day]))
+    else:
+        rows=list(post.completed_evidence(root,[day]))
+        assert len(rows)==1
+        assert rows[0]['source_date']==day and rows[0]['source_sha256']==byte_generation(sidecar)['sha256']
+        assert set(rows[0]) <= {'id','record_id','status','main_automatic_management_allowed',
+            'actual_cost_reconciliation','source_date','source_sha256'}
+    assert sidecar.exists() is (not compressed)
