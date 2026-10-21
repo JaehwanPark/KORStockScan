@@ -1827,7 +1827,8 @@ def test_semantic_owners_survive_rollover_without_reopening_completed_work(
     day, target = "2026-10-20", "2026-10-21"
     _write_json(mod._direct_summary_path(day), _direct_summary(day))
     owners = {"holding_profit_exit": "HoldingProfitExitSourceContractRepair",
-              "initial_quantity": "InitialQuantityProducerConsumerRepair1010"}
+              "initial_quantity": "InitialQuantityProducerConsumerRepair1010",
+              "market_weakness": "MainMarketWeaknessPostcloseObservation1008"}
     source = mod.stage2_checklist_path(day)
     source.parent.mkdir(parents=True, exist_ok=True)
     source.write_text("\n".join(
@@ -1854,9 +1855,10 @@ def test_semantic_owners_survive_rollover_without_reopening_completed_work(
         assert first.count(f"[{owner}]") == int(source_state == " " or target_state is not None)
         if expected_open:
             assert "missing cost stays null" in first and "original failure" in first
-            alert = dict(stage=stage, owner=stage)
-            _project_semantic_owner(alert, current, target)
-            assert alert["owner"] == owner and alert["owner_status"] == "current_open"
+            if stage != "market_weakness":
+                alert = dict(stage=stage, owner=stage)
+                _project_semantic_owner(alert, current, target)
+                assert alert["owner"] == owner and alert["owner_status"] == "current_open"
 
 
 @pytest.mark.parametrize("defect", ["duplicate", "schedule_missing", "source_changed", "target_duplicate"])

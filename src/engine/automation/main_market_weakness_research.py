@@ -721,6 +721,115 @@ def cursor_current(data_root, cursor):
     )
 
 
+def rebind_compressed_sources(root, prior, descriptor, *, stop_at):
+    """Reuse completed projections only across proven representation changes.
+
+    Keep the original projection IDs and immutable manifests. New physical
+    bindings get a successor generation before cumulative/outbox consumption.
+    Legacy inputs without complete read hashes must use the normal reader once.
+    """
+    old = prior.get("source_descriptor", {})
+    if prior.get("status") not in {"completed", "valid_empty", "completed_with_source_gaps"}:
+        return None
+    if {k: v for k, v in old.items() if k not in {"sources", "listing"}} != {
+        k: v for k, v in descriptor.items() if k not in {"sources", "listing"}
+    }:
+        return None
+    before, after = old.get("listing"), descriptor.get("listing")
+    if before != after and not (
+        isinstance(before, dict) and isinstance(after, dict)
+        and before.get("semantic_sha256") and not after.get("status")
+        and before.get("logical_path") == after.get("logical_path")
+        and before["semantic_sha256"] == after.get("semantic_sha256")
+    ):
+        return None
+    sources, replacements = old.get("sources", []), descriptor["sources"]
+    if len(sources) != len(replacements):
+        return None
+    manifest = check_seal(read_json(prior["manifest_path"]))
+    terminal = check_seal(read_json(prior["terminal_path"]))
+    daily = check_seal(read_json(prior["daily_path"]))
+    if (prior.get("generation") != R.digest(old)
+        or terminal.get("generation") != prior.get("generation")
+        or terminal.get("status") != prior.get("status")
+        or terminal.get("gaps") != prior.get("gaps")
+        or any(daily.get(k) != prior.get(k, {}) for k in (
+            "source_census", "source_projection_census"))
+        or daily.get("native_indexed_rows") != prior.get("native_indexed_rows", 0)
+        or terminal.get("source_manifest_sha256") != manifest["artifact_content_sha256"]
+        or terminal.get("daily_sha256") != daily["artifact_content_sha256"]
+        or any(manifest.get(k) != v for k, v in old.items())
+        or any(manifest.get(k, []) != prior.get(k, []) for k in (
+            "partitions", "source_ranges", "stream_receipts",
+            "shared_object_receipts", "source_dependency_receipts"))
+        or not receipts_current(prior.get("shared_object_receipts", [])
+            + prior.get("source_dependency_receipts", [])
+            + [p["stat"] for p in prior.get("partitions", []) if p.get("stat")])):
+        return None
+    proofs = []
+    for source, replacement in zip(sources, replacements):
+        if source == replacement:
+            continue
+        if (source.get("kind") not in {"native_observations", "natural_trace"}
+            or source.get("kind") != replacement.get("kind")
+            or not source.get("logical_path")
+            or source["logical_path"] != replacement.get("logical_path")
+            or not replacement.get("compressed")):
+            return None
+        whole = next((r for r in prior.get("stream_receipts", [])
+                      if r["path"] == source["path"]), None)
+        ranges = ([dict(start=0, end=whole["decoded_bytes"], sha256=whole["decoded_sha256"])]
+                  if whole else [r for r in prior.get("source_ranges", []) if r["path"] == source["path"]])
+        if not ranges or ranges[0]["start"] != 0 or any(
+            a["end"] != b["start"] for a, b in zip(ranges, ranges[1:])
+        ) or (not source.get("compressed") and ranges[-1]["end"] != source["size"]):
+            return None
+        verify_stream_aliases(root, replacement, stop_at=stop_at)
+        key = R.digest(dict(source=replacement, ranges=ranges))
+        cache = Path(root) / "verified_sources" / ("rebind-" + key + ".json")
+        proof = read_json(cache)
+        if proof:
+            check_seal(proof)
+            if proof.get("source") != replacement or proof.get("ranges") != ranges:
+                raise ValueError("research_rebind_cache_invalid")
+        else:
+            decoded = hashlib.sha256()
+            with source_handle(replacement["path"]) as (handle, physical):
+                for r in ranges:
+                    digest, remaining = hashlib.sha256(), r["end"] - r["start"]
+                    if remaining < 0:
+                        return None
+                    while remaining:
+                        if time.monotonic() >= stop_at:
+                            raise Deferred("compressed_rebind_wall_budget")
+                        raw = handle.read(min(65536, remaining))
+                        if not raw:
+                            return None
+                        digest.update(raw)
+                        decoded.update(raw)
+                        remaining -= len(raw)
+                    if digest.hexdigest() != r["sha256"]:
+                        return None
+                if handle.read(1):  # Also verifies gzip EOF/CRC, not a prefix.
+                    return None
+                proof = R.seal(dict(source=replacement, ranges=ranges,
+                    decoded_sha256=decoded.hexdigest(), decoded_bytes=handle.tell(),
+                    physical_sha256=physical.digest.hexdigest(), **R.AUTH))
+            if not receipts_current([replacement]):
+                raise Deferred("compressed_rebind_source_changed")
+            atomic(cache, proof, immutable=True)
+        if not receipts_current([replacement]):
+            raise Deferred("compressed_rebind_source_changed")
+        proofs.append(dict(path=replacement["path"], **{k: proof[k] for k in (
+            "decoded_sha256", "decoded_bytes", "physical_sha256")}))
+    return dict(prior, source_descriptor=descriptor, generation=R.digest(descriptor),
+        status="in_progress", source_index=len(replacements), offset=0,
+        stream_receipts=prior.get("stream_receipts", []) + proofs,
+        representation_parent=dict(generation=prior["generation"],
+            manifest_sha256=manifest["artifact_content_sha256"],
+            manifest_path=prior["manifest_path"]))
+
+
 def verify_file(root, path, expected, *, stop_at):
     before = stat_receipt(path)
     key = R.digest([before, expected])
@@ -1070,9 +1179,9 @@ def native_records(source, source_date, data_root, start=0, *, stop_at):
                     dict(
                         decoded_sha256=decoded_digest.hexdigest(),
                         decoded_bytes=handle.tell(),
-                        physical_sha256=physical.digest.hexdigest(),
+                        physical_sha256=physical.digest.hexdigest() if physical else decoded_digest.hexdigest(),
                     )
-                    if compressed
+                    if compressed or start == 0
                     else None
                 )
                 yield output, handle.tell(), True, dict(gaps), proof
@@ -1579,7 +1688,7 @@ def process_date(data_root, source_date, *, stop_at, clock=time.monotonic):
     generation = R.digest(descriptor)
     cursor = prior
     if cursor.get("generation") != generation:
-        cursor = dict(
+        cursor = rebind_compressed_sources(root, prior, descriptor, stop_at=stop_at) or dict(
             schema=R.VERSION + ":cursor",
             source_date=source_date,
             generation=generation,
@@ -1813,10 +1922,11 @@ def process_date(data_root, source_date, *, stop_at, clock=time.monotonic):
             for key, n in gaps.items():
                 cursor["gaps"][key] = cursor["gaps"].get(key, 0) + n
             if done:
-                if source.get("compressed") and range_proof:
+                if range_proof and "decoded_sha256" in range_proof:
                     cursor.setdefault("stream_receipts", []).append(
                         dict(path=source["path"], **range_proof)
                     )
+                if source.get("compressed") and range_proof:
                     start = cursor["compressed_in_progress"]["partition_start"]
                     cursor["partitions"][start:] = [
                         promote_compressed_partition(root, part)
@@ -1911,6 +2021,7 @@ def process_date(data_root, source_date, *, stop_at, clock=time.monotonic):
             source_dependency_receipts=cursor.get("source_dependency_receipts", []),
             source_ranges=cursor.get("source_ranges", []),
             stream_receipts=cursor.get("stream_receipts", []),
+            representation_parent=cursor.get("representation_parent"),
             **R.AUTH,
         )
     )

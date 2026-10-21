@@ -103,6 +103,106 @@ def write_gzip(path, value):
         handle.write(value)
 
 
+@pytest.mark.parametrize("native", [False, True])
+def test_compression_rebind_preserves_projections_before_cumulative(tmp_path, monkeypatch, native):
+    from src.tests.test_main_market_weakness_research_automation import setup_sources
+    data, trace_path, _ = setup_sources(tmp_path, monkeypatch)
+    paths = [trace_path]
+    if native:
+        body, t = native_capture()
+        trace_path.write_text(json.dumps(t) + "\n")
+        p = data / "ai_decision_payloads" / ("ai_decision_payloads_" + DAY + ".jsonl")
+        p.parent.mkdir(); p.write_text(json.dumps(body) + "\n"); paths.append(p)
+        monkeypatch.setattr(A, "scope_contract", lambda *a, **k: {})
+    A.process_date(data, DAY, stop_at=time.monotonic() + 10)
+    old = A.read_json(A.namespace(data) / DAY / "cursor.json")
+    original = {k: Path(old[k]).read_bytes() for k in ("manifest_path", "daily_path", "terminal_path")}
+    before = A.cumulative(data, stop_at=time.monotonic() + 10)
+    for p in paths:
+        write_gzip(Path(str(p) + ".gz"), p.read_bytes()); p.unlink()
+    assert not A.comparison_current(data, before)
+    monkeypatch.setattr(A, "gzip_trace_records", lambda *a, **k: pytest.fail("trace replayed"))
+    monkeypatch.setattr(A, "native_records", lambda *a, **k: pytest.fail("native replayed"))
+    A.process_date(data, DAY, stop_at=time.monotonic() + 10)
+    new = A.read_json(A.namespace(data) / DAY / "cursor.json")
+    assert new["representation_parent"]["generation"] == old["generation"]
+    assert new["generation"] != old["generation"]
+    assert new["partitions"] == old["partitions"]
+    assert new["gaps"] == old["gaps"] and new["source_census"] == old["source_census"]
+    assert all(Path(old[k]).read_bytes() == raw for k, raw in original.items())
+    assert not A.comparison_current(data, before)
+    after = A.cumulative(data, stop_at=time.monotonic() + 10)
+    assert A.comparison_current(data, after)
+    assert A.process_date(data, DAY, stop_at=time.monotonic() + 5)["delta"] == 0
+
+
+@pytest.mark.parametrize("damage", ["content", "extra", "ranges", "code", "listing", "dependency", "census"])
+def test_compression_rebind_rejects_changed_or_incomplete_evidence(tmp_path, monkeypatch, damage):
+    from src.tests.test_main_market_weakness_research_automation import setup_sources
+    data, p, _ = setup_sources(tmp_path, monkeypatch)
+    A.process_date(data, DAY, stop_at=time.monotonic() + 10)
+    prior = A.read_json(A.namespace(data) / DAY / "cursor.json")
+    raw = p.read_bytes()
+    write_gzip(Path(str(p) + ".gz"), raw.replace(b"BLOCK", b"WAIT_") if damage == "content"
+               else raw + b"{}\n" if damage == "extra" else raw)
+    p.unlink()
+    descriptor = copy.deepcopy(prior["source_descriptor"])
+    descriptor["sources"] = A.source_plan(data, DAY)
+    if damage == "ranges": prior["source_ranges"] = []
+    elif damage == "code": descriptor["code"] = "new-code"
+    elif damage == "listing": descriptor["listing"] = {"semantic_sha256": "changed"}
+    elif damage == "dependency": descriptor["dependencies"] = [{"status": "missing"}]
+    elif damage == "census": prior["source_census"] = {"natural_trace": 999}
+    assert A.rebind_compressed_sources(A.namespace(data), prior, descriptor,
+                                       stop_at=time.monotonic() + 5) is None
+
+
+def test_listing_compression_rebind_checks_native_semantic_hash(tmp_path, monkeypatch):
+    from src.tests.test_main_market_weakness_research_automation import setup_sources
+    data, _, _ = setup_sources(tmp_path, monkeypatch)
+    p = data / "master.json"; p.write_text('{"listing":"KOSPI"}')
+    monkeypatch.setattr(A, "listing_lookup", lambda *a: (lambda _: "KOSPI", A.read_source_json(p)[1]))
+    A.process_date(data, DAY, stop_at=time.monotonic() + 10)
+    old = A.read_json(A.namespace(data) / DAY / "cursor.json")
+    write_gzip(Path(str(p) + ".gz"), p.read_bytes()); p.unlink()
+    A.process_date(data, DAY, stop_at=time.monotonic() + 10)
+    new = A.read_json(A.namespace(data) / DAY / "cursor.json")
+    assert new["representation_parent"]["generation"] == old["generation"]
+    assert A.cursor_current(data, new)
+    write_gzip(Path(str(p) + ".gz"), b'{"listing":"KOSDAQ"}')
+    assert not A.cursor_current(data, new)
+
+
+def test_rebind_cache_avoids_second_read_and_refuses_new_physical_generation(tmp_path, monkeypatch):
+    from src.tests.test_main_market_weakness_research_automation import setup_sources
+    data, p, _ = setup_sources(tmp_path, monkeypatch)
+    A.process_date(data, DAY, stop_at=time.monotonic() + 10)
+    prior = A.read_json(A.namespace(data) / DAY / "cursor.json")
+    archive = Path(str(p) + ".gz")
+    write_gzip(archive, p.read_bytes()); p.unlink()
+    descriptor = dict(prior["source_descriptor"], sources=A.source_plan(data, DAY))
+    first = A.rebind_compressed_sources(A.namespace(data), prior, descriptor, stop_at=time.monotonic() + 5)
+    monkeypatch.setattr(A, "source_handle", lambda *a: pytest.fail("verified archive reread"))
+    assert A.rebind_compressed_sources(A.namespace(data), prior, descriptor, stop_at=time.monotonic() + 5) == first
+    archive.write_bytes(archive.read_bytes()[:-4])
+    with pytest.raises(A.Deferred, match="source_changed"):
+        A.rebind_compressed_sources(A.namespace(data), prior, descriptor, stop_at=time.monotonic() + 5)
+
+
+def test_compression_crc_failure_cannot_publish_successor(tmp_path, monkeypatch):
+    from src.tests.test_main_market_weakness_research_automation import setup_sources
+    data, p, _ = setup_sources(tmp_path, monkeypatch)
+    A.process_date(data, DAY, stop_at=time.monotonic() + 10)
+    cursor = A.namespace(data) / DAY / "cursor.json"
+    original = cursor.read_bytes()
+    archive = Path(str(p) + ".gz")
+    write_gzip(archive, p.read_bytes()); p.unlink()
+    archive.write_bytes(archive.read_bytes()[:-4])
+    with pytest.raises(EOFError):
+        A.process_date(data, DAY, stop_at=time.monotonic() + 5)
+    assert cursor.read_bytes() == original
+
+
 def test_gzip_only_day_discovery_and_reader_without_operating_directory(
     tmp_path, monkeypatch
 ):

@@ -164,3 +164,20 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
   - 인계 원본: [10/15 동일 ID의 Acceptance·이력](2026-10-15-stage2-todo-checklist.md). 원 관측/정책 날짜는 유지하며 미완료를 완료로 바꾸지 않는다.
 
   - 10/19 09:18 현재 보유 경계: 알테오젠196170의 사용자 수동 지정은 해제했으나09:15:08 기존 hard-stop 규칙이-1.51%에서 새 auto_hard_stop_handoff를 생성했다. operator 수동 소유권으로 재등록하지 않으며 hard safety를 임의 해제하지 않는다. 큐리옥스49362 직접 청산은 별도 broker1+2주 영수증/원장0/DB COMPLETED로 닫았다. 최종 observer는 semantic partial, full artifact 검사는 resource contention deferred이므로 전체 건강 완료와 구분한다.
+
+
+## 미완료 원천 진단 인계
+
+- [ ] `[MainMarketWeaknessPostcloseObservation1008] 갱신 원천·label·누적 비교·알림 판정 수용` (`Due: 2026-10-21`, `Slot: POSTCLOSE`, `TimeWindow: 21:40~익일 05:40; 06:30 종료; EOD 우선`, `Track: RuntimeStability`)
+  - Source: [현재 원천·야간 준비 리뷰](../audits/main-market-weakness-source-completeness-and-status-review-2026-10-16.md#2026-10-20-갱신-원천의-야간-재처리와-수용-인계), [운영 계약 §12](../proposals/main-market-weakness-postclose-source-binding-and-candidate-repair-plan-2026-10-13.md#12-2026-10-16-날짜-완전성최신-원천-처리보고-보완-운영-계약), [10/16 원 Acceptance·History](2026-10-16-stage2-todo-checklist.md).
+  - 현재 증거: selected661260e5f·설치 코드 binding/calendar 검증 정상. 발행된 누적793c59fd는12거래일을 포함하지만10/16 trace/payload의 gzip 전환과10/19 machine/aux/export 갱신으로 현재 비교는 false다. 기존21:40 계산 이후8슬롯은 EOD 실행으로 보류됐다. 원 pending0을 현행 완료로 쓰지 않는다.
+  - 실행 준비: 설치된 단일 야간 worker가 새10/20과 갱신10/16·19를 기존 checkpoint/세대로 처리한다. 격리 메타데이터 선택 재현은10/20→10/16→10/19이며 운영 예약/순환은 바꾸지 않았다. 새 원천과 EOD에 따라 실제 진입은 달라진다. 최대9회/예약600초/worker1/512MiB·자식 회수·원 날짜/물리 SHA/CRC·code/calendar·outbox 결속을 유지한다.
+  - 원천 blocker: source19의 기존 label 색인0건, 갱신 상위6개 partition의 재생 확인점0·epoch 미검증493,188행이다. 현재/원 정규화의 허용 epoch는 같고 과거 닫힌 receipt는 `unaccounted_raw_row_exclusion`이다. 책임 경로는 `continuous_reversal_source._source_quality_receipt`→`micro_reversion.observer_source_quality.main_raw_epoch_validation`; raw 제외 증빙 대사 없이 과거 행·label을 승격하지 않는다. 새 정상 원천의 연결과 역사 결손을 분리하고 같은 전체 재생성을 반복하지 않는다.
+  - Acceptance: 기존 압축 논리 원천·exact event/attempt/ask/label·확인 latch·A/B/C/U·W/F/U·기계 역할/보조 이후 CF·후보 고정/semantic ID·배송 불확실 계약을 계승한다. 갱신10/16·19 native currentness→terminal/source hash→현행 누적 대상/pending/invalidated→전향 분모/U 사유→알림 disposition→최신 시도/마지막 계산을 대사한다. 적격0은 정상 보류이며 기계 역할 미지원·원천 결손을0/no-edge로 바꾸지 않는다. 실제 수용 전에는 이 OPEN을 유지하고 다음 일자로 같은 ID·Acceptance·History를 이전한다.
+  - History: 원10/9·10/14 구현/배포,10/15 순환·증거 고정,10/16 완전성·보고 보완289회귀와 해당 원본 이력을 보존한다.10/16 12:09 재결속 후12거래일 처리·177후보/전향 확정0·적격0/미발송을 현재 증거로 분리한다.10/20 빠진 미종결 owner를 복원한 것이며 과거 코드 완료를 새로 재개한 것은 아니다.
+  - 권한·보호: source-only optional 연구이며 strict/PREOPEN/Main 기동 비차단, 장중 추가 계측0·보조 원 입력/응답/패턴·Main/manual/퇴역 경계를 유지한다. 원 strict-bound snapshot SHA7a91512b를 대조해 보존했으며 현재 문서 수정으로 원 영수증을 재봉인하지 않는다. 배포·재기동·provider/주문/정책 적용·수동 Telegram 시험 권한은 추가하지 않는다.
+  - 즉시 복구 지시: 사용자의 후속 지시로 닫힌10/16·19 원천 재집계는 야간을 기다리지 않고 단회 실행한다. 자동 시간창 제한을 운영자 복구까지 확대한 판단을 정정했다. 기존 selected producer/namespace lock·낮은 CPU/I/O 우선순위·worker1·512MiB·단계55초/감독60초·전체180초를 적용하고 heavy owner/선택본 변경 시 중단한다.10/20 미마감 자료·원 상위 보고/원천·정책/strict·기존 cron/순환은 그대로 두며, 실제 결과는 실행 뒤 대사한다.
+  - 16:56 실제 수용: [단회 복구 결과](../audits/main-market-weakness-source-completeness-and-status-review-2026-10-16.md#단회-복구의-실제-소비-결과--165627-kst).10/16·19와 누적을6.992초/자식 peak68.1MiB로 재처리했다. 새 누적fff32327·through19/12거래일은 currentness true·pending/invalidated0·migration false, 두 날짜 terminal/hash/phase completed와 notification→attempt→summary를 확인했다.177후보/전향 resolved0·적격0/not_eligible·실발송0이며 원 epoch/label 결손은 유지한다. 설치/cron 순환·야간 예약·outbox·selector 보존과 단회 예외 종료를 확인했다. 물리 재처리 수용은 끝났고 이 OPEN은 상위 제외 증빙·새 정상 label·전향 근거 수용에 한해 유지한다.
+
+
+  - 10/21 현재 인계: 기존 collector 종료/전건 거부·warmup/terminal 신원 수리를 포함한 후보에 압축 재결속·다음 날 OPEN 인계를 보완했다. 재기동 없이 준비만 하며 운영 연구는 재발행하지 않는다. 과거435,526행 미증명·role_unverified는 유지한다. 실제 전환/optional code binding 갱신 후 새 closed→replay/label→누적 currentness→알림 disposition의 자연 수용을 확인한다. [원인·회귀·준비](../audits/main-market-weakness-source-completeness-and-status-review-2026-10-16.md#압축-재결속수집-증빙일일-인계-배포-후보--2026-10-21).

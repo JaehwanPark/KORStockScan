@@ -1791,7 +1791,8 @@ def _carry_open_semantic_owners(
     is never recreated because economics are unavailable, and a target-day
     operator disposition takes precedence. Keep the original body verbatim.
     """
-    owners = {"HoldingProfitExitSourceContractRepair", "InitialQuantityProducerConsumerRepair1010"}
+    owners = {"HoldingProfitExitSourceContractRepair", "InitialQuantityProducerConsumerRepair1010",
+              "MainMarketWeaknessPostcloseObservation1008"}
     target_ids = _task_ids_from_text(existing)
     target_matches = re.findall(r"^- \[[ xX]\] `\[([A-Za-z0-9_:-]+)\]", existing, re.MULTILINE)
     if any(target_matches.count(owner) > 1 for owner in owners):

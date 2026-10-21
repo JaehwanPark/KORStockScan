@@ -38,3 +38,33 @@
 - 다음 허용 야간의 latest/backlog 실제 진전, 미시작 pending 해소, 남은 source gap, migration 종료, 누적 비교와 알림 disposition이 자연 수용이다. 적격 0은 정상 보류이며 코드 통과·커밋·배포가 조정 수치 검증이나 Telegram 배송·경제성을 증명하지 않는다. 원 `MainMarketWeaknessPostcloseObservation1008` OPEN을 유지한다.
 
 최종 자체 리뷰에서 위 구현·producer/consumer·원천 변경·초기 반환·압축 rollback·권한 경계의 미해결 소견은 0이다. 운영 배포와 실제 야간 수용은 위 owner의 별도 잔여 작업이다. 커밋 준비 중 다른 세션의 selected release가 `580d5865b568c36331bbeed69ee65de9fc6c137a`로 진행했음을 관측했다. 수리 소스·회귀·계획의 원본이 새 부모와 같은지 확인했고, 커밋의 체크리스트는 새 부모의 추가 인계도 보존한 상태에서 약세 보완 한 줄만 추가한다. 임시 index와 별도 branch로 생성하며 이 세션은 주 작업 branch/기존 staging 또는 selected release를 변경하지 않는다.
+
+
+## 압축 재결속·수집 증빙·일일 인계 배포 후보 — 2026-10-21
+
+사용자 지시: 재기동 없이 배포본 준비만 실행한다. 기준 commit `faa67a01dbe6805c4b0219ec51e5cbf60b558f4e`에 이미 준비한 collector 종료/거부 전건 증빙·최초 자연 종료 전환과 지연 부모 호환성 수리를 포함한다. 격리 작업본 `KORStockScan-worktrees/weakness-source-handoff-20261021`에서 수정했으며 운영 selector는 ea68c5a85, Main PID1724066/start19233026으로 고정했다.
+
+### 원인과 수리
+
+- source20의 4개 normalized partition에 `source_epoch_unverified` 435,526행이 남아 있다. native close는 epoch1792493874709471241만 승인하며 해당 receipt SHA는7da52736cd1ce66406b82f621058645a71277cca6edfa35f523081bbc1e7d3d4다. normalized 행 제외를 detector 오판으로 취급하지 않는다. 앞선 collector cooperative shutdown·전건 rejection journal 수리가 후보 ancestry에 있으며 64/65/121건·reconnect와 손상/다른 PID·epoch·날짜 거부를 기존 정상화 소비자까지 검증했다. 현재 ea68 epoch는 유지하며 실제 새 closed·label 연결은 자연 수용 OPEN이다. 원 normalized 파일은 다시 만들지 않았다. 대형 normalized JSON의 추가 census는 기존32MiB 읽기 한도에 도달해 중단했고, 결론에는 원 frozen report의 행수·해시를 사용했다.
+- source19 cursor196832a7은 원 trace/payload의 gzip 전환과 master 물리 파일 교체로 current=false다. master semantic hash c20d31bf는 같지만 기존 currentness는 물리 결속을 요구한다. `process_date`의 무조건 초기화 분기를 보완하여 완전한 원 읽기 해시·동일 코드/의존성·원 sealed 집계가 검증된 압축 전환만 projection을 재사용한다. gzip EOF/CRC와 전체 길이를 검증하고 기존 캐시에 세대별 증명을 보존한다. successor manifest→daily/terminal→cumulative를 통해 재결속하며 기존 산출물은 수정하지 않는다. 미래 plain native 수집도 같은 읽기에서 전체 증거 해시를 전달한다. 과거 native 읽기 해시가 없는10/19와 코드가 달라진 날짜는 정상 bounded 재처리가 필요하며, 이번 준비 작업은 운영 current=false를 해제하지 않았다.
+- checklist builder `_carry_open_semantic_owners`의 제한 목록에 약세 연구 owner가 빠져 있었다. 같은 ID를 추가하고 OPEN/완료/target 우선·중복 및 원 Acceptance/History 보존을 검증한다. 원 strict-bound72fe9d12 snapshot을 native `preserve_checklist`로 검증한 후10/21 owner를 복원했다.
+- 09:21 삼성전자 admission `FIXED-2026-10-21-005930-krx_regular-krx_nxt_integrated-63b8313a9eec`, generation3b66be93의 첫 warmup 서명 누락은 현재 ea68 및 후보에 기존 수리가 포함돼 있다. 기존 Main producer→pipeline→strict monitor와 rejected native claim→trace/guard/nonentry 회귀를 검증한다. 별도 관측 우회나 매매 기준 변경을 추가하지 않았다. 원 사건/누락 snapshot은 원본으로 유지하며 새 자연 영수증 수용을 테스트 결과로 대신하지 않는다.
+
+### 리뷰·대체·검증·인계
+
+원 구현으로 새 회귀를 실행하면 압축 재결속3건과 OPEN 인계1건이 실패했다. 수정 후 producer/consumer 관련9suite는1687 PASS였다. 재리뷰에서 원 cursor 집계까지 sealed daily/terminal과 대조하도록 보강했고, legacy native 없는 집계의0 기본값을 동일한 계약으로 보완했다. 최종 영향4suite274 PASS; CRC 손상·내용/길이/코드/마스터/의존성/집계 변경 거부, 원 cursor 보존, 동일 archive 재독0을 포함한다. 워밍업 source signature producer의 별도 회귀와 최종 candidate native checks 결과는 아래 준비 증거에 기록한다. provider/order/Telegram 호출은0이다.
+
+| 기존 경로 | 처분 | 근거와 현재 consumer |
+| --- | --- | --- |
+| `process_date`의 모든 descriptor 변경 초기화 | consolidated | 동일 함수가 증명된 압축 변경에만 완료 projection을 재사용한다. 내용·코드 변경 및 증거 없는 legacy에는 기존 재생 경로를 유지한다. |
+| native reader의 plain EOF 증거 누락 | removed | 같은 reader가 기존 읽기에서 전량 해시를 반환하고 기존 stream_receipts manifest가 보존한다. |
+| checklist의 두-owner 제한 목록 | consolidated | 같은 builder에 약세 OPEN을 포함한다. 별도 checklist 생성기/등록은 없다. |
+| 기존 collector close/거부 journal·신원 전달·엄격 detector | retained | 실제 native 정상화/trace/monitor 소비 계약에 필요하며 이미 준비된 수리를 재사용한다. |
+| nightly wrapper·CLI·일정·재처리 reader·원 역사 증거 | retained | 기존 scheduled consumer와 legacy/changed-source 복구에 필요하다. 새 module/worker/CLI/dispatch는0, 삭제 유예는0이다. |
+
+운영 연구 재집계·optional installer 재결속·정책 발행·selector 선택·재기동·자동 전환 예약은 실행하지 않는다. 후보 code closure와 실제 새 PID/closed epoch/전향 label/비용 후 경제성은 별개다. 기존 `role_unverified`·U·수집 미증명 행은 유지한다. 다음 전환 시 native 정책/currentness를 재검증하고 자기 optional code binding을 갱신한 뒤, 기존 야간 worker의 날짜별 source→누적→알림 disposition을 같은 OPEN owner에서 수용한다.
+
+근거: [원 incident 대사](../../tmp/weakness-source-handoff-20261021/incident.json), [원 코드 실패](../../tmp/weakness-source-handoff-20261021/baseline-regression.txt), [관련 회귀](../../tmp/weakness-source-handoff-20261021/regression.txt), [보완 후 회귀](../../tmp/weakness-source-handoff-20261021/supplemental-regression.txt), [최종 준비 영수증](../../tmp/weakness-source-handoff-20261021/final-candidate/readiness.json). 이 마지막 영수증이 clean candidate/정확한 commit·native handoff·parity·보호 파일/PID 대사를 소유한다.
+
+최종 정적 검증: 별도 fixed-watch producer/terminal135 PASS, compile·diff PASS, print-only parser23항목 중 해당 현재 owner1건이다. 기준faa67a01d 대비 비테스트 소스2파일 +117/-5, 테스트2파일 +106/-4, 문서3파일 +58/-0; 이동0·새 모듈0·신규 진입점0이다. 순증은 기존 owner 내부의 압축 원문/CRC·sealed 집계 검증과 회귀, 기존 Acceptance/History 인계 및 감사 기록이다. 다른 canonical 변경은 이 커밋에 포함하지 않는다.
