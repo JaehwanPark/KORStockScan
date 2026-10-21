@@ -450,6 +450,8 @@ def test_reused_observation_item_reads_exact_view_through_pre_machine_check(
         ai_engine=SimpleNamespace(analyze_target=lambda *_args, **_kwargs: {
             "machine_evaluation_status": "assessment_contract_invalid",
             "machine_contract_error": "missing_stock_code",
+            "provider_called": False,
+            "continuous_reversal_rejected_claim_receipt": {"sha256":"preserved-native-proof"},
             **timing,
         }),
         token="token", now=lambda: 11,
@@ -466,6 +468,8 @@ def test_reused_observation_item_reads_exact_view_through_pre_machine_check(
     assert result["reason"] != "route_snapshot_missing"
     assert reads == [("123456", "123456_AL")] * 4
     assert result["machine_evaluation_status"] == "assessment_contract_invalid"
+    assert result["provider_called"] is False
+    assert result["continuous_reversal_rejected_claim_receipt"] == {"sha256":"preserved-native-proof"}
     assert result.get("machine_input_trace", {}) == timing
     if timing:
         timing["entry_machine_input_preparation_stages_ms"]["policy_resolve_ms"] = 99

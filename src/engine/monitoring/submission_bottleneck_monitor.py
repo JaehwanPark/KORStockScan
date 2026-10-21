@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import copy
 import fcntl
 import hashlib
@@ -618,9 +619,107 @@ def _auxiliary_cost_receipt_valid(row):
                     for name in ("entry_cost_contract_sha256", "entry_cost_replay_context_sha256")))
 
 
+def _observer_lifecycle_diagnostic(row, receipt):
+    """Prove an exact native hold breach; a removed ready alone proves nothing."""
+    try:
+        from src.engine.scalping.continuous_reversal import good_quote
+        from src.engine.scalping.reversal_extended_catalog import cell_key
+        from src.engine.scalping.entry_machine_source_recovery import _digest
+        root = receipt['original_root']
+        selection = receipt['native_selection']
+        life = selection['original_signal_lifecycle']
+        latest = life['latest_native_observation']
+        at, ended = receipt['observed_epoch'], life['first_ineligible_seen']
+        trace_at = stamp(row['decision_ts']).timestamp()
+        family, bundle = receipt['family_sha256'], receipt['machine_bundle_sha256']
+        actor = [str(receipt[k]) for k in ('process_pid', 'process_start_ticks')]
+        scope = life['scope']
+        branches, floors = root['branch_signals'], life['branch_hold_floors']
+        route = {'KRX': ('', 'krx_only'), 'NXT': ('_NX', 'nxt_only'),
+                 'SOR': ('_AL', 'krx_nxt_integrated')}[root['venue']]
+        if (not all(type(v) in (int,float) and math.isfinite(v) and v > 0 for v in
+                    (at, ended, root['epoch'], latest[0], latest[3], latest[4], latest[5]))
+                or not all(type(v) is int and v >= 0 for v in
+                    (root['native_epoch'], root['native_sequence'], latest[1], latest[2], selection['native_sequence']))
+                or receipt['status'] != 'observed'
+                or receipt['sha256'] != _digest({k:v for k,v in receipt.items() if k != 'sha256'})
+                or not all(re.fullmatch('[0-9a-f]{64}', str(v)) for v in (family, bundle, root['registry_generation']))
+                or receipt['failure_cause'] != row.get('machine_contract_error')
+                or receipt['failure_cause'] != 'machine_source_quote_observer_native_root_changed'
+                or not row.get('evaluation_attempt_id')
+                or receipt['evaluation_attempt_id'] != row['evaluation_attempt_id']
+                or bundle != row.get('machine_bundle_sha256') or life['bundle_sha256'] != bundle
+                or row.get('provider_called') is not False or row.get('actual_order_submitted') is True
+                or any(receipt.get(k) is not False for k in ('runtime_effect','allowed_runtime_apply','actual_order_submitted'))
+                or receipt.get('broker_order_forbidden') is not True
+                or not all(v.isdigit() and int(v) > 0 for v in actor)
+                or any([str(r.get(k)) for k in ('process_pid','process_start_ticks')] != actor for r in (selection, life))
+                or (_row_actor(row) is not None and _row_actor(row) != actor)
+                or root['symbol'] != row.get('stock_code')
+                or root['source_item'] != root['symbol'] + route[0] or row.get('market_data_route') != route[1]
+                or scope[:4] != [root['symbol'], root['venue'], root['source_item'], root['market']]
+                or scope[4] != stamp(row['decision_ts']).date().isoformat()
+                or scope[5] != cell_key(root['symbol'], root['market'], root['confirmation_price'])
+                or selection['selected_scope'] != scope[5]
+                or life['scope_execution_hash'] != root['registry_generation']
+                or selection['scope_execution_hash'] != root['registry_generation']
+                or selection['family_sha256'] != family or life['family_sha256'] != family
+                or selection['item'] != root['source_item'] or selection['venue'] != root['venue']
+                or selection['observed_epoch'] != at or selection['native_source_current'] is not True
+                or selection['native_quote_current'] is not True
+                or selection['native_epoch'] != root['native_epoch']
+                or not 0 <= at-selection['native_last_received_epoch'] <= 3
+                or selection['native_sequence'] < latest[2]
+                or not root['epoch'] <= life['first_eligible_seen'] <= life['last_eligible_seen'] < ended <= at <= trace_at
+                or not at < receipt['original_deadline_epoch'] == life['original_deadline'] == root['epoch']+5
+                or trace_at-at > 5 or latest[0] != ended or not good_quote(latest)
+                or latest[1] != root['native_epoch'] or latest[2] <= root['native_sequence'] or latest[9] != root['source_item']
+                or life['native_epoch'] != root['native_epoch'] or life['native_sequence'] != root['native_sequence']
+                or life['native_event_id'] != root['event_id'] or life['signal_id'] != root['signal_id']
+                or life['epoch'] != root['epoch'] or life['continuous_ingress'] is not True
+                or life['claimed'] is not False or life['selector_claimed'] is not False
+                or life['terminal'] not in {'invalidated_before_claim','replaced_before_claim'}
+                or life['terminal_reason'] != 'first_price_hold_breached' or life['ready_membership_present'] is not False
+                or not branches or set(branches) != set(floors) or set(branches) != set(life['branch_survival'])
+                or any(life['branch_survival'][bid] is not False or signal['decision_phase'] != 'FIRST_PRICE_HOLD'
+                    or type(floors[bid]) not in (int,float) or not math.isfinite(floors[bid])
+                    or not 0 < latest[3] < floors[bid] == signal['signal_proof']['price']
+                    for bid,signal in branches.items())):
+            return None
+        for pid_key, start_key in (('async_producer_pid','async_producer_start_ticks'),
+                                   ('process_pid','process_start_ticks'), ('pid','process_start_ticks')):
+            if any(row.get(k) is not None for k in (pid_key,start_key)) and [str(row.get(k)) for k in (pid_key,start_key)] != actor:
+                return None
+        if row.get('stage') == 'zero_base_probe_result':
+            fields = row['fields']
+            reference = fields['native_observation_reference']
+            if isinstance(reference, str):
+                if len(reference) > 65536:
+                    return None
+                try: reference = json.loads(reference)
+                except ValueError: reference = ast.literal_eval(reference)
+            if (str(fields['zero_base_producer_pid']) != actor[0]
+                    or [str(reference.get(k)) for k in ('observer_pid','observer_start_ticks')] != actor
+                    or reference['family_sha256'] != family
+                    or reference['deadline_epoch'] != receipt['original_deadline_epoch']):
+                return None
+        current = receipt.get('current_root')
+        if current is not None and (current.get('signal_id') == root['signal_id']
+                or any(current.get(k) != root[k] for k in
+                    ('symbol','venue','market','source_item','native_epoch','registry_generation'))
+                or not root['native_sequence'] < current['native_sequence'] <= selection['native_sequence']
+                or not root['epoch'] < current['epoch'] <= at):
+            return None
+        return 'reversal_first_price_hold_invalidated'
+    except (KeyError, TypeError, ValueError, SyntaxError, IndexError, AttributeError, OverflowError):
+        return None
+
+
 def _reversal_lifecycle_diagnostic(row):
     """Only exact, intact rejection evidence can classify a normal lifecycle miss."""
     receipt = row.get("continuous_reversal_rejected_claim_receipt")
+    if isinstance(receipt, dict) and receipt.get('schema') == 'entry_source_quote_observer_rejection_v1':
+        return _observer_lifecycle_diagnostic(row, receipt)
     if (row.get("provider_called") is not False or row.get("actual_order_submitted") is True
             or not isinstance(receipt, dict) or receipt.get("status") != "observed"
             or receipt.get("schema") not in {"continuous_reversal_claim_source_receipt_v1",
@@ -830,7 +929,6 @@ def _probe_identity(row):
 
 def _probe_verified_no_match(row, *, allow_incomplete=False, feature_gap=False, historical=False):
     """A native FALSE observation proves coverage, never machine/AI acceptance."""
-    import ast
     try:
         fields = row['fields']
         result=fields.get('zero_base_probe_result')
@@ -944,7 +1042,6 @@ def _probe_verified_no_match(row, *, allow_incomplete=False, feature_gap=False, 
 
 def _probe_verified_pending(row, *, feature_gap=False):
     """Verify native incomplete outcomes; UNKNOWN never becomes an assessment."""
-    import ast
     if not _probe_verified_no_match(row, allow_incomplete=True, feature_gap=feature_gap):
         return None
     try:
@@ -1040,7 +1137,6 @@ def _probe_verified_pending(row, *, feature_gap=False):
 
 def _probe_verified_history(row):
     """Historical evaluations prove neither current executable data nor no-match."""
-    import ast
     if not _probe_verified_no_match(row, allow_incomplete=True, historical=True):
         return None
     try:
@@ -1362,8 +1458,28 @@ def source_gap_semantics(data_root, now, *, tail_bytes=SOURCE_TAIL_BYTES, _loade
                 else contract_error
             ) or (
                 "contract_error_receipt_missing" if reason == "assessment_contract_invalid" else reason)
+            receipt = fields.get('continuous_reversal_rejected_claim_receipt')
+            if isinstance(receipt, str) and len(receipt) <= 65536:
+                try:
+                    receipt = json.loads(receipt)
+                except ValueError:
+                    try: receipt = ast.literal_eval(receipt)
+                    except (ValueError, SyntaxError): receipt = None
+            lifecycle = _reversal_lifecycle_diagnostic(dict(row, decision_ts=row.get('emitted_at'),
+                evaluation_attempt_id=fields.get('evaluation_attempt_id'),
+                machine_bundle_sha256=fields.get('machine_bundle_sha256'), market_data_route=route,
+                machine_contract_error=contract_error,
+                provider_called=False if (fields.get('provider_called') is False
+                    or fields.get('provider_called') == 'False') else None,
+                continuous_reversal_rejected_claim_receipt=receipt))
+            if lifecycle:
+                kind = lifecycle
+                # Proven invalidation ends this assessment opportunity. It is
+                # neither a missing capture nor a covered/no-match observation.
+                probe_by_route[str(route or 'UNKNOWN')] -= 1
+                observed['probe_native_invalidated'] += 1
             record("machine_probe", kind, row,
-                   diagnostic=kind == "trusted_tape_source_insufficient",
+                   diagnostic=bool(lifecycle) or kind == "trusted_tape_source_insufficient",
                    code=row.get("stock_code"), route=route)
     for route, count in probe_by_route.items():
         if sources["probe"]["status"] != "complete" or count < 10:
@@ -3950,6 +4066,8 @@ def observation_health_projection(result):
     allowed_diagnostics.update('machine_trace:' + reason for reason in
         ('reversal_first_signal_invalidated', 'reversal_signal_generation_changed',
          'entry_machine_input_deadline_expired'))
+    allowed_diagnostics.update(stage + ':reversal_first_price_hold_invalidated'
+                               for stage in ('machine_probe', 'machine_trace'))
     pending = obj(gap.get('native_pending_observations'))
     pending_n = obj(gap.get('observed')).get('probe_observation_incomplete', 0)
     valid_pending = (pending.get('schema') == 'submission_monitor_native_pending_census_v1'
@@ -4025,7 +4143,8 @@ def observation_health_projection(result):
         and set(observed) <= {'probe_results', 'probe_assessed', 'entry_traces', 'machine_assessed',
             'auxiliary_required', 'auxiliary_called', 'auxiliary_cost_bound',
             'auxiliary_pending', 'auxiliary_pending_bound', 'auxiliary_transport_unavailable',
-            'probe_observation_incomplete', 'probe_native_no_match', 'probe_feature_missing', 'probe_history_only'}
+            'probe_observation_incomplete', 'probe_native_no_match', 'probe_feature_missing', 'probe_history_only',
+            'probe_native_invalidated'}
         and all(count(v) for v in observed.values()))
     expected_gap = ('gap_observed' if diagnostics or gap.get('issues') else 'observed_no_gap' if any(observed.values())
                     else 'unobservable')

@@ -718,6 +718,7 @@ def test_observer_root_rejection_retains_both_roots_without_admitting_or_retryin
     from src.engine.scalping import reversal_source_diagnostics as diagnostics
     root=dict(symbol='005930',venue='KRX',market='krx_regular',event_id='event',signal_id='signal',
         epoch=NOW,native_epoch=7,native_sequence=42,source_item='005930',entry_ask=100,
+        registry_generation='c'*64,confirmation_price=100,
         branch_signals={'G1':{'signal_id':'original'}})
     observation=dict(schema='entry_source_quote_observer_v1',snapshot=[root,{}],family_sha256='a'*64,
         observer_pid=123,observer_start_ticks='456',deadline_epoch=NOW+5)

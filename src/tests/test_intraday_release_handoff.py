@@ -1792,12 +1792,13 @@ def test_source_reader_handoff_preserves_issued_policy_and_exact_dependencies(tm
         names.update(variant['dependencies'])
     names.update(handoff.REVIEWED_SOURCE_READER_HASHES)
     if generation!='source_reader':names.update(handoff.REVIEWED_SOURCE_INTEGRATION_HASHES)
-    if generation in ('original_gap','incident_order','product_intake','sqlite_lifecycle','retired_review','clean_sqlite','delay_cleanup','role_latency','startup_budget','delay_shutdown','routed_reuse','source_epoch','closed_observer','postclose_repair','logical_pipeline','historical_resolution','finalization_health'):names.update(handoff.REVIEWED_ORIGINAL_GAP_HASHES)
-    if generation in ('product_intake','sqlite_lifecycle','retired_review','clean_sqlite','delay_cleanup','role_latency','startup_budget','delay_shutdown','routed_reuse','source_epoch','closed_observer','postclose_repair','logical_pipeline','historical_resolution','finalization_health'):names.update(handoff.REVIEWED_PRODUCT_INTAKE_HASHES)
+    if generation in ('original_gap','incident_order','product_intake','sqlite_lifecycle','retired_review','clean_sqlite','delay_cleanup','role_latency','startup_budget','delay_shutdown','routed_reuse','source_epoch','closed_observer','postclose_repair','logical_pipeline','historical_resolution','finalization_health','native_invalidation'):names.update(handoff.REVIEWED_ORIGINAL_GAP_HASHES)
+    if generation in ('product_intake','sqlite_lifecycle','retired_review','clean_sqlite','delay_cleanup','role_latency','startup_budget','delay_shutdown','routed_reuse','source_epoch','closed_observer','postclose_repair','logical_pipeline','historical_resolution','finalization_health','native_invalidation'):names.update(handoff.REVIEWED_PRODUCT_INTAKE_HASHES)
     if generation in ('sqlite_lifecycle','clean_sqlite'):names.update(handoff.REVIEWED_SQLITE_LIFECYCLE_HASHES)
-    if generation in ('retired_review','clean_sqlite','delay_cleanup','role_latency','startup_budget','delay_shutdown','routed_reuse','source_epoch','closed_observer','postclose_repair','logical_pipeline','historical_resolution','finalization_health'):names.update(handoff.REVIEWED_RETIRED_REVIEW_HASHES)
-    if generation in ('delay_cleanup','role_latency','startup_budget','delay_shutdown','routed_reuse','source_epoch','closed_observer','postclose_repair','logical_pipeline','historical_resolution','finalization_health'):
-        for variant in (handoff.REVIEWED_FINALIZATION_HEALTH_DEPENDENCY_VARIANTS if generation=='finalization_health' else
+    if generation in ('retired_review','clean_sqlite','delay_cleanup','role_latency','startup_budget','delay_shutdown','routed_reuse','source_epoch','closed_observer','postclose_repair','logical_pipeline','historical_resolution','finalization_health','native_invalidation'):names.update(handoff.REVIEWED_RETIRED_REVIEW_HASHES)
+    if generation in ('delay_cleanup','role_latency','startup_budget','delay_shutdown','routed_reuse','source_epoch','closed_observer','postclose_repair','logical_pipeline','historical_resolution','finalization_health','native_invalidation'):
+        for variant in (handoff.REVIEWED_NATIVE_INVALIDATION_DEPENDENCY_VARIANTS if generation=='native_invalidation' else
+                handoff.REVIEWED_FINALIZATION_HEALTH_DEPENDENCY_VARIANTS if generation=='finalization_health' else
                 handoff.REVIEWED_HISTORICAL_RESOLUTION_DEPENDENCY_VARIANTS if generation=='historical_resolution' else
                 handoff.REVIEWED_LOGICAL_PIPELINE_DEPENDENCY_VARIANTS if generation=='logical_pipeline' else
                 handoff.REVIEWED_POSTCLOSE_REPAIR_DEPENDENCY_VARIANTS if generation=='postclose_repair' else
@@ -1812,10 +1813,10 @@ def test_source_reader_handoff_preserves_issued_policy_and_exact_dependencies(tm
     names.add('src/engine/automation/intraday_release_handoff.py')
     for name in names:
         path = root/name; path.parent.mkdir(parents=True,exist_ok=True)
-        path.write_bytes((canonical/name).read_bytes() if generation=='finalization_health' or
+        path.write_bytes((canonical/name).read_bytes() if generation=='native_invalidation' or
             name=='src/engine/automation/intraday_release_handoff.py' else subprocess.check_output(
                 ['git','-C',str(canonical),'show',
-                 ({'historical_resolution':'e427676c4','logical_pipeline':'6d259b5a09', 'postclose_repair':'0cfd32827','closed_observer':'04e19bad0','source_epoch':'88351a078','routed_reuse':'68213dd10','delay_shutdown':'49ef280dc','startup_budget':'105f6f031','role_latency':'6e037d078','source_reader':'0255cb05f','incident_order':'041caf05e','product_intake':'21d822a64',
+                 ({'finalization_health':'6978f78c1','historical_resolution':'e427676c4','logical_pipeline':'6d259b5a09', 'postclose_repair':'0cfd32827','closed_observer':'04e19bad0','source_epoch':'88351a078','routed_reuse':'68213dd10','delay_shutdown':'49ef280dc','startup_budget':'105f6f031','role_latency':'6e037d078','source_reader':'0255cb05f','incident_order':'041caf05e','product_intake':'21d822a64',
                    'sqlite_lifecycle':'c550a4c43','retired_review':'3d8abd012','clean_sqlite':'0ce816f7c','delay_cleanup':'661260e5f'}.get(generation,'99c51c85f'))
                  +':'+os.path.normpath(name)]))
     original = {key: hashlib.sha256(subprocess.check_output(
@@ -1828,20 +1829,27 @@ def test_source_reader_handoff_preserves_issued_policy_and_exact_dependencies(tm
                         'commit','-qm','source reader generation'],check=True)
         return subprocess.check_output(['git','-C',str(root),'rev-parse','HEAD'],text=True).strip()
     revision = commit()
-    reader = root/reader_path
-    if fault == 'missing': reader.unlink()
-    elif fault == 'parent_mix':
-        parent = ('e427676c4' if generation == 'finalization_health' else '6d259b5a09' if generation == 'historical_resolution' else '0cfd32827' if generation == 'logical_pipeline' else '04e19bad0' if generation == 'postclose_repair' else origin if generation == 'routed_reuse'
-                  and reader_path in handoff.REVIEWED_ROUTED_REUSE_HASHES else '21d822a64')
-        reader.write_bytes(subprocess.check_output(['git','-C',str(canonical),'show',parent+':'+reader_path]))
-        revision=commit()
-    elif fault:
-        reader.write_bytes(reader.read_bytes()+b'\nUNREVIEWED_READER = True\n')
-        if fault == 'committed_change': revision = commit()
-    if fault:
-        with pytest.raises(ValueError):
-            handoff._verify_entry_code_delta(root,revision,origin,inventory,expected)
-    else:
+    # The new seven-file successor uses one clone per family/fault. Each
+    # mutation is isolated and restored before checking the next exact owner.
+    handoff._verify_entry_code_delta(root,revision,origin,inventory,expected)
+    for reader_name in (reader_path if isinstance(reader_path, tuple) else (reader_path,)):
+        reader = root/reader_name
+        original_bytes = reader.read_bytes()
+        if fault == 'missing': reader.unlink()
+        elif fault == 'parent_mix':
+            parent = ('e0d07d4ab' if generation == 'native_invalidation' else 'e427676c4' if generation == 'finalization_health' else '6d259b5a09' if generation == 'historical_resolution' else '0cfd32827' if generation == 'logical_pipeline' else '04e19bad0' if generation == 'postclose_repair' else origin if generation == 'routed_reuse'
+                      and reader_name in handoff.REVIEWED_ROUTED_REUSE_HASHES else '21d822a64')
+            reader.write_bytes(subprocess.check_output(['git','-C',str(canonical),'show',parent+':'+reader_name]))
+            revision=commit()
+        elif fault:
+            reader.write_bytes(reader.read_bytes()+b'\nUNREVIEWED_READER = True\n')
+            if fault == 'committed_change': revision = commit()
+        if fault:
+            with pytest.raises(ValueError):
+                handoff._verify_entry_code_delta(root,revision,origin,inventory,expected)
+            reader.write_bytes(original_bytes)
+            if fault in ('committed_change', 'parent_mix'):
+                revision=commit()
         handoff._verify_entry_code_delta(root,revision,origin,inventory,expected)
 
 
@@ -2020,3 +2028,10 @@ def test_historical_resolution_handoff_keeps_full_native_boundary(tmp_path, fami
 def test_finalization_health_handoff_keeps_issued_profiles_and_exact_successor(tmp_path, family, source, fault):
     test_source_reader_handoff_preserves_issued_policy_and_exact_dependencies(
         tmp_path, family, fault, source, 'finalization_health')
+
+
+@pytest.mark.parametrize('family', ['main_stop', 'holding_vote', 'pre_submit_delay'])
+@pytest.mark.parametrize('fault', [None, 'missing', 'dirty', 'committed_change', 'parent_mix'])
+def test_native_invalidation_handoff_binds_complete_observation_successor(tmp_path, family, fault):
+    test_source_reader_handoff_preserves_issued_policy_and_exact_dependencies(
+        tmp_path, family, fault, tuple(handoff.REVIEWED_NATIVE_INVALIDATION_HASHES), 'native_invalidation')

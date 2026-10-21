@@ -557,3 +557,170 @@ def test_unjoinable_identity_does_not_abort_other_research_rows():
     result = L.native_lifecycle_outcomes([invalid, research_record()], window_reader=lambda ref: None)
     assert result['outcomes'][0]['reason'] == 'exact_identity_missing'
     assert result['outcomes'][1]['reason'] == 'indexed_source_missing'
+
+
+@pytest.fixture
+def hold_invalidation(native, monkeypatch):
+    """Exercise the real ready survival rule, without reconstructing qualification."""
+    from src.engine.scalping.reversal_extended_state import State
+    from src.engine.scalping import reversal_current_backend
+    bid = 'manual_residual_0d7e29b0230e5b49'
+    family, bundle, generation = 'a'*64, 'b'*64, 'c'*64
+    item, symbol, venue, market = '066970_NX', '066970', 'NXT', 'PRE'
+    band = C.cell_key(symbol, market, 100100)
+    scope = (symbol, venue, item, market, '2026-10-12', band)
+    state = State(branch_ids=[bid], generation=generation)
+    def tick(seq, price, **changes):
+        row = quote(seq, stamp=T+seq*.1, price=price)
+        row[9] = item
+        for key, value in changes.items(): row[int(key)] = value
+        state.observe(row, symbol=symbol, venue=venue, session='NXT_PREMARKET')
+        return row
+    tick(0, 100100)
+    eid = '2026-10-12:NXT:NXT_PREMARKET:066970:1:0'
+    event = dict(epoch=T, event_id=eid, signal_id=eid, native_epoch=1, native_sequence=0,
+        symbol=symbol, source_item=item, venue=venue, market=market, confirmation_price=100100,
+        registry_generation=generation, entry_ask=100100,
+        branch_signals={bid: dict(decision_phase='FIRST_PRICE_HOLD', signal_proof={'price':100100})})
+    state.ready.append(dict(event=deepcopy(event), claimed=False, path_inputs={}))
+    carried = SimpleNamespace(_LOCK=threading.RLock(), _STATES={}, _GENERATION='d'*64,
+                              __name__='registered')
+    backend = SimpleNamespace(__name__='reversal_operating_runtime', _LOCK=threading.RLock(),
+        _STATES={scope: state}, _GENERATION=family, R=carried,
+        _FAMILY=dict(schema='continuous_reversal_policy_v6', family_sha256=family,
+            native_parent_bundle={'continuous_reversal':{'family_sha256':'d'*64}},
+            machine_cells={band:{'routes':{venue:dict(backend='union_v6', scope_execution_hash=generation,
+                payload={'branches':[{'branch_id':bid}]})}}}))
+    monkeypatch.setattr(R, '_GENERATION', bundle)
+    monkeypatch.setattr(reversal_current_backend, 'backend', lambda *a: backend)
+    R.record_native_ready(backend, *scope[:4], T)
+    return backend, state, event, tick
+
+
+def test_real_hold_breach_records_terminal_and_does_not_resurrect(hold_invalidation):
+    backend, state, event, tick = hold_invalidation
+    tick(1, 100000)
+    assert not state.ready
+    R.record_native_ready(backend, '066970', 'NXT', '066970_NX', 'PRE', T+.1)
+    life = next(iter(R._SELECTED_READY.values()))
+    assert life['terminal'] == 'invalidated_before_claim'
+    assert life['terminal_reason'] == 'first_price_hold_breached'
+    assert life['branch_survival'] == {next(iter(event['branch_signals'])):False}
+    original = deepcopy(life)
+    tick(2, 100100)
+    R.record_native_ready(backend, '066970', 'NXT', '066970_NX', 'PRE', T+.2)
+    assert next(iter(R._SELECTED_READY.values())) == original
+    assert not state.ready and life['original_deadline'] == T+5
+
+
+@pytest.mark.parametrize('damage', ['source','epoch','gap','generation','unknown_removal','quote'])
+def test_hold_terminal_never_upgrades_invalid_or_unobserved_source(hold_invalidation, damage):
+    backend, state, event, tick = hold_invalidation
+    changes = {'source':{'8':False},'epoch':{'1':2},'quote':{'5':None}}.get(damage,{})
+    tick(2 if damage=='gap' else 1, 100100 if damage=='unknown_removal' else 100000, **changes)
+    if damage=='generation':state.generation='e'*64
+    if damage=='unknown_removal':state.ready.clear()
+    R.record_native_ready(backend, '066970', 'NXT', '066970_NX', 'PRE', T+(.2 if damage=='gap' else .1))
+    life=next(iter(R._SELECTED_READY.values()))
+    assert life['terminal_reason'] != 'first_price_hold_breached'
+
+
+def _hold_rejection(hold_invalidation, monkeypatch):
+    from src.engine.scalping import entry_machine_source_recovery as recovery
+    backend, state, event, tick = hold_invalidation
+    tick(1, 100000)
+    R.record_native_ready(backend, '066970', 'NXT', '066970_NX', 'PRE', T+.1)
+    monkeypatch.setattr(D.time, 'time', lambda:T+.2)
+    observation=dict(schema='entry_source_quote_observer_v1', snapshot=[event,{}],
+        family_sha256=backend._GENERATION, deadline_epoch=T+5, deadline_perf=R.time.perf_counter()+5,
+        observer_pid=R.os.getpid(), observer_start_ticks=R._PROCESS_START_TICKS)
+    with pytest.raises(ValueError,match='machine_source_quote_observer_native_root_changed') as caught:
+        recovery.validated_observer_snapshot(observation, now=T+.2,
+            evaluation_attempt_id='hold-attempt',machine_bundle_sha256='b'*64)
+    return dict(decision_ts=K.iso(T+.3),decision_stage='entry_screen',stock_code='066970',
+        evaluation_attempt_id='hold-attempt',machine_bundle_sha256='b'*64,
+        market_data_route='nxt_only',provider_called=False,
+        machine_evaluation_status='assessment_contract_invalid',machine_contract_error=str(caught.value),
+        continuous_reversal_rejected_claim_receipt=caught.value.reversal_source_receipt)
+
+
+@pytest.mark.parametrize('damage',[None,'hash','attempt','bundle','pid','family','scope','item','signal',
+    'epoch','sequence','gap','quote','floor','deadline','future','claimed','survivor','ready','source','unknown',
+    'bool_price','bool_sequence','new_root_conflict'])
+def test_hold_rejection_consumes_exact_native_terminal_only(hold_invalidation, monkeypatch, damage):
+    from src.engine.monitoring.submission_bottleneck_monitor import _reversal_lifecycle_diagnostic
+    from src.engine.scalping.entry_machine_source_recovery import _digest
+    trace=_hold_rejection(hold_invalidation,monkeypatch)
+    receipt=trace['continuous_reversal_rejected_claim_receipt'];selection=receipt['native_selection']
+    life=selection['original_signal_lifecycle'];bid=next(iter(life['branch_survival']))
+    if damage=='bool_price':life['latest_native_observation'][3]=True
+    elif damage=='bool_sequence':life['latest_native_observation'][2]=True
+    elif damage=='new_root_conflict':receipt['current_root']=dict(receipt['original_root'],signal_id='new',native_epoch=2)
+    elif damage=='attempt':trace['evaluation_attempt_id']='other'
+    elif damage=='bundle':trace['machine_bundle_sha256']='d'*64
+    elif damage=='pid':life['process_pid']+=1
+    elif damage=='family':life['family_sha256']='d'*64
+    elif damage=='scope':selection['scope_execution_hash']='d'*64
+    elif damage=='item':life['latest_native_observation'][9]='066970_AL'
+    elif damage=='signal':life['signal_id']='other'
+    elif damage=='epoch':life['latest_native_observation'][1]+=1
+    elif damage=='sequence':life['latest_native_observation'][2]=0
+    elif damage=='gap':life['continuous_ingress']=False
+    elif damage=='quote':selection['native_quote_current']=False
+    elif damage=='floor':life['branch_hold_floors'][bid]=99900
+    elif damage=='deadline':receipt['original_deadline_epoch']+=1
+    elif damage=='future':life['first_ineligible_seen']=T+1
+    elif damage=='claimed':life['claimed']=True
+    elif damage=='survivor':life['branch_survival'][bid]=True
+    elif damage=='ready':life['ready_membership_present']=True
+    elif damage=='source':selection['native_source_current']=False
+    elif damage=='unknown':life['terminal_reason']='ready_removed_without_terminal_receipt'
+    receipt['sha256']=_digest({k:v for k,v in receipt.items() if k!='sha256'})
+    if damage=='hash':receipt['sha256']='0'*64
+    assert _reversal_lifecycle_diagnostic(trace)==('reversal_first_price_hold_invalidated' if damage is None else None)
+    from src.engine.scalping.ai_decision_trace import sanitize_ai_trace_value
+    safe,redacted=sanitize_ai_trace_value(trace)
+    assert not redacted and safe==trace
+
+
+def test_same_hold_attempt_probe_and_trace_are_diagnostics_not_source_loss(hold_invalidation,monkeypatch,tmp_path):
+    from src.engine.monitoring import submission_bottleneck_monitor as monitor
+    from src.tests.test_submission_bottleneck_monitor import _source_gap_files
+    trace=_hold_rejection(hold_invalidation,monkeypatch)
+    probe=dict(emitted_at=K.iso(T+.4),pipeline='ENTRY_PIPELINE',stage='zero_base_probe_result',stock_code='066970',
+        fields=dict(zero_base_probe_result='policy_unavailable',zero_base_probe_reason='assessment_contract_invalid',
+            zero_base_producer_pid=R.os.getpid(),native_observation_reference=dict(observer_pid=R.os.getpid(),
+                observer_start_ticks=R._PROCESS_START_TICKS,family_sha256='a'*64,deadline_epoch=T+5),
+            zero_base_route='nxt_only',zero_base_machine_contract_error=trace['machine_contract_error'],
+            evaluation_attempt_id=trace['evaluation_attempt_id'],machine_bundle_sha256='b'*64,provider_called='False',
+            continuous_reversal_rejected_claim_receipt=trace['continuous_reversal_rejected_claim_receipt']))
+    from src.utils import pipeline_event_logger as logger
+    monkeypatch.setattr(logger,'DATA_DIR',tmp_path)
+    monkeypatch.setattr(logger,'log_info',lambda *a:None)
+    probe=logger.emit_pipeline_event(probe['pipeline'],'test',probe['stock_code'],probe['stage'],
+        fields=probe['fields'],observed_at_epoch=T+.4)
+    assert probe['structured_append_succeeded'] is True
+    assert isinstance(probe['fields']['continuous_reversal_rejected_claim_receipt'],str)
+    now=datetime.fromtimestamp(T+1,K.KST)
+    _source_gap_files(tmp_path,now,probes=[probe],traces=[trace])
+    result=monitor.source_gap_semantics(tmp_path,now)
+    assert result['issues']=={}
+    assert result['diagnostics']=={'machine_probe:reversal_first_price_hold_invalidated':1,
+                                   'machine_trace:reversal_first_price_hold_invalidated':1}
+    assert result['observed']['probe_native_invalidated']==1
+    from src.tests.test_submission_bottleneck_monitor import _observation_health_fixture
+    health_input=_observation_health_fixture()
+    health_input['source_gap_semantics']=dict(result,as_of=health_input['as_of'])
+    unmet=monitor.observation_health_projection(health_input)['unmet_conditions']
+    assert 'unknown_or_unbound_source_diagnostic' not in unmet
+    assert 'source_observation_counts_invalid' not in unmet
+    probe['fields']['zero_base_producer_pid']=int(probe['fields']['zero_base_producer_pid'])+1
+    _source_gap_files(tmp_path,now,probes=[probe],traces=[trace])
+    conflict=monitor.source_gap_semantics(tmp_path,now)
+    assert conflict['issues']=={'machine_probe:machine_source_quote_observer_native_root_changed':1}
+    probe['fields']['zero_base_producer_pid']-=1
+    for malformed in ('{}', '{broken', '__import__("os")', 'x'*65537):
+        probe['fields']['continuous_reversal_rejected_claim_receipt']=malformed
+        _source_gap_files(tmp_path,now,probes=[probe],traces=[trace])
+        result=monitor.source_gap_semantics(tmp_path,now)
+        assert result['issues']=={'machine_probe:machine_source_quote_observer_native_root_changed':1}

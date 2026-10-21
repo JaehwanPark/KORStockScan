@@ -7,6 +7,7 @@ import json
 import math
 import os
 import time
+from copy import deepcopy
 from collections import deque, OrderedDict
 from pathlib import Path
 from threading import Lock
@@ -656,6 +657,7 @@ def _record_native_ready_locked(B, symbol, venue, item, market, epoch):
                 last = getattr(legacy, 'last', None)
                 states[tuple(scope)] = dict(turn=(getattr(legacy, 'turn', None) or {}).get('event_id'),
                     last=tuple(last) if last else None,
+                    generation=getattr(state, 'generation', None),
                     ready_event_ids=tuple(r['event'].get('event_id') for r in state.ready),
                     ready_ids=tuple(r['event'].get('signal_id') for r in state.ready))
                 for ready in getattr(state,'ready', ()):
@@ -667,7 +669,7 @@ def _record_native_ready_locked(B, symbol, venue, item, market, epoch):
                                  scope_execution_hash=getattr(state,'generation',None))))
                         family = getattr(B, '_FAMILY', None) or {}
                         if family.get('schema') in {'continuous_reversal_policy_v5', 'continuous_reversal_policy_v6'}:
-                            from src.engine.scalping.reversal_extended_catalog import cell_key
+                            from src.engine.scalping.reversal_extended_catalog import cell_key, CUMULATIVE_DEFINITIONS
                             band = cell_key(symbol, market, event['confirmation_price'])
                             cell = family['machine_cells'][band]['routes'][venue]
                             expected_backend = cell['backend']
@@ -686,6 +688,10 @@ def _record_native_ready_locked(B, symbol, venue, item, market, epoch):
                                         branch_membership={bid: signal.get('event_id', event['event_id'])
                                             if signal.get('decision_phase') == 'FIRST_UPTICK' else None
                                             for bid,signal in event.get('branch_signals', {}).items() if bid in branches},
+                                        branch_hold_floors={bid: (signal.get('signal_proof') or {}).get('price')
+                                            for bid,signal in event.get('branch_signals', {}).items()
+                                            if bid in branches and bid not in CUMULATIVE_DEFINITIONS
+                                            and signal.get('decision_phase') == 'FIRST_PRICE_HOLD'},
                                         selector_claimed=bool(ready.get('claimed'))),
                                         family['family_sha256'], tuple(scope), getattr(state,'generation',None)))
     with _LOCK:
@@ -739,6 +745,14 @@ def _record_native_ready_locked(B, symbol, venue, item, market, epoch):
                 row['last_observed_sequence'] = last[2]
             survivors = ({bid: anchor is None or anchor == state['turn']
                           for bid,anchor in row['branch_membership'].items()} if state else {})
+            floors = row['branch_hold_floors']
+            hold_proven = bool(floors and last and row['continuous_ingress']
+                and last[0] == epoch and last[2] > row['native_sequence']
+                and all(type(f) in (int, float) and math.isfinite(f) and f > 0 for f in floors.values()))
+            if hold_proven:
+                survivors.update({bid: last[3] >= floor for bid, floor in floors.items()})
+            row['latest_native_observation'] = list(last) if last else None
+            row['ready_membership_present'] = bool(state and row['signal_id'] in state['ready_ids'])
             # Never infer validity at the deadline from a static last tick.
             if epoch >= row['original_deadline']:
                 proven = (epoch == row['original_deadline'] and last and last[0] == epoch
@@ -749,7 +763,8 @@ def _record_native_ready_locked(B, symbol, venue, item, market, epoch):
                     terminal_reason='exact_boundary_observed' if proven else 'deadline_continuity_unobserved')
             elif not state or not last:
                 row.update(terminal='unobservable', terminal_reason='native_state_unobserved')
-            elif row['family_sha256'] != (getattr(B, '_FAMILY', None) or {}).get('family_sha256'):
+            elif (row['family_sha256'] != (getattr(B, '_FAMILY', None) or {}).get('family_sha256')
+                    or state['generation'] != row['scope_execution_hash']):
                 row.update(terminal='unobservable', terminal_reason='generation_changed')
             elif not good_quote(last) or last[1] != row['native_epoch']:
                 row.update(terminal='source_or_guard_blocked_before_claim', terminal_reason='source_or_epoch_invalid')
@@ -758,7 +773,9 @@ def _record_native_ready_locked(B, symbol, venue, item, market, epoch):
                 if not any(survivors.values()):
                     replaced = state['turn'] and state['turn'] in state['ready_event_ids']
                     row.update(terminal='replaced_before_claim' if replaced else 'invalidated_before_claim',
-                               terminal_reason='first_turn_invalidated')
+                               terminal_reason='first_price_hold_breached' if hold_proven
+                                   and set(floors) == set(survivors) and not row['ready_membership_present']
+                                   else 'first_turn_invalidated')
                 elif row['signal_id'] not in state['ready_ids']:
                     row.update(terminal='unobservable', terminal_reason='ready_removed_without_terminal_receipt')
                 elif row['selector_claimed']:
@@ -789,6 +806,18 @@ def _record_native_ready_locked(B, symbol, venue, item, market, epoch):
                         row.update(terminal='unobservable', terminal_reason='date_rollover')
                         _queue_lifecycle(key, row)
     return notify
+
+
+def native_ready_lifecycle(event, family_sha256):
+    """Read one exact bounded lifecycle while the caller holds native locks."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    identity = (datetime.fromtimestamp(event['epoch'], ZoneInfo('Asia/Seoul')).date().isoformat(),
+        os.getpid(), _GENERATION, family_sha256, event.get('registry_generation'),
+        event['symbol'], event['venue'], event['source_item'], event['market'],
+        event['native_epoch'], event['signal_id'])
+    with _LOCK:
+        return deepcopy(_SELECTED_READY.get(identity))
 
 
 def record_native_visit(symbol, venue, item, market, now):

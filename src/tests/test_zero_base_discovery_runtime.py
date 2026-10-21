@@ -468,6 +468,7 @@ def test_scanner_emits_failed_probe_identity_and_artifact_cause(monkeypatch, tmp
         "machine_evaluation_status": "source_quality_blocked_before_assessment",
         "machine_preflight_artifact_status": "artifact_missing",
         "evaluation_attempt_id": "machine-source-invalid-exact",
+        "provider_called": False, "continuous_reversal_rejected_claim_receipt": {"sha256":"exact-proof"},
         "machine_capture_status": "captured", "machine_observation_sha256": "a" * 64,
         "machine_input_trace": {"entry_machine_input_as_of": 11,
                                 "entry_machine_input_preparation_ms": 0,
@@ -492,6 +493,8 @@ def test_scanner_emits_failed_probe_identity_and_artifact_cause(monkeypatch, tmp
     assert payload["fields"]["zero_base_machine_source_gap_kind"] == "runtime_preflight_artifact_not_ready"
     assert payload["fields"]["zero_base_machine_preflight_artifact_status"] == "artifact_missing"
     assert payload["fields"]["zero_base_machine_input_trace"] == result["machine_input_trace"]
+    assert payload["fields"]["provider_called"] is False
+    assert payload["fields"]["continuous_reversal_rejected_claim_receipt"] == result["continuous_reversal_rejected_claim_receipt"]
     assert payload["fields"]["machine_observation_sha256"] == "a" * 64
 
     result.update(result="source_unavailable", evaluation_attempt_id=None,

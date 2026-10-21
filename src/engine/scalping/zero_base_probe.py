@@ -1153,7 +1153,7 @@ def run_zero_base_probe(
         # assessment. These fields never admit a candidate or change retries.
         for field in ("evaluation_attempt_id", "native_observation", "machine_evaluation_status",
                       "machine_capture_status", "machine_observation_sha256",
-                      "machine_bundle_sha256"):
+                      "machine_bundle_sha256", "provider_called", "continuous_reversal_rejected_claim_receipt"):
             if machine.get(field) is not None:
                 result[field] = machine[field]
         # Keep the engine's measured input boundary on rejected assessments too.

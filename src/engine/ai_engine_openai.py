@@ -10026,7 +10026,9 @@ class GPTSniperEngine:
                                 from src.engine.scalping.entry_machine_source_recovery import validated_observer_snapshot
                                 observation = {}
                                 snapshot = validated_observer_snapshot(entry_source_recovery_observation,
-                                    now=snapshot_now, receipt_out=observation)
+                                    now=snapshot_now, receipt_out=observation,
+                                    evaluation_attempt_id=machine_exact['evaluation_attempt_id'],
+                                    machine_bundle_sha256=entry_setup_live_policy['machine_bundle_sha256'])
                             else:
                                 snapshot, observation = observe_snapshot(symbol, _explicit_item_venue(item),
                                     machine_exact['session_bucket'], now=snapshot_now, item=item,

@@ -3488,6 +3488,52 @@ REVIEWED_FINALIZATION_HEALTH_DEPENDENCY_VARIANTS = {
 }
 
 
+# Exact native invalidation observation successor; original policy/FSM guards stay pinned.
+# Earlier issued profiles remain readable. A partial producer/consumer update is invalid.
+REVIEWED_NATIVE_INVALIDATION_HASHES = {'src/engine/monitoring/runtime_performance.py': '626ae4d2db569edce63082aab86965872b57f0ec9daacca767ec4e83f84e36be',
+ 'src/engine/scalping/reversal_source_diagnostics.py': 'ad9fc4f2eeac858435cae48f9707275eabce46c8f48fee38e40029ea4a843c93',
+ 'src/engine/scalping/entry_machine_source_recovery.py': 'a78c70c5c49169ccb57069df7a524a540a33b615617a49195ddbc343ff9602a5',
+ 'src/engine/ai_engine_openai.py': '4a70967c006a6dba29d06ba8409d346b782d7e2fe09656e1fbfc9807f17cc162',
+ 'src/engine/scalping/zero_base_probe.py': 'c8e671c81375910971a7b8f75d1e2d6162a3411906cfbd3a3a2e076c99837fc7',
+ 'src/scanners/scalping_scanner.py': 'ea6188939ecc11462923d4746d27d38042aadd06f4dcd02d14cea7b2e5f8123b',
+ 'src/engine/monitoring/submission_bottleneck_monitor.py': '6e1588b8e5709563f15cdea0705babe7357fed62a27061365ec5ac2425fc2085'}
+REVIEWED_NATIVE_INVALIDATION_PAIRS = {'src/engine/monitoring/runtime_performance.py': (('80089ba158ce24d79df5f37de8d521321bc2a40f988d5f394e354db637cce78d',
+                                                   '626ae4d2db569edce63082aab86965872b57f0ec9daacca767ec4e83f84e36be'),),
+ 'src/engine/scalping/reversal_source_diagnostics.py': (('bf7dd538048888ce9793ccdf39a6c5c4a463c9e3379f4c3c5c1a09173f543eb8',
+                                                         'ad9fc4f2eeac858435cae48f9707275eabce46c8f48fee38e40029ea4a843c93'),),
+ 'src/engine/scalping/entry_machine_source_recovery.py': (('43fd0b6edf45ce92a9ff07364683385804445296608c63455ad5f9b9c57cba55',
+                                                           'a78c70c5c49169ccb57069df7a524a540a33b615617a49195ddbc343ff9602a5'),
+                                                          ('89845a56178c7b2a7322317a5f0c3f9ea2344b0514efc7241d0c5a846acea712',
+                                                           'a78c70c5c49169ccb57069df7a524a540a33b615617a49195ddbc343ff9602a5')),
+ 'src/engine/ai_engine_openai.py': (('703bc5e36bf23a02caf78a3fa8f9251e202979048e4ed1cd64aafed57e732d07',
+                                     '4a70967c006a6dba29d06ba8409d346b782d7e2fe09656e1fbfc9807f17cc162'),
+                                    ('bdcf09bf1f19e4cb649c01105c7aa363b04bddcb8749793a8f701cc06cc8d185',
+                                     '4a70967c006a6dba29d06ba8409d346b782d7e2fe09656e1fbfc9807f17cc162')),
+ 'src/engine/scalping/zero_base_probe.py': (('214e80199cc4f9d56699aba376e24d325d0396abd7662a2f9ae5f788da66fc20',
+                                             'c8e671c81375910971a7b8f75d1e2d6162a3411906cfbd3a3a2e076c99837fc7'),
+                                            ('c91d31899343d4381a30edaa82046a65ace8cb6a55f33c03cd5851d9cd1e689f',
+                                             'c8e671c81375910971a7b8f75d1e2d6162a3411906cfbd3a3a2e076c99837fc7')),
+ 'src/scanners/scalping_scanner.py': (('0473ce423dbae36455bc50bf94549b991b904a86f5f9c00acc20f4766cc48c75',
+                                       'ea6188939ecc11462923d4746d27d38042aadd06f4dcd02d14cea7b2e5f8123b'),
+                                      ('3280979b86c4bb10231b7886f591aba239c453b3e37d1ba79b8c2fdb1d4f477f',
+                                       'ea6188939ecc11462923d4746d27d38042aadd06f4dcd02d14cea7b2e5f8123b')),
+ 'src/engine/monitoring/submission_bottleneck_monitor.py': (('9b6066255a77a38bd869bfcf2e3aacd4814bf7742f306428d04ed1f1741908d1',
+                                                             '6e1588b8e5709563f15cdea0705babe7357fed62a27061365ec5ac2425fc2085'),
+                                                            ('b2ed455255bc7659d2959a5c6012fe052206de588f1932d57dde2e376d2fad18',
+                                                             '6e1588b8e5709563f15cdea0705babe7357fed62a27061365ec5ac2425fc2085'),
+                                                            ('d3a344923d590f55cdd08ed14c3eba67de149c8e5fef1c89a28fba7d00a68cd7',
+                                                             '6e1588b8e5709563f15cdea0705babe7357fed62a27061365ec5ac2425fc2085'))}
+REVIEWED_NATIVE_INVALIDATION_DEPENDENCY_VARIANTS = {
+    key: {**value,
+        'selector_path': 'src/engine/monitoring/submission_bottleneck_monitor.py',
+        'selector_sha256': REVIEWED_NATIVE_INVALIDATION_HASHES['src/engine/monitoring/submission_bottleneck_monitor.py'],
+        'dependencies': {**value['dependencies'], **REVIEWED_NATIVE_INVALIDATION_HASHES},
+        'contract_extensions': {origin: {name: REVIEWED_NATIVE_INVALIDATION_HASHES.get(os.path.normpath(name), digest)
+            for name, digest in paths.items()} for origin, paths in value['contract_extensions'].items()},
+    } for key, value in REVIEWED_FINALIZATION_HEALTH_DEPENDENCY_VARIANTS.items()
+}
+
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -3566,6 +3612,9 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     finalization_health_present = any((root / name).is_file()
         and hashlib.sha256(candidate_bytes(name)).hexdigest() == sha
         for name, sha in REVIEWED_FINALIZATION_HEALTH_HASHES.items())
+    native_invalidation_present = any((root / name).is_file()
+        and hashlib.sha256(candidate_bytes(name)).hexdigest() == sha
+        for name, sha in REVIEWED_NATIVE_INVALIDATION_HASHES.items())
     contract_names = {repository_name(name) for name in paths.values()}
     for trigger, generations in REVIEWED_HOLDING_RESEARCH_DEPENDENCIES.items():
         if trigger not in contract_names:
@@ -3574,7 +3623,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         dependencies = generations.get(trigger_sha, {})
         # New exact selectors precede their historical parent. The first match
         # selects one complete generation, never per-file SHA alternatives.
-        for variants in (REVIEWED_FINALIZATION_HEALTH_DEPENDENCY_VARIANTS,
+        for variants in (REVIEWED_NATIVE_INVALIDATION_DEPENDENCY_VARIANTS,
+                         REVIEWED_FINALIZATION_HEALTH_DEPENDENCY_VARIANTS,
                          REVIEWED_HISTORICAL_RESOLUTION_DEPENDENCY_VARIANTS,
                          REVIEWED_LOGICAL_PIPELINE_DEPENDENCY_VARIANTS,
                          REVIEWED_POSTCLOSE_REPAIR_DEPENDENCY_VARIANTS,
@@ -3692,6 +3742,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
             dependencies = {**dependencies, **REVIEWED_HISTORICAL_RESOLUTION_HASHES}
         if finalization_health_present:
             dependencies = {**dependencies, **REVIEWED_FINALIZATION_HEALTH_HASHES}
+        if native_invalidation_present:
+            dependencies = {**dependencies, **REVIEWED_NATIVE_INVALIDATION_HASHES}
         dependencies_by_trigger[trigger] = (trigger_sha, dependencies)
     for key, name in paths.items():
         after = candidate_bytes(name)
@@ -3708,7 +3760,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         if before == after:
             continue
         pair = (hashlib.sha256(before).hexdigest(), hashlib.sha256(after).hexdigest())
-        if (pair in REVIEWED_FINALIZATION_HEALTH_PAIRS.get(repository_name(name), ())
+        if (pair in REVIEWED_NATIVE_INVALIDATION_PAIRS.get(repository_name(name), ())
+                or pair in REVIEWED_FINALIZATION_HEALTH_PAIRS.get(repository_name(name), ())
                 or pair in REVIEWED_HISTORICAL_RESOLUTION_PAIRS.get(repository_name(name), ())
                 or pair in REVIEWED_LOGICAL_PIPELINE_PAIRS.get(repository_name(name), ())
                 or pair in REVIEWED_POSTCLOSE_REPAIR_PAIRS.get(repository_name(name), ())

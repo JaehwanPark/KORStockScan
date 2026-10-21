@@ -443,7 +443,8 @@ def quote_retry_claim(stock, refresh, *, now):
     return claim
 
 
-def validated_observer_snapshot(observation, *, now, receipt_out=None):
+def validated_observer_snapshot(observation, *, now, receipt_out=None,
+                                evaluation_attempt_id=None, machine_bundle_sha256=None):
     """Read the existing native observer without a claim or ready counter."""
     from src.engine.scalping.reversal_source_diagnostics import observation_binding_valid, observe_snapshot
     if (not isinstance(observation, dict) or observation.get("schema") != "entry_source_quote_observer_v1"
@@ -451,7 +452,8 @@ def validated_observer_snapshot(observation, *, now, receipt_out=None):
         raise ValueError("machine_source_quote_observer_expired_or_invalid")
     root = observation["snapshot"][0]
     current, selection = observe_snapshot(root["symbol"], root["venue"], root["market"], now=now,
-        item=root["source_item"], family_sha256=observation["family_sha256"], live_clock=True)
+        item=root["source_item"], family_sha256=observation["family_sha256"], live_clock=True,
+        original_root=root)
     if (not current or any(current[0].get(key) != root.get(key) for key in
             ("event_id", "signal_id", "epoch", "native_epoch", "native_sequence", "source_item", "entry_ask"))
             or not set(current[0].get("branch_signals") or {}) <= set(root.get("branch_signals") or {})
@@ -461,9 +463,11 @@ def validated_observer_snapshot(observation, *, now, receipt_out=None):
         # existing rejected-source trace; a bare exception cannot distinguish
         # source loss from a valid FIRST/ready lifecycle transition.
         keys = ("symbol", "venue", "market", "event_id", "signal_id", "epoch",
-                "native_epoch", "native_sequence", "source_item", "entry_ask", "branch_signals")
+                "native_epoch", "native_sequence", "source_item", "entry_ask", "branch_signals",
+                "registry_generation", "confirmation_price")
         receipt = dict(schema="entry_source_quote_observer_rejection_v1", status="observed",
             failure_cause="machine_source_quote_observer_native_root_changed",
+            evaluation_attempt_id=evaluation_attempt_id, machine_bundle_sha256=machine_bundle_sha256,
             process_pid=observation["observer_pid"], process_start_ticks=observation["observer_start_ticks"],
             family_sha256=observation["family_sha256"], observed_epoch=selection.get("observed_epoch"),
             original_deadline_epoch=observation["deadline_epoch"],
