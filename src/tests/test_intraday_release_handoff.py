@@ -1770,7 +1770,7 @@ def test_archive_authority_successor_accepts_the_issued_full_reader_origin(avg_d
         'src/engine/automation/main_startup_validation.py','src/engine/automation/next_preopen_readiness.py',
         *(['src/engine/infrastructure/startup_validation_code_context.py'] if generation=='source_integration' else [])))
     for fault in ([None,'missing','dirty','committed_change']+(['parent_mix'] if generation in ('sqlite_lifecycle','retired_review','clean_sqlite','delay_cleanup') else []))])
-def test_source_reader_handoff_preserves_issued_policy_and_exact_dependencies(tmp_path, family, fault, reader_path,generation):
+def test_source_reader_handoff_preserves_issued_policy_and_exact_dependencies(tmp_path, family, fault, reader_path,generation, policy_origin=None):
     import hashlib
     import os
     import subprocess
@@ -1778,7 +1778,7 @@ def test_source_reader_handoff_preserves_issued_policy_and_exact_dependencies(tm
     from src.engine.scalping import holding_vote_experiment as holding
     from src.engine.scalping import pre_submit_delay_initial_policy as delay
     canonical = Path(handoff.__file__).resolve().parents[3]
-    origin = 'ab1c46633e638658721ec4bdab611bd389451985'
+    origin = policy_origin or 'ab1c46633e638658721ec4bdab611bd389451985'
     inventories = {
         'main_stop': {key: 'src/engine/'+key for key in stop.implementation_paths()},
         'holding_vote': {key: 'src/engine/'+key for key in holding._code_paths()},
@@ -2084,3 +2084,10 @@ def test_quantity_capture_handoff_preserves_policy_and_native_close(tmp_path, fa
     test_source_reader_handoff_preserves_issued_policy_and_exact_dependencies(
         tmp_path, family, fault, tuple({**handoff.REVIEWED_COLLECTOR_FIRST_TRANSITION_HASHES,
             **handoff.REVIEWED_QUANTITY_CAPTURE_HASHES}), 'quantity_capture')
+
+
+@pytest.mark.parametrize('family', ['main_stop', 'holding_vote', 'pre_submit_delay'])
+def test_quantity_capture_handoff_accepts_actual_preopen_origin(tmp_path, family):
+    test_source_reader_handoff_preserves_issued_policy_and_exact_dependencies(
+        tmp_path, family, None, tuple(handoff.REVIEWED_QUANTITY_CAPTURE_HASHES), 'quantity_capture',
+        policy_origin='d7d353b4add257f0962abff8082a061bbc040ab7')
