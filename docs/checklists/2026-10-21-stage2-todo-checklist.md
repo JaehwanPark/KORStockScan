@@ -195,3 +195,5 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
   - 상태: source/probe/metadata/WS/prefetch577회귀 PASS. 무수신127 exact lease/REG 대조 완료지만 broker item 수용/거래 유무는 미확정(보통주123·EF3·DR1). 종목별 unknown은 유지하고 새 결손을 계속 탐지한다.
   - 완료 기준: clean 통합 후보의 native policy/delay/stop/holding·report currentness PASS; 실제 전환은 동일 old epoch/native 자연 종료 및 거부 증거 전건 검증 뒤 별도 단계다. 후속 PID의 product 제외·단기/장기 slot·적격 대기·원천→정식 평가를 확인하고 원인 미확정은 exact 새 영수증으로만 종결한다. 주문/경제성과 구별한다.
   - 권한: 이번은 배포본 준비만, 재기동/selector·정책/threshold/provider/물리 cap/stale/주문 변경0. 기존 DirectFamilyPreopenPolicyHandoff의 자연 종료 전환과 겹치는 실행 담당을 만들지 않는다.
+
+  - 최종 준비16:44: eeaed90f6 통합본(수량3b6 포함), 회귀577/인계30·native4정책/4capability/currentness·parity128/76800/598불일치0·trailing20824scope PASS. selector/PID/원본9SHA 불변, 재기동/전환 예약0이다. candidate_preflight_ready=true와 자연 종료 증빙 대기 actual_transition_ready=false를 분리한다. 무수신127 원인 미확정/다음 자연창 수용은 계속 OPEN. [최종 증거](../../tmp/nonfixed-capacity-repair-20261021/readiness.json).
