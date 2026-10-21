@@ -249,8 +249,28 @@ def finalization_marker_issues(
         if str(exc) != 'strict_checklist_generation_stale':
             return [str(exc)]
         try:
-            from src.engine.automation.intraday_release_handoff import historical_checklist_for_observer
-            preserved = historical_checklist_for_observer(project, target_date)
+            strict = _load(Path(project)/'data/report/threshold_cycle_postclose_verification'/
+                f'threshold_cycle_postclose_verification_{target_date}.json', 'strict_current_missing_or_invalid')
+            expected = (strict.get('generation_binding') or {}).get('checklist_sha256')
+            if not isinstance(expected, str) or not re.fullmatch(r'[0-9a-f]{64}', expected):
+                raise FinalizationGenerationError('strict_checklist_generation_stale')
+            data_root = (Path(project)/'data').resolve(strict=True)
+            snapshot = data_root/'runtime/policy_bootstrap/historical_checklists'/(expected+'.md')
+            if snapshot.exists() or snapshot.is_symlink():
+                # Completed-marker observation binds the original strict bytes.
+                # Later native costs belong to new research, not this old run.
+                if (not snapshot.is_file() or snapshot.is_symlink()
+                        or any(p.is_symlink() for p in snapshot.parents if p.is_relative_to(data_root))
+                        or not 0 < snapshot.stat().st_size <= 2*1024*1024
+                        or _sha(snapshot) != expected):
+                    raise FinalizationGenerationError('historical_checklist_snapshot_invalid')
+                preserved = dict(path=str(snapshot), sha256=expected,
+                    basis='preserved_strict_bound_checklist', source_date=target_date,
+                    runtime_effect=False, new_finalization_claimed=False)
+            else:
+                # Older consumed handoffs may predate the native SHA snapshot.
+                from src.engine.automation.intraday_release_handoff import historical_checklist_for_observer
+                preserved = historical_checklist_for_observer(project, target_date)
             current = _capture_finalization_generation(
                 project, target_date, checklist_snapshot=Path(preserved['path']))
             if validation_details is not None:

@@ -195,6 +195,54 @@ def _fixture(root: Path, day: str = DAY) -> tuple[Path, Path]:
     return strict_attempt, manifest_path
 
 
+@pytest.mark.parametrize('damage', [None, 'missing', 'tamper', 'symlink', 'oversize', 'summary', 'stage', 'binding'])
+def test_completed_finalization_uses_original_strict_snapshot_after_cost_refresh(
+    tmp_path, monkeypatch, damage
+):
+    from src.engine.automation import intraday_release_handoff as handoff
+
+    day = '2026-10-20'
+    strict_path, _ = _fixture(tmp_path, day)
+    captured = capture_finalization_generation(tmp_path, day)
+    strict = json.loads(strict_path.read_bytes())
+    checklist = Path(strict['checklist_handoff']['path'])
+    expected = strict['generation_binding']['checklist_sha256']
+    saved = tmp_path/'data/runtime/policy_bootstrap/historical_checklists'/(expected+'.md')
+    saved.parent.mkdir(parents=True)
+    saved.write_bytes(checklist.read_bytes())
+    checklist.write_text('current operating work\n')
+    monkeypatch.setattr(handoff, 'historical_checklist_for_observer', lambda *a:
+        (_ for _ in ()).throw(ValueError('intraday_bootstrap_invalid:main_stop_confirmation_invalid')))
+    if damage == 'missing': saved.unlink()
+    elif damage == 'tamper': saved.write_text('changed original')
+    elif damage == 'symlink':
+        original = tmp_path/'outside.md'; original.write_bytes(saved.read_bytes())
+        saved.unlink(); saved.symlink_to(original)
+    elif damage == 'oversize': saved.write_bytes(b'x'*(2*1024*1024+1))
+    elif damage in {'summary', 'stage'}:
+        path = (tmp_path/f'data/report/runtime_approval_summary/runtime_approval_summary_{day}.json'
+                if damage == 'summary' else tmp_path/f'data/report/postclose_stage_terminal/{day}/research_capacity.json')
+        path.write_text('{}')
+    elif damage == 'binding':
+        strict['generation_binding']['checklist_sha256'] = 'f'*64
+        strict_path.write_text(json.dumps(strict))
+    original_operating = checklist.read_bytes()
+    details = {}
+    issues = finalization_marker_issues(tmp_path, day, captured['chain_sha256'],
+        captured['snapshot_sha256'], validation_details=details)
+    assert checklist.read_bytes() == original_operating
+    if damage is None:
+        assert issues == []
+        assert details['basis'] == 'preserved_strict_bound_checklist'
+        assert details['sha256'] == expected
+        assert details['new_finalization_claimed'] is False
+        # New finalization publication still requires the current native chain.
+        with pytest.raises(FinalizationGenerationError, match='strict_checklist_generation_stale'):
+            capture_finalization_generation(tmp_path, day)
+    else:
+        assert issues
+
+
 def test_snapshot_manifest_contract_preserves_legacy_and_requires_current_source(tmp_path):
     assert "missed_entry_counterfactual" not in snapshot_kinds_for_date("2026-09-29")
     assert "missed_entry_counterfactual" in snapshot_kinds_for_date("2026-09-30")
