@@ -140,6 +140,28 @@ def test_automatic_native_binding_warm_reuse_and_new_file_invalidation(tmp_path,
     assert research._sealed(manifest)['assembly_input_generation_sha256']!=payload['assembly_input_generation_sha256']
 
 
+@pytest.mark.parametrize('resident_cost_mb', [0, 40])
+def test_completed_cost_residency_ends_before_trace_population(tmp_path, monkeypatch, resident_cost_mb):
+    from src.engine.lifecycle import holding_research_cost as costs
+    from src.engine.lifecycle import research_input_budget as budget
+    root=tmp_path/'source';fixture(root)
+    original_enter=costs.Source.__enter__
+    observed=[]
+    def enter(owner):
+        original_enter(owner)
+        # A verified registry/cache can fit the completed-source phase but
+        # cannot overlap the next native trace envelope and tree writer.
+        owner.registry_claim=budget.Claim(resident_cost_mb*1024*1024)
+        observed.append(owner)
+        return owner
+    monkeypatch.setattr(costs.Source,'__enter__',enter)
+    before=budget.health()['used_bytes']
+    manifest=source.assemble(root,tmp_path/'assembly',source_date=DAY,target_date=TARGET,start_date=DAY)
+    assert research._sealed(manifest)['population_ids_ref']['count']==1
+    assert observed[0].closed and observed[0].registry_claim is None
+    assert budget.health()['used_bytes']==before
+
+
 def _issued_trailing_receipt(root, monkeypatch, *, account_scope=None, plan_known_at=None):
     from datetime import datetime
     from src.engine.scalping import trailing_entry_research_source as bridge

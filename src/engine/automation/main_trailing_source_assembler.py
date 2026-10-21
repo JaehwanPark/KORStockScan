@@ -1075,6 +1075,9 @@ def _assemble(root, output, *, source_date, target_date, start_date, as_of=None,
                 alternative={**position,'position_key':'alternative:'+position['position_key'],
                     'evidence_kind':'actual_entry_alternative_exit','actual_cost_reconciliation':None,'situation_pin':None}
                 yield alternative,event_ref
+        # Completed positions already sealed their cost receipts into the
+        # sorted population. Trace opportunities do not consume this cache.
+        costs.close()
         yield from _trace_rows(root,days,sources,gaps,exclude,db,as_of=as_of,output=output)
     with storage.index(output/'scratch') as db:
         db.execute('CREATE TABLE exclusions(id TEXT PRIMARY KEY,body TEXT) WITHOUT ROWID')
