@@ -59,6 +59,11 @@ MAIN_PROOF_SCHEMA = 'startup_main_preparation_code_handoff_v1'
 # Preserve both the issued preparation and its reviewed same-day stopped carry.
 # Evidence: docs/audits/preopen-alert-repair-2026-10-19.md.
 REVIEWED_PREPARATION_HISTORY = {
+    # Issued native invalidation receipt lineage; source rejection is preserved.
+    'src/engine/scalping/entry_machine_source_recovery.py': {
+        ('89845a56178c7b2a7322317a5f0c3f9ea2344b0514efc7241d0c5a846acea712',
+         'a78c70c5c49169ccb57069df7a524a540a33b615617a49195ddbc343ff9602a5'),
+    },
     'src/engine/scalping/reversal_code_handoff.py': {('6c5b8f3013e055ef54774c1e89be66fda93988aa5792e775bb82bac86636cbf0', '16776a22b99bff4054ba99914cd8f7c96e87f6ca9fb1ac041e6a8191723b929d')},
     #0255 source-reader successor: identical cumulative selection over a
     # one-symbol-at-a-time frozen source; require the exact reviewed bytes.

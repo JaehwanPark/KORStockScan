@@ -847,13 +847,18 @@ def test_delay_inventory_declaration_is_literal_unique_and_canonical(expression)
 
 
 @pytest.mark.parametrize('fault', [None, 'source', 'target', 'path'])
-def test_cleanup_ai_preparation_pair_is_exact(fault):
+@pytest.mark.parametrize('relative,old,current,revision', [
+    ('src/engine/ai_engine_openai.py',
+     '194f9dcd748a0c94fe49c12618c3c5eb9f3d81b07de494f0b59ddc349aa43584',
+     'bdcf09bf1f19e4cb649c01105c7aa363b04bddcb8749793a8f701cc06cc8d185', 'd927d0d70'),
+    ('src/engine/scalping/entry_machine_source_recovery.py',
+     '89845a56178c7b2a7322317a5f0c3f9ea2344b0514efc7241d0c5a846acea712',
+     'a78c70c5c49169ccb57069df7a524a540a33b615617a49195ddbc343ff9602a5', '193668e7f'),
+])
+def test_issued_source_preparation_pair_is_exact(fault,relative,old,current,revision):
     import subprocess
-    relative = 'src/engine/ai_engine_openai.py'
-    old = '194f9dcd748a0c94fe49c12618c3c5eb9f3d81b07de494f0b59ddc349aa43584'
-    current = 'bdcf09bf1f19e4cb649c01105c7aa363b04bddcb8749793a8f701cc06cc8d185'
     original = subprocess.check_output(['git', '-C', str(Path(C.__file__).resolve().parents[3]),
-        'show', 'd927d0d70:'+relative])
+        'show', revision+':'+relative])
     assert hashlib.sha256(original).hexdigest() == current
     if fault == 'source': old = '0'*64
     elif fault == 'target': current = '0'*64
