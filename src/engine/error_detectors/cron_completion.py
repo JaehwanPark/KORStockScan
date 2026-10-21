@@ -484,9 +484,9 @@ class CronCompletionDetector(BaseDetector):
                     issues.append(f"{jid}: finished with error after window end")
                     details[f"{jid}_status"] = "fail"
                 elif self._bounded_postclose_running(job, today_str):
-                    warnings.append(f"{jid}: exact-date owner running before effective-date 06:00")
+                    warnings.append(f"{jid}: exact-date owner running before source-date 23:20")
                     details[f"{jid}_status"] = "in_progress"
-                    details[f"{jid}_running_deadline"] = "06:00 effective date"
+                    details[f"{jid}_running_deadline"] = "23:20 source date"
                 elif past_window_end:
                     issues.append(f"{jid}: no completion marker after window end")
                     details[f"{jid}_status"] = "fail"

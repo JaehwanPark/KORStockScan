@@ -456,6 +456,9 @@ def test_postclose_completion_shares_exact_bounded_running_gate(
     result = detector.check()
     assert result.details[f"{job['id']}_status"] == expected
     assert result.severity == ("warning" if expected == "in_progress" else expected)
+    if expected == 'in_progress':
+        assert result.details[f"{job['id']}_running_deadline"] == '23:20 source date'
+        assert 'before source-date 23:20' in result.summary
 
 
 @pytest.fixture(autouse=True)
