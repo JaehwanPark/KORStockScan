@@ -24,6 +24,22 @@ FILL_KEYS = ('_entry_receipt_filled_by_order_no',
              '_entry_receipt_filled_amount_by_order_no',
              '_entry_receipt_economics_complete_by_order_no',
              'holding_buy_fill_legs')
+ORDER_SOURCE_KEYS = ('ord_no', 'qty', 'filled_qty', 'status', 'cancel_terminal_pending',
+                    'owner_registry_cancel_reconciliation_required', 'entry_reprice_cancel_terminal_pending')
+
+
+def order_source_projection(orders):
+    """Copy only the native order census read by the quantity proof validator.
+
+    Runtime orders also hold entry features and telemetry. Those are neither
+    terminal evidence nor inputs to this proof; never recursively visit them.
+    Missing/invalid consumed values remain visible to the native validator.
+    """
+    if orders is None:
+        return None
+    if type(orders) is not list or len(orders) > MAX_EXECUTIONS or any(type(o) is not dict for o in orders):
+        raise ValueError('quantity_proof_order_shape_invalid')
+    return [{key: order[key] for key in ORDER_SOURCE_KEYS if key in order} for order in orders]
 
 
 def _digest(value):
@@ -239,7 +255,7 @@ def build_quantity_source(stock, *, at):
         facts, _ = _fill_facts(snapshot)
         active = stock.get('initial_quantity_bundle')
         bundle = active if active is not None else stock.get('initial_quantity_last_terminal_bundle')
-        orders = stock.get('pending_entry_orders')
+        orders = order_source_projection(stock.get('pending_entry_orders'))
         if bundle is None and any(stock.get(name) for name in (
                 'entry_split_probe_bundle_id', 'entry_split_order_probe_first_applied',
                 'entry_split_probe_requested_qty', 'entry_split_probe_target_qty',
@@ -273,9 +289,7 @@ def build_quantity_source(stock, *, at):
                    for name in ('entry_requested_qty', 'requested_buy_qty')):
                 raise ValueError('native_buy_requested_quantity_conflict')
             proof.update(evidence_kind='native_filled_order_census',
-                orders=[{k:o.get(k) for k in ('ord_no','qty','filled_qty','status',
-                    'cancel_terminal_pending','owner_registry_cancel_reconciliation_required',
-                    'entry_reprice_cancel_terminal_pending')} for o in orders], requested_qty=requested)
+                orders=[{key:o.get(key) for key in ORDER_SOURCE_KEYS} for o in orders], requested_qty=requested)
         status, identity = _proven(proof, quantity, basis, at)
         result.update(status=status, reason='native_buy_terminal_and_position_bound',
             evidence_kind=proof['evidence_kind'], proof=proof, buy_fill_identity=identity,

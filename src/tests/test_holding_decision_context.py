@@ -2066,3 +2066,52 @@ def test_holding_quote_uses_0d_clock_instead_of_fresh_transport_or_carried_age(a
         "last_realtime_type_ts": None, "last_ws_update_ts": now, "quote_age_ms": 0,
     }, now)
     assert age is None
+
+
+@pytest.mark.parametrize('fault', [None, 'within_best', 'insufficient', 'stale', 'future', 'crossed',
+    'conflict', 'out_of_order', 'bad_cost', 'future_cost', 'unknown_fee', 'explicit_invalid'])
+def test_frozen_fee_and_full_visible_depth_feed_exit_vote_without_actual_cost_claim(monkeypatch, fault):
+    from src.engine.ai.holding_exit_vote import build_path_vote_input, path_vote_input_gaps
+    _enable(monkeypatch)
+    now = datetime(2026, 7, 23, 10, 0, 30, tzinfo=KST)
+    stock = dict(_stock(), buy_qty=220, broker_holding_qty=220,
+        _trailing_entry_cost_model=dict(buy_cost_krw=0, sell_cost_rate=.0023,
+            source_sha256='a'*64, known_at=now.timestamp()-60, actual_broker_cost=False,
+            allocation='frozen_configured_round_trip_rate_on_sell_model_only'))
+    ws = _ws(now)
+    ws['orderbook'] = dict(bids=[dict(price=10299, volume=200),dict(price=10298,volume=100)])
+    if fault == 'within_best': stock.update(buy_qty=20, broker_holding_qty=20)
+    if fault == 'insufficient': ws['orderbook']['bids'][1]['volume'] = 1
+    if fault in ('stale','future'):
+        ws.setdefault('last_realtime_type_ts', {})['0D'] = now.timestamp() + (1 if fault == 'future' else -4)
+        ws['quote_age_ms'] = -1000 if fault == 'future' else 4000
+    if fault == 'crossed': ws['best_ask'] = 10298
+    if fault == 'conflict': ws['orderbook']['bids'][0]['volume'] = 201
+    if fault == 'out_of_order': ws['orderbook']['bids'][1]['price'] = 10300
+    if fault == 'bad_cost': stock['_trailing_entry_cost_model']['actual_broker_cost'] = True
+    if fault == 'future_cost': stock['_trailing_entry_cost_model']['known_at'] = now.timestamp()+1
+    if fault == 'unknown_fee': stock.pop('_trailing_entry_cost_model')
+    if fault == 'explicit_invalid': stock['estimated_slippage_bps'] = float('nan')
+    ctx = build_holding_decision_context(None, '000660', ws, stock, 'KRX', 'krx_regular',
+        'holding_score', now_ts=now,
+        recent_candles=_candles(60,start=datetime(2026,7,23,9,0,tzinfo=KST)))
+    pnl = ctx['execution_pnl']
+    payload = build_path_vote_input(stock_code='000660', ws_data=ws,
+        recent_ticks=ws['recent_trade_ticks'], recent_candles=[],
+        position_ctx=dict(drawdown_from_peak_pct=.4),requested_paths=('EXIT_TRAILING_TP',),
+        holding_context=ctx, market='REGULAR',session_key='2026-07-23',position_key='record:1',
+        buy_fill_identity='b'*64,route='KRX',transport_epoch='1',source_generation='native:1',
+        quote_observed_at=now.timestamp())
+    if fault in (None,'within_best'):
+        vwap = (200*10299+20*10298)/220 if fault is None else 10299
+        expected = (vwap*(1-.0023)/10000-1)*100
+        assert pnl['estimated_net_executable_pnl_pct'] == pytest.approx(round(expected,4))
+        assert (pnl['estimated_slippage_bps'] > 0) is (fault is None)
+        assert pnl['cost_estimate_source']['depth_levels'] == (2 if fault is None else 1)
+        assert payload['flow']['execution_pnl']['cost_estimate_source'] == pnl['cost_estimate_source']
+        assert pnl['cost_estimate_source']['actual_broker_cost'] is False
+        assert pnl['cost_estimate_source']['actual_fill'] is False
+        assert 'executable_exit_pnl_missing' not in path_vote_input_gaps(payload)['EXIT_TRAILING_TP']
+    else:
+        assert pnl['estimated_net_executable_pnl_pct'] is None
+        assert 'executable_exit_pnl_missing' in path_vote_input_gaps(payload)['EXIT_TRAILING_TP']

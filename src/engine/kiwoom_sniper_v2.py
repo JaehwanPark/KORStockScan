@@ -14556,6 +14556,7 @@ def _run_sniper_iterations(
                         continue
                 else:
                     if status == "HOLDING":
+                        holding_observed_at = time.time()
                         handle_holding_state(
                             stock,
                             code,
@@ -14564,8 +14565,8 @@ def _run_sniper_iterations(
                             current_market_regime,
                             radar=radar,
                             ai_engine=ai_engine,
-                            now_ts=now_ts,
-                            now_dt=now,
+                            now_ts=holding_observed_at,
+                            now_dt=datetime.fromtimestamp(holding_observed_at),
                         )
                     continue
 
@@ -15787,14 +15788,15 @@ def _run_sniper_iterations(
                     )
             elif status == "HOLDING":
                 holding_ai_engine = None if eod_ai_holding_fallback else ai_engine
+                holding_observed_at = time.time()
                 handle_holding_state(
                     stock,
                     code,
                     ws_data,
                     admin_id,
                     current_market_regime,
-                    now_ts=now_ts,
-                    now_dt=now,
+                    now_ts=holding_observed_at,
+                    now_dt=datetime.fromtimestamp(holding_observed_at),
                     radar=radar,
                     ai_engine=holding_ai_engine,
                 )

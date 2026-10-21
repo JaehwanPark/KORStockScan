@@ -60,6 +60,14 @@ SOURCE_VIEW_KEYS = frozenset({
     '_main_stop_observation_epoch',
     '_main_stop_evaluation_lane_generations',
 })
+SOURCE_FEATURE_KEYS = frozenset({
+    'tick_context_quality', 'tick_context_stale', 'quote_stale', 'tick_latest_age_ms',
+    'quote_age_ms', 'buy_pressure_10t', 'net_aggressive_delta_10t',
+    'large_sell_print_detected', 'same_price_buy_absorption', 'curr_vs_micro_vwap_bp',
+    'micro_vwap_bp', 'tick_aggressor_pressure_usable', 'tick_aggressor_trusted_count',
+    'micro_vwap_available', 'minute_candle_window_fresh', 'minute_candle_context_quality',
+    'tick_acceleration_ratio',
+})
 
 # Native quantity trees admit 4096 nodes/depth 12/256 children/1024 characters.
 # A complete quote adds an envelope around that proof. The aggregate byte
@@ -138,16 +146,18 @@ def _string_size(value):
     return 2 + len(value) + 11 * len(_ESCAPED_CHARACTERS.findall(value))
 
 
-def _copy_observation_tree(value, budget, *, max_nodes, max_depth):
+def _copy_observation_tree(value, budget, *, max_nodes, max_depth, path='$'):
     remaining = max_nodes
+    failure = [path, type(value).__name__]
 
     def charge(size):
         budget[0] -= size
         if budget[0] < 0:
             raise ValueError('native_observation_budget_exceeded')
 
-    def copy_value(item, depth=0):
+    def copy_value(item, depth=0, where=path):
         nonlocal remaining
+        failure[:] = [where, type(item).__name__]
         remaining -= 1
         if remaining < 0 or depth > max_depth:
             raise ValueError('native_observation_budget_exceeded')
@@ -160,14 +170,16 @@ def _copy_observation_tree(value, budget, *, max_nodes, max_depth):
             for key, child in item.items():
                 if type(key) is not str or len(key) > 240:
                     raise ValueError('native_observation_key_invalid')
+                failure[:] = [where + '.' + key[:80], type(child).__name__]
                 charge(_string_size(key))
-                result[key] = copy_value(child, depth + 1)
+                result[key] = copy_value(child, depth + 1, where + '.' + key[:80])
             return result
         if kind in (list, tuple):
             if len(item) > 256:
                 raise ValueError('native_observation_budget_exceeded')
             charge(2 + len(item))
-            children = [copy_value(child, depth + 1) for child in item]
+            children = [copy_value(child, depth + 1, where + '[' + str(index) + ']')
+                        for index, child in enumerate(item)]
             return tuple(children) if kind is tuple else children
         if kind is str:
             if len(item) > 1024:
@@ -188,12 +200,17 @@ def _copy_observation_tree(value, budget, *, max_nodes, max_depth):
                 scalar = getattr(item, field.name)
                 if type(scalar) not in (int, float) or not finite(scalar):
                     raise ValueError('native_observation_value_invalid')
-                copy_value(scalar, depth + 1)
+                copy_value(scalar, depth + 1, where + '.' + field.name)
         else:
             raise ValueError('native_observation_value_invalid')
         return item
 
-    return copy_value(value)
+    try:
+        return copy_value(value)
+    except ValueError as exc:
+        # Preserve the failing input/type without serializing its value or
+        # calling arbitrary repr/deepcopy hooks on the trading thread.
+        raise ValueError(str(exc) + ':' + str(failure[0])[:120] + ':' + failure[1]) from exc
 
 
 def bounded_observation_copy(value):
@@ -218,12 +235,21 @@ def observation_view(stock):
         if key not in stock:
             continue
         value = stock[key]
+        if key == 'pending_entry_orders':
+            from .main_stop_quantity_source import order_source_projection
+            value = order_source_projection(value)
+        elif key in {'pending_add_order', 'entry_partial_fill_deferred_notice'}:
+            value = bool(value)  # Every native source consumer reads truthiness only.
+        elif key == 'last_reversal_features' and value is not None:
+            if type(value) is not dict:
+                raise ValueError('native_observation_feature_map_invalid:last_reversal_features')
+            value = {name: value[name] for name in SOURCE_FEATURE_KEYS if name in value}
         if key == 'holding_path_vote_ledger' and value is not None:
             if type(value) is not list or len(value) > 192 or any(type(row) is not dict for row in value):
                 raise ValueError('native_observation_vote_ledger_invalid')
             value = [{k: row[k] for k in ('persisted_at',) if k in row} for row in value]
         budget[0] -= 2 + _string_size(key)
-        result[key] = _copy_observation_tree(value, budget, max_nodes=4096, max_depth=12)
+        result[key] = _copy_observation_tree(value, budget, max_nodes=4096, max_depth=12, path=key)
     return result
 
 

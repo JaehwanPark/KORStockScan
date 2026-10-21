@@ -634,7 +634,7 @@ def test_observation_admission_bounds_depth_nodes_total_bytes_and_native_vote_ta
         observation_view({'holding_path_vote_ledger': ledger + [{}]})
     # Independently admissible fields share one aggregate 256 KiB budget.
     with pytest.raises(ValueError, match='budget_exceeded'):
-        observation_view({'last_reversal_features': ['x' * 1024] * 180,
+        observation_view({'last_reversal_features': {'tick_acceleration_ratio':['x' * 1024] * 180},
             '_trailing_entry_cost_model': ['x' * 1024] * 180})
 
 
@@ -760,3 +760,51 @@ def test_native_lane_never_relabels_an_unobserved_legacy_global_prefix():
     with pytest.raises(ValueError,match='lane_global_generation_unbound'):
         reserve_evaluation_lane(stock,view,'normal')
     assert (stock,view)==before
+
+
+def test_sql_dataframe_datetime_contract_reaches_native_source_without_timestamp_or_nat():
+    import pandas as pd
+    from src.database.db_manager import _canonical_target_datetimes
+    from src.engine.scalping.main_stop_runtime_source import observation_view
+    rows=pd.DataFrame([dict(buy_time=pd.Timestamp('2026-10-21T09:00:00+09:00'),order_time=None),
+                       dict(buy_time=None,order_time=pd.Timestamp('2026-10-21T10:00:00+09:00'))]).to_dict('records')
+    for row in rows:
+        with pytest.raises(ValueError,match='native_observation_value_invalid'):
+            observation_view(row)
+        clean=_canonical_target_datetimes(dict(row))
+        copied=observation_view(clean)
+        for key,value in row.items():
+            assert copied[key] is None if value is pd.NaT else copied[key].timestamp()==value.timestamp()
+            assert copied[key] is None or type(copied[key]) is datetime
+    # Submicrosecond evidence is not silently truncated or declared canonical.
+    stamp=pd.Timestamp('2026-10-21T09:00:00.000000001+09:00')
+    assert _canonical_target_datetimes(dict(buy_time=stamp))['buy_time'] is stamp
+
+
+def test_native_order_and_feature_projections_ignore_unconsumed_payloads_preserve_proof():
+    from src.engine.scalping.main_stop_runtime_source import observation_view
+    from src.engine.scalping.main_stop_quantity_source import build_quantity_source
+    stock=stage_stock()
+    before=build_quantity_source(stock,at=1000.)
+    class NoCopy:
+        def __deepcopy__(self,memo): raise AssertionError('unconsumed payload visited')
+    stock['pending_entry_orders'][0].update(ai_payload='x'*1000000,internal=NoCopy())
+    stock['last_reversal_features']=dict(tick_acceleration_ratio=1.25,tick_context_quality='fresh',
+        unrelated_payload=NoCopy(),unconsumed_trace='x'*1000000)
+    stock['pending_add_order']={}
+    stock['entry_partial_fill_deferred_notice']={'detail':NoCopy()}
+    view=observation_view(stock)
+    assert build_quantity_source(stock,at=1000.)==before==build_quantity_source(view,at=1000.)
+    assert 'ai_payload' not in view['pending_entry_orders'][0]
+    assert view['last_reversal_features']=={'tick_acceleration_ratio':1.25,'tick_context_quality':'fresh'}
+    assert view['entry_partial_fill_deferred_notice'] is True and view['pending_add_order'] is False
+    stock['pending_entry_orders'][0]['cancel_terminal_pending']=True
+    assert build_quantity_source(stock,at=1000.)['status']=='unknown'
+    assert build_quantity_source(observation_view(stock),at=1000.)['status']=='unknown'
+
+
+def test_copy_failure_reports_consumed_path_and_type_without_value():
+    from src.engine.scalping.main_stop_runtime_source import observation_view
+    stock=stage_stock();stock['pending_entry_orders'][0]['qty']=float('nan')
+    with pytest.raises(ValueError,match=r'native_observation_value_invalid:pending_entry_orders\[0\]\.qty:float'):
+        observation_view(stock)

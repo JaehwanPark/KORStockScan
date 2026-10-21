@@ -89541,11 +89541,12 @@ def handle_holding_state(
             scale_in_gate=gate, scale_in_action=action, reason="shared_main_rebound_entry", force=True)
         _process_scale_in_action(stock, code, ws_data, action, admin_id)
     elif now_ts - float(stock.get("last_add_block_log_ts", 0) or 0) >= 30:
-        assessment = (stock.get("_main_rebound_entry_assessment") or {}) if gate.get("allowed") else {}
+        assessment = stock.get("_main_rebound_entry_assessment") or {}
         _log_holding_pipeline(stock, code, "avg_down_shared_rebound_blocked",
             reason=gate.get("reason") if not gate.get("allowed") else assessment.get("reason", "shared_main_rebound_source_unavailable"),
             last_assessment_reason=(stock.get("_main_rebound_entry_assessment") or {}).get("reason"),
             last_assessment_at=stock.get("_main_rebound_entry_assessed_at"),
+            assessment_scope="current_evaluation" if gate.get("allowed") and stock.get("_main_rebound_entry_assessed_at") == now_ts else "prior_evaluation_diagnostic",
             machine_action=assessment.get("machine_action"),
             structure_phase_family=assessment.get("structure_phase_family"),
             source_signal_id=assessment.get("source_signal_id"),

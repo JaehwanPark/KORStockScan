@@ -1085,3 +1085,92 @@ trailing의 최초 직접 재생은 all_scope_assembly_code_changed로 차단됐
 기준2835cfdff 대비 범위 증감: non-test source +187/-13, tests +175/-9, docs +34/-0(이 계수 행 이전). 순증은 기존 source의 hash-bound metadata cache와 관측 배정·부정 회귀·완전 인계 증거이며, 새 module/주문 진입점/worker는0이다. 최종 반복 검증은 producer/consumer577와 인계30 PASS이며 구 수량 stage profile도 함께 통과했다.
 
 최종 준비(16:44 KST): source commit eeaed90f602b7e3061cf0adfb7c3a1746e5dd68e, managed release /home/ubuntu/KORStockScan-runtime-releases/nonfixed-capacity-20261021-eeaed90f6. 수량3b6cfb80b를 포함한 clean 통합 후보다. active/delay/stop/holding native 인계·4종 capability·운영 report currentness PASS, native128scope/76800행/598신호 parity 불일치0, 변경된 utility에 대한 trailing20824scope native 재검증 PASS(51.870초·RSS184428KiB)다. 원 수량/정책/selector9파일 SHA와 ea68/PID1724066/start19233026/cwd가 불변이고 원 epoch1792547808026387070은running이다. 따라서 candidate_preflight_ready=true, actual_transition_ready=false이며 자연 종료/전건 거부 증빙과 후속 PID 관측은 남는다. deployment_collector_shutdown_actor_unproven을 우회하지 않았다. 실제 배포 선택·재기동·전환 예약·정책/환경 변경·Kiwoom/provider/주문/Telegram 호출0. 무수신127은 exact 경계 대조 완료이며 원인 미확정 자체는 OPEN이다. [최종 native 준비 증거](../../tmp/nonfixed-capacity-repair-20261021/readiness.json), [127건 exact 대조](../../tmp/nonfixed-capacity-repair-20261021/no-receive-exact-trace.json), [기존·후보 오프라인 비교](../../tmp/nonfixed-capacity-repair-20261021/offline-comparison.json).
+
+## 2026-10-21 장중 손실 청산과 손절·트레일링 정책 적정성
+
+검토 시점은 **2026-10-21 15:27:41 KST**다. 장 마감 전체 실적이 아니다. 기준 workspace commit `1f90a93fa5ee35ee03255a44649f07f26f1b4af0`, 실제 선택/실행은 `ea68c5a850ce88919c1a6d19a18d461f0fb1183d`, Main PID `1724066`/start ticks `19233026`이다. `/proc`의 실제 cwd/start ticks, 당일 과거 PID별 정책 로딩 영수증, PostgreSQL 읽기 전용 완료거래, 원 pipeline 신호·주문·체결을 대조했다. [거래별 대사](../../tmp/stop-result-review-20261021/analysis.json), [원천 결속](../../tmp/stop-result-review-20261021/source-bindings.json), [검증](../../tmp/stop-result-review-20261021/verification.json).
+
+**판정: 완료 매도 12건 모두 `scalp_trailing_take_profit`이며, hard/soft stop 규칙으로 체결된 매도는 0건이다. DB 수익률이 음수인 4건은 트레일링의 손실 청산이다. 정책 로딩/실효 임계치는 일치하지만 수익 보호 설계의 적정성과 연구 원천 완전성에는 잔여 문제가 있다.** 주문 전 LOSS 라벨은 이 4건을 별도 손절 규칙의 실적으로 바꾸지 않는다. 15:01 삼성의 신호 수익률은 반올림된 `-0.00`/TRAILING으로 기록됐으므로 DB의 유효 수익률과 체결 가격·수량도 함께 사용했다.
+
+### 실제 손실 청산과 원인
+
+| 체결 시각 / ID | 종목·수량 | 평균 매수가 → 체결가 | DB 수익률 | 설정 비용 차감 손익 | 직접 원인 |
+| --- | --- | --- | --- | --- | --- |
+| 08:17:02 / 49406 | 미래에셋증권 7주 | 26,250 → 26,300원 | -0.0397% | -73원 | 순이익 고점 +0.53%, 가격 고점 26,450원에서 실행 bid 26,300원까지 0.5671% 하락하여 약세 한도 0.4%를 넘었다. 매매차익 350원보다 설정 비용 423원이 크다. |
+| 09:04:41 / 49399 | 두산에너빌리티 7주 | 63,585.7143 → 63,700원 | -0.0508% | -226원 | 09:04:33의 첫 신호는 순이익 +0.11%/bid 63,800원이었지만 09:05 이전 시간창에 6회 차단됐다. 09:04:40 bid 63,700원/순이익 -0.05%로 변하자 LOSS 안전 예외로 진행했다. 고점 64,150원 대비 최종 하락 0.7015%. |
+| 09:21:12 / 49350 | 삼성전자 2주 | 222,000 → 222,000원 | -0.2300% | -1,021원 | 09:21:01 평균가 도달로 기존 자동 수동관리 이관이 해제됐다. 이미 `armed=true`인 트레일링이 고점 223,000원 대비 bid 222,000원의 0.4484% 하락에 청산했다. 가격 손실 없이 설정 비용만 발생했다. |
+| 15:01:26 / 49418 | 삼성전자 2주 | 221,000 → 221,500원 | -0.0043% | -19원 | 순이익 고점 +0.45%, 고점 222,500원에서 bid 221,500원까지 0.4494% 하락했다. 당시 mark는 222,000원이지만 실제 매도 판단은 bid다. 매매차익 1,000원보다 설정 비용 1,019원이 크다. |
+
+4건 손익 합계는 **설정 비용 기준 -1,339원**이다. 전체 완료 12건의 같은 기준 합계는 +6,173원이며 EV나 정책 개선 효과를 뜻하지 않는다. 12건 모두 `remaining_sell_qty=0`이고 DB와 terminal의 수량·체결가격이 일치한다. 다만 모두 `main_lifecycle_actual_cost_status=cost_source_unavailable`, 비용 원천은 `configured_trade_cost_rate`다. 실제 증권사 수수료·세금 대사 후 순손익은 **null/미확인**으로 유지한다. 당일 `trade_performance_facts` 0행은 이 장중 조회 시점의 후행 fact 미생성 상태이며, 장후 실패로 단정하지 않는다.
+
+4건의 마지막 신호부터 broker fill 수신까지는 각각 0.561/1.207/0.768/0.459초였다. 최종 신호 bid와 실제 체결가는 모두 같았다. 따라서 이 4건에서 마지막 주문 이후 불리한 체결 가격 차이는 관측되지 않았다. 이는 신호 이전 가격 변화나 두산의 시간창 차단을 제외한 대사이며, 전체 시스템의 지연 무결함을 뜻하지 않는다.
+
+두산의 09:01:33 `manual_control_open_loss_auto_excluded`(-1.46%, preset 기준 -1.4%)는 매도 체결이 아니라 자동 관리 제외다. 09:03:36 평균가 회복으로 해제된 뒤 위 트레일링 청산으로 이어졌다. 기존 manual/operator custody와 손절 매도 실적을 합산하지 않는다.
+
+### 정책 수립과 실제 적용
+
+| 대상 | 생산·선정 근거 | 당일 소비 / 판정 |
+| --- | --- | --- |
+| Main stop | source 10/20 → target 10/21, semantic hash `9668356862bc7c2fda91e6daee541cbd35d560a9af8a988358906dd7b305089a`. 9개 cell 모두 `baseline_carry`, selected candidate 없음. | 7개 PID 로딩 영수증의 policy byte hash `62a6268f5c09832fc80450383be9342c137c5e6d134e00435ccc62b635b62812`와 loaded cell hash가 실제 파일/값과 일치한다. 새 손절 임계치를 실적으로 검증해 채택한 정책은 아니다. |
+| 공통 stop 값 | soft -3%, hard -5%, micro grace 60초, grace emergency -4%. 기존 protect 확인값은 window 20초/min samples 3/min span 8초/below ratio 0.67/buffer 1%, protect exit floor -0.3%, emergency -2%. | 실제 stop policy 및 현재 PID 환경을 대조했다. 오늘 위 4건의 청산 규칙은 trailing이므로 60초 유예나 protect 확인 지연을 이 손실의 직접 원인으로 귀속할 근거는 없다. |
+| 일반 트레일링 | bootstrap `scalp_trailing_mechanical_baseline_receipt_v2`: `operator_directed_m1_baseline`. 모든 장에서 start +0.4%, weak giveback 0.4%, strong 0.8%; classifier `mechanical_strength_v2`. | 실제 4건 모두 weak 0.4%를 사용했다. 현재 PID 환경, 당일 signal의 실효값, 순수 native 결정 함수의 재계산이 일치한다. AI score는 `usable=False`다. |
+| 트레일링 장후 후보 | 당일 combined policy artifact는 `hold_source_gap`, 사유 `trailing_index_native_archive_binding_missing`, runtime overrides 없음. | 실제 bootstrap은 명시적으로 승인된 baseline을 유지했다. 후보 보고서가 존재하거나 bootstrap이 PASS라는 이유로 새로운 튜닝 성과를 주장하지 않는다. 현재 후보 artifact의 결손을 활성 baseline 미로딩으로 해석하지 않는다. |
+| PREOPEN → PID | 07:57:22 bootstrap, manifest semantic hash `2986238a1ee245bd71a8078c20641765b24d44aebf46528eb52d2adc332940b6`. | 10:56:32 verify는 PID1724066 `passed=true`, missing/mismatch 0. 현재 `/proc` 식별도 일치한다. 오전 각 손실의 PID는 904787/1139985/1166767, 오후는1724066으로 구분했다. |
+
+정책 소비의 기술적 일치는 확인된다. 그러나 **baseline의 보존이 경제적 최적성의 검증은 아니다.** stop 연구의 20개 position 중 17개는 `unsupported_quote_without_actual_decision`, 2개는 `native_source_capture_loss`, 1개는 `manual_handoff_not_sell`이다. 실제 비용/terminal 결손은 20개 모두에 기록돼 있고 선택/holdout 근거가 없다. 이 배제 사유를 실측 수익 0이나 “실제 손절 횟수만 늘리면 해결”로 바꾸면 안 된다.
+
+### 보완이 필요한 지점과 후속 수용
+
+1. **수익 보호의 결합 설계.** start 순이익 +0.4%와 고점 가격 대비 giveback 0.4%는 서로 다른 분모다. 경계값만 대입해도 `(1.004 × 0.996 − 1) × 100 = -0.0016%`이며 호가 단위, spread, 판단 사이 가격 변동이 추가된다. 현재 일반 trailing은 별도 양의 순이익 보장선을 두지 않으며 protect exit floor -0.3%가 이 경로의 최저 이익을 보장하지 않는다. 시작선·되돌림폭·실행 bid·비용·tick을 같은 재생으로 비교하되, 오늘 4건만으로 임계치를 변경하지 않는다.
+2. **시간창과 손실 예외의 상호작용.** `kiwoom_orders.sell_side_open_time_passthrough_reason`은 LOSS를 안전 예외로 두고, dispatcher는 `profit_rate < 0`일 때 LOSS를 선택한다. 두산에서는 양수 신호 차단 → 음수 신호 허용이 실제 발생했다. 이는 현재 코드와 승인된 시간창에 맞는 동작이지만 이익 보호 목표와 충돌할 수 있다. 원 6개 차단·최종 신호·체결을 하나의 position 경로로 보존하고 시간창을 포함한 정책 비교가 필요하다. 183 exit signal은 12개 position의 반복 신호이며 183개 거래가 아니다.
+3. **수동관리 해제 후 활성 상태의 원천.** 삼성49350은 신호의 peak 순이익 +0.22%가 start +0.4%보다 낮지만 이미 armed 상태였다. 09:21:01 native `original_trailing_source.decision.armed=true`와 09:21:11 crossing은 원문 offset/hash로 확인했다. 같은 position의 arm을 유지/복구하는 코드와는 양립하지만, 최초 arm의 역사적 시각·peak·정책 원문은 이번 검토에서 입증하지 못했다. 따라서 완전한 적정 판정은 보류하며 기존 arm/수동관리 복귀 계약의 원천을 확인해야 한다. 임의 arm 초기화나 수동 제외 해제는 수행하지 않는다.
+4. **현재 생산자→연구 소비자 결손.** 완료 12개 position 중 7개의 최종 exit signal에 `main_stop_normal_exit_decision_gap`이 있다. 49392/49399/49375/49350/49415는 `native_observation_value_invalid`, 49402/49417은 `native_observation_budget_exceeded`다. 마지막49417은 현재 PID의15:07 신호이므로 오래된 배포의 과거 결손으로만 분류할 수 없다. `_main_stop_normal_exit_fields`가 `observation_view`/`bounded_observation_copy`를 거쳐 receipt를 만들고 예외를 gap으로 남기는 경로와 일치한다. 원 오류가 가리키는 복사 경계는 확인했으나, 당시 거부된 개별 필드/타입/크기까지 저장되지 않아 그 하위 원인은 아직 입증하지 못했다. 실제 신호·체결이 있어도 연구용 정상 종료 영수증이 계속 빠질 수 있는 결손이다. 기존 source owner에서 필요한 입력의 bounded projection과 형식 계약을 수리하고 정상/복구/큰 입력·세대 전환 회귀 및 새 실제 영수증까지 확인해야 한다. 한도 증대나 예외 무시만으로 닫지 않는다.
+5. **비용·경제성 수용.** 기존 `HoldingProfitExitSourceContractRepair`와 `InitialQuantityProducerConsumerRepair1010`의 비용/terminal 수용 범위를 사용한다. 실제 비용 원천과 정규 fact 생성 뒤 정확한 position·venue/session·policy별로 비교하고 원천 결손 행은 별도 제외한다. 삼성49350의 이월 보유와 당일 신규 매수를 같은 보유시간 분모로 합치지 않는다. 기존 `DirectFamilyPreopenPolicyHandoff`의 정책/PID 소비와 경제성 수용도 분리한다.
+
+이번 작업은 읽기 전용 분석과 이 감사 기록 추가다. non-test source +0/-0, tests +0/-0, 신규 runtime entrypoint/producer 0; 기존 source·운영 정책·실행 소비자는 `retained`, 대체/삭제 대상은 `none`이다. 원 1,413,010,480-byte prefix를 1회 읽고(208,590행, 1.98초, 과대행 제외0) 필요한 event와 offset/SHA만 연구 scratch에 보존했다. 이어 원문293행/5,550,564바이트를 직접 대사했다. [읽기 범위](../../tmp/stop-result-review-20261021/raw-prefix-review.json). native stop semantic/cell 검증, 당일7PID policy hash 대사, 4개 손실의 순수 trailing 함수 재현 PASS다. 이는 실제 비용 또는 삼성 최초 arm 원천의 PASS를 뜻하지 않는다. 재기동·정책/임계치 변경·provider/account/order 호출·장후 전체 재생성은 수행하지 않았다. 원 연구 완료 기록은 당시 범위의 완료로 보존하며 이번에 확인한 현재 결손은 기존 자연 수용 owner에서 다룬다.
+
+
+
+
+## 2026-10-21 normal-exit receipt and holding-input repair
+
+범위는 사용자 요청의 청산 판단 원천 수리와 추가된 AVG_DOWN 입력·사유 전달 수리다. 기준 통합 코드 `eeaed90f6`, 작업 기준 문서 자식 `584d2f6c1`, 격리 worktree `normal-exit-receipts-20261021`에서 구현한다. 실제 선택본 `ea68c5a85`/PID1724066/start19233026은 유지하며 이번 권한은 **배포본 준비만**이다. 재기동·selector·정책 수치·시간창·수동 custody·provider·주문·stale/cap 변경 권한으로 해석하지 않는다.
+
+### 원인, 수리와 직접 소비자
+
+- DB `get_active_targets`의 dataframe→record 변환은 SQL datetime을 `pandas.Timestamp`/`NaT`로 반환한다. 기존 exact-type 관측 복사는 이를 거부한다. DB owner에서 microsecond 정확도의 Timestamp를 원 timezone/fold의 Python datetime으로, NaT를 null로 정규화한다. submicrosecond 시각은 절삭하지 않고 계속 거부한다.
+- 주문 상태에는 수량 증명과 무관한 큰 진입 feature/telemetry가 함께 있다. 기존 관측 복사가 이를 순회하면서 고정 budget을 소진한다. `main_stop_quantity_source.order_source_projection`을 실제 수량 builder와 관측 view가 공통 소비하여 원 7개 수량·terminal/reconciliation 필드만 먼저 투영한다. post-add feature도 실제 quality/decision 소비 필드만 투영한다. 64KiB quantity proof, 256KiB observation, node/depth/string 제한과 full/partial/cancel/missing proof 판정은 유지한다.
+- 복사 실패는 기존 reason prefix와 함께 정확한 필드 경로·타입을 기록한다. 값·임의 repr/deepcopy는 실행하지 않는다. 정상 청산 forced capture→normal decision→native terminal reader 통합 회귀를 포함한다. 과거 7건은 거절 당시 원 입력 필드가 보존되지 않았으므로 위 재현을 각 사건의 정확한 하위 원인으로 소급 확정하지 않는다.
+- Main의 두 HOLDING dispatch는 snapshot 이후 물리 시각을 새로 잡고 같은 시각의 now_ts/now_dt를 전달한다. 107ms 미래 오분류 재현과 진짜 미래 시각 차단을 함께 검증한다. quote 시각으로 현재 시각을 끌어올리거나 stale 허용을 늘리지 않는다.
+- fresh source/quote로 입증된 native `no_matching_pattern`만 정상 미성립 WAIT로 전달한다. missing/stale/window-incomplete는 기존 결손으로 유지한다. 판단 잠금에서도 직전 clock·preflight·timing·native 사유를 `prior_evaluation_diagnostic`으로 남긴다. 잠금을 풀거나 과거 PASS를 현재 주문 권한으로 재사용하지 않는다.
+- EXIT 투표의 실행가능 손익은 기존 frozen configured fee source와 fresh normalized bid depth의 전 수량 커버리지로 추정한다. 최대 기존 10호가의 실제 관측량으로 VWAP 영향만 계산하며, fee와 impact는 평균 진입 원가 금액 기준이다. 잔량 부족·호가 불일치·역전·미래/오래된 시각·비용 해시/clock/종류 결손은 null이다. 상단 호가가 전량을 커버할 때 impact0은 관측 모델 결과다. 실제 증권사 비용·체결 보장으로 표기하지 않는다. 기존 명시적 비용 입력이 잘못된 경우 이를 대체해 정상화하지 않는다.
+
+### 원본 대사와 재생 한계
+
+[원인 재현과 역사 대사](../../tmp/normal-exit-receipt-repair-20261021/causal-and-historical-verification.json)는 동결된 selected-events 61MiB만 한 번 읽어 SHA와 정확한 raw offset/size/SHA를 결속했다. 원 1.4GiB 전체 재스캔·API·거래 DB 변경은 없다. 네 손실 건의 신호 10개를 당시 영수증의 SELL_WINDOWS/09:05 cutoff/scope로 native trailing decision와 sell-time guard에 함께 재생했다. 두산 6회 이익 신호 차단→마지막 LOSS 예외를 재현했다. 앞선 호가의 체결 가능성·정책 개선 EV는 null이며 시간창이나 +0.4/0.4/0.8 수치를 바꾸지 않았다.
+
+원 12건 actual broker cost는 null, 49350 삼성 이월분 최초 arm clock/peak/policy 원천도 미확인이다. native 당일 broker-cost source/연구비용 index 부재를 확인하며 설정 비용 -1,339원을 실제 순익으로 대체하지 않는다. 과거 영수증 결손 ID는 **49402,49392,49399,49375,49350,49415,49417**이며 원 bytes/reasons를 보존한다. 정상화된 영수증·arm·fill을 소급 발행하지 않는다. 실제 ADD0/엄격 모집단0/experiment_not_armed는 유효한 미확정 상태이며 ADD/NO_ADD 쌍의 성과도 null이다.
+
+### 교체 및 제거 판정
+
+| 기존 경로 | 판정 / 현재 소비 근거 |
+| --- | --- |
+| dataframe datetime 직접 전달 | consolidated: 기존 DB owner의 정규화로 관측·시간 소비자에 전달 |
+| 주문/feature 전체 재귀 복사 | removed: 소비 필드 projection 하나로 수량 builder와 관측 view 통합 |
+| 필드 없는 복사 오류 | replaced: 같은 예외 prefix + bounded path/type |
+| 루프 시작 시각의 HOLDING 전달 2곳 | replaced: snapshot 뒤 실제 관측 시각, wrapper·안전/시간 gate는 retained |
+| 정상 FALSE를 unavailable로 일괄 표시 | replaced: fresh FALSE만 WAIT, 미확인/새 결손 탐지 retained |
+| 잠금 시 진단 assessment 삭제 | removed: 직전 진단과 clock을 표시, lock/권한 consumer retained |
+| 비용 입력 생산자 없는 null-only 경로 | consolidated: frozen fee/current full depth에서만 추정, 미확인 null retained |
+| 기존 발행 코드 세대 인계 | retained: immutable 정책/보고서 reader 필요; 새 complete-generation exact dependency 검증 추가 |
+
+새 root module/producer/wrapper/병렬 추적 owner는 없다. source 순증은 기존 DB·관측 owner의 입력 projection, 명시적 추정 비용의 provenance, 이미 발행한 정책 보존용 정확 세대 hash 결속 때문이다. tests는 실제 생산자·소비자와 missing/stale/conflict/새 세대/hard guard 음성 사례를 포함하며 기존 fixture를 재사용한다.
+
+검증·배포 준비의 최종 commit, source/tests/docs 증감과 native 인계 결과는 아래 후속 기록에 남긴다. 코드 수리와 실제 선택/PID 소비, 다음 자연 정상 영수증, 실제 비용 및 경제성은 별도다. 현재 epoch 자연 종료 뒤 전환의 유일한 owner는 `DirectFamilyPreopenPolicyHandoff`다. 새 영수증 결손·비용 입력 수용과 역사 결손은 `HoldingProfitExitSourceContractRepair`에서 원 Acceptance를 유지한다.
+
+
+### 코드 리뷰와 준비 전 검증
+
+수리→리뷰→보완→재리뷰를 완료했다. self review에서 비용 추정 provenance가 AI payload whitelist에서 빠지는 문제를 보완하고, native hash helper 이름과 충돌한 profile 등록 변수도 바로잡아 직접 회귀를 추가했다. 새로운 caller/branch는 기존 owner 안의 순수 projection·비용 모델·정상 FALSE 분류뿐이며 신규 dispatch/entrypoint/engine-root module은 없다. source8파일 +244/-20, tests5파일 +233/-5, docs3파일 +88/-0(후속 준비 결과 기록 전)이다. 이동은0, unrelated canonical 변경은 포함하지 않는다.
+
+최종 생산자·소비자 313 PASS, 새 인계 complete-generation 15개와 hash-helper1개 PASS(같은 실행의 선별된 source 포함327 PASS), 기존 수량/비상시 발행 세대 인계30 PASS다. Python compile·diff check·문서 parser/현재 owner 유일성도 확인했다. 첫 실험에서 발생한 test fixture의 quote-clock 누락/queue seal 누락은 실제 fixture 계약에 맞춰 고쳤으며 보호 한도는 변경하지 않았다. 확대 실행의 기존 WATCHING 테스트 `test_watching_state_logs_latency_entry_price_guard`는 준비 부모584d와 현재 모두 동일하게 실패했다(주문 mock 기대와 기존 preflight 차이). 이 작업의 HOLDING·청산 수리 회귀는 최종 별도 실행으로 모두 통과했다. 부모 실패는 이 source 수리의 성공으로 덮지 않으며 기존 entry owner에서 추적할 인접 한계다. 실제 provider·주문·Telegram·재기동 검증은 실행하지 않았다.

@@ -275,6 +275,54 @@ def _best_levels(ws_data: dict[str, Any]) -> dict[str, int]:
     }
 
 
+def _observed_exit_costs(position, ws, *, levels, fresh, average, quantity, now):
+    """Model full-quantity execution from the frozen fee source and visible bids.
+
+    This is configured-cost/current-book arithmetic, never broker cost or a
+    promised fill. Missing depth, malformed levels and unknown fees stay null.
+    Consume normalized book rows only; no request, parser or fallback price.
+    """
+    cost = position.get("_trailing_entry_cost_model")
+    if not fresh or average <= 0 or quantity <= 0 or type(cost) is not dict:
+        return None
+    rate, known = cost.get("sell_cost_rate"), cost.get("known_at")
+    sha = cost.get("source_sha256")
+    if (type(rate) not in (int, float) or not math.isfinite(rate) or not 0 <= rate < .05
+            or type(known) not in (int, float) or not math.isfinite(known) or not 0 < known <= now
+            or type(cost.get("buy_cost_krw")) not in (int, float) or cost["buy_cost_krw"] != 0
+            or cost.get("actual_broker_cost") is not False
+            or cost.get("allocation") != "frozen_configured_round_trip_rate_on_sell_model_only"
+            or type(sha) is not str or len(sha) != 64 or any(c not in "0123456789abcdef" for c in sha)):
+        return None
+    bids = (ws.get("orderbook") or {}).get("bids") if type(ws.get("orderbook")) is dict else None
+    if type(bids) is not list or not bids:
+        return None
+    left, proceeds, previous = quantity, 0., None
+    for index, row in enumerate(bids[:10]):
+        if type(row) is not dict:
+            return None
+        price, volume = row.get("price"), row.get("qty", row.get("volume"))
+        if (type(price) not in (int, float) or not math.isfinite(price) or price <= 0
+                or type(volume) is not int or volume <= 0
+                or (previous is not None and price >= previous)
+                or (index == 0 and (price != levels["best_bid"] or volume != levels["best_bid_qty"]))):
+            return None
+        take = min(left, volume)
+        proceeds += take * price
+        left -= take
+        previous = price
+        if left == 0:
+            basis = quantity * average
+            return dict(fee_tax_pct=proceeds * rate / basis * 100.,
+                slippage_bps=(levels["best_bid"] * quantity - proceeds) / basis * 10000.,
+                source="frozen_configured_cost_and_visible_bid_depth_model",
+                cost_source_sha256=sha, cost_known_at=known, observed_at=now,
+                depth_levels=index + 1, quantity=quantity, modeled_vwap=proceeds / quantity,
+                percent_basis="average_entry_notional", actual_broker_cost=False,
+                actual_fill=False)
+    return None
+
+
 def _request_suffix(request_code: str) -> str:
     upper = str(request_code or "").upper()
     if upper.endswith("_NX"):
@@ -1007,6 +1055,19 @@ def build_holding_decision_context(
         not math.isfinite(estimated_slippage_bps) or estimated_slippage_bps < 0
     ):
         estimated_slippage_bps = None
+    modeled_costs = _observed_exit_costs(position, ws, levels=levels, fresh=bbo_fresh,
+        average=avg_price, quantity=memory_qty, now=now_epoch)
+    # Explicit invalid inputs remain gaps. Only absent fields can be supplied
+    # by the existing frozen cost source plus full visible-quantity coverage.
+    if modeled_costs is not None:
+        applied = []
+        if "estimated_fee_tax_pct" not in position:
+            estimated_fee_tax_pct = modeled_costs["fee_tax_pct"]
+            applied.append("estimated_fee_tax_pct")
+        if "estimated_slippage_bps" not in position:
+            estimated_slippage_bps = modeled_costs["slippage_bps"]
+            applied.append("estimated_slippage_bps")
+        modeled_costs = dict(modeled_costs, applied_components=applied) if applied else None
     estimated_net_executable_pnl_pct = (
         round(
             executable_pnl_pct
@@ -1191,6 +1252,7 @@ def build_holding_decision_context(
             "estimated_fee_tax_pct": estimated_fee_tax_pct,
             "spread_cost_bps": spread_bps,
             "estimated_slippage_bps": estimated_slippage_bps,
+            "cost_estimate_source": modeled_costs,
             "estimated_net_executable_pnl_pct": (estimated_net_executable_pnl_pct),
             "remaining_qty": memory_qty,
             "best_bid_qty": levels["best_bid_qty"],
@@ -1530,6 +1592,7 @@ def holding_decision_context_model_payload(
                     "estimated_fee_tax_pct",
                     "spread_cost_bps",
                     "estimated_slippage_bps",
+                    "cost_estimate_source",
                     "estimated_net_executable_pnl_pct",
                     "remaining_qty",
                     "best_bid_qty",

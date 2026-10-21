@@ -3838,6 +3838,96 @@ REVIEWED_NONFIXED_CAPACITY_DEPENDENCY_VARIANTS = {
 }
 
 
+# Normal-exit source capture and holding-input repair; preserve issued generations.
+# Existing stop/holding review, 2026-10-21. No trading thresholds change.
+REVIEWED_HOLDING_INPUT_HASHES = {'src/database/db_manager.py': '263871b31390d03e14b3881c4edd09bb74f7fce42f142bd19afb5b0778d49ff8',
+ 'src/engine/kiwoom_sniper_v2.py': 'f0289f079fc3f193efe02a0ff3ee7542da5dc3b1689292277372ba526bc4eba7',
+ 'src/engine/scalping/avg_down_rebound.py': '8248104e54c002e41a846c1b318adc8b86445934538256746e7404b72cc15e1f',
+ 'src/engine/scalping/holding_decision_context.py': '5d7577896850988b6419996a76db24344f7a612c59ecac339331ca2e841607d2',
+ 'src/engine/scalping/main_stop_quantity_source.py': '736226f72aabb1f7a1fe134d746e1f79139ae5ce3da52d83d49abb1d37483f36',
+ 'src/engine/scalping/main_stop_runtime_source.py': '6d097264784b2f7a1601c534a27d13c0647dee227bfa5e12bedb2a9471cd2344',
+ 'src/engine/sniper_state_handlers.py': '7c24ee7d6fbd307be13e1d64e1c4995fa06a06f098b7c0144f54984b624a1c5d'}
+REVIEWED_HOLDING_INPUT_PAIRS = {'src/database/db_manager.py': (('6577bc9847a7decace8ad701f2ea628e6f49e687e30296aa0c4c977212b82672',
+                                 '263871b31390d03e14b3881c4edd09bb74f7fce42f142bd19afb5b0778d49ff8'),),
+ 'src/engine/kiwoom_sniper_v2.py': (('2498fb498de2d796fd9abc695caad99ccc61b914c2999a640d88f3f5c96f8dac',
+                                     'f0289f079fc3f193efe02a0ff3ee7542da5dc3b1689292277372ba526bc4eba7'),
+                                    ('3b35fc7133fc87cf5b23ae6f03c3272b9b78b61840f3bc1c6f0e84db5ba8def4',
+                                     'f0289f079fc3f193efe02a0ff3ee7542da5dc3b1689292277372ba526bc4eba7'),
+                                    ('44133e57f1c20521b80cfa5fa1e7dadb7c89b010ab461cce3959fd1ba6fd4997',
+                                     'f0289f079fc3f193efe02a0ff3ee7542da5dc3b1689292277372ba526bc4eba7'),
+                                    ('4454e6051c47ef959f0b8201526901fe5bd2dfff3b25aaa5593605cf7f53cd33',
+                                     'f0289f079fc3f193efe02a0ff3ee7542da5dc3b1689292277372ba526bc4eba7'),
+                                    ('45a139a2ed413afb888cd244ae73d60d5f312b503a8e1c54cc1ce599b048d279',
+                                     'f0289f079fc3f193efe02a0ff3ee7542da5dc3b1689292277372ba526bc4eba7'),
+                                    ('4cbd06363b1156761fd748c51ac9fbb4f54e69b64771f9f86e6770bba5ce177c',
+                                     'f0289f079fc3f193efe02a0ff3ee7542da5dc3b1689292277372ba526bc4eba7'),
+                                    ('51280b79c7eee85279c9d649c76888cb03954f73c18c1e0ba41a863c4ea8a0a1',
+                                     'f0289f079fc3f193efe02a0ff3ee7542da5dc3b1689292277372ba526bc4eba7'),
+                                    ('522bc4a71a1375144db798b2e451fcee03a44e80d57323c7996fa365bf20c71c',
+                                     'f0289f079fc3f193efe02a0ff3ee7542da5dc3b1689292277372ba526bc4eba7'),
+                                    ('647f24d8805d0d9d6c1489df272b258706c7314111121e8660c01ee72930e713',
+                                     'f0289f079fc3f193efe02a0ff3ee7542da5dc3b1689292277372ba526bc4eba7'),
+                                    ('6f1abc2ad7c532d693b832fb041ff519874ce141b52d2f1c724b445467440c0e',
+                                     'f0289f079fc3f193efe02a0ff3ee7542da5dc3b1689292277372ba526bc4eba7'),
+                                    ('96319c0071dfce04980af151ff9e22b91352a704281bb727c8e68d604ee6aa20',
+                                     'f0289f079fc3f193efe02a0ff3ee7542da5dc3b1689292277372ba526bc4eba7'),
+                                    ('ab335b38a3aff9362bd17a29fde787b425a4478f60e0d328c7b60553800cc21e',
+                                     'f0289f079fc3f193efe02a0ff3ee7542da5dc3b1689292277372ba526bc4eba7'),
+                                    ('ac1bcb15d252715133c256970dabc03985522f4a2a6fced0ead54b75309481e8',
+                                     'f0289f079fc3f193efe02a0ff3ee7542da5dc3b1689292277372ba526bc4eba7'),
+                                    ('b7cec7cbec7082c9c98a8861638485432ee20346ce687dbd06d82196551548bb',
+                                     'f0289f079fc3f193efe02a0ff3ee7542da5dc3b1689292277372ba526bc4eba7'),
+                                    ('bb8cc6f224428a073f60826f8aa70e97d4b68b0383c907d681b8be5473a2d7c6',
+                                     'f0289f079fc3f193efe02a0ff3ee7542da5dc3b1689292277372ba526bc4eba7'),
+                                    ('d19c471856511889cf9728a3fee7f13c4bcdfce29566dbea80ae5b581d9e8777',
+                                     'f0289f079fc3f193efe02a0ff3ee7542da5dc3b1689292277372ba526bc4eba7'),
+                                    ('d3740c011a60c9a6214e2744e8a57da1767ea5608ccf6586c714df68d941e8da',
+                                     'f0289f079fc3f193efe02a0ff3ee7542da5dc3b1689292277372ba526bc4eba7'),
+                                    ('e1f43d4d08a0606db678c59f5755b94fbb976ef4ce55ece812ecc00e97c8973e',
+                                     'f0289f079fc3f193efe02a0ff3ee7542da5dc3b1689292277372ba526bc4eba7')),
+ 'src/engine/scalping/avg_down_rebound.py': (('56475ad935418ebb1d335e750b4a0e6fcd5c7478eb6eeae6979511cfdf8ff4af',
+                                              '8248104e54c002e41a846c1b318adc8b86445934538256746e7404b72cc15e1f'),),
+ 'src/engine/scalping/holding_decision_context.py': (('783f95ab9cd3ef2813151949cdf6aa2c2ab6ed3a1443ae60d6600d21dcd52898',
+                                                      '5d7577896850988b6419996a76db24344f7a612c59ecac339331ca2e841607d2'),),
+ 'src/engine/scalping/main_stop_quantity_source.py': (('dd49bd2d6543adfa0e653974e31c37be7aed752b6e279a58e33ceca846ea240e',
+                                                       '736226f72aabb1f7a1fe134d746e1f79139ae5ce3da52d83d49abb1d37483f36'),),
+ 'src/engine/scalping/main_stop_runtime_source.py': (('fb32767aee777ed660ec0db018b5419e6f12f09a5644882425f79a954bd32978',
+                                                      '6d097264784b2f7a1601c534a27d13c0647dee227bfa5e12bedb2a9471cd2344'),),
+ 'src/engine/sniper_state_handlers.py': (('02be17b70de8acfa2bc2750c25b2292117e4b5b6c1680a95b1d3e0e65b245d19',
+                                          '7c24ee7d6fbd307be13e1d64e1c4995fa06a06f098b7c0144f54984b624a1c5d'),
+                                         ('5900377f71e90559ca111bf60448fa60375464af10693e1b5dd16158078c8eaf',
+                                          '7c24ee7d6fbd307be13e1d64e1c4995fa06a06f098b7c0144f54984b624a1c5d'),
+                                         ('669b6109e36f81e9dee263d1c3e31011d55fd612d5641713c6ee109a827a9425',
+                                          '7c24ee7d6fbd307be13e1d64e1c4995fa06a06f098b7c0144f54984b624a1c5d'),
+                                         ('885af7dd480a520e98502bcd6729586b4d21016de8254a4a7d9e299389f09ed4',
+                                          '7c24ee7d6fbd307be13e1d64e1c4995fa06a06f098b7c0144f54984b624a1c5d'),
+                                         ('8a0c18d2c097b063a8349907f39e6057d43b7ad9ef173e5f6c4e1be48f8b21f9',
+                                          '7c24ee7d6fbd307be13e1d64e1c4995fa06a06f098b7c0144f54984b624a1c5d'),
+                                         ('8cc435544ceeda76309b9051179af20022f100c8b1bad48356636fb51b9f101c',
+                                          '7c24ee7d6fbd307be13e1d64e1c4995fa06a06f098b7c0144f54984b624a1c5d'),
+                                         ('c47a60dccf7266e27880b94cb9bccf3b2c23c6c513ede76cce33bce212abfd55',
+                                          '7c24ee7d6fbd307be13e1d64e1c4995fa06a06f098b7c0144f54984b624a1c5d'),
+                                         ('ee62c7703fe10c8c602ad13b351ffc5ab1976af5f0d0709e8f09f082a8a81d38',
+                                          '7c24ee7d6fbd307be13e1d64e1c4995fa06a06f098b7c0144f54984b624a1c5d'),
+                                         ('f79445872ae7b091f494d9e0ee7880b0476f20cd009492803261e44bd70f3c42',
+                                          '7c24ee7d6fbd307be13e1d64e1c4995fa06a06f098b7c0144f54984b624a1c5d'))}
+REVIEWED_HOLDING_INPUT_DEPENDENCY_HASHES = {**REVIEWED_HOLDING_INPUT_HASHES, **{'src/engine/automation/pre_submit_delay_partitioned_research.py': '481cf3053929d89e4679dd33be92cc5c93f7c0118e62d86fc814cd324ef00507',
+ 'src/engine/automation/pre_submit_delay_research_review.py': '7dc2c312ce3fe14d5f3343d668e22d90f083a214e5ed25144f446e26f6dec8d3',
+ 'src/utils/pipeline_event_logger.py': '2e1c150e1b7d21adcb6fa586a15c1e018cdf2e6a2aab13daa067f414d9b4e6d3'}}
+REVIEWED_HOLDING_INPUT_DEPENDENCY_VARIANTS = {
+    (trigger, REVIEWED_HOLDING_INPUT_HASHES.get(trigger, sha)): {**value,
+        'selector_path': 'src/engine/scalping/main_stop_runtime_source.py',
+        'selector_sha256': REVIEWED_HOLDING_INPUT_HASHES['src/engine/scalping/main_stop_runtime_source.py'],
+        'dependencies': {**{os.path.normpath(name): REVIEWED_HOLDING_INPUT_DEPENDENCY_HASHES.get(os.path.normpath(name), sha)
+            for name, sha in value['dependencies'].items()}, **REVIEWED_HOLDING_INPUT_DEPENDENCY_HASHES},
+        'contract_extensions': {origin: {name: REVIEWED_HOLDING_INPUT_DEPENDENCY_HASHES.get(os.path.normpath(name), digest)
+            for name, digest in paths.items()} for origin, paths in value['contract_extensions'].items()},
+    } for (trigger, sha), value in REVIEWED_NONFIXED_CAPACITY_DEPENDENCY_VARIANTS.items()
+}
+for (_trigger, _holding_input_sha), _variant in REVIEWED_HOLDING_INPUT_DEPENDENCY_VARIANTS.items():
+    REVIEWED_HOLDING_RESEARCH_DEPENDENCIES[_trigger][_holding_input_sha] = _variant['dependencies']
+
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -3943,6 +4033,9 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     delay_machine_parent_present = any((root / name).is_file()
         and hashlib.sha256(candidate_bytes(name)).hexdigest() == sha
         for name, sha in REVIEWED_DELAY_MACHINE_PARENT_HASHES.items())
+    holding_input_present = any((root / name).is_file()
+        and hashlib.sha256(candidate_bytes(name)).hexdigest() == sha
+        for name, sha in REVIEWED_HOLDING_INPUT_HASHES.items())
     nonfixed_capacity_present = any((root / name).is_file()
         and hashlib.sha256(candidate_bytes(name)).hexdigest() == sha
         for name, sha in REVIEWED_NONFIXED_CAPACITY_HASHES.items())
@@ -3954,7 +4047,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         dependencies = generations.get(trigger_sha, {})
         # New exact selectors precede their historical parent. The first match
         # selects one complete generation, never per-file SHA alternatives.
-        for variants in (REVIEWED_NONFIXED_CAPACITY_DEPENDENCY_VARIANTS,
+        for variants in (REVIEWED_HOLDING_INPUT_DEPENDENCY_VARIANTS,
+                         REVIEWED_NONFIXED_CAPACITY_DEPENDENCY_VARIANTS,
                          REVIEWED_QUANTITY_STAGE_DEPENDENCY_VARIANTS,
                          REVIEWED_QUANTITY_CAPTURE_DEPENDENCY_VARIANTS,
                          REVIEWED_COLLECTOR_FIRST_TRANSITION_DEPENDENCY_VARIANTS,
@@ -4105,6 +4199,11 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
             dependencies = {**dependencies, **REVIEWED_NONFIXED_CAPACITY_HASHES}
             extensions = {name: REVIEWED_NONFIXED_CAPACITY_HASHES.get(repository_name(name), sha)
                           for name, sha in extensions.items()}
+        if holding_input_present:
+            dependencies = {**{repository_name(name): sha for name, sha in dependencies.items()},
+                            **REVIEWED_HOLDING_INPUT_DEPENDENCY_HASHES}
+            extensions = {name: REVIEWED_HOLDING_INPUT_DEPENDENCY_HASHES.get(repository_name(name), sha)
+                          for name, sha in extensions.items()}
         dependencies_by_trigger[trigger] = (trigger_sha, dependencies)
     for key, name in paths.items():
         after = candidate_bytes(name)
@@ -4121,7 +4220,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         if before == after:
             continue
         pair = (hashlib.sha256(before).hexdigest(), hashlib.sha256(after).hexdigest())
-        if (pair in REVIEWED_NONFIXED_CAPACITY_PAIRS.get(repository_name(name), ())
+        if (pair in REVIEWED_HOLDING_INPUT_PAIRS.get(repository_name(name), ())
+                or pair in REVIEWED_NONFIXED_CAPACITY_PAIRS.get(repository_name(name), ())
                 or pair in REVIEWED_DELAY_MACHINE_PARENT_PAIRS.get(repository_name(name), ())
                 or pair in REVIEWED_QUANTITY_STAGE_PAIRS.get(repository_name(name), ())
                 or pair in REVIEWED_QUANTITY_CAPTURE_PAIRS.get(repository_name(name), ())

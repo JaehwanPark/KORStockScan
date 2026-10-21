@@ -856,3 +856,35 @@ def test_native_lane_pending_claims_close_on_early_context_exit():
         assert state['evaluation_global_prefix']==2
         assert health()['used_bytes']>before
     assert health()['used_bytes']==before
+
+
+def test_restored_datetime_and_large_order_receipt_reach_native_terminal_consumer(monkeypatch, tmp_path):
+    import pandas as pd
+    from src.database.db_manager import _canonical_target_datetimes
+    from src.engine import sniper_state_handlers as handlers
+    stock, rows, economic = native_terminal_case(tmp_path)
+    # Exercise the DB dataframe conversion, actual forced capture and final
+    # native receipt reader together, without reconstructing a lost receipt.
+    restored = pd.DataFrame([dict(holding_started_at=datetime(2026,10,16,9),
+                                 order_time=pd.NaT)]).to_dict('records')[0]
+    stock.update(_canonical_target_datetimes(restored))
+    stock['pending_entry_orders'][0]['entry_feature_telemetry'] = 'x'*1_000_000
+    stock['_trailing_entry_cost_model'] = rows[-1]['cost_model']
+    stock['_main_stop_current_quote_context'] = dict(at=rows[-1]['at'],bid=rows[-1]['bid'],bid_qty=2,
+        quote=dict(market_route='SOR',item='005930',transport_epoch=1,observed_epoch=rows[-1]['at']),
+        complete=True,market='REGULAR',evaluator='normal',decision_profit_pct=.5,
+        position_key=position_cycle_id(stock),quantity=2,buy_price=10000.,pending_exit=False)
+    captured=[]
+    monkeypatch.setattr(policy,'enqueue_source',lambda s,c,row: captured.append(deepcopy(row)) or True)
+    monkeypatch.setattr(handlers,'_is_scalp_simulated_position',lambda *a:False)
+    monkeypatch.setattr(handlers,'_main_stop_preset_observation',lambda *a,**k:None)
+    fields=handlers._main_stop_normal_exit_fields(stock,'005930',at=rows[-1]['at'],
+        mark_price=rows[-1]['bid']+1,exit_rule='scalp_trailing_take_profit')
+    assert 'main_stop_normal_exit_decision' in fields, fields
+    assert captured[0]['quantity_source']['status']=='full_fill'
+    seal(captured[0])  # The real queue seals this detached source before writing.
+    economic['terminal_observation']['exit_signal']['fields'].update(fields)
+    seal(economic,'artifact_sha256')
+    endpoint=replay.normal_exit_terminal_outcome(first_row=rows[0],last_row=captured[0],economic=economic)
+    assert endpoint['receipt_binding']['status']=='COMPLETED'
+    assert endpoint['at']==rows[-1]['at']
