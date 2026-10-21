@@ -100,6 +100,7 @@ def test_native_stop_accepts_only_sealed_lossless_compression(tmp_path, namespac
     _, report, _, _=publication(tmp_path)
     compressed=raw.with_suffix('.jsonl.gz')
     compressed.write_bytes(gzip.compress(content));raw.unlink()
+    Path(str(compressed)+'.archive_receipt.json').write_text('{"native_metadata":true}\n')
     assert post.vote_watch(tmp_path,'2026-10-12') != report['vote_watch_sha256']
     assert post.read_committed(tmp_path,'2026-10-12')[1] == report
     assert post.read_committed(tmp_path,'2026-10-12',verify_full=True)[1] == report
@@ -162,15 +163,41 @@ def test_holding_request_index_and_watch_share_original_compression_contract(tmp
     assert db.execute('SELECT count(*) FROM original').fetchone()[0]==3;db.close()
     before=post.vote_watch(tmp_path,'2026-10-12')
     for raw in raws:
+        Path(str(raw)+'.gz.archive_receipt.json').write_text('{"native_metadata":true}\n')
         raw.with_suffix('.jsonl.gz').write_bytes(gzip.compress(b'{"endpoint":"holding_path_vote","request_id":"unused"}\n'))
     assert post.vote_watch(tmp_path,'2026-10-12')==before
     db=_request_index(tmp_path,output,'2026-10-08',sources)
     assert db.execute('SELECT count(*) FROM original').fetchone()[0]==3;db.close()
     assert set(sources)=={str(path) for path in raws}
+    fresh=tmp_path/'fresh';fresh.mkdir();fresh_sources={}
+    db=_request_index(tmp_path,fresh,'2026-10-08',fresh_sources)
+    assert db.execute('SELECT count(*) FROM original').fetchone()[0]==3;db.close()
+    assert set(fresh_sources)==set(sources)
     raws[-1].unlink()
     assert post.vote_watch(tmp_path,'2026-10-12')!=before
     with pytest.raises(ValueError,match='holding_request_index_stale'):
         _request_index(tmp_path,output,'2026-10-08',sources)
+
+
+
+@pytest.mark.parametrize('suffix', ['.gz.archive_receipt.json', '.archive_receipt.json', '.gz.archive_receipt.jsonl'])
+@pytest.mark.parametrize('legacy_binding', [False, True])
+def test_watch_excludes_only_native_request_archive_metadata(tmp_path, suffix, legacy_binding):
+    folder=tmp_path/'ai_decision_requests';folder.mkdir()
+    raw=folder/'ai_decision_requests_2026-10-08.jsonl';raw.write_text('{}\n')
+    before=post.vote_watch(tmp_path,'2026-10-12')
+    binding=post.capture_vote_watch_binding(tmp_path,'2026-10-12')
+    extra=Path(str(raw)+suffix);extra.write_text('{}\n')
+    native=suffix=='.gz.archive_receipt.json'
+    if legacy_binding and native:
+        binding[str(extra)]=dict(path=str(extra),stat=list(post.source_stat(extra.stat())))
+    if native:
+        assert post.vote_watch(tmp_path,'2026-10-12')==before
+        post.verify_vote_watch_binding(tmp_path,'2026-10-12',binding)
+    else:
+        assert post.vote_watch(tmp_path,'2026-10-12')!=before
+        with pytest.raises(ValueError,match='source_set_changed'):
+            post.verify_vote_watch_binding(tmp_path,'2026-10-12',binding)
 
 
 def baseline():

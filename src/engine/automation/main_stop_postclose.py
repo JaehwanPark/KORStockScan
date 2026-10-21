@@ -122,10 +122,11 @@ def operator_sources(root, target):
 
 
 def _vote_watch_metadata(root, path):
-    """Native dedup claims and append locks are not vote research inputs."""
+    """Native synchronization and archive receipts are not research inputs."""
     import re
+    from src.engine.ai.holding_vote_replay_source import request_source_metadata
     path = Path(path)
-    return (path.parent == Path(root)/'runtime/holding_path_votes'
+    return (path.parent.parent == Path(root) and request_source_metadata(path)) or (path.parent == Path(root)/'runtime/holding_path_votes'
             and re.fullmatch(r'[0-9a-f]{64}(?:\.claims\.jsonl|\.jsonl\.lock)', path.name) is not None)
 
 

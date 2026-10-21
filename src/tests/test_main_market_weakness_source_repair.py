@@ -1689,7 +1689,7 @@ def test_frozen_observer_contract_damage_is_explicit(tmp_path, field, value):
         A.observations(data, DAY, observer_snapshot=A.stat_receipt(path))
 
 
-@pytest.mark.parametrize("mode", ["missing", "resolved", "mixed"])
+@pytest.mark.parametrize("mode", ["missing", "resolved", "mixed", "partial", "invalid_issues"])
 def test_retained_replay_label_chain_reports_epoch_gap_without_inventing_outcome(
     tmp_path, monkeypatch, mode
 ):
@@ -1713,6 +1713,9 @@ def test_retained_replay_label_chain_reports_epoch_gap_without_inventing_outcome
         if resolved
         else []
     )
+    if mode == "partial":
+        records = records * 3
+        monkeypatch.setattr(A, "CHUNK_ROWS", 1)
     normalized = data / "normalized.json"
     normalized.write_text("retained source")
     report = R.seal(
@@ -1728,7 +1731,9 @@ def test_retained_replay_label_chain_reports_epoch_gap_without_inventing_outcome
                         day=DAY,
                         path=str(normalized),
                         sha256=A.file_hash(normalized),
-                        issues={} if resolved else dict(source_epoch_unverified=25),
+                        issues=([] if mode == "invalid_issues" else
+                            {} if mode in {"resolved", "mixed"} else
+                            dict(source_epoch_unverified=25, zero=0, negative=-1, boolean=True, text="3")),
                     ),
                     records_object=1,
                     records_sha256=R.digest(records),
@@ -1779,6 +1784,11 @@ def test_retained_replay_label_chain_reports_epoch_gap_without_inventing_outcome
         data / "ai_decision_trace" / f"ai_decision_trace_{DAY}.jsonl.gz",
         (json.dumps(t) + "\n").encode(),
     )
+    if mode == "invalid_issues":
+        path = data / "report/continuous_reversal_operating" / DAY / "machine-comparison.json"
+        with pytest.raises(ValueError, match="replay_upstream_issues_invalid"):
+            list(A.replay_records(data, DAY, A.stat_receipt(path), lambda _: "KOSPI"))
+        return
     A.process_date(data, DAY, stop_at=time.monotonic() + 5)
     cursor = A.read_json(A.namespace(data) / DAY / "cursor.json")
     daily = A.check_seal(A.read_json(cursor["daily_path"]))
@@ -1790,8 +1800,15 @@ def test_retained_replay_label_chain_reports_epoch_gap_without_inventing_outcome
     assert len(natural) == 1 and natural[0]["outcome"] == ("W" if resolved else "U")
     if resolved:
         assert natural[0]["label_binding"] == "exact_event_time_actual_ask"
-    if mode == "resolved":
+    if mode in {"resolved", "partial"}:
         assert "replay_empty_partition" not in daily["input_exclusions"]
+        if mode == "partial":
+            assert daily["input_exclusions"]["replay_upstream_source_epoch_unverified"] == 25
+            assert not any("replay_upstream_" + key in daily["input_exclusions"] for key in ("zero", "negative", "boolean", "text"))
+            path = data / "report/continuous_reversal_operating" / DAY / "machine-comparison.json"
+            resumed = list(A.replay_records(data, DAY, A.stat_receipt(path), lambda _: "KOSPI", start=[0, 1]))
+            assert len(resumed) == 2
+            assert sum(chunk[3].get("replay_upstream_source_epoch_unverified", 0) for chunk in resumed) == 25
     else:
         assert daily["input_exclusions"]["replay_empty_partition"] == 1
         assert (
@@ -1861,7 +1878,7 @@ def test_early_night_defer_publishes_latest_without_reservation_or_source_reads(
     A.publish_night_status(root, completed)
     original = (root / "last_completed_computation.json").read_bytes()
     reservation = state_path.read_bytes()
-    result = A.scheduled(tmp_path)
+    result = A.scheduled(tmp_path, source_date=DAY)
     assert result["status"] == "deferred_resource_or_window"
     assert result["reason"] == reason
     assert result["attempted_at_kst"] == now.isoformat()

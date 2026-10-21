@@ -896,6 +896,14 @@ def replay_records(
                     "normalized_or_records_source_invalid": 1
                 }
                 continue
+            issues = ref.get("issues", {})
+            if not isinstance(issues, dict):
+                raise ValueError("replay_upstream_issues_invalid")
+            upstream_gaps = {
+                "replay_upstream_" + reason: count
+                for reason, count in issues.items()
+                if type(count) is int and count > 0
+            }
             for offset in range(
                 row_start if pi == part_start else 0, len(records), CHUNK_ROWS
             ):
@@ -979,18 +987,19 @@ def replay_records(
                 next_position = (
                     [pi + 1, 0] if next_offset >= len(records) else [pi, next_offset]
                 )
+                # Commit partition-level raw exclusions once, with the final
+                # record chunk, including when resuming within the partition.
+                if next_position[0] == pi + 1:
+                    for reason, count in upstream_gaps.items():
+                        gaps.add(reason, count)
                 yield output, next_position, next_position[0] == len(parts), dict(gaps)
                 gaps = CounterDict()
             if not records:
                 # Empty replay points do not establish an empty market. Preserve
                 # upstream row exclusions instead of silently losing label ancestry.
                 gaps.add("replay_empty_partition")
-                issues = ref.get("issues", {})
-                if not isinstance(issues, dict):
-                    raise ValueError("replay_upstream_issues_invalid")
-                for reason, count in issues.items():
-                    if type(count) is int and count > 0:
-                        gaps.add("replay_upstream_" + reason, count)
+                for reason, count in upstream_gaps.items():
+                    gaps.add(reason, count)
                 yield [], [pi + 1, 0], pi + 1 == len(parts), dict(gaps)
         if not parts:
             yield [], [0, 0], True, {"replay_source_date_partition_missing": 1}
@@ -2911,7 +2920,7 @@ def select_source_date(data_root, dates, *, night, check_preflight):
     return day
 
 
-def scheduled(data_root):
+def scheduled(data_root, *, source_date=None):
     started = time.monotonic()
     root = namespace(data_root)
     config = read_json(root / "installation.json", {})
@@ -3001,9 +3010,18 @@ def scheduled(data_root):
             check_preflight()
             if not dates:
                 return preflight_status("valid_empty", "no_retained_source_date")
-            day = select_source_date(
-                data_root, dates, night=night, check_preflight=check_preflight
-            )
+            if source_date is None:
+                day = select_source_date(
+                    data_root, dates, night=night, check_preflight=check_preflight
+                )
+            else:
+                # An explicit report repair uses the same night reservation,
+                # supervisor and child guards as automatic backlog rotation.
+                if (date.fromisoformat(source_date).isoformat() != source_date
+                        or source_date not in dates or source_date > night):
+                    raise ValueError("repair_source_date_outside_retained_night_scope")
+                day = source_date
+                check_preflight()
             if day is None:
                 return preflight_status("valid_empty", "no_closed_source_date")
         except Deferred as exc:
@@ -3134,12 +3152,15 @@ def main(argv=None):
     parser.add_argument("--worker-date")
     parser.add_argument("--worker-seconds", type=float, default=55)
     parser.add_argument("--scheduled", action="store_true")
+    parser.add_argument("--source-date", help="Repair one retained source date under the night supervisor")
     parser.add_argument("--reservation-id")
     parser.add_argument("--configure-optional-cron", action="store_true")
     parser.add_argument("--workspace", type=Path)
     parser.add_argument("--notify-enabled", action="store_true", default=None)
     parser.add_argument("--cron-user")
     args = parser.parse_args(argv)
+    if args.source_date and (not args.scheduled or args.worker_date or args.configure_optional_cron):
+        parser.error("--source-date requires only --scheduled")
     try:
         if args.worker_date:
             # Workers are entered only from the night supervisor; no bypass CLI.
@@ -3237,7 +3258,7 @@ def main(argv=None):
                 notification_disposition_path=str(notification_path),
             )
         elif args.scheduled:
-            result = scheduled(args.data_root)
+            result = scheduled(args.data_root, source_date=args.source_date)
         elif args.configure_optional_cron:
             if not args.workspace:
                 parser.error("--workspace required for optional cron installation")

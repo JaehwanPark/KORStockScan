@@ -456,8 +456,9 @@ def test_earlier_preparation_removes_late_cron_slots(tmp_path):
     )[2]
 
 
+@pytest.mark.parametrize("requested", [None, DAY, "2026-10-09", "2026-09-20"])
 def test_night_reservations_survive_failures_and_do_not_reset_at_midnight(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, requested
 ):
     class Clock(datetime):
         current = datetime.fromisoformat("2026-10-08T23:40:00+09:00")
@@ -484,7 +485,20 @@ def test_night_reservations_survive_failures_and_do_not_reset_at_midnight(
         )
     )
     A.atomic(A.namespace(tmp_path) / "installation.json", cfg)
-    assert A.scheduled(tmp_path)["status"] == "failed_contract"
+    if requested not in {None, DAY}:
+        with pytest.raises(ValueError, match="repair_source_date_outside_retained_night_scope"):
+            A.scheduled(tmp_path, source_date=requested)
+        assert not list((A.namespace(tmp_path) / "attempts").glob("*.json"))
+        return
+    calls = []
+    def supervised(command, **kwargs):
+        calls.append(command)
+        return dict(exit_code=1, reason=None, wall_seconds=0.01)
+    monkeypatch.setattr(A, "supervise", supervised)
+    assert A.scheduled(tmp_path, source_date=requested)["status"] == "failed_contract"
+    assert calls[0][calls[0].index("--worker-date") + 1] == DAY
+    ticket = A.read_json(next((A.namespace(tmp_path) / "attempts").glob("*.json")))
+    assert ticket["source_date"] == DAY and ticket["configuration_sha256"] == cfg["artifact_content_sha256"]
     Clock.current = datetime.fromisoformat("2026-10-09T00:40:00+09:00")
     assert A.scheduled(tmp_path)["night_id"] == "2026-10-08"
     state = A.read_json(A.namespace(tmp_path) / "nights/2026-10-08.json")
@@ -539,8 +553,9 @@ def test_deferred_worker_exit_zero_is_not_completed(tmp_path, monkeypatch):
         ("owner", "supervisor_preflight_window_or_resource_changed"),
     ],
 )
+@pytest.mark.parametrize("requested", [None, DAY])
 def test_source_selection_limits_defer_without_starting_child(
-    tmp_path, monkeypatch, limit, reason
+    tmp_path, monkeypatch, limit, reason, requested
 ):
     class Clock(datetime):
         current = datetime.fromisoformat("2026-10-08T22:40:00+09:00")
@@ -581,12 +596,17 @@ def test_source_selection_limits_defer_without_starting_child(
         return True
 
     monkeypatch.setattr(A, "cursor_current", source_changed)
+    if requested:
+        def discovered(*a, **kw):
+            source_changed()
+            return dict(source_dates=[DAY])
+        monkeypatch.setattr(A, "research_source_scope", discovered)
     monkeypatch.setattr(
         A,
         "supervise",
         lambda *a, **k: pytest.fail("child started after preflight limit"),
     )
-    result = A.scheduled(tmp_path)
+    result = A.scheduled(tmp_path, source_date=requested)
     assert result["status"] == "deferred_resource_or_window"
     assert result["reason"] == reason
     assert result["worker_started"] is False

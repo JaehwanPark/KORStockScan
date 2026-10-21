@@ -112,9 +112,17 @@ def request_source_shadowed(path):
     except FileNotFoundError:return False
 
 
+def request_source_metadata(path):
+    """Native archive receipts describe original bytes; they are not JSONL rows."""
+    path=Path(path)
+    namespace=path.parent.name
+    return (namespace in {'ai_decision_payloads','ai_decision_prompts','ai_decision_requests'}
+        and re.fullmatch(re.escape(namespace)+r'_\d{4}-\d{2}-\d{2}\.jsonl\.gz\.archive_receipt\.json',path.name) is not None)
+
+
 def original_request_paths(root, namespace, day):
     return tuple(path for path in sorted((Path(root)/namespace).glob(namespace+'_'+day+'.jsonl*'))
-        if not request_source_shadowed(path))
+        if not request_source_metadata(path) and not request_source_shadowed(path))
 
 
 def _request_index(root, output, day, sources):
