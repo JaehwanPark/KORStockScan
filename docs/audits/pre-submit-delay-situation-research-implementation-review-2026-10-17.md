@@ -129,3 +129,27 @@ WARN의 `main_trailing_research_handoff_invalid`는 c5 원문부터 존재한다
 구현 commit `6fd14475b` 이후 병행 작업이14:47:51에 운영을 `0ce816f7c1e2c495c24fc11fd4ab0a7d837c56ca`로 전환했다. 실제 PID2108660/start11987479의 cwd/선택 receipt를 확인했고, 이번 작업이 수행한 배포나 재기동으로 기록하지 않는다. 격리 merge `fd7071c0f`는 새 SQLite lifecycle·cleanup과 기존 지연 수리를 모두 보존한다. checklist 충돌은 양쪽 담당 항목을 유지해 해결했다. source/test 비교는 현재 선택0ce 기준의 이번 변경만 집계한다.
 
 통합 후에도 후보의 선택 code contract `90593534bb4d658f653da6e2576eb8b833747a963f220743c1850f1ded27c81a`는 같으며 원v3·새v4 PreparedPolicy 및 후보 원천 재검증이 통과했다. 값/분할이 달라지지 않은 후보를 다시 발행하지 않았다. 원 정책/보고서/committed pointer/PREOPEN4개 파일 SHA는 보존됐다. selector 변경은 병행 배포로 구분한다. 이번 branch의 정식 release 준비·native 전체 code handoff·정책 게시·PID 소비는 아직 수행하지 않았다.
+
+
+## Identical machine-parent timing cohorts — 2026-10-21
+
+- 요청 범위는 구현·반복 코드리뷰·격리 재계산·배포 후보 준비다. 재기동·selector/PREOPEN/운영 정책 교체는 하지 않는다. 기준 코드 `d2e9bedf3ac638788c6850e183f0a2f35e00943c`는 이전에 검증한 자연 종료 전환/수집기 종료 수리를 포함한다. 별도 수량 연구 후보의 미종결 변경은 포함하지 않는다. 실제 유지 대상은 `ea68c5a85`, Main1724066/start19233026, epoch1792547808026387070이다.
+- 원인: 오늘 기계 부모 `2581b1bf…`와 원 학습 부모 `29c211d3…`는 전체128개 scope의 기계·보조 payload, membership, definition, backend가 같다. 전체 실행 해시는 정책 인계와 장후 materialization 코드 변경도 포함하여 달라졌다. 부모 문자열만으로 집단을 나누던 생산자는 같은 규칙의 과거 근거를 오늘 정책에 연결하지 못했다. 이전 `c0036d89…`는 session contract 코드가 달라 연결하지 않는다.
+- 수리: 기존 `pre_submit_delay_situation_projection`에서 발행된 target bundle→native parent ancestry를 제한된 깊이/파일 크기로 읽고 원 파일 SHA·native seal·날짜·전역 규칙을 검증한다. 두 비평가 코드 파일만 equality에서 분리하며 나머지 실행 코드·unknown field·기계/보조 payload·membership·definition은 정확히 같아야 한다. auxiliary timing identity는 기존 계약 그대로다. 불명/상이 부모에는 alias를 발급하지 않는다. 조건이 성립한 부모만 기존 partitioned producer의 **선정 집단**에 연결한다. qualified projection/판정·호가/기회 ID와 원 부모는 그대로 보존한다. 기존 v4 split/purge·가격쌍 비교·지원 없는0초는 유지한다.
+- 직접 소비: sharded validator는 원본 native proof를 확인한 뒤 전량 재계산한다. source verifier와 연구 검토 reader도 같은 결속을 소비한다. runtime의 exact-parent lookup은 그대로 사용하며 임의 hash alias나 warm-path 파일 읽기를 추가하지 않는다. 기존 정책을 소비하는 코드 인계는 네 변경 source의 전체 exact dependency group으로 결속한다. 실제 정책 내용 변경은 기존 same-policy code handoff가 승인하지 않는다.
+- [격리 재계산](/home/ubuntu/KORStockScan/tmp/pre-submit-delay-semantic-20261021/recalculation-result.json): 원source10/20→target10/21의 과거 발행 날짜를 보존한 재현이며 새 운영 발행이 아니다. 기준점382개 중37개를 연결했고 원 projection logical SHA·census·가격쌍477개를 보존했다.121개 price_ready cell은 불충분102·즉시우위17·양수180초2로 동일하다. 오늘 부모 cell16개는 불충분10·즉시우위6이며 양수는0이다.121개 native PreparedPolicy 조회를 대조했다. native sealed raw references와 현재 compact/ledger/situation generation을 검증했으며 과거 raw 전체를 재자격 심사했다는 뜻은 아니다.14.353초·최대RSS136836KiB, 원자료 추가/수정0이다.
+- [오늘12건의 격리 조회](/home/ubuntu/KORStockScan/tmp/pre-submit-delay-semantic-20261021/today-attempt-replay.json): 원12개 ID를488576B compact에서 대조했다.1건은 근거 있는 즉시제출,11건은 비교 근거 부족이며12건 모두0초다. 이는 실제 정책 적중률 변경이나 주문 재실행이 아니다. 기존 양수180초 집단은 오늘 부모로 이전하지 않는다. 과거 무효 호가8건도 복구되지 않았다.
+- 리뷰 보완: 선정 집단을 옮길 때 연구 검토 reader가 원 부모로 membership을 찾던 불일치를 함께 수리했다. 원천 body를 바꾸는 대신 group lookup만 같은 native proof로 결속했다. runtime/세션/새 코드/규칙/route/AI/membership/definition/unknown field 변경, 잘못된 날짜·hash·ancestry·누락/변조 파일은 연결 거부 회귀로 확인한다. native 로더를 축약한 단위 fixture와 실제 원본 native validation 결과를 구분한다.
+- 검증: 영향 회귀198개 PASS, reader 보완 이후 표적12개 PASS. 코드 인계 회귀의 최초 실패는 확장된 source group을 누락한 축약 fixture였고 누락 파일 검사를 유지한 채 fixture 입력을 보완했다. 최종 인계/compile/diff/parser 및 후보 결과는 [검증 기록](/home/ubuntu/KORStockScan/tmp/pre-submit-delay-semantic-20261021/validation.json), [후보 준비](/home/ubuntu/KORStockScan/tmp/pre-submit-delay-semantic-20261021/candidate.json)에 기록한다.
+
+| 기존 경로 | 처리 및 현재 소비자 |
+| --- | --- |
+| native situation projection / ancestry source reader | retained/extended. 기존 partitioned producer와 native 검증이 소비하며 별도 모듈·worker·보고서 producer를 만들지 않는다. |
+| partitioned `_populate`의 exact-parent grouping | consolidated. 같은 함수가 native proof가 있는 집단만 연결하고 나머지는 원 exact-parent를 유지한다. |
+| 연구 검토 `_populate`의 원 부모 전용 membership 조회 | replaced in place. 원 신원은 보존하고 검증된 선정 집단을 조회한다. |
+| runtime PreparedPolicy exact-parent lookup, v2/v3/v4 역사 reader | retained. 기존 운영 정책과 봉인 과거 generation의 현재 소비자다. |
+| 기존 코드 인계 profile | retained. 원 PREOPEN/현재 PID/이전 불변 릴리스가 소비한다. 새 네 파일 group도 같은 검증 함수에 연결한다. |
+
+크기/소유 변화: 기준d2e9bedf3 대비 비테스트 source5개 +195/-11, tests2개 +131/-0, docs3개 +33/-1이다. 이동·새 모듈·실행 entrypoint·worker·schedule 추가0, 폐기 경로0이다. native 보조 함수4개는 기존 원천 owner 안에 두었다. 순증은 기존 owner의 native 동일성/ancestry 검증과 producer-consumer 연결 및 실패 회귀 때문이다. canonical의 병행 수량/종료 문서 변경은 이 commit 집계에 넣지 않는다.
+
+기능/코드 수리와 배포/정책 게시/자연 판정은 별도다. `DirectFamilyPreopenPolicyHandoff`가 다음 정식 source-date 정책 재계산·현재 machine target binding·PREOPEN·정확한 PID 소비를 소유한다. 현재 세션은 재기동과 자동 전환 예약을 수행하지 않는다. 장 종료 대기 세션을 유지할 필요가 없다.

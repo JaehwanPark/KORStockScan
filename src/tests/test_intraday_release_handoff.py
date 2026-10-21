@@ -1816,6 +1816,8 @@ def test_source_reader_handoff_preserves_issued_policy_and_exact_dependencies(tm
                 handoff.REVIEWED_DELAY_CLEANUP_DEPENDENCY_VARIANTS).values():
             names.update(variant['dependencies'])
     names.add('src/engine/automation/intraday_release_handoff.py')
+    if generation == 'collector_first_transition':
+        names.update(handoff.REVIEWED_DELAY_MACHINE_PARENT_HASHES)
     for name in names:
         path = root/name; path.parent.mkdir(parents=True,exist_ok=True)
         path.write_bytes((canonical/name).read_bytes() if generation=='collector_first_transition' or
@@ -2075,3 +2077,10 @@ def test_collector_close_handoff_requires_whole_native_generation(tmp_path, fami
 def test_collector_first_transition_handoff_preserves_issued_predecessor(tmp_path, family, fault):
     test_source_reader_handoff_preserves_issued_policy_and_exact_dependencies(
         tmp_path, family, fault, tuple(handoff.REVIEWED_COLLECTOR_FIRST_TRANSITION_HASHES), 'collector_first_transition')
+
+
+@pytest.mark.parametrize('family', ['main_stop', 'holding_vote', 'pre_submit_delay'])
+@pytest.mark.parametrize('fault', [None, 'missing', 'dirty', 'committed_change', 'parent_mix'])
+def test_delay_machine_parent_handoff_requires_whole_producer_consumer_group(tmp_path, family, fault):
+    test_source_reader_handoff_preserves_issued_policy_and_exact_dependencies(
+        tmp_path, family, fault, tuple(handoff.REVIEWED_DELAY_MACHINE_PARENT_HASHES), 'collector_first_transition')

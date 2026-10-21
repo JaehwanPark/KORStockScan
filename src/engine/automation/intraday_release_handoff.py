@@ -3728,6 +3728,28 @@ REVIEWED_COLLECTOR_FIRST_TRANSITION_DEPENDENCY_VARIANTS = {
 }
 
 
+# Exact delay cohort successor. Existing issued-policy selection stays unchanged;
+# only a separately generated, native-bound policy may join identical parents.
+REVIEWED_DELAY_MACHINE_PARENT_HASHES = {'src/engine/automation/pre_submit_delay_partitioned_research.py': 'fbbcdd010d364ce7eb746ed9741de943507d1c3c62de1d47f6d8f56c067c02dd',
+ 'src/engine/automation/pre_submit_delay_research_review.py': '7dc2c312ce3fe14d5f3343d668e22d90f083a214e5ed25144f446e26f6dec8d3',
+ 'src/engine/automation/pre_submit_delay_situation_projection.py': '572758cce22a8ba5ac6159ad9b670c3ac45d1112c30fc31907f8eb0d02ca7454',
+ 'src/engine/scalping/pre_submit_delay_initial_policy.py': 'e8300feda594447ef1151244cd26898f05dec704d624293c3cdbe7391b1142d4'}
+REVIEWED_DELAY_MACHINE_PARENT_PAIRS = {'src/engine/automation/pre_submit_delay_partitioned_research.py': (('df3407a49b012152ee894db86b5052a681ccf6122db5c459cf743747e8f95ba6',
+                                                                     'fbbcdd010d364ce7eb746ed9741de943507d1c3c62de1d47f6d8f56c067c02dd'),
+                                                                    ('cbc0a519c2126948f7c68982c86bae7678c54db65c687ed960563cf76053e6e3',
+                                                                     'fbbcdd010d364ce7eb746ed9741de943507d1c3c62de1d47f6d8f56c067c02dd')),
+ 'src/engine/automation/pre_submit_delay_research_review.py': (('6cf9e50d915da95f0cd469b2a7d36ede3754cba6c237f69ab0fdfcf565f968d6',
+                                                                '7dc2c312ce3fe14d5f3343d668e22d90f083a214e5ed25144f446e26f6dec8d3'),
+                                                               ('159b04fa4b5486e43feba9ca2dee73b7e1f9052926f729cb6169ff0ff89ad2ac',
+                                                                '7dc2c312ce3fe14d5f3343d668e22d90f083a214e5ed25144f446e26f6dec8d3')),
+ 'src/engine/automation/pre_submit_delay_situation_projection.py': (('c77e565c1f29b64551e690f0e0901226c73baba2c53a61b6c49239be76c39f28',
+                                                                     '572758cce22a8ba5ac6159ad9b670c3ac45d1112c30fc31907f8eb0d02ca7454'),),
+ 'src/engine/scalping/pre_submit_delay_initial_policy.py': (('0853914ebbc643de4301b87209c9db106662bd60485146b0d16e495b77c0cd33',
+                                                             'e8300feda594447ef1151244cd26898f05dec704d624293c3cdbe7391b1142d4'),
+                                                            ('918c266dea445d4b9f949b6ae76755c724df8fc525760812a0cab33b70de8b1c',
+                                                             'e8300feda594447ef1151244cd26898f05dec704d624293c3cdbe7391b1142d4'))}
+
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -3824,6 +3846,9 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     native_invalidation_present = any((root / name).is_file()
         and hashlib.sha256(candidate_bytes(name)).hexdigest() == sha
         for name, sha in REVIEWED_NATIVE_INVALIDATION_HASHES.items())
+    delay_machine_parent_present = any((root / name).is_file()
+        and hashlib.sha256(candidate_bytes(name)).hexdigest() == sha
+        for name, sha in REVIEWED_DELAY_MACHINE_PARENT_HASHES.items())
     contract_names = {repository_name(name) for name in paths.values()}
     for trigger, generations in REVIEWED_HOLDING_RESEARCH_DEPENDENCIES.items():
         if trigger not in contract_names:
@@ -3968,6 +3993,10 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
             dependencies = {**dependencies, **REVIEWED_COLLECTOR_CLOSE_HASHES}
         if first_transition_present:
             dependencies = {**dependencies, **REVIEWED_COLLECTOR_FIRST_TRANSITION_HASHES}
+        if delay_machine_parent_present:
+            dependencies = {**dependencies, **REVIEWED_DELAY_MACHINE_PARENT_HASHES}
+            extensions = {name: REVIEWED_DELAY_MACHINE_PARENT_HASHES.get(repository_name(name), sha)
+                          for name, sha in extensions.items()}
         dependencies_by_trigger[trigger] = (trigger_sha, dependencies)
     for key, name in paths.items():
         after = candidate_bytes(name)
@@ -3984,7 +4013,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         if before == after:
             continue
         pair = (hashlib.sha256(before).hexdigest(), hashlib.sha256(after).hexdigest())
-        if (pair in REVIEWED_COLLECTOR_FIRST_TRANSITION_PAIRS.get(repository_name(name), ())
+        if (pair in REVIEWED_DELAY_MACHINE_PARENT_PAIRS.get(repository_name(name), ())
+                or pair in REVIEWED_COLLECTOR_FIRST_TRANSITION_PAIRS.get(repository_name(name), ())
                 or pair in REVIEWED_COLLECTOR_CLOSE_PAIRS.get(repository_name(name), ())
                 or pair in REVIEWED_BUY_IDENTITY_PAIRS.get(repository_name(name), ())
                 or pair in REVIEWED_ENTRY_RECEIPT_PAIRS.get(repository_name(name), ())

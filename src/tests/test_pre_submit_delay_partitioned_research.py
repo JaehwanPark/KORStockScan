@@ -23,6 +23,128 @@ def build(report, output):
         source_receipt=report.get('source_receipt'))
 
 
+def _machine_chain(root, monkeypatch):
+    """Small native-loader fixture; production generation validation is separate."""
+    from copy import deepcopy
+    from src.engine.scalping import mechanistic_entry_runtime_policy as native
+    base = root/'runtime/mechanistic_entry_policy'
+    (base/'generations').mkdir(parents=True)
+    (base/'candidates').mkdir()
+    def validate(bundle, *, target_date):
+        if (bundle['target_date'] != target_date or bundle['bundle_sha256'] != initial.digest(
+                {k:v for k,v in bundle.items() if k!='bundle_sha256'})):
+            raise ValueError('machine_bundle_contract_invalid')
+    monkeypatch.setattr(native, 'validate', validate)
+    old = dict(target_date='2026-10-02', continuous_reversal=dict(schema='continuous_reversal_policy_v6',
+        effective_date='2026-10-02', execution_manifest_hash='a'*64,
+        contract_file_sha256={'runtime.py':'1'*64, 'session_contract.py':'2'*64,
+                             'reversal_code_handoff.py':'3'*64, 'reversal_cumulative_postclose.py':'4'*64},
+        machine_cells={'scope':{'routes':{'SOR':{'payload':{'rule':'first_hold'},'backend':'union_v6',
+                                              'scope_execution_hash':'5'*64}}}},
+        auxiliary_cells={'scope':{'routes':{'SOR':{'payload':{'prompt':'original','model':'same'}}}}},
+        operating_manifest={'scopes':{'scope|SOR':['first_hold']},'definitions':{'first_hold':'6'*64}}))
+    def write(bundle):
+        bundle['bundle_sha256'] = initial.digest({k:v for k,v in bundle.items() if k!='bundle_sha256'})
+        path = base/'generations'/(bundle['bundle_sha256']+'.json')
+        path.write_text(json.dumps(bundle))
+    write(old)
+    new = deepcopy(old);new['target_date']='2026-10-05'
+    new['continuous_reversal'].update(effective_date='2026-10-05',execution_manifest_hash='c'*64,
+                                      parent_bundle_sha256=old['bundle_sha256'])
+    new['continuous_reversal']['contract_file_sha256']['reversal_code_handoff.py']='7'*64
+    new['continuous_reversal']['contract_file_sha256']['reversal_cumulative_postclose.py']='8'*64
+    write(new)
+    (base/'candidates/policy_2026-10-05.json').write_text(json.dumps(new))
+    return old,new,write
+
+
+def test_identical_machine_parent_recalculation_reaches_prepared_consumer(tmp_path, monkeypatch):
+    from src.engine.automation import pre_submit_delay_situation_projection as recovery
+    from src.engine.automation import pre_submit_delay_research_review as review
+    original,_ = fixture(tmp_path/'source',monkeypatch)
+    _machine_chain(tmp_path/'native',monkeypatch)
+    proof = recovery.prepare_machine_compatibility(tmp_path/'native','2026-10-05')
+    rows = original['qualified_projection']
+    for row in rows:
+        row['parent_compatibility']=['a'*64,'b'*64]
+        row['native_evaluation_bound']=True
+    census={**original['census'],'native_evaluation_unverified_n':0,'parent_compatibility_unverified_n':0}
+    kwargs=dict(census=census,source_date='2026-10-02',publication_date='2026-10-02',effective_date='2026-10-05',
+                source_sha256='d'*64,code_contract_sha256='e'*64,source_receipt={})
+    before,old=partitioned.build(rows,output_root=tmp_path/'before',**kwargs)
+    query=dict(target_date='2026-10-05',market='REGULAR',parents=['c'*64,'b'*64])
+    assert initial.PreparedPolicy.from_artifacts(old,before,target_date='2026-10-05').lookup(**query)['delay_sec']==0
+    after,new=partitioned.build(rows,output_root=tmp_path/'after',machine_compatibility=proof,**kwargs)
+    prepared=initial.PreparedPolicy.from_artifacts(new,after,target_date='2026-10-05')
+    assert prepared.lookup(**query)['delay_sec']==60
+    assert after['qualified_projection_ref']['logical_sha256']==before['qualified_projection_ref']['logical_sha256']
+    assert after['census']==before['census']
+    for parents in (['c'*64,'f'*64],['f'*64,'b'*64]):
+        assert prepared.lookup(**{**query,'parents':parents})['status']=='unsupported_existing_behavior'
+    assert prepared.lookup(**{**query,'target_date':'2026-10-06'})['delay_sec']==0
+    with storage.index(tmp_path/'review') as db:
+        monkeypatch.setattr(review,'_enrich',lambda db,row,receipt:row)
+        counts,_=review._populate(db,after.evidence_root,after,{})
+        assert counts['anchors']==len(rows)
+    # Same checksum-sealed report cannot authorize changed native source bytes.
+    path=Path(proof['chain'][1]['path']);path.write_text(path.read_text()+'\n')
+    with pytest.raises(ValueError,match='compatibility_binding_invalid'):
+        initial.PreparedPolicy.from_artifacts(new,after,target_date='2026-10-05')
+
+
+@pytest.mark.parametrize('changed', ['runtime','session','new_code','rule','route','auxiliary','membership','definition','unknown'])
+def test_changed_machine_semantics_do_not_join_parents(tmp_path,monkeypatch,changed):
+    from src.engine.automation import pre_submit_delay_situation_projection as recovery
+    _,new,write=_machine_chain(tmp_path,monkeypatch)
+    family=new['continuous_reversal']
+    if changed in {'runtime','session','new_code'}:
+        key={'runtime':'runtime.py','session':'session_contract.py','new_code':'new_runtime.py'}[changed]
+        family['contract_file_sha256'][key]='f'*64
+    elif changed=='rule':family['machine_cells']['scope']['routes']['SOR']['payload']['rule']='different'
+    elif changed=='route':family['machine_cells']['scope']['routes']['NXT']=family['machine_cells']['scope']['routes'].pop('SOR')
+    elif changed=='auxiliary':family['auxiliary_cells']['scope']['routes']['SOR']['payload']['prompt']='different'
+    elif changed=='membership':family['operating_manifest']['scopes']['scope|SOR'].append('other')
+    elif changed=='definition':family['operating_manifest']['definitions']['first_hold']='f'*64
+    else:family['new_behavior']='different'
+    write(new)
+    (tmp_path/'runtime/mechanistic_entry_policy/candidates/policy_2026-10-05.json').write_text(json.dumps(new))
+    assert recovery.prepare_machine_compatibility(tmp_path,'2026-10-05') is None
+
+
+def test_machine_parent_proof_rejects_wrong_date_hash_ancestry_and_missing_source(tmp_path,monkeypatch):
+    from copy import deepcopy
+    from src.engine.automation import pre_submit_delay_situation_projection as recovery
+    _machine_chain(tmp_path,monkeypatch)
+    proof=recovery.prepare_machine_compatibility(tmp_path,'2026-10-05')
+    for changed in ('date','hash','ancestry','semantic'):
+        bad=deepcopy(proof)
+        if changed=='date':bad['target_date']='2026-10-06'
+        elif changed=='hash':bad['chain'][1]['sha256']='f'*64
+        elif changed=='ancestry':bad['chain'].reverse()
+        else:bad['semantic_sha256']='f'*64
+        bad['sha256']=initial.digest({k:v for k,v in bad.items() if k!='sha256'})
+        with pytest.raises(ValueError,match='delay_machine_compatibility'):
+            recovery.machine_parent_mapping(bad,target_date='2026-10-05')
+    Path(proof['chain'][1]['path']).unlink()
+    with pytest.raises(FileNotFoundError):recovery.machine_parent_mapping(proof,target_date='2026-10-05')
+
+
+def test_cached_recalculation_verifies_new_native_sources_before_publication(tmp_path,monkeypatch):
+    from src.engine.automation import pre_submit_delay_situation_projection as recovery
+    original,_=fixture(tmp_path/'source',monkeypatch)
+    _machine_chain(tmp_path/'native',monkeypatch)
+    checked=[]
+    def verify(root,report):
+        proof=report.get('machine_parent_compatibility')
+        assert proof is not None
+        checked.append(recovery.machine_parent_mapping(proof,target_date=report['effective_date']))
+    monkeypatch.setattr(initial,'verify_source',verify)
+    partitioned.run(tmp_path/'native',tmp_path/'candidate','2026-10-02',publication_date='2026-10-02',
+        effective_date='2026-10-05',require_ledger=True,dry_run=True,contract=initial.code_contract(),
+        cached=(original,iter(original['qualified_projection'])))
+    assert checked and checked[0]['a'*64]=='c'*64
+
+
 def test_whole_split_and_metrics_equal_supported_resident_reference(tmp_path,monkeypatch):
     reference,policy = fixture(tmp_path/'source',monkeypatch)
     result,selected = build(reference,tmp_path/'result')

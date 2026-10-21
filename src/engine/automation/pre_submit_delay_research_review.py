@@ -205,6 +205,9 @@ def _enrich(db, row, receipt):
 
 
 def _populate(db, root, report, compact_receipt):
+    from .pre_submit_delay_situation_projection import machine_parent_mapping
+    machine_parents = machine_parent_mapping(report.get('machine_parent_compatibility'),
+                                             target_date=report['effective_date'])
     db.executescript("""
         CREATE TABLE population (
             id TEXT PRIMARY KEY, gid TEXT, day TEXT, symbol TEXT, anchor TEXT,
@@ -261,6 +264,8 @@ def _populate(db, root, report, compact_receipt):
         for name in ("delay_recheck_requested_at_epoch",
                      "delay_recheck_completed_at_epoch", "delay_terminal_reason"):
             counts["available:" + name] += row.get(name) is not None
+        counts['identical_machine_parent_mapped_anchors'] += machine_parents.get(parents[0], parents[0]) != parents[0]
+        parents = [machine_parents.get(parents[0], parents[0]), parents[1]]
         compatible = [parents[0], row.get("auxiliary_timing_compatibility_sha256", parents[1])]
         db.execute("INSERT INTO population(id,gid,day,symbol,anchor,session,situation,at,end,p0,native,opportunity,spread_bp,progress_bp,compatibility_gid) "
                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (
@@ -633,7 +638,9 @@ def _generate(data_root, source_date, output_dir):
         default_delay_interpretation="existing_behavior_without_comparative_evidence",
         contributions_ref=contributions_ref, frozen_membership_ref=split_ref,
         semantic_compatibility_ref=compatibility_ref,
-        compatibility_contract="exact_machine_prompt_model_options_validator_and_schema_except_local_fact_alias",
+        compatibility_contract=("native_identical_machine_parents_and_exact_auxiliary_timing_identity"
+            if report.get('machine_parent_compatibility') else
+            "exact_machine_prompt_model_options_validator_and_schema_except_local_fact_alias"),
         feature_groups_ref=feature_groups_ref, compact_enrichment=compact_receipt,
         preserved_field_coverage={k.removeprefix("available:"): v for k, v in counts.items() if k.startswith("available:")},
         analysis_availability=dict(

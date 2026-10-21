@@ -394,3 +394,10 @@ PYTHONPATH=. /home/ubuntu/KORStockScan/.venv/bin/python -m src.engine.automation
 4. **선정 알고리즘 v4에 단기를 포함한다.** v2/v3는 원 grid와 분할을 재현한다. v4는 P0와 단기 관측 모두 실제 목표시각 이후 250ms 이내인 pair만 단기 후보로 받는다. 학습에서 후보를 고정하고 시간순 검증구간의 방향을 확인한다. 기존 상황/부모 분류, purge, 지원되는 0초 자식의 부모 양수 차단을 유지한다.
 5. **0초의 의미를 구분한다.** 지연 유리, 관측 pair에서 즉시 유리, 판단 불충분을 별도 표시한다. 미지원 정책·표본 부족·학습/검증 불일치 때문에 유지한 0초는 최적 시간 증명이 아니다. 원천 누락 경보로도 바꾸지 않는다. 의미감시는 선택값·policy status·선정 근거와 commit→제출 함수 반환 시간을 집계하고, 단기 지연의 due/recheck/terminal도 기존 종결 계약으로 검사한다.
 6. **재계산은 별도 후보 출력에서 끝까지 검증한다.** 기존 family ledger·compact·native index·완료 체결 field tree를 사용한다. 영향 없는 장후 전체 체인 재실행이나 큰 raw 전수 재해시를 하지 않는다. 기존 보고서에 새로운 immutable attempt를 생성하고, 새 후보는 source 10/19·publication 10/20·effective 10/21로 격리한다. 현재 정책·selector·PREOPEN을 교체하지 않는다. 후보 native 검증과 코드 검토 완료 이후 정식 코드 인계·정책 게시·실제 PID 소비는 `DirectFamilyPreopenPolicyHandoff`의 별도 수용이다.
+
+
+### 10/21 native machine-parent equivalence intake
+
+기존 partitioned 지연 연구 생산자는 발행된 target-date 기계 candidate의 native ancestry를 따라 전체 규칙·보조 payload·scope·정의·평가 코드가 같은 부모만 선정 집단에 연결한다. 인계/장후 materialization 두 파일의 코드 차이는 native 결과 payload를 전역 대조한 뒤에만 분리한다. 세션/평가 코드·prompt/model/options·membership·정의·알 수 없는 field 차이는 연결을 거부한다. 원 qualified projection/부모/기회 ID는 보존하고 source·selection validator와 연구 검토 reader가 같은 proof를 소비한다. target candidate가 없거나 동등 부모가 없으면 기존 exact-parent 방식이다. 기존 candidate가 invalid이면 오류로 남긴다. 최대16세대·bundle8MiB 경계를 넘으면 재시도나 한도 확대 없이 원천 계약을 점검한다. 최초 호환성 경계에서 ancestry 탐색을 종료한다.
+
+격리 재계산은 운영 발행과 별개다. 기존 CLI/장후 family owner의 source-date→publication-date→effective-date 계약, 단일 writer, source verifier, 새 PREOPEN과 PID 소비 조건을 그대로 적용한다. 현재 세션은 배포 후보만 준비하며 재기동·운영 정책 교체를 하지 않는다. [구현·원본 대사·회귀·제거 판정](../audits/pre-submit-delay-situation-research-implementation-review-2026-10-17.md#identical-machine-parent-timing-cohorts--2026-10-21).

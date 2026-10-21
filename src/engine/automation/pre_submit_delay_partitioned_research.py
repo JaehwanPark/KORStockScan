@@ -245,7 +245,7 @@ def _select(db, base, args, *, horizons=initial.HORIZONS):
         'validation_ids_sha256':_ids_digest(db,validation+f' AND p{best} IS NOT NULL',args)}
 
 
-def _populate(db, projected, *, effective_date, algorithm):
+def _populate(db, projected, *, effective_date, algorithm, machine_parents=None):
     horizons = initial.candidate_horizons(algorithm)[1:]
     db.execute('CREATE TABLE population (id TEXT PRIMARY KEY, body TEXT, gid TEXT, anchor TEXT, '
         'market TEXT, parents TEXT, kind TEXT, at REAL, end REAL, native INTEGER, p0 INTEGER, '
@@ -266,11 +266,14 @@ def _populate(db, projected, *, effective_date, algorithm):
                 or any(str(k) not in {'30','60','120','180'} or initial.number(v) is None for k,v in pairs.items())
                 or not isinstance(row.get('situation'),str) or len(row['situation'])>2048):
             raise ValueError('initial_delay_projection_invalid')
-        group = [row['anchor_kind'],row['session'],row['parent_compatibility']]
+        # Keep original opportunity/receipt identities and qualification bytes.
+        # Only the selection cohort uses a proven identical issued parent.
+        parents = [(machine_parents or {}).get(parents[0], parents[0]), parents[1]]
+        group = [row['anchor_kind'],row['session'],parents]
         pairs = initial.selection_pairs(row, algorithm)
         db.execute('INSERT INTO population VALUES (' + ','.join('?' for _ in range(13+len(horizons))) + ')',
             (row['identity'],storage.encoded(row).decode(),initial.digest(group),row['anchor_kind'],
-             row['session'],storage.encoded(row['parent_compatibility']).decode(),row['situation'],
+             row['session'],storage.encoded(parents).decode(),row['situation'],
              row['committed_at'],row['observation_end_at'],int(row['native_evaluation_bound']),int(row['p0_valid']),
              *(pairs.get(d) for d in horizons), 'unqualified',
              int(row['p0_valid'] and (algorithm==initial.LEGACY_ALGORITHM or initial.lineage_eligible(row,effective_date)))))
@@ -330,7 +333,8 @@ def _cell_rows(db, effective, algorithm):
 
 
 def build(projected, census, *, output_root, source_date, publication_date, effective_date,
-          source_sha256, code_contract_sha256, source_receipt, _algorithm=None, _projection_contract=None, _mapping_version=None):
+          source_sha256, code_contract_sha256, source_receipt, _algorithm=None, _projection_contract=None, _mapping_version=None,
+          machine_compatibility=None):
     algorithm = _algorithm or initial.ALGORITHM
     if algorithm not in initial.ALGORITHMS:
         raise ValueError('initial_delay_algorithm_invalid')
@@ -338,8 +342,10 @@ def build(projected, census, *, output_root, source_date, publication_date, effe
     if not date.fromisoformat(source_date) <= date.fromisoformat(publication_date) < date.fromisoformat(effective_date):
         raise ValueError('initial_delay_dates_invalid')
     root = Path(output_root)
+    from .pre_submit_delay_situation_projection import machine_parent_mapping
+    machine_parents = machine_parent_mapping(machine_compatibility, target_date=effective_date)
     with storage.index(root) as db:
-        _populate(db,projected,effective_date=effective_date,algorithm=algorithm)
+        _populate(db,projected,effective_date=effective_date,algorithm=algorithm,machine_parents=machine_parents)
         observed = {'qualified_pass_n':0,'p0_valid_n':0,'native_evaluation_unverified_n':0,
                     'parent_compatibility_unverified_n':0}
         for body, in db.execute('SELECT body FROM population'):
@@ -370,9 +376,13 @@ def build(projected, census, *, output_root, source_date, publication_date, effe
         paired_net_ev_delta_pct=None,realized_pnl_krw=None,metric_role='initial_entry_price_timing_estimate',
         decision_authority='next_preopen_initial_pre_submit_timing_policy',
         primary_decision_metric='mean_paired_price_improvement_bp'),root)
+    if machine_compatibility is not None:
+        report['machine_parent_compatibility'] = machine_compatibility
     policy = EvidenceDocument({k:report[k] for k in ('storage_schema','source_date','publication_date','source_sha256',
         'code_contract_sha256','algorithm','mapping_version','cells_ref','default_delay_sec',
         'metric_role','decision_authority','primary_decision_metric')},root)
+    if machine_compatibility is not None:
+        policy['machine_parent_compatibility'] = machine_compatibility
     policy.update(schema=initial.POLICY_SCHEMA,policy_kind='initial_paired_quote_timing',effective_from=effective_date,
         expires_on=effective_date,supported_anchor_kind='price_ready',selection_status=report['status'],
         runtime_apply_allowed=not blocked,report_sha256=initial.digest(report))
@@ -401,6 +411,10 @@ def validate(policy, report, *, target_date=None):
             raise ValueError('initial_delay_generation_invalid')
     if target_date and not policy['effective_from']<=target_date<=policy['expires_on']:
         raise ValueError('initial_delay_date_invalid')
+    if policy.get('machine_parent_compatibility') != report.get('machine_parent_compatibility'):
+        raise ValueError('delay_machine_compatibility_binding_invalid')
+    from .pre_submit_delay_situation_projection import machine_parent_mapping
+    machine_parent_mapping(report.get('machine_parent_compatibility'), target_date=report['effective_date'])
     from src.engine.infrastructure.startup_validation_code_context import validate_preparation_delay_selection
     if validate_preparation_delay_selection(policy,report,target_date=target_date):
         return
@@ -414,7 +428,8 @@ def validate(policy, report, *, target_date=None):
             source_sha256=report['source_sha256'],code_contract_sha256=report['code_contract_sha256'],
             source_receipt=report.get('source_receipt'),_algorithm=report['algorithm'],
             _projection_contract=initial.frozen_projection_contract(report),
-            _mapping_version=report.get('mapping_version'))
+            _mapping_version=report.get('mapping_version'),
+            machine_compatibility=report.get('machine_parent_compatibility'))
         # Physical layout belongs to its own verified generation. Selection and
         # split must match by canonical semantic digests, independently of it.
         for key in ('qualified_projection_ref','partitions_ref','cells_ref'):
@@ -453,6 +468,8 @@ def run(root, output, day, *, publication_date, effective_date, require_ledger, 
         contract, cached=None):
     import tempfile
     root,output=Path(root).resolve(),Path(output).resolve()
+    from .pre_submit_delay_situation_projection import prepare_machine_compatibility
+    machine_compatibility = prepare_machine_compatibility(root, effective_date)
     output.mkdir(parents=True,exist_ok=True)
     from src.engine.lifecycle.research_disk_budget import use
     # Canonical input == output is the normal dispatcher path. Only this
@@ -466,10 +483,11 @@ def run(root, output, day, *, publication_date, effective_date, require_ledger, 
             saved,projection=cached
             report,policy=build(projection,saved['census'],output_root=scratch,source_date=day,
                 publication_date=publication_date,effective_date=effective_date,source_sha256=saved['source_sha256'],
-                code_contract_sha256=contract,source_receipt=saved['source_receipt'])
+                code_contract_sha256=contract,source_receipt=saved['source_receipt'],
+                machine_compatibility=machine_compatibility)
             decode_passes=0
             def verify():
-                initial.verify_source(root,saved)
+                initial.verify_source(root,report)
                 if initial.code_contract()!=contract: raise ValueError('delay_code_changed_during_research')
             finish(output,day,report,policy,verify,dry_run)
         else:
@@ -507,7 +525,8 @@ def run(root, output, day, *, publication_date, effective_date, require_ledger, 
                         native_situation_projection=situation_receipt)
                     report,policy=build((row for _,row,_ in storage.records(db)),census,
                         output_root=scratch,source_date=day,publication_date=publication_date,effective_date=effective_date,
-                        source_sha256=snapshot.source['sha256'],code_contract_sha256=contract,source_receipt=receipt)
+                        source_sha256=snapshot.source['sha256'],code_contract_sha256=contract,source_receipt=receipt,
+                        machine_compatibility=machine_compatibility)
                     report['source_scan_census']={k:snapshot.source[k] for k in ('raw_event_count','isolated_records',
                         'conflicted_records','scan_jobs','bytes_read')}
                     # The scan census is diagnostic and part of the report seal.
