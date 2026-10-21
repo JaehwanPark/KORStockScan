@@ -42,23 +42,36 @@ AUTHORITY_FALSE = ('runtime_effect', 'allowed_runtime_apply', 'actual_pid_consum
                    'actual_profit_verified', 'policy_published')
 
 
-def file_bytes(path, limit=8*1024*1024):
+def _file_blocks(path, limit):
+    """Hash-only protected sources need no resident JSON/evidence-sized buffer."""
     path = Path(path)
     descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     with os.fdopen(descriptor, 'rb') as stream:
         before = os.fstat(stream.fileno())
-        if not stat.S_ISREG(before.st_mode) or before.st_size > limit:
+        if not stat.S_ISREG(before.st_mode) or (limit is not None and before.st_size > limit):
             raise ValueError('fixture_regular_bounded_file_required')
-        raw = stream.read(limit+1)
+        size = 0
+        for block in iter(lambda: stream.read(64*1024), b''):
+            size += len(block)
+            if size > before.st_size:
+                raise ValueError('fixture_read_changed_or_limit_exceeded')
+            yield block
+        finished = os.fstat(stream.fileno())
         after = path.lstat()
-    identity = lambda value: (value.st_dev,value.st_ino,value.st_size,value.st_mtime_ns,value.st_ctime_ns)
-    if len(raw) > limit or len(raw) != before.st_size or identity(before) != identity(after):
-        raise ValueError('fixture_read_changed_or_limit_exceeded')
-    return raw
+        identity = lambda value: (value.st_dev,value.st_ino,value.st_size,value.st_mtime_ns,value.st_ctime_ns)
+        if size != before.st_size or identity(before) != identity(finished) or identity(before) != identity(after):
+            raise ValueError('fixture_read_changed_or_limit_exceeded')
 
 
-def file_sha(path, limit=8*1024*1024):
-    return hashlib.sha256(file_bytes(path,limit)).hexdigest()
+def file_bytes(path, limit=8*1024*1024):
+    return b''.join(_file_blocks(path, limit))
+
+
+def file_sha(path, limit=8*1024*1024, *, stream=False):
+    sha = hashlib.sha256()
+    for block in _file_blocks(path, None if stream else limit):
+        sha.update(block)
+    return sha.hexdigest()
 
 
 def plan_identity(family):

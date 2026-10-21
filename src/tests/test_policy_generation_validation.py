@@ -113,11 +113,12 @@ def test_supplement_never_closes_changed_or_unverified_contract(tmp_path,damage)
     assert result.get('current_code_capability_verified') is not True
 
 
-@pytest.mark.parametrize('bad',['failed','timeout','network','changed_report','missing_cases'])
+@pytest.mark.parametrize('bad',['failed','timeout','network','changed_report','missing_cases','large_report','large_report_changed'])
 def test_fixture_writer_failure_cannot_publish_or_modify_protected_source(tmp_path,monkeypatch,bad):
     data=tmp_path/'data';family='entry_cancel_wait'
     report=data/'report/entry_cancel_wait_tuning'/f'entry_cancel_wait_tuning_{DAY}.json'
-    report.parent.mkdir(parents=True);report.write_text('original native source')
+    original='x'*(8*1024*1024+1) if bad.startswith('large_report') else 'original native source'
+    report.parent.mkdir(parents=True);report.write_text(original)
     class Process:
         pid=123
         def __init__(self,command,**kwargs):
@@ -135,16 +136,23 @@ def test_fixture_writer_failure_cannot_publish_or_modify_protected_source(tmp_pa
                     ET.SubElement(root,'testcase',classname='src.tests.'+Path(name).stem,name='fixture')
             ET.ElementTree(root).write(xml_path)
             (xml_path.parent/'network.json').write_text(json.dumps({'blocked_attempts':int(bad=='network')}))
-            if bad=='changed_report':report.write_text('concurrent update')
+            if bad in {'changed_report','large_report_changed'}:report.write_text('concurrent update')
             return 1 if bad=='failed' else 0
         def poll(self):return None if self.running else 0
     monkeypatch.setattr(writer,'_assert_committed',lambda family:None)
     monkeypatch.setattr(writer.subprocess,'Popen',Process)
     monkeypatch.setattr(writer.os,'killpg',lambda *a:None)
+    monkeypatch.setattr(writer.subprocess,'check_output',lambda *a,**kw:'a'*40+'\n')
+    if bad=='large_report':
+        result=writer.validate(family,data,source_date=DAY,target_date='2026-10-15',publish=True)
+        assert result['status']=='pass' and result['published'] is True
+        assert validation.verify_fixture(data,family)[0]['protected_artifact_sha256'][str(report)]==hashlib.sha256(original.encode()).hexdigest()
+        assert report.read_text()==original
+        return
     with pytest.raises((ValueError,writer.subprocess.TimeoutExpired)):
         writer.validate(family,data,source_date=DAY,target_date='2026-10-15',publish=True)
     assert not validation.fixture_path(data,family).exists()
-    assert report.read_text()==('concurrent update' if bad=='changed_report' else 'original native source')
+    assert report.read_text()==('concurrent update' if bad in {'changed_report','large_report_changed'} else original)
     assert len(list((data/'report/postclose_generation_validation/runs').glob('*/failure.json')))==1
 
 
@@ -158,6 +166,9 @@ def test_fixture_reader_is_bounded_and_rejects_special_sources(tmp_path,kind):
     else:path.write_text('x'*11)
     with pytest.raises((ValueError,OSError)):
         validation.file_bytes(path,10)
+    if kind != 'oversize':
+        with pytest.raises((ValueError,OSError)):
+            validation.file_sha(path,stream=True)
 
 
 
@@ -545,3 +556,30 @@ def test_exact_successor_accepts_late_original_fixture_only_with_native_report_b
     result=handoff.current_fixture_observation(observed,data)
     assert result['status']==('verified' if damage is None else 'unverified'),result
     assert report.read_bytes()==before and contract['fixture_receipt'] is None
+
+
+@pytest.mark.parametrize('mutation', [None, 'rewrite', 'append', 'replace'])
+def test_protected_hash_stream_is_bounded_and_rejects_mid_read_generation_change(tmp_path, monkeypatch, mutation):
+    path=tmp_path/'protected.json';raw=b'x'*(128*1024+1);path.write_bytes(raw)
+    fdopen=validation.os.fdopen
+    class Reader:
+        def __init__(self, stream):self.stream=stream;self.reads=0
+        def __enter__(self):return self
+        def __exit__(self,*args):return self.stream.__exit__(*args)
+        def fileno(self):return self.stream.fileno()
+        def read(self,size):
+            assert 0 < size <= 64*1024
+            value=self.stream.read(size);self.reads+=1
+            if self.reads==1:
+                if mutation=='rewrite':path.write_bytes(b'y'*len(raw))
+                elif mutation=='append':
+                    with path.open('ab') as handle:handle.write(b'y')
+                elif mutation=='replace':
+                    replacement=tmp_path/'replacement';replacement.write_bytes(raw);replacement.replace(path)
+            return value
+    monkeypatch.setattr(validation.os,'fdopen',lambda *a,**kw:Reader(fdopen(*a,**kw)))
+    if mutation:
+        with pytest.raises(ValueError,match='fixture_read_changed_or_limit_exceeded'):
+            validation.file_sha(path,stream=True)
+    else:
+        assert validation.file_sha(path,stream=True)==hashlib.sha256(raw).hexdigest()

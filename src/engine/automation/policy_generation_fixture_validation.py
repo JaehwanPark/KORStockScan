@@ -44,7 +44,7 @@ def validate(family, data, *, source_date, target_date, publish=False):
         data/'runtime/policy_bootstrap'/f'runtime_policy_bootstrap_{target_date}.json',
         data/'runtime/policy_bootstrap'/f'runtime_policy_bootstrap_{target_date}.env',
     ]
-    before = {str(path): validation.file_sha(path) if path.exists() else None for path in protected}
+    before = {str(path): validation.file_sha(path, stream=True) if path.exists() else None for path in protected}
     destination = validation.fixture_path(data, family)
     if destination.exists() or destination.is_symlink():
         value, reference = validation.verify_fixture(data, family)
@@ -89,7 +89,7 @@ def pytest_sessionfinish(session, exitstatus):
         count = validation.junit_counts(run/'tests.xml', family)
         if json.loads((run/'network.json').read_text()) != {'blocked_attempts':0}:
             raise ValueError('fixture_network_attempted')
-        after = {str(path): validation.file_sha(path) if path.exists() else None for path in protected}
+        after = {str(path): validation.file_sha(path, stream=True) if path.exists() else None for path in protected}
         if before != after:
             raise ValueError('fixture_protected_artifact_changed')
         if code != generation.code_generation(family) or plan != validation.plan_identity(family):
