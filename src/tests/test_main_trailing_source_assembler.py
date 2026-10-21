@@ -89,7 +89,8 @@ def _native_inventory_vote(root, day, *, position='record:7'):
     return path, row
 
 
-def test_historical_inventory_is_stable_after_current_session_appends(tmp_path):
+@pytest.mark.parametrize('assembly_day', [DAY, TARGET])
+def test_historical_inventory_is_stable_after_current_session_appends(tmp_path, assembly_day):
     root=tmp_path/'source';fixture(root)
     master=next((root/'report/micro_reversion_economic_reference').glob('*.json'))
     parent=root/'runtime/policy_bootstrap'/f'runtime_policy_bootstrap_{DAY}.json'
@@ -100,21 +101,29 @@ def test_historical_inventory_is_stable_after_current_session_appends(tmp_path):
     _native_inventory_vote(root, TARGET)
     _native_inventory_vote(root, TARGET, position='record:8')
     assert source.input_inventory(root, [DAY], master, parent)==before
-    assert source.source_generation_matches(root,DAY,path,generation)
+    assert source.source_generation_matches(root,assembly_day,path,generation)
     # Late historical observations are still a changed input, even if their
     # original receipt clocks happen to duplicate an earlier row.
     with path.open('a') as handle:handle.write(json.dumps(row)+'\n')
     assert source.input_inventory(root,[DAY],master,parent)!=before
-    assert not source.source_generation_matches(root,DAY,path,generation)
+    assert not source.source_generation_matches(root,assembly_day,path,generation)
 
 
 @pytest.mark.parametrize('field,value', [('status','VALID'), ('session_key',TARGET),
     ('position_key','record:8'), ('persisted_at',0), ('path_policy_sha256','changed')])
-def test_historical_inventory_does_not_hide_invalid_or_rewritten_votes(tmp_path,field,value):
+@pytest.mark.parametrize('assembly_day', [DAY, TARGET])
+def test_historical_inventory_does_not_hide_invalid_or_rewritten_votes(tmp_path,field,value,assembly_day):
     path,row=_native_inventory_vote(tmp_path,DAY)
     generation=source.historical_vote_generation(path,DAY)
     path.write_text(json.dumps({**row,field:value})+'\n')
-    assert not source.source_generation_matches(tmp_path,DAY,path,generation)
+    assert not source.source_generation_matches(tmp_path,assembly_day,path,generation)
+
+
+@pytest.mark.parametrize('frozen_day', ['2026-10-13', 'unknown', DAY+'T00:00:00', None])
+def test_historical_vote_binding_rejects_future_or_invalid_original_scope(tmp_path, frozen_day):
+    path,_=_native_inventory_vote(tmp_path,DAY)
+    generation=source.historical_vote_generation(path,DAY)
+    assert not source.source_generation_matches(tmp_path,TARGET,path,{**generation,'source_date':frozen_day})
 
 
 def test_automatic_native_binding_warm_reuse_and_new_file_invalidation(tmp_path,monkeypatch):

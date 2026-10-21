@@ -216,8 +216,10 @@ def source_generation_matches(root, source_date, path, generation):
             return False
     if generation.get('schema') == VOTE_INVENTORY_SCHEMA:
         try:
-            return (generation.get('source_date') == source_date
-                    and historical_vote_generation(path, source_date) == generation)
+            frozen_day = generation.get('source_date')
+            return (date.fromisoformat(frozen_day).isoformat() == frozen_day
+                    and frozen_day <= source_date
+                    and historical_vote_generation(path, frozen_day) == generation)
         except (OSError, ValueError, TypeError, KeyError, OverflowError):
             return False
     if Path(path) == Path(root)/'runtime/order_owner_registry.jsonl':
