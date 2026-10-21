@@ -406,6 +406,30 @@ from src.engine.infrastructure.validation_digest_session import reused_digest
     assert 'startup_' in result.stderr,result.stderr
 
 
+@pytest.mark.parametrize('change', [None, 'content', 'replacement', 'parent_alias', 'mode'])
+def test_batched_anchor_check_preserves_identity_and_shared_parent_bounds(tmp_path,monkeypatch,change):
+    directory=tmp_path/'sources';directory.mkdir()
+    files=[directory/str(i) for i in range(64)]
+    for path in files:path.write_text('original')
+    anchors={str(path):C._request_identity(path) for path in files}
+    if change=='content':files[-1].write_text('modified')
+    elif change=='replacement':
+        replacement=tmp_path/'replacement';replacement.write_text('original');replacement.replace(files[-1])
+    elif change=='parent_alias':
+        moved=tmp_path/'moved';directory.rename(moved);directory.symlink_to(moved,target_is_directory=True)
+    elif change=='mode':directory.chmod(0o700)
+    expected=all(C._request_identity(name)==before for name,before in anchors.items())
+    calls=[];original=C.os.lstat
+    def observed(name,*args,**kwargs):
+        calls.append(str(name));return original(name,*args,**kwargs)
+    monkeypatch.setattr(C.os,'lstat',observed)
+    assert C._anchor_identities_unchanged(anchors) is expected
+    assert expected is (change is None)
+    if change is None:
+        assert calls.count(str(directory))==2
+        assert len(calls)<4*len(files)
+
+
 @pytest.mark.parametrize('damage', [None, 'missing_shard', 'corrupt_shard', 'membership', 'selection', 'unobserved'])
 def test_native_sharded_delay_preparation_delegates_observed_rebuild_in_real_isolation(
         request_fixture, monkeypatch, damage):

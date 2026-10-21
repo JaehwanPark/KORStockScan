@@ -13,6 +13,7 @@ import json
 import os
 from pathlib import Path
 import re
+import stat
 import time
 
 SCHEMA = 'main_startup_validation_code_context_v1'
@@ -417,8 +418,13 @@ def install_validation_code_context(request: dict) -> None:
     _CONTEXT['request_identity'] = _request_identity(request_path)
     if request.get('main_preparation_code_handoff') is not None:
         proof = request['main_preparation_code_handoff']
+        mounts = _sha('/proc/self/mountinfo')
         _CONTEXT['main_anchor_identities'] = {path: _request_identity(path)
             for path in proof['source_hashes']}
+        if _sha('/proc/self/mountinfo') != mounts:
+            _CONTEXT = {'valid': False}
+            raise ValueError('startup_main_mount_generation_changed')
+        _CONTEXT['main_mountinfo_sha256'] = mounts
         _CONTEXT['delegation'] = dict(digest_reused_reads=0, digest_reused_bytes=0, auxiliary_manifests=[])
         from src.engine.infrastructure.validation_digest_session import ACTIVE
         if ACTIVE.get() is not None:
@@ -1123,6 +1129,34 @@ def _request_identity(path):
     return identity(path)
 
 
+def _anchor_identities_unchanged(anchors):
+    """Compare all files while checking shared lexical parents once per pass."""
+    parents = {}
+    def parent_row(name):
+        value = os.lstat(name)
+        row = [name, value.st_dev, value.st_ino, value.st_mode, value.st_uid]
+        if stat.S_ISLNK(value.st_mode):
+            row += [value.st_ctime_ns, os.readlink(name)]
+        return row
+    for name, before in anchors.items():
+        if name != before[0]:
+            return False
+        if before[0] != before[1]:
+            if _request_identity(name) != before:
+                return False
+            continue
+        value = os.lstat(name)
+        if [value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns,
+                value.st_ctime_ns, value.st_mode, value.st_uid] != before[2:9]:
+            return False
+        for row in before[9]:
+            if row[0] not in parents:
+                parents[row[0]] = parent_row(row[0])
+            if parents[row[0]] != row:
+                return False
+    return all(parent_row(name) == row for name, row in parents.items())
+
+
 def _main_context(*, digest_only=False):
     global _CONTEXT
     if _CONTEXT is None:
@@ -1141,8 +1175,9 @@ def _main_context(*, digest_only=False):
             raise ValueError('startup_main_preparation_proof_required')
         if (_git_head(proof['selected_release_root']) != proof['selected_release_commit']
                 or _git_head(ROOT) != c['request']['execution_release_commit']
-                or any(_request_identity(path) != before
-                       for path, before in c['main_anchor_identities'].items())):
+                or _sha('/proc/self/mountinfo') != c['main_mountinfo_sha256']
+                or not _anchor_identities_unchanged(c['main_anchor_identities'])
+                or _sha('/proc/self/mountinfo') != c['main_mountinfo_sha256']):
             raise ValueError('startup_main_preparation_anchor_changed')
         return proof
     except (OSError, ValueError, KeyError, TypeError):
