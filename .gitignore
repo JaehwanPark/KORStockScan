@@ -40,6 +40,11 @@ dist/
 /data/source_quality/file_source_retirement.apply.lock
 /data/report/strategy_owner_first_use_replay/*.lock
 /data/report/market_opportunity_census/*.publish.lock
+# Disposable native holding-request indexes and research coordination locks.
+/data-research-inputs/**/holding_request_index/*.sqlite
+/data-research-inputs/**/holding_request_index/*.sqlite-*
+/data-research-inputs/**/report/postclose_stage_terminal/*/*.lock
+/data-research-inputs/**/runtime/postclose_stage_slots/*.lock
 /data/runtime/manual_close_reconciliation/
 # Exact reviewed approval assets required by the dated profile/preflight contract.
 !docs/audit-reports/2026-09-08-low-price-recommendation-apply-evidence.json
