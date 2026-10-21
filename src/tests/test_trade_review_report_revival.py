@@ -890,7 +890,7 @@ def test_carry_partial_sell_reconciles_prior_and_final_fill_legs():
     assert ledger["sell_fill_fees_taxes_krw"] == 20
 
 
-def test_prior_entry_fill_events_require_sealed_same_id_snapshot(monkeypatch):
+def test_prior_entry_fill_events_require_sealed_same_id_snapshot(monkeypatch, unarchived_prior_snapshots):
     snapshot = {
         "date": "2026-09-23", "meta": {"warnings": []},
         "metrics": {"open_scalp_position_projection_status": "current_db_census",
@@ -915,7 +915,7 @@ def test_prior_entry_fill_events_require_sealed_same_id_snapshot(monkeypatch):
     assert events == {}
 
 
-def test_prior_fill_events_include_intermediate_day_scale_in(monkeypatch):
+def test_prior_fill_events_include_intermediate_day_scale_in(monkeypatch, unarchived_prior_snapshots):
     def snapshot(day):
         stage = "position_rebased_after_fill" if day == "2026-09-22" else "scale_in_executed"
         return {
@@ -943,7 +943,7 @@ def test_prior_fill_events_include_intermediate_day_scale_in(monkeypatch):
     assert set(receipts) == {"2026-09-22", "2026-09-23"}
 
 
-def test_open_position_rebound_blockers_carry_as_bounded_prior_day_counts(monkeypatch):
+def test_open_position_rebound_blockers_carry_as_bounded_prior_day_counts(monkeypatch, unarchived_prior_snapshots):
     trade = {"id": 42, "rec_date": "2026-09-23", "status": "HOLDING",
              "strategy": "SCALPING", "code": "123456", "buy_qty": 1}
     blocked = [report_mod.HoldingEvent(
@@ -974,7 +974,7 @@ def test_open_position_rebound_blockers_carry_as_bounded_prior_day_counts(monkey
     assert lineage["prior_blocker_summary_gap_count"] == 0
 
 
-def test_prior_position_snapshot_without_rebound_summary_preserves_gap(monkeypatch):
+def test_prior_position_snapshot_without_rebound_summary_preserves_gap(monkeypatch, unarchived_prior_snapshots):
     snapshot = {"date": "2026-09-23", "meta": {"warnings": []},
                 "metrics": {"open_scalp_position_projection_status": "current_db_census",
                             "open_scalp_position_projection_count": 1},
@@ -1855,3 +1855,10 @@ def test_database_completion_observation_cannot_forge_native_terminal_or_eligibi
     issue = report_mod.verify_completed_census_manifest(report, day)
     assert (issue is None) is (mutation is None)
     assert report["sections"]["completed_trade_projection"][0]["profit_rate"] is None
+
+
+@pytest.fixture
+def unarchived_prior_snapshots(monkeypatch):
+    from src.engine import log_archive_service
+    monkeypatch.setattr(log_archive_service, "prior_entry_snapshot_rejection", lambda *a, **k: None)
+    monkeypatch.setattr(log_archive_service, "load_prior_entry_projection", lambda *a, **k: None)

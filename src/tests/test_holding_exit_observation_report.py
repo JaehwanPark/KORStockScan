@@ -1,5 +1,6 @@
 import gzip
 import json
+import pytest
 
 from src.engine import holding_exit_observation_report as report_mod
 
@@ -1158,3 +1159,32 @@ def test_publisher_and_bootstrap_share_forward_window_guard():
     report["analysis_window"] = report_mod._analysis_window_start(target_date="2026-10-08", month_start="2026-09-01")[1]
     with pytest.raises(ValueError, match="selection_forward_window_invalid"):
         verify_forward_window(report, "2026-10-08")
+
+
+@pytest.mark.parametrize('hour', [10, 17])
+@pytest.mark.parametrize('route', ['KRX', 'NXT', 'SOR'])
+@pytest.mark.parametrize('fault', [None, 'order', 'execution', 'clock', 'route', 'authority', 'fake_verified', 'custody'])
+def test_operator_krx_sor_defaults_close_only_attribution_gap(hour, route, fault):
+    from src.trading.market.execution_venue import execution_venue_fields, MARKET_DEFAULT_AUTHORITY
+    at = f'2026-10-21T{hour}:10:00+09:00'
+    native = dict(broker_actual_execution_venue='UNKNOWN',
+                  broker_actual_execution_venue_source='official_exchange_fields_ambiguous_or_missing')
+    assignment = execution_venue_fields(native, observed_at=at)
+    trade = dict(native, **assignment, effective_venue='KRX', exact_sell_fill_time=at,
+        sell_order_no='1', sell_execution_no='2', exit_execution_broker_route=route,
+        terminal_population_scope='real_record_bound',
+        terminal_decision_authority='broker_sell_fill_observation_only', sell_quantity_conserved=True,
+        realized_pnl_krw=None)
+    candidate = dict(native, **assignment, exact_sell_fill_time=at, sell_order_no='1', sell_execution_no='2',
+        market_axes_source_quality_status='route_contract_ready', broker_route_requested=route)
+    assert assignment['execution_venue_override'] == MARKET_DEFAULT_AUTHORITY
+    changes = dict(order=('sell_order_no','other'), execution=('sell_execution_no','other'),
+                   clock=('exact_sell_fill_time',at.replace(':10:',':11:')), route=('broker_route_requested','CONFLICT'),
+                   authority=('execution_venue_override','unapproved'), fake_verified=('actual_execution_venue_verified',True))
+    if fault in changes:
+        key, value = changes[fault]; candidate[key] = value
+    if fault == 'custody':trade['sell_quantity_conserved'] = False
+    gap = report_mod._post_sell_binding_gap(trade,candidate)
+    assert (gap is None) is (fault is None)
+    assert trade['broker_actual_execution_venue'] == candidate['broker_actual_execution_venue'] == 'UNKNOWN'
+    assert trade['realized_pnl_krw'] is None

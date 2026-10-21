@@ -10081,6 +10081,7 @@ def test_latency_input_health_survives_existing_pipeline_events(monkeypatch):
 @pytest.mark.parametrize('hour,broker,route,suffix', [
     (8,'NXT','nxt_only','_NX'), (8,'SOR','krx_nxt_integrated','_AL'), (10,'SOR','krx_only',''),
     (10,'SOR','krx_nxt_integrated','_AL'), (17,'SOR','krx_nxt_integrated','_AL'),
+    (10,'UNKNOWN','unknown','_AL'), (17,'UNKNOWN','unknown','_AL'),
 ])
 @pytest.mark.parametrize('fault', [None,'stale','future','crossed','item','epoch','missing_quote','depth','invalid_depth'])
 def test_post_sell_registration_to_native_route_horizons_preserves_unknown_fill_venue(
@@ -10105,6 +10106,7 @@ def test_post_sell_registration_to_native_route_horizons_preserves_unknown_fill_
         broker_actual_execution_venue_source='official_fid_2134_2135' if broker=='NXT' else 'official_exchange_fields_ambiguous_or_missing',
         broker_actual_exchange_code='2' if broker=='NXT' else '0',
         broker_actual_exchange_name='NXT' if broker=='NXT' else 'SOR',broker_sor_flag='N' if broker=='NXT' else 'Y')
+    native_route = 'krx_nxt_integrated' if route == 'unknown' else route
     candidate=feedback.record_post_sell_candidate(recommendation_id=77,stock=stock,code='005090',
         sell_time=sell,sell_price=10000,buy_price=9900,buy_qty=2)
     assert candidate['post_sell_executable_bbo_observer_registered'] is True
@@ -10125,7 +10127,7 @@ def test_post_sell_registration_to_native_route_horizons_preserves_unknown_fill_
             quote_at=clock[0]-.1
             if fault=='stale':quote_at=clock[0]-2
             if fault=='future':quote_at=clock[0]+1
-            snapshot=dict(item=('000660' if fault=='item' else code)+suffix,market_route=route,
+            snapshot=dict(item=('000660' if fault=='item' else code)+suffix,market_route=native_route,
                 effective_venue='NXT' if suffix=='_NX' else '' if suffix=='_AL' else 'KRX',
                 observed_epoch=quote_at,transport_epoch=6 if fault=='epoch' else 7,
                 orderbook=dict(bids=[dict(price=10100,volume=0 if fault=='depth' else -1 if fault=='invalid_depth' else 20)],
@@ -10134,7 +10136,7 @@ def test_post_sell_registration_to_native_route_horizons_preserves_unknown_fill_
                 snapshot['route_depth_totals']={'KRX':{'ask':0,'bid':0},'NXT':{'ask':30,'bid':20},
                     'combined':{'ask':30,'bid':20}}
             return dict(market_data_transport_epoch=7,
-                realtime_type_snapshots_by_route={} if fault=='missing_quote' else {route:{'0D':snapshot}})
+                realtime_type_snapshots_by_route={} if fault=='missing_quote' else {native_route:{'0D':snapshot}})
     manager=Manager();logs=[]
     monkeypatch.setattr(state_handlers,'WS_MANAGER',manager)
     monkeypatch.setattr(state_handlers,'active_post_sell_executable_bbo_observers',feedback.active_post_sell_executable_bbo_observers)

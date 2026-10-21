@@ -126,18 +126,22 @@ def _parse_aware_dt(value: Any) -> datetime | None:
 
 def _sor_krx_post_sell_user_override(trade: dict, candidate: dict) -> bool:
     """Admit a real SOR fill to KRX-reference postclose analysis only."""
-    from src.trading.market.execution_venue import execution_venue_fields, SOR_KRX_AUTHORITY
+    from src.trading.market.execution_venue import execution_venue_fields, VENUE_ASSIGNMENT_AUTHORITIES, MARKET_DEFAULT_AUTHORITY
     assigned = execution_venue_fields(trade, observed_at=trade.get("exact_sell_fill_time"))
-    if assigned["execution_venue_override"] == SOR_KRX_AUTHORITY:
+    authority = assigned["execution_venue_override"]
+    if authority in VENUE_ASSIGNMENT_AUTHORITIES:
         candidate_assignment = execution_venue_fields(candidate,
             observed_at=candidate.get("exact_sell_fill_time"))
-        return bool(candidate_assignment["execution_venue_override"] == SOR_KRX_AUTHORITY
+        return bool(candidate_assignment["execution_venue_override"] == authority
             and trade.get("effective_venue") == candidate.get("actual_execution_venue") == "KRX"
-            and trade.get("execution_venue_override") == candidate.get("execution_venue_override") == SOR_KRX_AUTHORITY
+            and trade.get("execution_venue_override") == candidate.get("execution_venue_override") == authority
             and trade.get("actual_execution_venue_verified") is False
             and candidate.get("actual_execution_venue_verified") is False
             and str(trade.get("exit_execution_broker_route") or "").upper()
-                == str(candidate.get("broker_route_requested") or "").upper() == "SOR"
+                == str(candidate.get("broker_route_requested") or "").upper()
+            and (str(candidate.get("broker_route_requested") or "").upper() == "SOR"
+                 or authority == MARKET_DEFAULT_AUTHORITY and
+                 str(candidate.get("broker_route_requested") or "").upper() in {"KRX", "NXT"})
             and candidate.get("market_axes_source_quality_status") == "route_contract_ready"
             and trade.get("terminal_population_scope") == "real_record_bound"
             and trade.get("terminal_decision_authority") == "broker_sell_fill_observation_only"
@@ -191,6 +195,10 @@ def _post_sell_binding_gap(trade: dict, candidate: dict) -> str | None:
     terminal_route = str(trade.get("exit_execution_broker_route") or "").upper()
     candidate_route = str(candidate.get("broker_route_requested") or "").upper()
     override = _sor_krx_post_sell_user_override(trade, candidate)
+    from src.trading.market.execution_venue import VENUE_ASSIGNMENT_AUTHORITIES
+    assigned_reference = any(row.get(key) in VENUE_ASSIGNMENT_AUTHORITIES
+        for row in (trade, candidate) for key in (
+            "execution_venue_override", "actual_execution_venue_source"))
     unverified_sor_venue_relabel = bool(
         terminal_route == "SOR"
         and str(trade.get("broker_actual_execution_venue") or "").upper()
@@ -202,6 +210,7 @@ def _post_sell_binding_gap(trade: dict, candidate: dict) -> str | None:
     if (candidate.get("market_axes_source_quality_status") != "route_contract_ready"
             or terminal_venue not in {"KRX", "NXT"}
             or (candidate_venue != terminal_venue and not override)
+            or (assigned_reference and not override)
             or unverified_sor_venue_relabel
             or terminal_route not in {"KRX", "NXT", "SOR"}
             or candidate_route != terminal_route):

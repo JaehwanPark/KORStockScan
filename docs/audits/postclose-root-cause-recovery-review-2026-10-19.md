@@ -1240,3 +1240,34 @@ trailing의 최초 직접 재생은 all_scope_assembly_code_changed로 차단됐
 최종 source587·새 세대 인계16·기존 세대 대표9 PASS다. active-policy128scope/76,800rows/598hits/mismatch0, 원10/21 target의 active/delay/stop/holding code handoff·4family capability·최종 report consumer PASS다. 닫힌10/20 원천의 현재 code 결속만 native producer로 갱신해 trailing20,824scope를53.04초/RSS182,628KiB에 재검증했다. 원 holding report/initial policy·수량 fixed stage·운영 정책을 보존했으며 common/eligible 표본이나 실제 경제성 회복으로 주장하지 않는다.
 
 실제 선택ea68/PID1724066/start19233026/cwd, 원본9개SHA는 동일하다. epoch1792547808026387070은 running이며 실제 전환 수용은 pending이다. 재기동/선택/예약/실제 REG·REMOVE/주문/provider/Telegram0, 장 종료까지 세션 대기 작업0이다. source-only quote scope와 actual execution venue를 분리해 source collection은 가능하지만, 0/SOR 원문의 물리 KRX/NXT 구분·원12건 exact 비용은 미확인으로 유지한다. 새PID 자연 수신/horizon 수용은 기존 owner에서 별도로 확인한다.
+
+
+## 2026-10-21 operator KRX SOR defaults
+
+사용자 지시에 따라 미확정 **운영 venue=KRX / 주문 route=SOR**를 기존 공통 owner에 통합했다. 기준은 `09a409d58`(통합 code `19297ead7` 후속)이며 준비만 수행한다. selector/기동/PID/정책 적용은 하지 않는다. `user_2026_10_21_unresolved_venue_krx_route_sor`는 원 사건의 aware KST 날짜가10/21 이후일 때 적용한다. 재생 시 실행일로 과거 사건을 소급 재분류하지 않으며, 원10/16 SOR 지정과 발행 영수증도 읽을 수 있다.
+
+원인과 수리:
+
+- 기존 `execution_venue_fields`는 정확한0/SOR/Y 원문에만 KRX 지정을 허용했고, 나머지 미확정은 receipt/후행 관측/정책 독자에게 UNKNOWN으로 흩어졌다. 기존 owner를 확장해 운영 귀속과 broker route의 기본값·사용자 출처를 함께 전달한다. 명시 KRX/NXT/SOR가 우선하며 invalid/conflicting packet은 기본값으로 덮지 않는다.
+- 주문 owner의 장외 미확정 기본 NXT는10/21부터 SOR로 통일한다. Main holding의 두 거래소 적격이 모두 확인됐으나 route 지시가 없던 경우도 같은 권한을 사용한다. 미확정 적격, 마감/시간창, 대사, custody, 주문/수량/잔량, stale/epoch/가격·depth 안전장치는 유지한다. 기본값은 새 주문이나 관리 권한이 아니다.
+- BUY/SELL 원 영수증, frozen outbox, trade review, post-sell registry, holding 연구가 같은 지정 출처를 소비한다. quote가 없을 때 새 수집 요청은 SOR의`krx_nxt_integrated`로 준비하지만 receipt의 **관측 route는 unknown을 유지**한다. 이후 정확한_AL/0D/epoch/fresh/depth가 실제 수신돼야 horizon이 유효하다. 기존 명시 quote route/item은 변경하지 않는다.
+- 수량 원천 독자는 실제 venue와 주문 route를 분리한다. 분할/timeout은 정확한 quote route를 우선하며, 불가피한 운영 기본값을 물리 체결소로 해석하지 않는다. source cache·execution cache와 trailing code manifest에 공통 owner 해시를 포함해 이전 reader 결과를 재사용하지 못하게 한다. 수량 기준/단계/상한은 그대로다.
+- AI의 route/session 비교에서 현재 날짜의 UNKNOWN 물리 venue만으로 제외하던 조건은 운영 KRX 귀속으로 해석한다. raw actual venue는 UNKNOWN으로 남고 별도 운영 귀속·사용자 출처가 붙는다. observe-only, 정확한 outcome/cost/holdout과 역할·정책 승격 조건은 유지한다.
+- 재리뷰에서 양쪽의 운영 KRX가 같다는 이유로 잘못된 authority/verified/custody를 놓치는 결속 경로를 발견했다. 지정이 사용된 경로에는 exact fill clock·order/execution ID·동일 authority·unverified 표시·수량 보존을 함께 요구하도록 직접 소비자를 수리했다.
+
+원문 보존: `broker_actual_execution_venue=UNKNOWN`, raw FID/envelope, `actual_execution_venue_verified=false`, 미확정 실제 비용은 유지한다. 현재 유효한 사용자 지정은 운영 venue 결손으로 다시 실패시키지 않지만, 새 호가/체결 ID/비용/clock/세대 결손과 명시 값 충돌은 계속 탐지한다. 과거12건의 실제 비용,20개 horizon과49350 최초 활성화 등 미복원 원천은 이번 코드 기본값으로 복구되지 않는다. 실제 KRX 체결 성과나 순익으로 승격하지 않는다.
+
+범위/교체 대사:
+
+| 기존 경로 | 처리 | 현재 소비자와 이유 |
+| --- | --- | --- |
+| 공통 venue helper의0/SOR/Y 한정 분기 | consolidated | 기존10/16 reader 보존과10/21 운영 기본값을 한 owner에서 검증 |
+| receipt/후행/연구의 미확정 route 중단 | replaced | 공통 기본값과 raw/authority를 직접 소비; quote/경제성 검증은 유지 |
+| 장외 기본 NXT | retained for historical dates | 10/21 이후 미확정은 SOR; 과거 재현과 명시 NXT 주문은 보존 |
+| venue를 주문 route로 재사용하던 수량 연구 fallback | replaced | 직접 route 필드와 exact quote route가 우선; 기존 발행 reader 호환 유지 |
+| native packet/quote/비용/수량 안전 owner | retained | 실제 수신·체결·비용·guard 증거가 필요하며 기본값으로 만들 수 없음 |
+| 이전 통합 배포·세대 계약 | retained | issued source-date 정책/영수증과 최초 자연 종료 전환의 current consumer가 있음 |
+
+새 Python module/entrypoint/worker/wrapper/스케줄0. 기존 owner13개(인계 포함)를 수정했다. review baseline의 unrelated source/docs와 immutable release는 보존한다. 원본을 바꾸는 수동 status/hash 편집이나 경보 억제는 없다.
+
+검증: 격리 before/after12조건에서 미확정3시간대가 UNKNOWN/차단→KRX/SOR/수집 준비로 연결됐고 명시 NXT/KRX 및 충돌 구분을 보존했다. source1,344 PASS, 추가 비용/시장/cache 계약514 PASS, holding route18 PASS, 인계16 PASS, 기존 세대 대표9 PASS. 네 snapshot 테스트의 baseline 실패는 shared 실제 archive를 읽던 fixture 의존으로 재현됐고 fake archive를 명시해 격리했다(생산자 우회 없음). `git diff --check`와 관련 compile PASS. [원인·격리 증거](../../tmp/operational-market-defaults-20261021/causal-verification.json). 최종 native preflight/선택/PID 상태는 같은 절의 후속 기록과 readiness를 따른다.

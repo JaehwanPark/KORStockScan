@@ -1995,3 +1995,25 @@ def test_sor_single_venue_keeps_exact_date_policy_and_unknown_guards(
         assert result["aftermarket_sor_runtime_policy_valid"] is True
     else:
         assert not result.get("ord_no")
+
+
+@pytest.mark.parametrize('hour', [8, 10, 17, 19])
+@pytest.mark.parametrize('requested', [None, '', 'UNKNOWN', '-', 'SOR', 'NXT', 'KRX', 'CONFLICT'])
+def test_operator_default_route_is_sor_with_explicit_routes_and_preflight_preserved(hour, requested):
+    from src.trading.market.execution_venue import MARKET_DEFAULT_AUTHORITY
+    at = datetime(2026, 10, 21, hour, 10, tzinfo=kiwoom_orders.KST)
+    result = kiwoom_orders.describe_order_route_resolution(requested, now=at)
+    missing = requested in (None, '', 'UNKNOWN', '-')
+    assert result['effective_dmst_stex_tp'] == ('SOR' if missing else requested)
+    assert result['broker_route_override'] == (MARKET_DEFAULT_AUTHORITY if missing else None)
+    if missing:
+        assert result['broker_route_resolution'] == MARKET_DEFAULT_AUTHORITY
+    context = session_contract.resolve_market_session(at)
+    checked = session_contract.resolve_order_type_preflight(
+        context, result['effective_dmst_stex_tp'], 'buy', '0')
+    if hour >= 17 or requested == 'CONFLICT':
+        assert checked.allowed is False  # Missing eligibility/closed entry clock/invalid route.
+    closed = session_contract.resolve_order_type_preflight(
+        session_contract.resolve_market_session(at.replace(hour=20)),
+        result['effective_dmst_stex_tp'], 'sell', '0', existing_holding=True)
+    assert closed.allowed is False

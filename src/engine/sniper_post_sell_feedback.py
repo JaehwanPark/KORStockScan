@@ -484,20 +484,25 @@ def _post_sell_execution_route_contract(
         if sell_dt.tzinfo is None
         else sell_dt
     )
-    from src.trading.market.execution_venue import execution_venue_fields
+    from src.trading.market.execution_venue import (
+        execution_venue_fields, broker_route_fields, market_defaults_active,
+        MARKET_DEFAULT_AUTHORITY,
+    )
     assignment = execution_venue_fields(source, observed_at=resolved_sell_dt)
     context = resolve_market_session(resolved_sell_dt)
-    broker_route = str(
-        source.get("last_sell_execution_broker_route_requested")
-        or source.get("broker_route_requested")
-        or source.get("last_sell_execution_broker_route")
-        or source.get("last_exit_broker_route")
-        or source.get("fast_exit_broker_route")
-        or source.get("entry_execution_broker_route")
-        or source.get("broker_route")
-        or source.get("dmst_stex_tp")
-        or ""
-    ).strip().upper()
+    from src.trading.market.execution_venue import UNRESOLVED_MARKET_VALUES
+    broker_route = ""
+    for key in ("last_sell_execution_broker_route_requested", "broker_route_requested",
+                "last_sell_execution_broker_route", "last_exit_broker_route", "fast_exit_broker_route",
+                "entry_execution_broker_route", "broker_route", "dmst_stex_tp"):
+        value = str(source.get(key) or "").strip().upper()
+        if not broker_route:
+            broker_route = value
+        if value not in UNRESOLVED_MARKET_VALUES:
+            broker_route = value
+            break
+    route_fields = broker_route_fields(broker_route, observed_at=resolved_sell_dt, recorded=source)
+    broker_route = route_fields["broker_route_requested"]
     market_data_route = str(
         source.get("last_sell_execution_market_data_route")
         or source.get("market_data_route")
@@ -507,10 +512,13 @@ def _post_sell_execution_route_contract(
     ).strip().lower()
     route_resolution = "explicit_market_data_route"
     if market_data_route in {"", "unknown", "-"}:
-        market_data_route = str(
-            context.preferred_market_data_route or ""
-        ).strip().lower()
-        route_resolution = "market_session_contract_preferred_data_route"
+        if market_defaults_active(resolved_sell_dt):
+            market_data_route = {"SOR": "krx_nxt_integrated", "KRX": "krx_only",
+                                 "NXT": "nxt_only"}.get(broker_route, "unknown")
+            route_resolution = MARKET_DEFAULT_AUTHORITY
+        else:
+            market_data_route = str(context.preferred_market_data_route or "").strip().lower()
+            route_resolution = "market_session_contract_preferred_data_route"
     if broker_route not in {"KRX", "NXT", "SOR"} or market_data_route not in {
         "krx_only",
         "nxt_only",
@@ -554,7 +562,7 @@ def _post_sell_execution_route_contract(
     ).strip()
     if venue == "UNKNOWN":
         venue_source = "official_exchange_fields_ambiguous_or_missing"
-    if assignment["execution_venue_override"]:
+    if assignment["actual_execution_venue"] in {"KRX", "NXT"}:
         venue = assignment["actual_execution_venue"]
         venue_source = assignment["actual_execution_venue_source"]
 
@@ -605,6 +613,7 @@ def _post_sell_execution_route_contract(
         "market_session_regime": session,
         "market_data_route": market_data_route,
         "broker_route_requested": broker_route,
+        **route_fields,
         "actual_execution_venue": venue,
         "actual_execution_venue_source": venue_source,
         "actual_execution_venue_verified": assignment["actual_execution_venue_verified"],
@@ -1011,6 +1020,8 @@ def record_post_sell_candidate(
             "market_session_regime": receipt_route.get("session", "unknown"),
             "market_data_route": receipt_route.get("expected_market_route", "-"),
             "broker_route_requested": receipt_route.get("broker_route", "-"),
+            "broker_route_requested_raw": receipt_route.get("broker_route_requested_raw"),
+            "broker_route_override": receipt_route.get("broker_route_override"),
             "actual_execution_venue": receipt_route.get("venue", "UNKNOWN"),
             "actual_execution_venue_source": receipt_route.get(
                 "actual_execution_venue_source",

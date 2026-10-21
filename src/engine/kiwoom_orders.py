@@ -1782,15 +1782,20 @@ def resolve_order_dmst_stex_tp(dmst_stex_tp=None, *, now=None) -> str:
     explicit = str(dmst_stex_tp or "").strip().upper()
     if explicit in {"KRX", "NXT", "SOR"}:
         return explicit
+    from src.trading.market.execution_venue import broker_route_fields, market_defaults_active
+    observed_at = now if now is not None else datetime.now(KST)
+    if isinstance(observed_at, datetime) and observed_at.tzinfo is None:
+        observed_at = observed_at.replace(tzinfo=KST)
+    if market_defaults_active(observed_at):
+        return broker_route_fields(explicit, observed_at=observed_at)["broker_route_requested"]
     return "SOR" if is_krx_regular_order_session(now) else "NXT"
 
 
 def describe_order_route_resolution(dmst_stex_tp=None, *, now=None) -> dict:
     """Describe the broker route independently from the venue cohort.
 
-    ``dmst_stex_tp`` is the Kiwoom execution route.  It must never be reused as
-    an effective venue/cohort label: KRX regular-session orders use SOR, while
-    premarket and NXT-session orders default to NXT.
+    Explicit routes win. From the operator's effective date unresolved
+    requests default to SOR in every supported session; guards still preflight.
     """
 
     explicit = str(dmst_stex_tp or "").strip().upper()
@@ -1799,9 +1804,21 @@ def describe_order_route_resolution(dmst_stex_tp=None, *, now=None) -> dict:
         if now is None
         else resolve_order_dmst_stex_tp(dmst_stex_tp, now=now)
     )
+    from src.trading.market.execution_venue import broker_route_fields
+    at = now if now is not None else datetime.now(KST)
+    if isinstance(at, datetime) and at.tzinfo is None:
+        at = at.replace(tzinfo=KST)
+    default_route = broker_route_fields(explicit, observed_at=at)
     if explicit in {"KRX", "NXT", "SOR"}:
         resolution = "explicit_request"
         requested = explicit
+    elif default_route["broker_route_override"]:
+        from src.trading.market.execution_venue import MARKET_DEFAULT_AUTHORITY
+        resolution = MARKET_DEFAULT_AUTHORITY
+        requested = explicit or "AUTO"
+    elif effective not in {"KRX", "NXT", "SOR"}:
+        resolution = "explicit_route_invalid"
+        requested = explicit or "UNKNOWN"
     elif effective == "SOR":
         resolution = "krx_regular_session_default_sor"
         requested = "AUTO"
@@ -1813,6 +1830,7 @@ def describe_order_route_resolution(dmst_stex_tp=None, *, now=None) -> dict:
         "effective_dmst_stex_tp": effective,
         "broker_route": effective,
         "broker_route_resolution": resolution,
+        "broker_route_override": default_route["broker_route_override"],
     }
 
 

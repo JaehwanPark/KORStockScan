@@ -2588,3 +2588,15 @@ def test_same_broker_second_policy_requires_exact_causal_request_sent_full_fill(
             proof=broken['policy_decision_clock_proof'];proof['proof_sha256']=policy._digest({k:v for k,v in proof.items()if k!='proof_sha256'})
         broken['shapes']['parent']['policy_decision_clock_proof']=deepcopy(broken['policy_decision_clock_proof'])
         assert not policy_decision_precedes_fill(broken,fact)
+
+
+def test_quantity_execution_cache_binds_shared_market_default_owner(monkeypatch):
+    from pathlib import Path
+    from src.trading.market import execution_venue
+    from src.engine.scalping.initial_quantity_refresh_evaluation import _execution_key
+    before = _execution_key({}, {}, {}, {})
+    owner = Path(execution_venue.__file__).resolve()
+    original = Path.read_bytes
+    monkeypatch.setattr(Path, 'read_bytes', lambda path: original(path) +
+        (b'\n# changed market authority\n' if path.resolve() == owner else b''))
+    assert _execution_key({}, {}, {}, {}) != before

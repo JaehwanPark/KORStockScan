@@ -30,6 +30,7 @@ from zoneinfo import ZoneInfo
 from src.utils.jsonl_io import existing_or_gzip_path, iter_jsonl
 from src.engine.automation.source_quality_clean_baseline import policy_refresh_start_date
 from src.trading.order.tick_utils import get_tick_size
+from src.trading.market.execution_venue import operational_venue, MARKET_DEFAULT_AUTHORITY
 from src.engine.scalping.entry_setup_evidence import (
     MECHANISTIC_ENTRY_FLOW_OBSERVATION_SCHEMA,
     MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1,
@@ -675,8 +676,8 @@ def _candidate_source_contract(
             and _normalized_venue(row.get("market_data_route")) != route
         ):
             exclusions["dual_market_data_route_mismatch"] += 1
-        elif is_dual_aftermarket and _normalized_venue(
-            row.get("actual_execution_venue")
+        elif is_dual_aftermarket and operational_venue(
+            row.get("actual_execution_venue"), observed_at=row.get("decision_ts")
         ) not in {"KRX", "NXT"}:
             exclusions["dual_actual_execution_venue_unknown"] += 1
         elif not row_date:
@@ -705,6 +706,9 @@ def _candidate_source_contract(
         ):
             exclusions["dual_exposure_cost_missing_or_invalid"] += 1
         else:
+            if is_dual_aftermarket and _normalized_venue(row.get("actual_execution_venue")) not in {"KRX", "NXT"}:
+                row = {**row, "operational_execution_venue": "KRX",
+                       "execution_venue_assignment_authority": MARKET_DEFAULT_AUTHORITY}
             comparisons.append(row)
 
     identity = (

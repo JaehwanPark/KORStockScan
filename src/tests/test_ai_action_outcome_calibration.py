@@ -4327,8 +4327,9 @@ def test_same_prompt_isolated_krx_and_nxt_are_separate_candidates(
     } == {("KRX", "KRX_REGULAR"), ("NXT", "NXT_AFTERMARKET")}
 
 
+@pytest.mark.parametrize("source_date,count", [("2026-09-07",1),("2026-10-21",2)])
 def test_dual_aftermarket_uses_route_key_and_remains_observe_only(
-    tmp_path: Path,
+    tmp_path: Path, source_date, count,
 ) -> None:
     assert calibration._cohort_route_scope("KRX", "KRX_REGULAR", "") == (
         "KRX:KRX_REGULAR"
@@ -4382,7 +4383,7 @@ def test_dual_aftermarket_uses_route_key_and_remains_observe_only(
     ]
     payload = _valid_detailed_payload(
         {
-            "target_date": "2026-09-07",
+            "target_date": source_date,
             "requests": [{"candidate": {"prompt_version": "dual_v1"}}],
             "paired_comparisons": rows,
         }
@@ -4409,22 +4410,22 @@ def test_dual_aftermarket_uses_route_key_and_remains_observe_only(
         tmp_path
         / "report"
         / calibration.PAIRED_SUBDIR
-        / "ai_prompt_detailed_paired_replay_2026-09-07_dual.json"
+        / f"ai_prompt_detailed_paired_replay_{source_date}_dual.json"
     )
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload), encoding="utf-8")
 
-    report = build_report(target_date="2026-09-07", data_root=tmp_path)
+    report = build_report(target_date=source_date, data_root=tmp_path)
 
     candidate = report["candidate_summaries"][0]
     assert candidate["cohort_key_version"] == "v2"
     assert candidate["market_data_route"] == "KRX_NXT_INTEGRATED"
     assert candidate["authority_state"] == "OBSERVE_ONLY"
-    assert candidate["exact_trace_count"] == 1
+    assert candidate["exact_trace_count"] == count
     assert candidate["review_ready_for_prompt_candidate"] is False
     assert candidate["review_classification"] == "dual_aftermarket_observe_only"
     assert report["source_reports"][0]["row_exclusion_reason_counts"] == {
-        "dual_actual_execution_venue_unknown": 1,
+        **({"dual_actual_execution_venue_unknown": 1} if count == 1 else {}),
         "dual_exposure_cost_missing_or_invalid": 1,
     }
     assert report["review_ready_candidates"] == []

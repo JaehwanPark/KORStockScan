@@ -1,8 +1,10 @@
+import pytest
 import json
 import sys
 import types
 from datetime import datetime
 from types import SimpleNamespace
+from zoneinfo import ZoneInfo
 
 from src.engine import sniper_post_sell_feedback as feedback_mod
 import src.utils as utils_pkg
@@ -851,8 +853,9 @@ def test_real_post_sell_registers_bounded_exact_route_bbo_observer(
     )
 
 
+@pytest.mark.parametrize("day,requested_route", [(20, "UNKNOWN"), (21, "CONFLICT")])
 def test_real_post_sell_observer_fails_closed_without_execution_route(
-    monkeypatch, tmp_path
+    monkeypatch, tmp_path, day, requested_route
 ):
     monkeypatch.setattr(feedback_mod, "DATA_DIR", tmp_path)
     monkeypatch.setattr(
@@ -867,11 +870,18 @@ def test_real_post_sell_observer_fails_closed_without_execution_route(
     feedback_mod._WS_RETAIN_UNTIL.clear()
     feedback_mod._POST_SELL_EXECUTABLE_BBO_OBSERVERS.clear()
 
+    sell_dt = datetime(2026, 10, day, 10, tzinfo=ZoneInfo("Asia/Seoul"))
+    class FrozenDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return sell_dt.astimezone(tz) if tz else sell_dt.replace(tzinfo=None)
+    monkeypatch.setattr(feedback_mod, "datetime", FrozenDateTime)
+    monkeypatch.setattr(feedback_mod.time, "time", lambda: sell_dt.timestamp())
     candidate = feedback_mod.record_post_sell_candidate(
         recommendation_id=93,
-        stock={"name": "경로결손테스트"},
+        stock={"name": "경로결손테스트", "broker_route_requested": requested_route},
         code="444446",
-        sell_time=datetime.now().replace(microsecond=0),
+        sell_time=sell_dt,
         sell_price=10_000,
         buy_price=9_900,
     )
@@ -1220,3 +1230,74 @@ def test_materialize_post_sell_feedback_snapshot_marks_partial_sample(
     assert captured["payload"]["source_quality"]["reason"] == (
         "partial_mature_real_post_sell_evaluation_rows"
     )
+
+
+@pytest.mark.parametrize("hour", [8, 10, 17])
+@pytest.mark.parametrize("missing", [None, "", "UNKNOWN", "-", "NOT_AVAILABLE"])
+def test_operator_market_defaults_bind_receipt_and_observer_without_native_proof(hour, missing):
+    from src.trading.market.execution_venue import execution_venue_fields, broker_route_fields, MARKET_DEFAULT_AUTHORITY
+    from src.engine.sniper_execution_receipts import _receipt_market_axes
+    at = datetime(2026, 10, 21, hour, 10, tzinfo=ZoneInfo("Asia/Seoul"))
+    source = dict(broker_actual_execution_venue=missing, broker_route=missing,
+                  actual_execution_venue=missing, market_data_route="unknown")
+    original = dict(source)
+    axes = _receipt_market_axes(source, observed_at=at, requested_route_keys=("broker_route",))
+    assert axes["actual_execution_venue"] == "KRX"
+    assert axes["actual_execution_venue_verified"] is False
+    assert axes["execution_venue_override"] == MARKET_DEFAULT_AUTHORITY
+    assert axes["broker_route_requested"] == "SOR"
+    assert axes["broker_route_override"] == MARKET_DEFAULT_AUTHORITY
+    assert axes["market_data_route"] == "unknown"  # No observed quote is invented.
+    contract = feedback_mod._post_sell_execution_route_contract({**source, **axes}, sell_dt=at)
+    assert contract["status"] == "route_contract_ready"
+    assert contract["venue"] == "KRX" and contract["broker_route"] == "SOR"
+    assert contract["quote_observer_scope"] == "SOR"
+    assert contract["expected_market_route"] == "krx_nxt_integrated"
+    assert contract["actual_execution_venue_verified"] is False
+    assert execution_venue_fields({**source, **axes}, observed_at=at)["execution_venue_override"] == MARKET_DEFAULT_AUTHORITY
+    assert broker_route_fields("SOR", observed_at=at, recorded=axes)["broker_route_override"] == MARKET_DEFAULT_AUTHORITY
+    assert source == original
+
+
+@pytest.mark.parametrize("venue", ["KRX", "NXT"])
+def test_operator_defaults_preserve_explicit_native_venue_and_route(venue):
+    from src.trading.market.execution_venue import execution_venue_fields, broker_route_fields
+    at = datetime(2026, 10, 21, 17, tzinfo=ZoneInfo("Asia/Seoul"))
+    source = dict(broker_actual_execution_venue=venue, broker_actual_execution_venue_source="official_fid_2134_2135")
+    result = execution_venue_fields(source, observed_at=at)
+    assert result["actual_execution_venue"] == venue and result["actual_execution_venue_verified"] is True
+    assert result["execution_venue_override"] is None
+    assert broker_route_fields(venue, observed_at=at)["broker_route_requested"] == venue
+
+
+@pytest.mark.parametrize("clock", [None, "bad", "2026-10-20T17:00:00+09:00", "2026-10-21T17:00:00"])
+def test_market_default_authority_does_not_relabel_undated_or_historical_inputs(clock):
+    from src.trading.market.execution_venue import execution_venue_fields, broker_route_fields
+    assert execution_venue_fields({}, observed_at=clock)["actual_execution_venue"] == "UNKNOWN"
+    assert broker_route_fields(None, observed_at=clock)["broker_route_requested"] == "UNKNOWN"
+
+
+def test_market_defaults_keep_conflicts_actionable():
+    from src.trading.market.execution_venue import execution_venue_fields, broker_route_fields
+    at = datetime(2026, 10, 21, 17, tzinfo=ZoneInfo("Asia/Seoul"))
+    assert execution_venue_fields({"broker_actual_execution_venue": "CONFLICT"}, observed_at=at)["actual_execution_venue"] == "UNKNOWN"
+    assert execution_venue_fields({"broker_actual_execution_venue": "UNKNOWN", "broker_actual_exchange_code": "2"}, observed_at=at)["execution_venue_override"] is None
+    assert broker_route_fields("CONFLICT", observed_at=at)["broker_route_requested"] == "CONFLICT"
+
+
+def test_observer_missing_primary_route_preserves_known_secondary_route():
+    at = datetime(2026, 10, 21, 8, 10, tzinfo=ZoneInfo("Asia/Seoul"))
+    result = feedback_mod._post_sell_execution_route_contract(dict(
+        broker_route_requested="UNKNOWN", last_sell_execution_broker_route="NXT",
+        broker_actual_execution_venue="NXT", broker_actual_execution_venue_source="official_fid_2134_2135"),
+        sell_dt=at)
+    assert result["broker_route"] == result["venue"] == "NXT"
+    assert result["expected_market_route"] == "nxt_only"
+    assert result["actual_execution_venue_verified"] is True
+
+
+def test_operator_default_does_not_normalize_conflicting_native_source():
+    from src.trading.market.execution_venue import execution_venue_fields
+    at = datetime(2026,10,21,17,tzinfo=ZoneInfo('Asia/Seoul'))
+    source = dict(broker_actual_execution_venue='UNKNOWN', broker_actual_execution_venue_source='conflicting_packet')
+    assert execution_venue_fields(source, observed_at=at)['execution_venue_override'] is None

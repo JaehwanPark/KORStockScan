@@ -2944,9 +2944,13 @@ def _completed_trade_projection(
         "execution_receipt_exact_configured_cost" if configured_receipt else
         "source_gap_unknown"
     )
-    from src.trading.market.execution_venue import execution_venue_fields
+    from src.trading.market.execution_venue import execution_venue_fields, broker_route_fields
     assigned_venue = execution_venue_fields(terminal_fields,
         observed_at=terminal_fields.get("broker_execution_observed_at") or occurrence_time)
+    assigned_route = broker_route_fields(
+        terminal_fields.get("broker_route_requested") or terminal_fields.get("broker_route"),
+        observed_at=terminal_fields.get("broker_execution_observed_at") or occurrence_time,
+        recorded=terminal_fields)
     return {
         "id": trade.get("id"),
         "rec_date": trade.get("rec_date"),
@@ -2975,9 +2979,8 @@ def _completed_trade_projection(
         ),
         "broker_sor_flag": terminal_fields.get("broker_sor_flag"),
         "entry_execution_broker_route": terminal_fields.get("broker_route"),
-        "exit_execution_broker_route": terminal_fields.get(
-            "broker_route_requested"
-        ) or terminal_fields.get("broker_route"),
+        "exit_execution_broker_route": assigned_route["broker_route_requested"],
+        **assigned_route,
         "main_lifecycle_id": terminal_fields.get("main_lifecycle_id"),
         "attempt_id": terminal_fields.get("attempt_id")
         or terminal_fields.get("main_lifecycle_attempt_id"),

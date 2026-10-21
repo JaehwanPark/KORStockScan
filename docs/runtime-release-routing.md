@@ -472,3 +472,15 @@ The prepared holding-input generation binds the DB datetime producer, both Main 
 ### Post-sell source reader preparation
 
 The reviewed post-sell successor binds its candidate recorder, route registration, exact-item recovery and 0D horizon reader as one complete code generation. `REVIEWED_POST_SELL_SOURCE_DEPENDENCY_VARIANTS` preserves issued predecessor readers. The code-only handoff does not select/restart a release. Native physical SOR venue ambiguity remains UNKNOWN/unverified separately from operator assignment and quote scope; it must not become a universal promotion/restart gate. Source-only horizons retain exact route/item, clock/depth/transport and existing bounded additive REG/retention contracts. See the [existing source review](audits/postclose-root-cause-recovery-review-2026-10-19.md#2026-10-21-post-sell-route-source-repair-and-unresolved-physical-venue).
+
+
+### Operator Market Default Candidate
+
+The operator KRX/SOR default candidate extends the prepared post-sell source
+release. Its source-only native fixtures, original active policy parity and
+exact complete dependency generation must verify before any transition.
+Original raw native venue and quote evidence cannot be repaired by selection.
+Preparation does not restart, reserve or schedule a transition. Main's
+incumbent collector must still produce its native natural-close evidence under
+`DirectFamilyPreopenPolicyHandoff` before the separately authorized ordered
+transition. [Default scope and proof boundaries](audits/postclose-root-cause-recovery-review-2026-10-19.md#2026-10-21-operator-krx-sor-defaults).

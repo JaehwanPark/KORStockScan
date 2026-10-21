@@ -149,6 +149,7 @@ def fingerprint(trades,path,horizon):
         'initial_quantity_policy.py','initial_quantity_source_cache.py',
         'initial_quantity_cap_observation.py','initial_quantity_type.py')}
     readers['utils/jsonl_io.py']=engine.parent/'utils/jsonl_io.py'
+    readers['trading/market/execution_venue.py']=engine.parent/'trading/market/execution_venue.py'
     readers['lifecycle/research_input_budget.py']=engine/'lifecycle/research_input_budget.py'
     readers['lifecycle/research_json_stream.py']=engine/'lifecycle/research_json_stream.py'
     readers['automation/main_trailing_source_store.py']=engine/'automation/main_trailing_source_store.py'
@@ -274,6 +275,8 @@ def joint_records(trades, paths, rows, grid, *, data_dir, cost_rate):
     from src.engine.scalping.initial_quantity_refresh_evaluation import execution_case
     readers=('initial_quantity_refresh_evaluation.py','initial_quantity_timeout_research.py','initial_quantity_policy.py','initial_quantity_cap_observation.py','initial_quantity_timeout.py','entry_split_order_plan.py')
     reader={name:hashlib.sha256(Path(__file__).with_name(name).read_bytes()).hexdigest() for name in readers}
+    reader['trading/market/execution_venue.py']=hashlib.sha256(
+        (Path(__file__).resolve().parents[2]/'trading/market/execution_venue.py').read_bytes()).hexdigest()
     for trade in trades:
         tid=trade['trade_id'];row=rows[tid];path=paths.get(tid,{})
         model={k:trade[k] for k in ('buy_qty','buy_price','sell_price','exit_at')}

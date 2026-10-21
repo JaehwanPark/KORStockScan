@@ -9,6 +9,31 @@ quantity guards.
 
 ## Official Kiwoom Reference Gate
 
+
+### Operator KRX And SOR Defaults
+
+The 2026-10-21 operator instruction assigns unresolved operational venue to KRX
+and unresolved broker order route to SOR. The existing
+`src/trading/market/execution_venue.py` owns this dated assignment and its raw
+value/authority fields. Native explicit KRX/NXT and explicit valid routes win;
+invalid/conflicting packets and missing event clocks are not verified by an
+assignment. The event date governs replay; old native receipts remain intact.
+
+`kiwoom_orders` consumes the same route default before the existing session,
+eligibility, custody, order type, quantity and source guards. Selection of SOR
+is not an order approval. Exact quote route/item/epoch/freshness/depth remain
+required for observations and execution. Native UNKNOWN and unverified venue,
+actual cost gaps and physical venue-specific economic uncertainty remain raw
+facts; they do not become broker-confirmed KRX through this instruction.
+
+Current official upstream HEAD was inspected before coding:
+`953e5dbff123f437ab4d11a78a95191a685eb51f`; packaged order specs, core client,
+realtime contracts and Postman agree on the named KRX/NXT/SOR request enum.
+`kiwoom_docs` is absent. Request schema, FIDs, parsers, authentication and continuation are
+unchanged; no live API call was made. [Retrieval and file hashes](../tmp/operational-market-defaults-20261021/official-reference.json)
+and [review](audits/postclose-root-cause-recovery-review-2026-10-19.md#2026-10-21-operator-krx-sor-defaults)
+record the exact authority and verification boundary.
+
 ### Entry Capacity Source Preparation And Receipt Identity
 
 The 2026-10-02 capacity change inspected current upstream

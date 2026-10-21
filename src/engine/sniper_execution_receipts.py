@@ -436,9 +436,12 @@ def _receipt_market_axes(
             decision_market_scope = "KRX_NXT_INTEGRATED"
 
     requested_route = ""
+    from src.trading.market.execution_venue import UNRESOLVED_MARKET_VALUES
     for key in requested_route_keys:
         candidate = str(stock.get(key) or "").strip().upper()
-        if candidate in {"KRX", "NXT", "SOR"}:
+        if not requested_route:
+            requested_route = candidate
+        if candidate not in UNRESOLVED_MARKET_VALUES:
             requested_route = candidate
             break
 
@@ -460,7 +463,7 @@ def _receipt_market_axes(
         else "unknown"
     )
 
-    from src.trading.market.execution_venue import execution_venue_fields
+    from src.trading.market.execution_venue import execution_venue_fields, broker_route_fields
     assigned_venue = execution_venue_fields(stock, observed_at=receipt_at)
     return {
         "session_contract_version": session_contract_version or "unknown",
@@ -468,7 +471,7 @@ def _receipt_market_axes(
         "market_session_regime": session_regime or "unknown",
         "market_data_route": market_data_route or "unknown",
         "preferred_market_data_route": preferred_market_data_route or "unknown",
-        "broker_route_requested": requested_route or "UNKNOWN",
+        **broker_route_fields(requested_route, observed_at=receipt_at, recorded=stock),
         **assigned_venue,
     }
 
@@ -870,6 +873,8 @@ _SELL_RECEIPT_SNAPSHOT_KEYS = (
     "actual_execution_venue_source",
     "actual_execution_venue_verified",
     "execution_venue_override",
+    "broker_route_requested_raw",
+    "broker_route_override",
     "exit_receipt_submission_custody_source_gap",
     "exit_receipt_submission_custody_retry_required",
     "_sell_submit_receipt_proof",
@@ -1446,12 +1451,13 @@ def _native_sell_receipt_identity(stock, code, target_id, stage, fields, observe
         # SOR may confirm the order/execution while leaving the actual venue
         # explicitly unresolved. Receipt custody can ACK that terminal without
         # promoting its venue, economic provenance or scanner coverage.
-        from src.trading.market.execution_venue import execution_venue_fields, SOR_KRX_AUTHORITY
+        from src.trading.market.execution_venue import execution_venue_fields, VENUE_ASSIGNMENT_AUTHORITIES
         assigned = execution_venue_fields(fields, observed_at=observed_at)
-        assigned_gap = (assigned["execution_venue_override"] == SOR_KRX_AUTHORITY
+        authority = assigned["execution_venue_override"]
+        assigned_gap = (authority in VENUE_ASSIGNMENT_AUTHORITIES
             and fields.get("actual_execution_venue") == fields.get("exit_effective_venue") == "KRX"
-            and fields.get("actual_execution_venue_source") == SOR_KRX_AUTHORITY
-            and fields.get("execution_venue_override") == SOR_KRX_AUTHORITY
+            and fields.get("actual_execution_venue_source") == authority
+            and fields.get("execution_venue_override") == authority
             and fields.get("actual_execution_venue_verified") is False)
         legacy_gap = (fields.get("actual_execution_venue") == fields.get("exit_effective_venue") == "UNKNOWN"
             and fields.get("actual_execution_venue_source") == "official_exchange_fields_ambiguous_or_missing")
@@ -1525,9 +1531,13 @@ def _native_sell_receipt_identity(stock, code, target_id, stage, fields, observe
                 native_receipt_entry_lineage_reason=str(fields.get("holding_path_terminal_signal_binding")
                     or "entry_buy_generation_unavailable"))
         if known_venue_gap:
+            from src.trading.market.execution_venue import MARKET_DEFAULT_AUTHORITY
             identity.update(native_receipt_execution_venue_status="unknown_preserved",
                 native_receipt_broker_provenance_complete=False,
-                native_receipt_source_gap="actual_execution_venue_unresolved")
+                native_receipt_operational_venue=fields.get("actual_execution_venue"),
+                native_receipt_venue_assignment_authority=authority,
+                native_receipt_source_gap=(None if assigned_gap and authority == MARKET_DEFAULT_AUTHORITY
+                                           else "actual_execution_venue_unresolved"))
         return identity
     if not re.fullmatch(r"analyze_target:" + re.escape(str(code))
                         + r":[0-9]{10,16}:[0-9a-f]{8,64}", trace):

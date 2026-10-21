@@ -1214,12 +1214,22 @@ def _join_post_fill_paths_uncached(trades: list[dict[str, Any]], *, data_dir: Pa
                         broker_fill_raw = fields.get("broker_execution_observed_at")
                         fill_at = _timestamp(broker_fill_raw) or emitted
                         if fill_at and price and qty and qty > 0 and qty.is_integer():
+                            from src.trading.market.execution_venue import execution_venue_fields, broker_route_fields
+                            venue_fields = execution_venue_fields(fields, observed_at=fill_at)
+                            route_fields = broker_route_fields(
+                                fields.get("broker_route_requested") or fields.get("broker_route"),
+                                observed_at=fill_at)
                             bucket["fills"].append({"at": fill_at, "emitted_at": emitted,
                                 "clock_precision_sec": (
                                     1 if broker_fill_raw and "." not in
                                     str(broker_fill_raw).split("T")[-1] else 0),
                                 "price": price,
-                                "qty": int(qty), "venue": str(fields.get("actual_execution_venue") or "UNKNOWN"),
+                                "qty": int(qty), "venue": venue_fields["actual_execution_venue"],
+                                "route": (venue_fields["actual_execution_venue"] if
+                                          route_fields["broker_route_requested"] == "UNKNOWN" else
+                                          route_fields["broker_route_requested"]),
+                                "venue_assignment_authority": venue_fields["execution_venue_override"],
+                                "broker_actual_execution_venue": fields.get("broker_actual_execution_venue", "UNKNOWN"),
                                 "order_no": str(fields.get("order_no") or ""),
                                 "execution_no": str(fields.get("execution_no") or ""),
                                 "clock_source": ("broker_execution_observed_at"

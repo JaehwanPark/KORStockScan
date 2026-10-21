@@ -5762,9 +5762,10 @@ def test_fast_sell_final_nonzero_remaining_never_completes():
 
 @pytest.mark.parametrize('damage',[None,'operator_assigned','operator_assigned_invalid_authority','venue','venue_source','broker_venue','exit_venue','route','route_request',
     'envelope','packet','ingress','clock','session_clock','session_schema','custody','quantity','remaining','buy','simulation','tamper'])
-def test_terminal_sor_unknown_venue_acks_custody_and_preserves_source_gap(monkeypatch,damage):
+@pytest.mark.parametrize('day',[16,21])
+def test_terminal_sor_unknown_venue_acks_custody_and_preserves_source_gap(monkeypatch,damage,day):
     from copy import deepcopy
-    now=datetime(2026,10,16,9,23,48,936821,tzinfo=timezone(timedelta(hours=9)))
+    now=datetime(2026,10,day,9,23,48,936821,tzinfo=timezone(timedelta(hours=9)))
     stock=dict(id=49294,code='036930',name='Jusung')
     fields=dict(order_no='0015649',execution_no='30414',sell_qty=1,remaining_sell_qty=0,
         actual_order_submitted=True,broker_order_forbidden=False,exit_rule='scalp_trailing_take_profit',
@@ -5810,7 +5811,7 @@ def test_terminal_sor_unknown_venue_acks_custody_and_preserves_source_gap(monkey
     assert leg==original
     if damage in (None,'operator_assigned'):
         assert captured[0]['native_receipt_execution_venue_status']=='unknown_preserved'
-        assert captured[0]['native_receipt_source_gap']=='actual_execution_venue_unresolved'
+        assert captured[0]['native_receipt_source_gap']==('None' if day==21 and damage=='operator_assigned' else 'actual_execution_venue_unresolved')
         assert captured[0]['broker_execution_provenance_complete']=='False'
         assert captured[0]['actual_execution_venue']==('KRX' if damage=='operator_assigned' else 'UNKNOWN')
         assert captured[0]['main_lifecycle_actual_cost_status']=='cost_source_unavailable'

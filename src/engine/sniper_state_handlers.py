@@ -77270,6 +77270,7 @@ def _holding_sell_nullable_flag(stock: dict, *keys: str) -> tuple[bool | None, s
 
 
 def _holding_sell_recorded_route(stock: dict) -> tuple[str, str]:
+    from src.trading.market.execution_venue import UNRESOLVED_MARKET_VALUES
     for key in (
         "sell_submit_intended_route",
         "sell_pending_order_broker_route",
@@ -77277,7 +77278,7 @@ def _holding_sell_recorded_route(stock: dict) -> tuple[str, str]:
         "approved_exit_route",
     ):
         route = str(stock.get(key) or "").strip().upper()
-        if route:
+        if route not in UNRESOLVED_MARKET_VALUES:
             return route, f"stock.{key}"
     return "", "recorded_route_missing"
 
@@ -77406,6 +77407,18 @@ def _resolve_holding_sell_dmst_stex_tp(
         }
         if eligible_routes:
             if eligible_routes == {"KRX", "NXT"}:
+                from src.trading.market.execution_venue import broker_route_fields
+                assigned = broker_route_fields(None, observed_at=observed_at)
+                if assigned["broker_route_override"]:
+                    return {
+                        "blocked": False, "dmst_stex_tp": assigned["broker_route_requested"],
+                        "nxt_enabled": is_nxt_enabled, "nxt_flag_source": source,
+                        "krx_aftermarket_enabled": krx_aftermarket_enabled,
+                        "krx_aftermarket_flag_source": krx_source,
+                        "market_session_regime": session.session_regime,
+                        "route_source": assigned["broker_route_override"],
+                        "reason": assigned["broker_route_override"],
+                    }
                 return {
                     "blocked": True,
                     "dmst_stex_tp": "UNKNOWN",
@@ -77429,16 +77442,19 @@ def _resolve_holding_sell_dmst_stex_tp(
                 "route_source": "exact_symbol_aftermarket_eligibility",
                 "reason": "holding_sell_exact_eligibility_route",
             }
+        from src.trading.market.execution_venue import broker_route_fields
+        assigned = broker_route_fields(None, observed_at=observed_at)
         return {
             "blocked": True,
-            "dmst_stex_tp": "UNKNOWN",
+            "dmst_stex_tp": assigned["broker_route_requested"],
             "nxt_enabled": is_nxt_enabled,
             "nxt_flag_source": source,
             "krx_aftermarket_enabled": krx_aftermarket_enabled,
             "krx_aftermarket_flag_source": krx_source,
             "market_session_regime": session.session_regime,
             "route_source": route_source,
-            "reason": "holding_sell_route_authority_missing",
+            "reason": ("holding_sell_route_eligibility_missing" if assigned["broker_route_override"]
+                       else "holding_sell_route_authority_missing"),
         }
 
     krx_regular = _holding_sell_krx_regular_session(current_t)

@@ -69,7 +69,8 @@ CODE_PATHS = ('ai/holding_exit_vote.py','ai/holding_vote_replay_source.py',
               '../utils/pipeline_event_logger.py',
               '../utils/kiwoom_utils.py',
               '../trading/order/owner_custody_registry.py',
-              '../trading/market/session_contract.py')
+              '../trading/market/session_contract.py',
+              '../trading/market/execution_venue.py')
 
 
 def code_contract():

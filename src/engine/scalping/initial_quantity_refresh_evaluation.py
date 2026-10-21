@@ -41,8 +41,10 @@ def _execution_key(trade,path,source,grid):
     import hashlib
     from src.engine.scalping.initial_quantity_source_cache import encode
     from src.engine.scalping.initial_quantity_policy import _digest
-    return _digest(dict(trade=trade,path=encode(path),source=source,grid=grid,
-                        readers={name:hashlib.sha256(Path(__file__).with_name(name).read_bytes()).hexdigest() for name in EXECUTION_READERS}))
+    readers={name:hashlib.sha256(Path(__file__).with_name(name).read_bytes()).hexdigest() for name in EXECUTION_READERS}
+    readers['trading/market/execution_venue.py']=hashlib.sha256(
+        (Path(__file__).resolve().parents[2]/'trading/market/execution_venue.py').read_bytes()).hexdigest()
+    return _digest(dict(trade=trade,path=encode(path),source=source,grid=grid,readers=readers))
 
 
 def modeled_parent(row):
@@ -189,7 +191,7 @@ def execution_case(trade, path, source, *, mode, shape, horizon, reserve=5):
     from src.engine.scalping.initial_quantity_cap_observation import quote_route_binding
     depth=context.get('ask_depth_source') or {}
     binding=quote_route_binding(depth.get('item'),depth.get('market_route'),legacy=True)
-    route=binding['order_route'] if binding else first.get('venue')
+    route=binding['order_route'] if binding else first.get('route', first.get('venue'))
     fill_venues=binding['fill_venues'] if binding else (route,)
     probe=bool(start.get('probe_applied'))
     if route not in {'KRX','NXT','SOR'}:

@@ -1449,7 +1449,7 @@ def test_holding_sell_exchange_resolution_blocks_krx_only_during_nxt_time(monkey
     decision = state_handlers._resolve_holding_sell_dmst_stex_tp(
         {"name": "스피어"},
         "347700",
-        now_t=dt_time(16, 10),
+        observed_at=datetime(2026,10,20,16,10,tzinfo=state_handlers._KST),
     )
 
     assert decision["blocked"] is True
@@ -1470,7 +1470,7 @@ def test_holding_sell_exchange_resolution_preserves_missing_nxt_provenance(
     decision = state_handlers._resolve_holding_sell_dmst_stex_tp(
         {"name": "에스티팜", "status": "HOLDING", "buy_qty": 1},
         "237690",
-        now_t=dt_time(17, 0),
+        observed_at=datetime(2026,10,20,17,0,tzinfo=state_handlers._KST),
     )
 
     assert decision["blocked"] is True
@@ -1559,7 +1559,7 @@ def test_holding_sell_exchange_resolution_labels_unconfirmed_nxt_capability(
     decision = state_handlers._resolve_holding_sell_dmst_stex_tp(
         {"name": "미확인"},
         "123456",
-        now_t=dt_time(16, 39),
+        observed_at=datetime(2026,10,20,16,39,tzinfo=state_handlers._KST),
     )
 
     assert decision["blocked"] is True
@@ -40742,3 +40742,21 @@ def test_weak_context_observations_do_not_evict_confirmed_block_history():
     counts = state_handlers._recent_trade_quality_block_counts(stock, now_ts=1041, confirmed_only=True)
     assert counts['total_count'] == 1
     assert counts['risk_context_only_count'] == 32
+
+
+@pytest.mark.parametrize('krx,nxt,route,blocked', [(True,True,'SOR',False), (True,False,'KRX',False),
+    (False,True,'NXT',False), (None,None,'SOR',True), (False,False,'SOR',True)])
+@pytest.mark.parametrize('hour', [17,19])
+def test_operator_sor_default_resolves_route_authority_without_inventing_eligibility(monkeypatch,krx,nxt,route,blocked,hour):
+    monkeypatch.setattr(state_handlers,'DB',None)
+    stock=dict(id=7,code='005930',name='TEST',status='HOLDING',buy_qty=1)
+    if krx is not None:stock['krx_aftermarket_eligible']=krx
+    if nxt is not None:stock['is_nxt']=nxt
+    result=state_handlers._resolve_holding_sell_dmst_stex_tp(stock,'005930',
+        observed_at=datetime(2026,10,21,hour,10,tzinfo=state_handlers._KST))
+    assert result['dmst_stex_tp']==route and result['blocked'] is blocked
+    if blocked:assert result['reason']=='holding_sell_route_eligibility_missing'
+    elif route=='SOR':assert result['reason']=='user_2026_10_21_unresolved_venue_krx_route_sor'
+    closed=state_handlers._resolve_holding_sell_dmst_stex_tp(stock,'005930',
+        observed_at=datetime(2026,10,21,20,1,tzinfo=state_handlers._KST))
+    assert closed['blocked'] is True

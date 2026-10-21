@@ -3967,6 +3967,151 @@ for (_trigger, _post_sell_source_sha), _variant in REVIEWED_POST_SELL_SOURCE_DEP
     REVIEWED_HOLDING_RESEARCH_DEPENDENCIES[_trigger][_post_sell_source_sha] = _variant['dependencies']
 
 
+# Dated operator KRX/SOR defaults preserve raw exchange, quote and economic proof.
+# All importing producers/readers are one exact dependency generation.
+REVIEWED_OPERATOR_MARKET_HASHES = {'src/engine/automation/main_trailing_all_scope_research.py': '53d7acf04f8bcb37240a1a6572f8e0db2c8ac5e40029010f66e5419ce6d3aa89',
+ 'src/engine/holding_exit_observation_report.py': 'bde5c4156f9b748e957b8b1fa38d12ce24f5b23777a7343fbe31aedbeeb6e75a',
+ 'src/engine/kiwoom_orders.py': '32e93c49a880e1f3a393ec0367cf1339dbc3ef00c689c821b45b159872c423d9',
+ 'src/engine/scalping/ai_action_outcome_calibration.py': 'b239020a8231bc8e4d92f5fd8a21af1359c441336823b26e5ac52150459a904c',
+ 'src/engine/scalping/initial_quantity_policy.py': '07650f2de7fbf28abebbc19ee21cdd4eec9a9371528d9d23d35bb356ad57ed5c',
+ 'src/engine/scalping/initial_quantity_refresh_evaluation.py': '41b4737da689b2802bc33b0b17cba65938fb173c53a5dd76f4af1a5d49db5afc',
+ 'src/engine/scalping/initial_quantity_source_cache.py': '5e2724f3532cd7a8f467d7fbf04cd562444f9de7e46fcea5e83180e4bc68fa53',
+ 'src/engine/sniper_execution_receipts.py': 'e015955435a78f9558999c6347b49c10beb7bf48582fc6b28cc102a2ee4807e1',
+ 'src/engine/sniper_post_sell_feedback.py': 'fae77491c422f776a48a99da5d855b76e934bdd244055e4cdc44372c8016b41b',
+ 'src/engine/sniper_state_handlers.py': 'eaca4d2d23d2764c42e3f7cc2f73d04db0b29bb8115cabac4f10cf48e89d57aa',
+ 'src/engine/sniper_trade_review_report.py': '65c57137cffbc8e02f349ef16964e9fe2f6d27ce30573b37a9d6bbd502c5023b',
+ 'src/trading/market/execution_venue.py': 'a794c64a1787fd892837c665e5a495f4043a1bc7371cbdc1604466528bb2fe9a'}
+REVIEWED_OPERATOR_MARKET_PAIRS = {'src/engine/automation/main_trailing_all_scope_research.py': (('1385571ec3fea2b9ff5815f11d76c6132fd26a15633d8809fbb36c9c28781061',
+                                                                '53d7acf04f8bcb37240a1a6572f8e0db2c8ac5e40029010f66e5419ce6d3aa89'),
+                                                               ('a4433ef1560280d8cfc198bb95357414f01373ba55757c4197315a2b3d0f2dab',
+                                                                '53d7acf04f8bcb37240a1a6572f8e0db2c8ac5e40029010f66e5419ce6d3aa89'),
+                                                               ('a51359c9c0864e055c4c71cb240760f11ca7de265530aa22ac378a70c30af01b',
+                                                                '53d7acf04f8bcb37240a1a6572f8e0db2c8ac5e40029010f66e5419ce6d3aa89'),
+                                                               ('f704dcc16a4bb8434cb255168074a493a215feaac3b1c30372053c11c6babdcc',
+                                                                '53d7acf04f8bcb37240a1a6572f8e0db2c8ac5e40029010f66e5419ce6d3aa89')),
+ 'src/engine/holding_exit_observation_report.py': (('108fcdffa626abec4e90b263c12780e78c7f77e222b950e2407b0b00d462fa4f',
+                                                    'bde5c4156f9b748e957b8b1fa38d12ce24f5b23777a7343fbe31aedbeeb6e75a'),
+                                                   ('538cc6b7a2cdc91871af06896ee1328de11ebad441f343e7c6b693ad29b8f255',
+                                                    'bde5c4156f9b748e957b8b1fa38d12ce24f5b23777a7343fbe31aedbeeb6e75a'),
+                                                   ('6ffbcceecdecfa73346047d2ec6f2019ccd1ab296959819c63c4acac7c421ec9',
+                                                    'bde5c4156f9b748e957b8b1fa38d12ce24f5b23777a7343fbe31aedbeeb6e75a'),
+                                                   ('8baa7a8788877aa872afeec62f199db2a095d420ff1d87d84fdd50e4b1b2c7db',
+                                                    'bde5c4156f9b748e957b8b1fa38d12ce24f5b23777a7343fbe31aedbeeb6e75a'),
+                                                   ('bd366b341b5515a0d7dcc2b4da47cf71320a0d703b617057037044d52b8c06e3',
+                                                    'bde5c4156f9b748e957b8b1fa38d12ce24f5b23777a7343fbe31aedbeeb6e75a'),
+                                                   ('fb676ef08389cfbf7d46a0b532d0bd6f3c81949d6b6a64a2c45c17ccf3a839b5',
+                                                    'bde5c4156f9b748e957b8b1fa38d12ce24f5b23777a7343fbe31aedbeeb6e75a')),
+ 'src/engine/kiwoom_orders.py': (('3d31672f0dfab9080cfca4623aa280c1e2f850db43435241c5d0b8b669ce5702',
+                                  '32e93c49a880e1f3a393ec0367cf1339dbc3ef00c689c821b45b159872c423d9'),),
+ 'src/engine/scalping/ai_action_outcome_calibration.py': (('18c661a624b4db88ac0ee5963ff3667a258434662d9ddfca9bea8ab6cc7f50aa',
+                                                           'b239020a8231bc8e4d92f5fd8a21af1359c441336823b26e5ac52150459a904c'),
+                                                          ('26b7b67e5efcf5ed9d4904ac2c715cb1e1e87d76a8b63acc0b6049bff91c03c2',
+                                                           'b239020a8231bc8e4d92f5fd8a21af1359c441336823b26e5ac52150459a904c')),
+ 'src/engine/scalping/initial_quantity_policy.py': (('2710cc18ab0289b1318cb53af8cd45bebcbd9ad9354d82ba2fa180ed3eb9fd90',
+                                                     '07650f2de7fbf28abebbc19ee21cdd4eec9a9371528d9d23d35bb356ad57ed5c'),
+                                                    ('366541bd4f1dd717c75fa5ae9ae4297aafe5950e1d7f0a72afd050b57252d68d',
+                                                     '07650f2de7fbf28abebbc19ee21cdd4eec9a9371528d9d23d35bb356ad57ed5c'),
+                                                    ('4567eed7de944395133eb6ebc975c823cf3840e6abe9424877455130feb55c87',
+                                                     '07650f2de7fbf28abebbc19ee21cdd4eec9a9371528d9d23d35bb356ad57ed5c'),
+                                                    ('6c4e28dc699c2d0b5c12be791c3bf64b721a78a9cb344a3b5f42f79fcf89ed51',
+                                                     '07650f2de7fbf28abebbc19ee21cdd4eec9a9371528d9d23d35bb356ad57ed5c'),
+                                                    ('806875b857f58895a39ec116ed0a3b619539f7d782fc1996581c1af84c201a34',
+                                                     '07650f2de7fbf28abebbc19ee21cdd4eec9a9371528d9d23d35bb356ad57ed5c'),
+                                                    ('99656408f2e1dd095686f4ce3b8cdea8364baaf98b62664e53104186c3db62f4',
+                                                     '07650f2de7fbf28abebbc19ee21cdd4eec9a9371528d9d23d35bb356ad57ed5c'),
+                                                    ('9b18c05ff050cb8d182b03296ee71f30b8efa867341ba47b04a2f06dc55f87c7',
+                                                     '07650f2de7fbf28abebbc19ee21cdd4eec9a9371528d9d23d35bb356ad57ed5c'),
+                                                    ('a6e57b600500e10b20ebf1ca2ac097a2433fbd5f8696e28f8ec1ef97601b627a',
+                                                     '07650f2de7fbf28abebbc19ee21cdd4eec9a9371528d9d23d35bb356ad57ed5c'),
+                                                    ('c9496cee9ce0305a75fd0e1c2df93370e18ea4792b61b3d47d8de9937aaef4d4',
+                                                     '07650f2de7fbf28abebbc19ee21cdd4eec9a9371528d9d23d35bb356ad57ed5c'),
+                                                    ('dbd20ac53e9ebb59dbb6b465a214558eb838b8f012636eda73cb02f65c5304c6',
+                                                     '07650f2de7fbf28abebbc19ee21cdd4eec9a9371528d9d23d35bb356ad57ed5c')),
+ 'src/engine/scalping/initial_quantity_refresh_evaluation.py': (('5311174d8495ed9560ff6421027700ff7acf89bd43315ba1c63484bb50bfb3e9',
+                                                                 '41b4737da689b2802bc33b0b17cba65938fb173c53a5dd76f4af1a5d49db5afc'),
+                                                                ('6b052913a8a88b6780257bbfef0de9bae5c961039608e1cfa1ed25ab0412053f',
+                                                                 '41b4737da689b2802bc33b0b17cba65938fb173c53a5dd76f4af1a5d49db5afc'),
+                                                                ('779a0d679ec1b7e1704ad368d8896d166a545e358438fda8e2f51ef0dde800fa',
+                                                                 '41b4737da689b2802bc33b0b17cba65938fb173c53a5dd76f4af1a5d49db5afc'),
+                                                                ('798f15352dc47787bc3d3bd571f45fbed2911cdaafbdcab5487998745442bbe4',
+                                                                 '41b4737da689b2802bc33b0b17cba65938fb173c53a5dd76f4af1a5d49db5afc'),
+                                                                ('921bac7fcf49a127f1a9f7e1f15d3641b4d8eab39fb054c506e68219f5cc8f43',
+                                                                 '41b4737da689b2802bc33b0b17cba65938fb173c53a5dd76f4af1a5d49db5afc')),
+ 'src/engine/scalping/initial_quantity_source_cache.py': (('353795e63675a34743f1bdf0823f684cbdcdd472cdf12790dc17896e1aa107db',
+                                                           '5e2724f3532cd7a8f467d7fbf04cd562444f9de7e46fcea5e83180e4bc68fa53'),
+                                                          ('4dfa3c22640ee0f94fdac37633e7adbb0b6be4ecdaa14efe25ca04d840c799a7',
+                                                           '5e2724f3532cd7a8f467d7fbf04cd562444f9de7e46fcea5e83180e4bc68fa53'),
+                                                          ('77a7b57d5f752c760332fc6fd46a4fb121d4c0042ceb464a689fae1dc23c5704',
+                                                           '5e2724f3532cd7a8f467d7fbf04cd562444f9de7e46fcea5e83180e4bc68fa53'),
+                                                          ('910f1a50b7191cf47815b6707dae489847d25f1e45f1b40104a0c38d20eaa846',
+                                                           '5e2724f3532cd7a8f467d7fbf04cd562444f9de7e46fcea5e83180e4bc68fa53'),
+                                                          ('aeabf97ec5bd69578e6e66fc4b2eb14945fbe7a34e59658e12fe1b9cf9732ecd',
+                                                           '5e2724f3532cd7a8f467d7fbf04cd562444f9de7e46fcea5e83180e4bc68fa53'),
+                                                          ('b746d9c9d131ab2795953f3e2401f2fe367525dc0d7dc2c85051fdaac73af97c',
+                                                           '5e2724f3532cd7a8f467d7fbf04cd562444f9de7e46fcea5e83180e4bc68fa53'),
+                                                          ('f76427a4e0c75e5062149daff971362962acdc22c599bac957a5dfd3f4c04a70',
+                                                           '5e2724f3532cd7a8f467d7fbf04cd562444f9de7e46fcea5e83180e4bc68fa53')),
+ 'src/engine/sniper_execution_receipts.py': (('179948c3eb4a0bd7bab6d121ae6d90a0817b82dbef557dea72a25db62c0b8e05',
+                                              'e015955435a78f9558999c6347b49c10beb7bf48582fc6b28cc102a2ee4807e1'),
+                                             ('20d1f9b5403440f10571199bd33e1ba103aa611512e6b7d5151fbe07acd94620',
+                                              'e015955435a78f9558999c6347b49c10beb7bf48582fc6b28cc102a2ee4807e1'),
+                                             ('26b75b658f2fbb8f0411fed3d03a5a1f26923a2ad6d0610fa550aaf9a0ad4b51',
+                                              'e015955435a78f9558999c6347b49c10beb7bf48582fc6b28cc102a2ee4807e1'),
+                                             ('978dcd47d83709b245dfe8e2983b450d6559f39c9716fe47cce5a475b1eee4b6',
+                                              'e015955435a78f9558999c6347b49c10beb7bf48582fc6b28cc102a2ee4807e1'),
+                                             ('a169bb2c9d48b0ce289488985e7df6c6a8d83df9fc9257b63ef4bbf0e2fbbe80',
+                                              'e015955435a78f9558999c6347b49c10beb7bf48582fc6b28cc102a2ee4807e1')),
+ 'src/engine/sniper_post_sell_feedback.py': (('03026d2b252fa18fc5c36aaa9e1df7c9f3a0ae43ad2debc541882a78e8a9c275',
+                                              'fae77491c422f776a48a99da5d855b76e934bdd244055e4cdc44372c8016b41b'),
+                                             ('8fcbf7de95acc2e5ba3121be0f20ece3bbefc7bd22fb57cc4cebe938115fc2d9',
+                                              'fae77491c422f776a48a99da5d855b76e934bdd244055e4cdc44372c8016b41b')),
+ 'src/engine/sniper_state_handlers.py': (('02be17b70de8acfa2bc2750c25b2292117e4b5b6c1680a95b1d3e0e65b245d19',
+                                          'eaca4d2d23d2764c42e3f7cc2f73d04db0b29bb8115cabac4f10cf48e89d57aa'),
+                                         ('5900377f71e90559ca111bf60448fa60375464af10693e1b5dd16158078c8eaf',
+                                          'eaca4d2d23d2764c42e3f7cc2f73d04db0b29bb8115cabac4f10cf48e89d57aa'),
+                                         ('669b6109e36f81e9dee263d1c3e31011d55fd612d5641713c6ee109a827a9425',
+                                          'eaca4d2d23d2764c42e3f7cc2f73d04db0b29bb8115cabac4f10cf48e89d57aa'),
+                                         ('7c24ee7d6fbd307be13e1d64e1c4995fa06a06f098b7c0144f54984b624a1c5d',
+                                          'eaca4d2d23d2764c42e3f7cc2f73d04db0b29bb8115cabac4f10cf48e89d57aa'),
+                                         ('885af7dd480a520e98502bcd6729586b4d21016de8254a4a7d9e299389f09ed4',
+                                          'eaca4d2d23d2764c42e3f7cc2f73d04db0b29bb8115cabac4f10cf48e89d57aa'),
+                                         ('8a0c18d2c097b063a8349907f39e6057d43b7ad9ef173e5f6c4e1be48f8b21f9',
+                                          'eaca4d2d23d2764c42e3f7cc2f73d04db0b29bb8115cabac4f10cf48e89d57aa'),
+                                         ('8cc435544ceeda76309b9051179af20022f100c8b1bad48356636fb51b9f101c',
+                                          'eaca4d2d23d2764c42e3f7cc2f73d04db0b29bb8115cabac4f10cf48e89d57aa'),
+                                         ('9bf2d5b2a3fc5461beaaaf0ca4190e3bf8e4a12d4465d333a495b746f00f98b8',
+                                          'eaca4d2d23d2764c42e3f7cc2f73d04db0b29bb8115cabac4f10cf48e89d57aa'),
+                                         ('c47a60dccf7266e27880b94cb9bccf3b2c23c6c513ede76cce33bce212abfd55',
+                                          'eaca4d2d23d2764c42e3f7cc2f73d04db0b29bb8115cabac4f10cf48e89d57aa'),
+                                         ('ee62c7703fe10c8c602ad13b351ffc5ab1976af5f0d0709e8f09f082a8a81d38',
+                                          'eaca4d2d23d2764c42e3f7cc2f73d04db0b29bb8115cabac4f10cf48e89d57aa'),
+                                         ('f79445872ae7b091f494d9e0ee7880b0476f20cd009492803261e44bd70f3c42',
+                                          'eaca4d2d23d2764c42e3f7cc2f73d04db0b29bb8115cabac4f10cf48e89d57aa')),
+ 'src/engine/sniper_trade_review_report.py': (('8d07674031ac0ca0a08437c61490cd896d8810c30f57810ad53febb8cac0b57c',
+                                               '65c57137cffbc8e02f349ef16964e9fe2f6d27ce30573b37a9d6bbd502c5023b'),
+                                              ('af3f2273dc66d0da041bc64c8b5d79dc553558d369714d586609f0f6cbbd90f0',
+                                               '65c57137cffbc8e02f349ef16964e9fe2f6d27ce30573b37a9d6bbd502c5023b'),
+                                              ('afbd53084fbf25dfa6f91c865d74b0327b02a38d9b3b3d7957c7a60a78874a1b',
+                                               '65c57137cffbc8e02f349ef16964e9fe2f6d27ce30573b37a9d6bbd502c5023b'),
+                                              ('d3e838423aeeaba629be4902b2aac533caceef3145ad747bdc78ff2900c230d8',
+                                               '65c57137cffbc8e02f349ef16964e9fe2f6d27ce30573b37a9d6bbd502c5023b'),
+                                              ('de4dd6cfc135d5d6c53f757151f32753f13ff780caca285886dba2dc285890d8',
+                                               '65c57137cffbc8e02f349ef16964e9fe2f6d27ce30573b37a9d6bbd502c5023b')),
+ 'src/trading/market/execution_venue.py': (('50b13de6e49aae4e861c29cc66a6508ada2cc33176ba94b67a815dfc2fb819af',
+                                            'a794c64a1787fd892837c665e5a495f4043a1bc7371cbdc1604466528bb2fe9a'),)}
+REVIEWED_OPERATOR_MARKET_DEPENDENCY_VARIANTS = {
+    (trigger, REVIEWED_OPERATOR_MARKET_HASHES.get(trigger, sha)): {**value,
+        'selector_path': 'src/trading/market/execution_venue.py',
+        'selector_sha256': REVIEWED_OPERATOR_MARKET_HASHES['src/trading/market/execution_venue.py'],
+        'dependencies': {**value['dependencies'], **REVIEWED_OPERATOR_MARKET_HASHES},
+        'contract_extensions': {origin: {name: REVIEWED_OPERATOR_MARKET_HASHES.get(os.path.normpath(name), digest)
+            for name, digest in paths.items()} for origin, paths in value['contract_extensions'].items()},
+    } for (trigger, sha), value in REVIEWED_POST_SELL_SOURCE_DEPENDENCY_VARIANTS.items()
+}
+for (_trigger, _operator_market_sha), _variant in REVIEWED_OPERATOR_MARKET_DEPENDENCY_VARIANTS.items():
+    REVIEWED_HOLDING_RESEARCH_DEPENDENCIES[_trigger][_operator_market_sha] = _variant['dependencies']
+
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -4078,6 +4223,9 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     nonfixed_capacity_present = any((root / name).is_file()
         and hashlib.sha256(candidate_bytes(name)).hexdigest() == sha
         for name, sha in REVIEWED_NONFIXED_CAPACITY_HASHES.items())
+    operator_market_present = any((root / name).is_file()
+        and hashlib.sha256(candidate_bytes(name)).hexdigest() == sha
+        for name, sha in REVIEWED_OPERATOR_MARKET_HASHES.items())
     post_sell_source_present = any((root / name).is_file()
         and hashlib.sha256(candidate_bytes(name)).hexdigest() == sha
         for name, sha in REVIEWED_POST_SELL_SOURCE_HASHES.items())
@@ -4089,7 +4237,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         dependencies = generations.get(trigger_sha, {})
         # New exact selectors precede their historical parent. The first match
         # selects one complete generation, never per-file SHA alternatives.
-        for variants in (REVIEWED_POST_SELL_SOURCE_DEPENDENCY_VARIANTS,
+        for variants in (REVIEWED_OPERATOR_MARKET_DEPENDENCY_VARIANTS,
+                         REVIEWED_POST_SELL_SOURCE_DEPENDENCY_VARIANTS,
                          REVIEWED_HOLDING_INPUT_DEPENDENCY_VARIANTS,
                          REVIEWED_NONFIXED_CAPACITY_DEPENDENCY_VARIANTS,
                          REVIEWED_QUANTITY_STAGE_DEPENDENCY_VARIANTS,
@@ -4251,6 +4400,13 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
             dependencies = {**dependencies, **REVIEWED_POST_SELL_SOURCE_HASHES}
             extensions = {name: REVIEWED_POST_SELL_SOURCE_HASHES.get(repository_name(name), sha)
                           for name, sha in extensions.items()}
+        if operator_market_present:
+            operator_variant = REVIEWED_OPERATOR_MARKET_DEPENDENCY_VARIANTS.get((trigger, trigger_sha))
+            if operator_variant is None:
+                raise ValueError('entry_consumer_operator_market_generation_mixed:' + trigger)
+            dependencies = {**dependencies, **operator_variant['dependencies']}
+            extensions = {name: REVIEWED_OPERATOR_MARKET_HASHES.get(repository_name(name), sha)
+                          for name, sha in extensions.items()}
         dependencies_by_trigger[trigger] = (trigger_sha, dependencies)
     for key, name in paths.items():
         after = candidate_bytes(name)
@@ -4267,7 +4423,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         if before == after:
             continue
         pair = (hashlib.sha256(before).hexdigest(), hashlib.sha256(after).hexdigest())
-        if (pair in REVIEWED_POST_SELL_SOURCE_PAIRS.get(repository_name(name), ())
+        if (pair in REVIEWED_OPERATOR_MARKET_PAIRS.get(repository_name(name), ())
+                or pair in REVIEWED_POST_SELL_SOURCE_PAIRS.get(repository_name(name), ())
                 or pair in REVIEWED_HOLDING_INPUT_PAIRS.get(repository_name(name), ())
                 or pair in REVIEWED_NONFIXED_CAPACITY_PAIRS.get(repository_name(name), ())
                 or pair in REVIEWED_DELAY_MACHINE_PARENT_PAIRS.get(repository_name(name), ())
