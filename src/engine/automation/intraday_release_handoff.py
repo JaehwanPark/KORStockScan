@@ -4111,6 +4111,18 @@ REVIEWED_OPERATOR_MARKET_DEPENDENCY_VARIANTS = {
 for (_trigger, _operator_market_sha), _variant in REVIEWED_OPERATOR_MARKET_DEPENDENCY_VARIANTS.items():
     REVIEWED_HOLDING_RESEARCH_DEPENDENCIES[_trigger][_operator_market_sha] = _variant['dependencies']
 
+REVIEWED_P5_ANCESTRY_HASHES = {
+    'src/engine/infrastructure/startup_validation_code_context.py':
+        'dc2853b8b3d255c019926c702c668fb603110250f2b1e1a28eaa0570c85b367a',
+}
+REVIEWED_P5_ANCESTRY_DEPENDENCY_VARIANTS = {
+    key: {**value,
+        'selector_path': 'src/engine/infrastructure/startup_validation_code_context.py',
+        'selector_sha256': REVIEWED_P5_ANCESTRY_HASHES['src/engine/infrastructure/startup_validation_code_context.py'],
+        'dependencies': {**value['dependencies'], **REVIEWED_P5_ANCESTRY_HASHES},
+    } for key, value in REVIEWED_OPERATOR_MARKET_DEPENDENCY_VARIANTS.items()
+}
+
 
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
@@ -4226,6 +4238,9 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     operator_market_present = any((root / name).is_file()
         and hashlib.sha256(candidate_bytes(name)).hexdigest() == sha
         for name, sha in REVIEWED_OPERATOR_MARKET_HASHES.items())
+    p5_ancestry_present = any((root / name).is_file()
+        and hashlib.sha256(candidate_bytes(name)).hexdigest() == sha
+        for name, sha in REVIEWED_P5_ANCESTRY_HASHES.items())
     post_sell_source_present = any((root / name).is_file()
         and hashlib.sha256(candidate_bytes(name)).hexdigest() == sha
         for name, sha in REVIEWED_POST_SELL_SOURCE_HASHES.items())
@@ -4237,7 +4252,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         dependencies = generations.get(trigger_sha, {})
         # New exact selectors precede their historical parent. The first match
         # selects one complete generation, never per-file SHA alternatives.
-        for variants in (REVIEWED_OPERATOR_MARKET_DEPENDENCY_VARIANTS,
+        for variants in (REVIEWED_P5_ANCESTRY_DEPENDENCY_VARIANTS,
+                         REVIEWED_OPERATOR_MARKET_DEPENDENCY_VARIANTS,
                          REVIEWED_POST_SELL_SOURCE_DEPENDENCY_VARIANTS,
                          REVIEWED_HOLDING_INPUT_DEPENDENCY_VARIANTS,
                          REVIEWED_NONFIXED_CAPACITY_DEPENDENCY_VARIANTS,
@@ -4401,7 +4417,9 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
             extensions = {name: REVIEWED_POST_SELL_SOURCE_HASHES.get(repository_name(name), sha)
                           for name, sha in extensions.items()}
         if operator_market_present:
-            operator_variant = REVIEWED_OPERATOR_MARKET_DEPENDENCY_VARIANTS.get((trigger, trigger_sha))
+            operator_variants = (REVIEWED_P5_ANCESTRY_DEPENDENCY_VARIANTS if p5_ancestry_present
+                                 else REVIEWED_OPERATOR_MARKET_DEPENDENCY_VARIANTS)
+            operator_variant = operator_variants.get((trigger, trigger_sha))
             if operator_variant is None:
                 raise ValueError('entry_consumer_operator_market_generation_mixed:' + trigger)
             dependencies = {**dependencies, **operator_variant['dependencies']}

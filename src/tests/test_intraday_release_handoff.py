@@ -1771,7 +1771,10 @@ def test_archive_authority_successor_accepts_the_issued_full_reader_origin(avg_d
         *(['src/engine/infrastructure/startup_validation_code_context.py'] if generation=='source_integration' else [])))
     for fault in ([None,'missing','dirty','committed_change']+(['parent_mix'] if generation in ('sqlite_lifecycle','retired_review','clean_sqlite','delay_cleanup') else []))])
 def test_source_reader_handoff_preserves_issued_policy_and_exact_dependencies(tmp_path, family, fault, reader_path,generation, policy_origin=None):
-    operator_market = generation == 'operator_market'
+    p5_ancestry = generation == 'p5_ancestry'
+    operator_market = generation in ('operator_market', 'p5_ancestry')
+    if p5_ancestry:
+        generation = 'operator_market'
     issued_post_sell_source = generation == 'post_sell_source'
     post_sell_source = generation in ('post_sell_source','operator_market')
     issued_holding_input = generation == 'holding_input'
@@ -1807,7 +1810,8 @@ def test_source_reader_handoff_preserves_issued_policy_and_exact_dependencies(tm
     if generation in ('sqlite_lifecycle','clean_sqlite'):names.update(handoff.REVIEWED_SQLITE_LIFECYCLE_HASHES)
     if generation in ('retired_review','clean_sqlite','delay_cleanup','role_latency','startup_budget','delay_shutdown','routed_reuse','source_epoch','closed_observer','postclose_repair','logical_pipeline','historical_resolution','finalization_health','native_invalidation','fixed_wait','entry_receipt','buy_identity','collector_close','collector_first_transition','quantity_capture'):names.update(handoff.REVIEWED_RETIRED_REVIEW_HASHES)
     if generation in ('delay_cleanup','role_latency','startup_budget','delay_shutdown','routed_reuse','source_epoch','closed_observer','postclose_repair','logical_pipeline','historical_resolution','finalization_health','native_invalidation','fixed_wait','entry_receipt','buy_identity','collector_close','collector_first_transition','quantity_capture'):
-        for variant in (handoff.REVIEWED_OPERATOR_MARKET_DEPENDENCY_VARIANTS if operator_market else
+        for variant in (handoff.REVIEWED_P5_ANCESTRY_DEPENDENCY_VARIANTS if p5_ancestry else
+                handoff.REVIEWED_OPERATOR_MARKET_DEPENDENCY_VARIANTS if operator_market else
                 handoff.REVIEWED_POST_SELL_SOURCE_DEPENDENCY_VARIANTS if post_sell_source else
                 handoff.REVIEWED_HOLDING_INPUT_DEPENDENCY_VARIANTS if holding_input else
                 handoff.REVIEWED_NONFIXED_CAPACITY_DEPENDENCY_VARIANTS if nonfixed_capacity else
@@ -1836,7 +1840,8 @@ def test_source_reader_handoff_preserves_issued_policy_and_exact_dependencies(tm
         names.update(handoff.REVIEWED_DELAY_MACHINE_PARENT_HASHES)
     for name in names:
         path = root/name; path.parent.mkdir(parents=True,exist_ok=True)
-        path.write_bytes(subprocess.check_output(['git','-C',str(canonical),'show','19297ead7:'+os.path.normpath(name)]) if issued_post_sell_source and name!='src/engine/automation/intraday_release_handoff.py' else
+        path.write_bytes(subprocess.check_output(['git','-C',str(canonical),'show','b82a84620:'+os.path.normpath(name)]) if operator_market and not p5_ancestry and name!='src/engine/automation/intraday_release_handoff.py' else
+            subprocess.check_output(['git','-C',str(canonical),'show','19297ead7:'+os.path.normpath(name)]) if issued_post_sell_source and name!='src/engine/automation/intraday_release_handoff.py' else
             subprocess.check_output(['git','-C',str(canonical),'show','0b36f17fc:'+os.path.normpath(name)]) if issued_holding_input and name!='src/engine/automation/intraday_release_handoff.py' else
             subprocess.check_output(['git','-C',str(canonical),'show','eeaed90f6:'+os.path.normpath(name)]) if issued_nonfixed and name!='src/engine/automation/intraday_release_handoff.py' else
             (canonical/name).read_bytes() if nonfixed_capacity or
@@ -1865,6 +1870,10 @@ def test_source_reader_handoff_preserves_issued_policy_and_exact_dependencies(tm
         elif fault == 'parent_mix':
             parent = ('ea68c5a85' if generation in ('collector_close','collector_first_transition','quantity_capture') else 'd76cbd56d' if generation == 'buy_identity' else '4809d898e' if generation == 'entry_receipt' else '193668e7f' if generation == 'fixed_wait' else 'e0d07d4ab' if generation == 'native_invalidation' else 'e427676c4' if generation == 'finalization_health' else '6d259b5a09' if generation == 'historical_resolution' else '0cfd32827' if generation == 'logical_pipeline' else '04e19bad0' if generation == 'postclose_repair' else origin if generation == 'routed_reuse'
                       and reader_name in handoff.REVIEWED_ROUTED_REUSE_HASHES else '21d822a64')
+            if p5_ancestry:
+                # The immediate pre-repair file remains an issued profile.
+                # An older partial generation must still fail exact binding.
+                parent = origin
             reader.write_bytes(subprocess.check_output(['git','-C',str(canonical),'show',parent+':'+reader_name]))
             revision=commit()
         elif fault:
@@ -2166,3 +2175,10 @@ def test_operator_market_handoff_binds_every_consumer_and_preserves_old_profiles
 def test_operator_quantity_provenance_handoff_retains_complete_generation(tmp_path,family,fault):
     test_source_reader_handoff_preserves_issued_policy_and_exact_dependencies(
         tmp_path,family,fault,'src/engine/scalping/initial_quantity_policy.py','operator_market')
+
+
+@pytest.mark.parametrize('family',['main_stop','holding_vote','pre_submit_delay'])
+@pytest.mark.parametrize('fault',[None,'missing','parent_mix','committed_change','dirty'])
+def test_p5_ancestry_handoff_keeps_complete_operator_generation(tmp_path,family,fault):
+    test_source_reader_handoff_preserves_issued_policy_and_exact_dependencies(
+        tmp_path,family,fault,tuple(handoff.REVIEWED_P5_ANCESTRY_HASHES),'p5_ancestry')

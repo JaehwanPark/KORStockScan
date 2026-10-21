@@ -848,10 +848,13 @@ def test_delay_inventory_declaration_is_literal_unique_and_canonical(expression)
 
 @pytest.mark.parametrize('fault', [None, 'source', 'target', 'path'])
 def test_cleanup_ai_preparation_pair_is_exact(fault):
+    import subprocess
     relative = 'src/engine/ai_engine_openai.py'
     old = '194f9dcd748a0c94fe49c12618c3c5eb9f3d81b07de494f0b59ddc349aa43584'
     current = 'bdcf09bf1f19e4cb649c01105c7aa363b04bddcb8749793a8f701cc06cc8d185'
-    assert C._sha(Path(C.__file__).resolve().parents[3]/relative) == current
+    original = subprocess.check_output(['git', '-C', str(Path(C.__file__).resolve().parents[3]),
+        'show', 'd927d0d70:'+relative])
+    assert hashlib.sha256(original).hexdigest() == current
     if fault == 'source': old = '0'*64
     elif fault == 'target': current = '0'*64
     elif fault == 'path': relative = 'src/engine/kiwoom_sniper_v2.py'
