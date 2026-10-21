@@ -1231,3 +1231,12 @@ trailing의 최초 직접 재생은 all_scope_assembly_code_changed로 차단됐
 기준502b3c083 대비 source3파일 +99/-24, tests2파일 +102/-5, docs3파일 +47/-0(최종 준비 이력 전)이다. source 순증은 실행 venue와 독립된 quote scope/raw provenance, current epoch·양수 depth 검사 및 기존 발행 세대와 새 producer/consumer를 묶는 정확 hash profile 때문이다. helper/module/entrypoint 이동0·신규 module/entrypoint0이며 다른 세션 변경을 포함하지 않았다. 원 지점의 guard 교체와 canonical item mapper 통합을 완료했고 기존 historical reader는 위 현재 소비자 근거로 retained다.
 
 최종 source587 PASS, 새 exact-generation 인계16 PASS, 기존 준비 세대 대표9 PASS, Python compile·diff check·문서 print-only parser PASS다. self review의 수정은 quote selector를 물리 venue와 구분하는 scope 명명, verified/source/raw fill 상태 전달, bid 잔량의 양수 source 검증이다. 실패 실험의 test import 누락은 fixture에 pytest import를 보완해 재검증했다. 원본 실패 bytes/log와 역사 결손은 보존했다. 최종 native active-policy/parity·delay/stop/holding·4family fixture·report currentness와 actual PID/epoch 원본 보존은 아래 준비 결과에 별도로 기록한다.
+
+
+### 후행 호가 통합 배포본 준비 완료
+
+준비 commit **`19297ead7d17d71666bc68928a0ecb170b19059c`**, 디렉터리 `/home/ubuntu/KORStockScan-runtime-releases/post-sell-source-20261021-19297ead7`의 clean native router 검증과 기존0b36/eeae/최초 전환/수량/지연/약세 연구9개 ancestry를 확인했다. [최종 readiness](../../tmp/post-sell-route-source-repair-20261021/readiness.json).
+
+최종 source587·새 세대 인계16·기존 세대 대표9 PASS다. active-policy128scope/76,800rows/598hits/mismatch0, 원10/21 target의 active/delay/stop/holding code handoff·4family capability·최종 report consumer PASS다. 닫힌10/20 원천의 현재 code 결속만 native producer로 갱신해 trailing20,824scope를53.04초/RSS182,628KiB에 재검증했다. 원 holding report/initial policy·수량 fixed stage·운영 정책을 보존했으며 common/eligible 표본이나 실제 경제성 회복으로 주장하지 않는다.
+
+실제 선택ea68/PID1724066/start19233026/cwd, 원본9개SHA는 동일하다. epoch1792547808026387070은 running이며 실제 전환 수용은 pending이다. 재기동/선택/예약/실제 REG·REMOVE/주문/provider/Telegram0, 장 종료까지 세션 대기 작업0이다. source-only quote scope와 actual execution venue를 분리해 source collection은 가능하지만, 0/SOR 원문의 물리 KRX/NXT 구분·원12건 exact 비용은 미확인으로 유지한다. 새PID 자연 수신/horizon 수용은 기존 owner에서 별도로 확인한다.
