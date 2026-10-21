@@ -1,0 +1,171 @@
+{
+  "schema": "scalp_micro_reversion_callback_baseline_v1",
+  "baseline_id": "main_server_synthetic_0b_20261021T111800+0900",
+  "generated_at": "2026-10-21T11:18:00+09:00",
+  "host": {
+    "hostname": "ip-172-31-34-105",
+    "machine": "aarch64",
+    "python": "3.13.12",
+    "platform": "Linux-7.0.0-1014-aws-aarch64-with-glibc2.39"
+  },
+  "workload": {
+    "input": "same_valid_stable_price_kiwoom_0b_snapshot",
+    "observer_off_then_on": true,
+    "path_capture_enabled_on": true,
+    "discovery_enabled_on": false,
+    "iterations_per_repeat": 5000,
+    "warmup_per_repeat": 500,
+    "repeat_count": 5
+  },
+  "observer_off_runs": [
+    {
+      "p50_ms": 0.000122,
+      "p95_ms": 0.000128,
+      "p99_ms": 0.000142,
+      "max_ms": 0.007091,
+      "mean_ms": 0.00012393080000000002
+    },
+    {
+      "p50_ms": 0.000122,
+      "p95_ms": 0.000128,
+      "p99_ms": 0.000141,
+      "max_ms": 0.024191,
+      "mean_ms": 0.0001291384
+    },
+    {
+      "p50_ms": 0.000122,
+      "p95_ms": 0.000128,
+      "p99_ms": 0.000142,
+      "max_ms": 0.011458,
+      "mean_ms": 0.0001247732
+    },
+    {
+      "p50_ms": 0.000122,
+      "p95_ms": 0.000128,
+      "p99_ms": 0.000142,
+      "max_ms": 0.000351,
+      "mean_ms": 0.0001224598
+    },
+    {
+      "p50_ms": 0.000122,
+      "p95_ms": 0.000129,
+      "p99_ms": 0.000146,
+      "max_ms": 0.000311,
+      "mean_ms": 0.0001229756
+    }
+  ],
+  "observer_on_runs": [
+    {
+      "p50_ms": 0.022127,
+      "p95_ms": 0.026335,
+      "p99_ms": 0.033298,
+      "max_ms": 9.699838,
+      "mean_ms": 0.0324939076,
+      "collector_internal_p95_ms": 0.02469,
+      "collector_internal_p99_ms": 0.030927,
+      "queue_drop_count": 0.0,
+      "worker_error_count": 0.0
+    },
+    {
+      "p50_ms": 0.022262,
+      "p95_ms": 0.024265,
+      "p99_ms": 0.033184,
+      "max_ms": 6.300495,
+      "mean_ms": 0.03277237,
+      "collector_internal_p95_ms": 0.023012,
+      "collector_internal_p99_ms": 0.032691,
+      "queue_drop_count": 0.0,
+      "worker_error_count": 0.0
+    },
+    {
+      "p50_ms": 0.022425,
+      "p95_ms": 0.023718,
+      "p99_ms": 0.03285,
+      "max_ms": 10.634577,
+      "mean_ms": 0.0312944032,
+      "collector_internal_p95_ms": 0.022266,
+      "collector_internal_p99_ms": 0.031017,
+      "queue_drop_count": 0.0,
+      "worker_error_count": 0.0
+    },
+    {
+      "p50_ms": 0.022518,
+      "p95_ms": 0.023756,
+      "p99_ms": 0.032753,
+      "max_ms": 9.715851,
+      "mean_ms": 0.0273093408,
+      "collector_internal_p95_ms": 0.022159,
+      "collector_internal_p99_ms": 0.030936,
+      "queue_drop_count": 0.0,
+      "worker_error_count": 0.0
+    },
+    {
+      "p50_ms": 0.022572,
+      "p95_ms": 0.023939,
+      "p99_ms": 0.03409,
+      "max_ms": 15.417175,
+      "mean_ms": 0.036634527800000004,
+      "collector_internal_p95_ms": 0.022471,
+      "collector_internal_p99_ms": 0.033177,
+      "queue_drop_count": 0.0,
+      "worker_error_count": 0.0
+    }
+  ],
+  "summary": {
+    "observer_off_p95_ms_max": 0.000129,
+    "observer_off_p99_ms_max": 0.000146,
+    "observer_on_external_p95_ms_max": 0.026335,
+    "observer_on_external_p99_ms_max": 0.03409,
+    "observer_on_internal_p95_ms_max": 0.02469,
+    "observer_on_internal_p99_ms_max": 0.033177,
+    "queue_drop_count": 0,
+    "worker_error_count": 0
+  },
+  "frozen_limits": {
+    "derivation": "max(absolute_floor, five_times_max_observed_internal_percentile)",
+    "minimum_callback_samples": 1000,
+    "producer_callback_latency_p95_max_ms": 1.0,
+    "producer_callback_latency_p99_max_ms": 2.0,
+    "snapshot_stale_after_sec": 30.0
+  },
+  "metric_role": "source_quality_gate_and_observer_canary_safety_veto",
+  "decision_authority": "observer_canary_stop_only_no_trading_authority",
+  "window_policy": "current_process_cumulative_with_periodic_snapshot",
+  "sample_floor": "latency_guard_after_frozen_minimum_callback_samples",
+  "primary_decision_metric": "stop_required",
+  "source_quality_gate": "fresh_collector_snapshot_and_valid_frozen_guard_config;_bounded_ingress_queue_loss_is_source_quality_exclusion_and_provider_replay_hold;_successful_write_below_preventive_low_disk_watermark_is_operational_warning_only;_worker_writer_actual_capture_loss_storage_self_disable_or_authority_failure_is_immediate_stop",
+  "forbidden_uses": [
+    "broker_order_submission",
+    "broker_order_cancel",
+    "buy_wait_drop_or_entry_exit_decision",
+    "simulated_or_real_position_creation",
+    "threshold_provider_bot_quantity_or_cap_mutation",
+    "p2_policy_selection_or_economic_edge_claim"
+  ],
+  "status": "PASS_WITH_UNCHANGED_RUNTIME_LIMITS",
+  "scope": "collector_0b_absolute_canary_only",
+  "runtime_guard_changed": false,
+  "guard_config_sha256": "6fb3781d01b89352aeaf828a2aee25474066b9ab2581bbcad2880de71c5124cf",
+  "runtime_limits": {
+    "minimum_callback_samples": 1000,
+    "producer_callback_latency_p95_max_ms": 1.0,
+    "producer_callback_latency_p99_max_ms": 2.0,
+    "snapshot_stale_after_sec": 30.0
+  },
+  "source_hashes": {
+    "src/engine/kiwoom_websocket.py": "215a0e3d6388df5938a4d70e8e5afad689fa8087280a3a53b81619a2295e35e3",
+    "src/engine/scalping/micro_reversion/canary_monitor.py": "1a767cc4e34ac8add1ec4318e305317f6faa35c469951dd422b45ec814258891",
+    "src/engine/scalping/micro_reversion/forward_collector.py": "975d0b0061398a488244c80e869336a4aaac14e37d653b57c8115b83382e465e",
+    "src/engine/scalping/micro_reversion/observer_source_quality.py": "189b61810654f59055c0dcf863c8e3e1bf17fc308f624b4feac09808676d7e7c"
+  },
+  "benchmark_module_sha256": "1a767cc4e34ac8add1ec4318e305317f6faa35c469951dd422b45ec814258891",
+  "unchanged_deployed_source_hashes": {
+    "src/engine/scalping/micro_reversion/observation_adapter.py": "4ddc938b5f4a0a185e9a9297763f604493913f764c79ccb90fceb17028cdac0d",
+    "src/engine/scalping/micro_reversion/path_capture.py": "f0494ef292fe8584dc387ba1bfbffcaf47084c3957c524a253dec69da014b0a0",
+    "src/engine/scalping/micro_reversion/path_journal.py": "5d8e09413c104fc7392bca32c0804ee4d0142a61ecfb2674cf207089dc943dd6",
+    "src/trading/market/session_contract.py": "dfd0ff3b2a28d8d6581a44762e5b618ae807fdc1c45d7f8cd3128b76be83573c",
+    "src/engine/scalping/native_packet_validation.py": "a4a36300a81f02cd89256f6b6a9d756de52990f5817d3ba7f90ae75df1d8faea",
+    "src/engine/scalping/micro_reversion/storage_maintenance.py": "61282651dcdf8bda3a4311855c3e7d10b500f1f8ac3fbaef2d5a66b5f4bcc514"
+  },
+  "unchanged_deployed_source_origin": "b53ebf689"
+}

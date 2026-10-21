@@ -330,3 +330,15 @@ PYTHONPATH=. "$VENV_PY" -m src.engine.lifecycle.broker_cost_source --date "$TARG
 - 완료 census 재검증은 일자별 native metadata를 제한 없이 보관하지 않는다. 전체 1,000건의 연구 비용 영수증·제외 사유를 유지한 상태로 기존 64MiB 공통 resident 예산 안에서 일자별 증명을 검증·해제한다. 예산 확대나 비적격 거래의 영수증 삭제로 성능 검증을 통과시키지 않는다.
 - 최초 정책의 별도 경제/자연소비 허들을 추가하지 않는다. 수리 코드 검증·선택 배포·정규 장후 자연 생산·실제 PID 소비·비용 후 성과는 각각의 근거로 보고한다.
 - 보완 owner는 동일한 `InitialQuantityBrokerCostClosure1017`이며 현재 실행은 [10/18 체크리스트](../checklists/2026-10-18-stage2-todo-checklist.md)에 이관했다. 기존 `InitialQuantityProducerConsumerRepair1010`의 남은 역사 원천/정산·경제성 Acceptance와 `DirectFamilyPreopenPolicyHandoff`의 실제 소비 조건은 유지한다.
+
+
+### 2026-10-21 배포 전 수량 feature 검증
+
+자연 종료 대기는 실제 최초 전환에 적용한다. 닫힌 과거 원천의 reader/소비 검증은 그 전에 수행한다. 기존 source cache는 대형 pipeline의 native indexed coverage·chain generation과 별도의 물리 identity를 사용한다. cold feature 생성은 현재 streaming reader의 같은 물리 읽기에서 SHA를 계산하고, immutable cache의 정확한 byte proof만 native digest session에 결속한다. 작은 원천의 byte 검증과 전체 원천32MiB digest budget을 유지한다. native gzip은 원 plain identity와 현재 archive identity를 혼동하지 않으며 full source validator도 기존 archiver/enrollment의 완전 논리 SHA·size·CRC·현재 세대 증명으로 검증한다.
+
+코드 변경/원천 변경/새 cohort/horizon은 기존 cache 계약대로 무효화한다. source-only 재계산·private successor·native 검증을 실제 운영 stage 선택/정책 적용/PID 소비와 구별하고 원 generation은 보존한다. 이전 plain path가 없다는 이유로 raw를 재생성하거나 hash/size 한도를 늘리지 않는다. [현재 리뷰](../audits/postclose-root-cause-recovery-review-2026-10-19.md#수량-통합-검증-즉시-재개와-후보-구분--2026-10-21).
+
+
+### 동일 날짜 후속 stage의 배포 준비 인계 — 2026-10-21
+
+기존 publish_refresh_quantity_evaluation의 publish_current=False는 운영 정책·공용 committed 참조를 유지하며 같은 날짜의 새 immutable generation을 검증된 후보 코드에만 결속한다. full native report/evaluation/timeout/census/terminal/source 검증 후 원 공용 참조 SHA를 CAS 부모로 포함한 code-addressed stage reference를 같은 commit lock에서 발행한다. 감시·summary는 기존 committed_refresh_stage_path의 공통 bounded parser를 사용하며, 정확한 코드 참조가 손상되거나 부모·날짜·경로·SHA가 달라지면 실패한다. 준비된 코드와 다른 기존 reader는 원 공용 참조를 계속 읽는다. 실제 선택 후 정상 native 발행은 공용 참조와 이미 준비된 같은 코드 참조를 이관하며 원 generation을 보존한다. 실제 정책 활성화/PID/자연 closed 수용은 별도다. [원인·검증](../audits/postclose-root-cause-recovery-review-2026-10-19.md#수량-후속-stage의-후보별-인계--2026-10-21).

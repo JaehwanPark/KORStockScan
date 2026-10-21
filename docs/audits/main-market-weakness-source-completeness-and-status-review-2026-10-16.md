@@ -86,3 +86,52 @@
 - 실제 단회 attempt는 [7bb84aadd1194cf7b2fdda872871990d](../../data/report/main_market_weakness_research/attempts/7bb84aadd1194cf7b2fdda872871990d.json), 알림 disposition은 [7087bbfa](../../data/report/main_market_weakness_research/notifications/7087bbfa023265b44d7bd954b5f8d6d18e17990c0fdec7d31a0f1a0c85137985.json)의 `not_eligible`다. terminal→cumulative current→notification→attempt→night summary/last completed의 같은 세대를 검증했다. 단회 요약의 `night_id=null`, `execution_mode=operator_closed_source_recovery`는 이번 실행을 야간 cron으로 표시하지 않기 위한 실제 provenance다.
 - 설치 설정·자동 순환 cursor·원10/19 야간 예약·outbox·selector 5개의 기존 hash가 그대로임을 확인했다. Telegram 전송은0이며 Main 배포/재기동·정책/주문 변경은 하지 않았다. 원 strict-bound snapshot도 그대로 보존한다. Python 생산 코드/테스트 수정은0이고 임시 운영 명령은 이번 두 날짜 복구 후 종료했다. 상주 worker/새 cron/CLI/validator는 추가하지 않았다.
 - 갱신10/16·19의 물리 원천/누적/알림 상태 수용은 완료했다. 위 준비 단계의 “야간 대기”는 이번 사용자 예외로 해제됐고 단회 예외는 종료됐다. 즉시 복구의 비테스트 소스/테스트 증감은 각각+0/-0, 기존 리뷰/owner 문서는 직전 준비 상태 대비+19/-0이다. 재리뷰·native 소비 결속·문서 링크58개·parser24개 중 현재 owner1개·diff를 검증했고 다른 세션이 추가한 d927 배포 인계도 보존했다. 남은 owner 범위는 상위 raw 제외 증빙·새 정상 label·전향 근거의 자연 수용이며 코드/기계적 재처리 실패로 전용하지 않는다. 같은493,188행을 근거 없이 다시 재생하거나 현재 U를0/no-edge로 바꾸지 않는다.
+
+
+## 압축 재결속·수집 증빙·일일 인계 배포 후보 — 2026-10-21
+
+사용자 지시: 재기동 없이 배포본 준비만 실행한다. 기준 commit `faa67a01dbe6805c4b0219ec51e5cbf60b558f4e`에 이미 준비한 collector 종료/거부 전건 증빙·최초 자연 종료 전환과 지연 부모 호환성 수리를 포함한다. 격리 작업본 `KORStockScan-worktrees/weakness-source-handoff-20261021`에서 수정했으며 운영 selector는 ea68c5a85, Main PID1724066/start19233026으로 고정했다.
+
+### 원인과 수리
+
+- source20의 4개 normalized partition에 `source_epoch_unverified` 435,526행이 남아 있다. native close는 epoch1792493874709471241만 승인하며 해당 receipt SHA는7da52736cd1ce66406b82f621058645a71277cca6edfa35f523081bbc1e7d3d4다. normalized 행 제외를 detector 오판으로 취급하지 않는다. 앞선 collector cooperative shutdown·전건 rejection journal 수리가 후보 ancestry에 있으며 64/65/121건·reconnect와 손상/다른 PID·epoch·날짜 거부를 기존 정상화 소비자까지 검증했다. 현재 ea68 epoch는 유지하며 실제 새 closed·label 연결은 자연 수용 OPEN이다. 원 normalized 파일은 다시 만들지 않았다. 대형 normalized JSON의 추가 census는 기존32MiB 읽기 한도에 도달해 중단했고, 결론에는 원 frozen report의 행수·해시를 사용했다.
+- source19 cursor196832a7은 원 trace/payload의 gzip 전환과 master 물리 파일 교체로 current=false다. master semantic hash c20d31bf는 같지만 기존 currentness는 물리 결속을 요구한다. `process_date`의 무조건 초기화 분기를 보완하여 완전한 원 읽기 해시·동일 코드/의존성·원 sealed 집계가 검증된 압축 전환만 projection을 재사용한다. gzip EOF/CRC와 전체 길이를 검증하고 기존 캐시에 세대별 증명을 보존한다. successor manifest→daily/terminal→cumulative를 통해 재결속하며 기존 산출물은 수정하지 않는다. 미래 plain native 수집도 같은 읽기에서 전체 증거 해시를 전달한다. 과거 native 읽기 해시가 없는10/19와 코드가 달라진 날짜는 정상 bounded 재처리가 필요하며, 이번 준비 작업은 운영 current=false를 해제하지 않았다.
+- checklist builder `_carry_open_semantic_owners`의 제한 목록에 약세 연구 owner가 빠져 있었다. 같은 ID를 추가하고 OPEN/완료/target 우선·중복 및 원 Acceptance/History 보존을 검증한다. 원 strict-bound72fe9d12 snapshot을 native `preserve_checklist`로 검증한 후10/21 owner를 복원했다.
+- 09:21 삼성전자 admission `FIXED-2026-10-21-005930-krx_regular-krx_nxt_integrated-63b8313a9eec`, generation3b66be93의 첫 warmup 서명 누락은 현재 ea68 및 후보에 기존 수리가 포함돼 있다. 기존 Main producer→pipeline→strict monitor와 rejected native claim→trace/guard/nonentry 회귀를 검증한다. 별도 관측 우회나 매매 기준 변경을 추가하지 않았다. 원 사건/누락 snapshot은 원본으로 유지하며 새 자연 영수증 수용을 테스트 결과로 대신하지 않는다.
+
+### 리뷰·대체·검증·인계
+
+원 구현으로 새 회귀를 실행하면 압축 재결속3건과 OPEN 인계1건이 실패했다. 수정 후 producer/consumer 관련9suite는1687 PASS였다. 재리뷰에서 원 cursor 집계까지 sealed daily/terminal과 대조하도록 보강했고, legacy native 없는 집계의0 기본값을 동일한 계약으로 보완했다. 최종 영향4suite274 PASS; CRC 손상·내용/길이/코드/마스터/의존성/집계 변경 거부, 원 cursor 보존, 동일 archive 재독0을 포함한다. 워밍업 source signature producer의 별도 회귀와 최종 candidate native checks 결과는 아래 준비 증거에 기록한다. provider/order/Telegram 호출은0이다.
+
+| 기존 경로 | 처분 | 근거와 현재 consumer |
+| --- | --- | --- |
+| `process_date`의 모든 descriptor 변경 초기화 | consolidated | 동일 함수가 증명된 압축 변경에만 완료 projection을 재사용한다. 내용·코드 변경 및 증거 없는 legacy에는 기존 재생 경로를 유지한다. |
+| native reader의 plain EOF 증거 누락 | removed | 같은 reader가 기존 읽기에서 전량 해시를 반환하고 기존 stream_receipts manifest가 보존한다. |
+| checklist의 두-owner 제한 목록 | consolidated | 같은 builder에 약세 OPEN을 포함한다. 별도 checklist 생성기/등록은 없다. |
+| 기존 collector close/거부 journal·신원 전달·엄격 detector | retained | 실제 native 정상화/trace/monitor 소비 계약에 필요하며 이미 준비된 수리를 재사용한다. |
+| nightly wrapper·CLI·일정·재처리 reader·원 역사 증거 | retained | 기존 scheduled consumer와 legacy/changed-source 복구에 필요하다. 새 module/worker/CLI/dispatch는0, 삭제 유예는0이다. |
+
+운영 연구 재집계·optional installer 재결속·정책 발행·selector 선택·재기동·자동 전환 예약은 실행하지 않는다. 후보 code closure와 실제 새 PID/closed epoch/전향 label/비용 후 경제성은 별개다. 기존 `role_unverified`·U·수집 미증명 행은 유지한다. 다음 전환 시 native 정책/currentness를 재검증하고 자기 optional code binding을 갱신한 뒤, 기존 야간 worker의 날짜별 source→누적→알림 disposition을 같은 OPEN owner에서 수용한다.
+
+## 장후 모니터링 확장과 설치·날짜 표현 수리 — 2026-10-21
+
+사용자는 장후 모니터링에 약세 연구의 당일 결함·결손, 보고서 생산의 의미적 결함과 필요한 재생성을 포함하도록 지시했다. source_date=`2026-10-21`, next_effective_date=`2026-10-22`, 기존 owner=`MainMarketWeaknessPostcloseObservation1008`를 유지한다. 선택 연구를 Main strict/PREOPEN 필수 gate로 추가하지 않으며 실제 Main 재기동·주문·provider 변경과 분리한다.
+
+### 원인 → 수리 → 회귀
+
+- 20:50:29 alert의 `optional_research_calendar_unverified`는 selected `e3665f20a`, Main649593/start22579533에서 확인했다. 설치 코드 hash는f6f00912, 선택 연구 코드는91667149였다. UID·시간대·Main 장전 calendar·자기 cron1개·명령은 모두 일치했다. 최초 위반은 배포 뒤 optional 설치 코드 결속의 미갱신이며 calendar 시간 변경이 아니다. 원 설치/시도/누적/탐지/selector·cron bytes는 [복구 전 증거](../../tmp/postclose-monitoring-20261021/optional-binding-before/)에 보존했다.
+- 실제 selected installer의 read-only gate도 `optional_selected_release_code_not_reviewed`였다. canonical 개발 workspace의 이전 automation 파일과 비교해, 정상적인 불변 release에서 수행하는 재결속을 거부했다. 기존 `selected_optional_code`가 실제 실행 코드의 기존7개 연구 의존성 digest와 wrapper를 선택본에 대조하도록 교체했다. 공유 workspace의 원천·예약 경로는 유지한다.
+- 알림의source10/13은10/21 04:40 마지막 개별 작업의 날짜였다. 누적2bd6b1b1은10/20까지13거래일을 포함한다.10/16·19는10/20 16:56,10/20은23:40 계산됐다. `last_completed_computation`을 누적 through-date로 표시하지 않도록 기존 detector→semantic alert→notifier에 역할·최신 시도/마지막 완료·누적 범위를 연결하고, 실제 코드 결속 불일치를 별도 이유로 전달했다.
+- 원 installer 회귀는1FAIL/3negative PASS, 날짜 detector/formatter는 각각 원 결함에서FAIL했다. 수리 후 installer/notifier90PASS와 optional detector2PASS, compile·diff check를 통과했다. [원 재현과 최종 검증 로그](../../tmp/postclose-monitoring-20261021/).
+
+수리 commit=`a995efc1a995d683b048d6702d3e4b3efaaf03ab`, baseline=`e3665f20ac2ddd1ff74d5a65b12410fe26827afa`. 비테스트 source3파일+31/-13, test3파일+72/-2, 새 module/producer/worker/예약0이다. 기존 mutable-workspace 비교 분기는 `removed/replaced`, 코드 digest·installer·detector·notifier는 현재 CLI/예약/알림 consumer 때문에 `retained/extended`다. 원 보고서·cursor·실패·불변 release는 역사 reader와 근거 때문에retained이며 별도 삭제 유예 경로는 없다. 증가는 기존 owner 간 결속 정보와 서로 다른 실패 회귀다. 이 문서·owning proposal·현재 checklist의 추가 기록은 기존 dirty 변경과 구분한다.
+
+### 실제 수용 — 미종결
+
+21:09 기준 불변 후보 `/home/ubuntu/KORStockScan-runtime-releases/postclose-monitoring-20261021-a995efc1a`는 native router validation을 통과했으며 아직 미선택이다. 현재 EOD/장후 worker는e3665f20a에 고정돼 있다. 현재 generation을 교체하지 않고 전환 가능한 경계에서 기존 installer로 재결속한 뒤, 필요한 일별→누적→알림 disposition만 native bounded owner에서 재생성하고 마지막 consumer를 대사한다. 실제 선택/설치 재결속/새 코드·10/21 원천 계산은 아직 완료로 주장하지 않는다.
+
+10/20 원천의epoch_unverified435,526행,10/19의493,188행 등은 재계산만으로 복구되지 않는다. 현행 producer의 종료·제외·label 연결과 역사 결손을 분리하고, 원천 손실·비용/결과 미확정은 제외/null로 보존한다. 결손이 있는 계산 완료를 정상 원천·경제 적격으로 표시하지 않는다. 최종 closure는 당일 실제 source/terminal/hash·누적 currentness·의미 있는 비교 분모/탈락 사유·알림 disposition과 전체 장후 strict/controller/finalization·10/22 준비본을 각각 확인하는 것이다.
+
+근거: [원 incident 대사](../../tmp/weakness-source-handoff-20261021/incident.json), [원 코드 실패](../../tmp/weakness-source-handoff-20261021/baseline-regression.txt), [관련 회귀](../../tmp/weakness-source-handoff-20261021/regression.txt), [보완 후 회귀](../../tmp/weakness-source-handoff-20261021/supplemental-regression.txt), [최종 준비 영수증](../../tmp/weakness-source-handoff-20261021/final-candidate/readiness.json). 이 마지막 영수증이 clean candidate/정확한 commit·native handoff·parity·보호 파일/PID 대사를 소유한다.
+
+최종 정적 검증: 별도 fixed-watch producer/terminal135 PASS, compile·diff PASS, print-only parser23항목 중 해당 현재 owner1건이다. 기준faa67a01d 대비 비테스트 소스2파일 +117/-5, 테스트2파일 +106/-4, 문서3파일 +58/-0; 이동0·새 모듈0·신규 진입점0이다. 순증은 기존 owner 내부의 압축 원문/CRC·sealed 집계 검증과 회귀, 기존 Acceptance/History 인계 및 감사 기록이다. 다른 canonical 변경은 이 커밋에 포함하지 않는다.

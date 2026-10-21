@@ -228,3 +228,12 @@ quote consistency와 observer refresh는 과거 10/16 준비 env에서 활성 �
 `automation.prepared_policy_code_handoff`는 기존 완전 검증된 원 prepared manifest/env/verification과 당시 controller/summary/Main 정책 영수증을 내용 해시로 원본 보존한다. 같은 target의 기존 delay 및 incumbent-carry holding/stop 정책만 exact 원 정책 해시·원 코드 inventory·검토된 원/후속 코드 해시 쌍으로 인계한다. 현재 정책 파일은 별도로 불변 검증하고 숫자 successor·다른 날짜·변경 코드/증거·재선정은 거부한다. 과거 closure 보존은 현재 closure나 PID 소비가 아니다.
 
 발행은 Main 부재와 release-set/selector 잠금 아래 수행하며, 네트워크 및 쓰기 경계가 있는 격리 namespace에서 native reader와 bootstrap을 실행한다. 실제 선택 전에 원 정책 의미 불변과 native 신호 parity를 확인한다. 변경 capability generation은 기존 독립 fixture producer로 새 검증을 발행한다. 기존 당일 PREOPEN/PID 기동 검증은 유지한다. 세부 결과는 [배포 검증 기록](../audits/nonfixed-quote-deployment-and-isolated-policy-review-2026-10-17.md)에 남긴다.
+
+
+## 12. 10/21 비상시 상품·관측 용량 후속 계약
+
+상품 필터는 zero_base_discovery_source의 discovery_product_filter가 기존 native verified common-stock master/official archive parser를 재사용한다. 원 master·원본·archive 정체성을 확인하고 유효 날짜/시장/common stock가 입증된 종목만 비상시 panel→queue 배정으로 보낸다. 누락/변조/충돌은 product_unverified이며 ETF로 추정하지 않는다. 복원 ledger도 dispatch 직전 같은 owner를 사용한다. 새 metadata generation/압축 시 파일 정체성 cache가 무효화되며 현행 metadata가 없으면 종목별 보류한다. metadata는 주문/정책 선정 권한이 아니다.
+
+관측5 physical/최대150초/source-only 예산은 유지한다. short-capable 수요가 없으면 기존4long reservation의 유휴1개를 장기가 사용하며, 단기 수요가 있으면4+1이다. cleanup ack 전 자리를 회수하거나 구 lease를 연장/병합하지 않는다. 각 시장/route/source_kind 안에서 미탐침 우선·활동성3/aging1로 오래된 저활동 후보가 전체 용량을 선점하거나 활동 후보 유입 때문에 영구 기아가 생기지 않게 한다. Native 요구시간 계산은 실제 가용 배정이 있을 때만 실행한다. 자연 수용은 같은 PID 창의 적격 대기/slot 사용/원천→native 평가 전환이며 주문 수·비용 후 성과와 분리한다.
+
+무수신127건은 기존 exact_probe_source_trace의 local REG→control→wire→normalized→native 증거로 대조했고 개별 ACK는 여전히 미증명이다. 연결 성공을 item 수용으로 바꾸거나 거래 희소를 API 장애로 단정하지 않는다. 과거 무수신 원인이 해결됐다고 표기하지 않으며 다음 자연 수신 창을 기존 SubmissionMonitorSyncLineage1019에서 확인한다. 이번 지시는 clean release 준비까지이며 selector/재기동/전환 예약0이다. [원인·수리·회귀·제거 검토](../audits/postclose-root-cause-recovery-review-2026-10-19.md#비상시-상품-원천관측-배정-수리--2026-10-21).

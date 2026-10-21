@@ -278,3 +278,23 @@ gzip-only 날짜/종목 마스터·엄격한 alias 검증, 원 native 본문과 
 - 검증 가능한 야간 창 안에서 code/calendar 불일치·EOD 실행·야간 예산 소진·deadline 여유 부족으로 worker 시작 전에 보류한 결과도 lock 아래 `night_summary.latest_attempt`에 시각·사유·`worker_started=false`로 기록한다. 이 보류는 worker 예약 횟수·예약초·순환 위치·원 마지막 계산 bytes를 바꾸지 않는다. 최초 검사부터 시간창 밖이면 신규 lock/연구 상태 쓰기는 0이다. 다른 worker가 lock을 보유한 경우 그 writer의 요약을 덮지 않는다.
 - `source_census.native_observations`는 native 색인에 공급한 유효 행 수로 바로잡고, 독립 분석행 수는 `source_projection_census`로 분리한다. `native_indexed_rows`는 중복 입력을 포함한 행 수이며 고유 관측/매매 기회 수가 아니다. daily JSON/Markdown과 terminal에 두 census·색인 수·`analysis_coverage.native_binding_verified`를 제공한다. gzip 중단/CRC 실패 시 색인·두 census를 같은 checkpoint로 되돌린다. 분석/재생/보조 모집단이나 W/F/U·후보 정의를 변경하지 않는다.
 - 배포 전용 세션은 검토 커밋을 통합한 selected release에서 기존 자기 optional code/calendar binding을 재결속하고 설정·cron 재조회를 확인한다. 기존 enabled/notify·설치 역사·source floor·후보/outbox를 보존한다. 코드 hash 변경으로 기완료 날짜도 재처리 대상이 될 수 있으므로 한 야간의 전체 완료를 보장하지 않는다. 다음 허용 야간에서 최신 마감일 기회→기존 backlog 진전→migration/누적→알림 disposition을 수용한다. 연구 때문에 Main을 재기동하거나 과거 원천/보조 응답을 다시 생성하지 않는다. 후보의 새 전향 근거 부재는 알림 보류이며 실주문/정책 적용 권한이 아니다.
+
+
+## 13. 2026-10-21 압축 이후 재결속과 일일 인계
+
+기존 `process_date`가 완료된 projection의 원 source manifest·terminal·daily 해시와 집계 수치, 코드·관찰·정책 의존성을 먼저 검증한다. gzip 전환만 달라졌으면 원 전체 읽기 해시 또는 연속된 전체 byte-range 해시를 새 압축본의 해제 원문·EOF/CRC와 대조한다. 기존 `verified_sources`에 물리 세대별 증명을 캐시하고, 같은 증명은 재독하지 않는다. 검증된 projection ID와 원문 참조는 그대로 두고 부모 manifest를 명시한 후속 generation을 발행한 뒤 기존 cumulative→notification 경로가 소비한다. 원 비교는 후속 누적 발행 전까지 current=false다. 종목마스터는 native 검증을 거친 같은 논리 경로·semantic hash인 경우에만 재사용한다.
+
+해시가 없는 과거 입력, 코드·내용·원천·의존성 변경, 불완전 coverage는 기존 제한된 재처리 경로를 사용한다. CRC/세대 변경·budget 실패는 원 cursor를 보존하며 완료로 발행하지 않는다. 원문 수집기는 앞으로 plain native stream도 기존 읽기 중 전체 해시를 남긴다. 별도 raw 재스캔, 크기·시간 한도 확대, 상위 원천 생성 또는 매매 기준 변경은 없다.
+
+`MainMarketWeaknessPostcloseObservation1008`은 기존 checklist builder의 OPEN 인계 대상이다. 전일 OPEN의 stable ID·Acceptance·History를 보존하며 target의 명시적 종료/기존 항목이 우선한다. 현재 owner는 한 건이어야 하며 completed/absent는 다시 만들지 않는다. 수집 종료 증빙은 기존 collector→canary closed→normalized source→operating replay→weakness consumer가 소유한다. 종료 증빙 없는 과거 epoch를 소급 승인하지 않는다.
+
+이번 권한은 배포본 준비까지다. 실제 전환 시 기존 설치 enabled/notify/calendar/예산을 유지한 optional code binding 갱신이 필요하다. 이후 기존 야간 worker가 최신 마감일→backlog→누적 currentness→알림 disposition을 확인한다. 지금 재기동·selector 변경·cron 변경·보고서 재발행·Telegram 호출을 실행하지 않는다. [검토 기록](../audits/main-market-weakness-source-completeness-and-status-review-2026-10-16.md#압축-재결속수집-증빙일일-인계-배포-후보--2026-10-21).
+
+후속 장후 복구의 installer는 canonical workspace를 공유 원천·예약 owner로만 사용하고, 실제 실행 중인 연구 코드의 기존7개 의존 파일과 launch wrapper를 선택된 불변 release와 대조한다. mutable workspace가 이전 코드라는 이유로 검토된 selected installer를 거부하지 않으며, 실제 실행/선택 코드·의존성·wrapper 불일치는 계속 거부한다. 기존 installer의 자기 tag 재결속·readback/rollback과 enabled/notify·설치 이력·source floor·예산·후보/outbox 보존을 유지한다. 알림은 코드 결속 불일치와 calendar 불일치를 구분하고, 개별 작업 source 역할·마지막 완료 source·누적 through-date/거래일 수를 함께 전달한다. 누적 처리 범위와 원천 결손 해소·새 코드 재계산·경제 적격은 별도 판정이다. 실제 반영과 원천일10/21의 재생성·최종 소비는 [현재 장후 복구 기록](../audits/main-market-weakness-source-completeness-and-status-review-2026-10-16.md#장후-모니터링-확장과-설치날짜-표현-수리--2026-10-21)의 미종결 수용을 따른다.
+
+
+### 10/21 장후의 부분 partition 제외 집계와 지정일 복구
+
+유효 replay point가 남은 partition도 normalized source의 원 제외 수를 daily/terminal에 전달한다. 원 raw 행 제외 수와 projected opportunity 수는 다른 단위이며 서로 차감하지 않는다. partition의 마지막 chunk에서만 원 제외 수를 commit하여 중간 재개와 다중 chunk에서 중복 집계하지 않는다. 원 source epoch 결손과 비용/정답 null은 유지한다.
+
+명시적으로 지시한 장후 지정일 보고서 복구는 기존 supervisor의 `--scheduled --source-date YYYY-MM-DD`로 수행한다. 설치/calendar·야간 창·정규 장후 우선권·동일 worker lock·9회/600초 야간 예약·60초 child·512MiB·retained source 범위/마감일 이하 검사를 그대로 적용한다. 자동 cron의 backlog 순환은 변경하지 않으며 예약/최신 우선권 cursor를 수동 수정하거나 child 예약을 따로 만들지 않는다. worker 직접 CLI는 기존 supervisor parent/예약 검증을 유지한다. 지정일 재생성은 원천/정책/주문 권한을 부여하지 않는다.

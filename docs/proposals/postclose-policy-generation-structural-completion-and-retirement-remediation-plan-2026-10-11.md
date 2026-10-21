@@ -262,6 +262,10 @@ RT1–RT6: 전체 내부 import·literal/dynamic entrypoint census, retired CLI 
 
 ### 13.3 운영 인계와 rollback
 
+장후 source assembler는 완료 거래의 비용·custody receipt를 정렬된 모집단에 봉인한 뒤 기존 `Source.close()`로 resident cache를 해제하고 AI trace 모집단으로 진행한다. 서로 다른 두 단계의 캐시를 겹쳐 유지하거나 공통64MiB 한도를 늘리지 않는다. 원 비용·registry·snapshot 세대의 종료 재검증은 그대로 수행한다. 손절의 completed evidence도 native 검증된 logical projection을 사용하며 plain 제거 후 gzip 원천은 metadata만 streaming으로 읽고 읽기 전후 논리 세대를 대조한다. reader 코드 변경이 보유 vote의 결속을 바꾸면 holding_suffix를 먼저 재생성하며 원 hash를 수동 수정하지 않는다. 긴 평가의 마지막 검증에서 native 해시 admission이 만료되면 기존 TTL은 유지하고 같은 파일 신원·같은 issuer proof SHA의 작은 native 봉인 증빙을 재검증해 새 admission을 얻는다. 원천/증빙 변경·누락·시계 역행은 실패하며 재인증할 수 없는 큰 원천을 전체 읽기로 우회하지 않는다.
+
+`holding_suffix` snapshot 실패 뒤에는 해당 producer와 영향 stop stage를 먼저 복구·검증한 다음 기존 `--resume-from-final-handoff` 경계를 사용한다. Python module 이름이 없는 원 shell 실패는 동일 run/date/code의 완결 command metrics와 원 native snapshot attempt의 날짜·profile·phase·종료시각·측정시간·원 bytes/hash가 함께 맞아야 한다. 모든 활성 stage, 정확한 exit snapshot과 수량 terminal, 정상 prefix의 원 command 영수증도 재검증한다. 누락·다른 세대·모호한 attempt는 재개하지 않으며 원 실패를 성공으로 덮어쓰지 않는다. [실제 원인과 검증 기록](../audits/postclose-root-cause-recovery-review-2026-10-19.md#장후-eod-지연전일-완료-영수증-관측-수리--2026-10-21).
+
 1. 각 독립 묶음은 구현→자기리뷰→보완→재리뷰→표적 기능/성능 검증으로 닫는다. 미해결 코드 finding과 자연 미관측을 분리한다. 유효 complete-source 양성 경로가 없으면 구조 완성으로 표시하지 않는다.
 2. 기존 승인 범위/체크리스트가 허용하는 운영 후속만 실행한다. 승인 이력을 무시해 다시 요구하지 않지만, 이 계획 문서 자체로 새 임계치·provider·주문·봇 권한을 만들지 않는다.
 3. 실제 인계는 선택 release·active writer와 정책 parent를 다시 확인하고 native immutable generation/CAS를 사용한다. shared workspace의 관련/무관 변경을 분리해 검토한 commit 목록과 최종 release 파일 해시를 대사한다. 새 schema는 호환 reader→producer/successor 순서로 이행하며 실행 중인 writer의 코드를 바꾸지 않는다. source 날짜는 원래 10/8 등 작업 대상을 유지하며 publication/apply 날짜와 분리한다. 현재 selector·10/12 sealed preparation을 임의 직접 수정하지 않는다.
@@ -313,3 +317,9 @@ RT1–RT6: 전체 내부 import·literal/dynamic entrypoint census, retired CLI 
 - 계획 작업이므로 Python/거래 회귀·성능 실측·provider·장후 재생성·배포·재기동·삭제·외부 동기화는 실행하지 않았다. [최종 검증 기록](../../data/report/postclose_structural_plan/2026-10-11/document-validation.json)에 링크/owner/보호 해시와 범위를 기록했다.
 
 구현 결과는 향후 별도 audit에 기록하며 이 계획의 완료 문구로 대체하지 않는다.
+
+
+장후 압축 후 손절 watch와 original holding request index는 기존 request reader가 정의한 정확한 native `.jsonl.gz.archive_receipt.json`만 metadata로 분리한다. 동일한 판별 함수를 재사용하며 실제 JSONL·새 원천·변조/누락·유사 이름 파일은 계속 원천 검증 대상이다. 압축 원문은 기존 logical SHA/size/해당 native archive receipt 검증을 유지하고, 원 committed/watch binding bytes를 편집하지 않는다.
+
+
+코드 fixture 발행은 protected operational report의 before/after SHA를 동일 regular fd·파일 신원/크기/mtime/ctime·64KiB streaming으로 대조한다. JSON 본문을 통째로 materialize하는 fixture/evidence reader와 역할을 구분하며 그 기존8MiB 제한은 유지한다. 보고서가 커져도 원본 변경·교체·확장·special file을 수용하지 않으며 source/policy bytes를 편집하지 않는다. fixture는 코드 경로 검증일 뿐 비용/원천 결손·경제성·PID·기동 수용을 대신하지 않는다.

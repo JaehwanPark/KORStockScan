@@ -444,3 +444,91 @@ Submission observation health applies its existing exact historical scanner iden
 The submission receipt/cache successor preserves explicit root-parent lineage and liquidity-guard terminals under existing guards. Cache schemas21/22 use verified forward-only migration; the source-window producer/reader must upgrade together before startup. The native summary keeps exact unchanged parser/callback semantics and preserves its predecessor checkpoint. Missing-feature diagnostics allow independently proven FALSE prerequisites alongside UNKNOWN branches, with all native identity/clock/source checks and zero trading authority retained. Root-change rejection traces keep both native roots for causal diagnosis; their presence alone is not recovery.
 
 The ordered deployment prepare phase invokes the existing bounded `sentinel_source_window.prepare` while its startup hold is owned, after native policy/bootstrap checks and before Main starts. Record the preparation receipt in the transition. Missing/stale cache or incomplete native index keeps the transition stopped with its owned hold; do not rebuild a full-day source or start with an unverified projection.
+
+
+The native hold-invalidation observation successor binds the exact runtime lifecycle, native snapshot/rejection, AI adapter, probe producer/scanner and monitor files as one reviewed source generation. Pre-drain delay/stop/holding checks reject a missing, dirty or mixed file and retain issued predecessor profiles. This is a diagnostic code handoff: FIRST_PRICE_HOLD decisions, deadlines and native rejection remain unchanged. The existing producer lock and current-PID observer publication still precede full health. Exact historical receipts without the original native terminal cannot be reclassified from price resemblance alone. See the [native invalidation review](audits/postclose-root-cause-recovery-review-2026-10-19.md#native-first_price_hold-invalidation-observation--2026-10-21).
+
+
+The revived fixed-watch wait successor derives missing observation source_signature from the new native watch admission only inside the existing pipeline logger. Runtime revival still clears inherited source/route and enforces warmup; conflicting signatures remain actionable. The exact handler/capability-reader group requires fresh rising/holding fixtures and full pre-drain native policy/stop/delay/holding checks. Preserve original waits and strict monitor boundaries. See the [wait identity review](audits/postclose-root-cause-recovery-review-2026-10-19.md#revived-fixed-watch-wait-identity-and-1005-log-burst---2026-10-21).
+
+
+A reviewed residual-receipt successor carries the existing registry's exact current Main residual BUY identity into the native entry ledger before REST staging completes. Bounded inventory recovery uses the same registry and probe owners, requiring every exact unit-leg terminal/amount and no SELL/cancel/manual conflict; it never copies account aggregate cost or invents fills. Keep the source-generation profile complete, publish fresh entry-cancel/rising/holding capability fixtures and verify native report currentness before the ordered transition. Preserve initial failure/registry/probe bytes and verify the repaired DB/runtime quantity through the normal startup or periodic sync consumer. See the [receipt recovery review](audits/postclose-root-cause-recovery-review-2026-10-19.md#exact-residual-receipt-and-owned-quantity-recovery-review).
+
+Exact reviewed wait/receipt successors retain the historical-resolution late-fixture path: the original fixture must bind the unchanged original report SHA and independently verifiable test/network evidence, while a new fixture proves the current code. A fixture published after an immutable report never permits modifying that report or accepting an unbound/mixed generation.
+
+Owned unit-entry quantity recovery must publish and natively restore the exact holding BUY receipt before committing the DB quantity. A matching already-completed recovery proof permits source-only identity completion while the position remains open; any actual SELL/cancel/manual custody blocks this path. Preserve the prior receipt and failed boot evidence; validate the boot consumer, not only the quantity projection.
+
+
+The cooperative collector-close successor routes both restart claimants through the existing restart request owner. Main joins the engine before summary termination drain; the native WebSocket close must retain its collector until the immutable final snapshot is persisted. The existing ten-second collector deadline is shared across worker/writer phases. Ordered deployment pins the running collector PID/start/epoch before a stop request and verifies its native closed receipt after exit. Missing actor or closure proof retains the incumbent/owned transition; PID absence alone cannot advance selection. Legacy self-SIGTERM incumbents cannot be treated as supporting this contract. Their first transition remains a separate native predecessor closure requirement; do not inject running code, fabricate a close or waive the guard. Full timestamp rejection journals retain exact coverage while the diagnostic tail remains64. Preserve both journal and closed receipt for every dependent source; midnight closure binds the original source date separately. See the [existing cause and repair review](audits/main-machine-pattern-dual-track-research-review-2026-10-21.md#종료와-거부-증빙-생산자-수리--2026-10-21).
+
+
+For the first legacy-to-cooperative transition, the existing ordered pin accepts a collector already closed by the native market-close path. Before requesting Main restart, require same-day consumed selection, normal engine terminal with zero unresolved positions, the original shared-WS PID/start/boot/root/commit and matching observer epoch, and all native immutable closed receipts. Recheck exact frame/latest/closed bytes after exit. A running legacy collector, missing/changed receipt or incomplete rejection coverage remains blocked. The already-stopped predecessor path additionally retains its original closed-consumption proof. This adds no signal injection, collection cutoff, scheduler, forced exit or historical approval. For Main closed-source intake, exact pre-enqueue rejection receipts may coexist with path timestamp regressions already quarantined within the existing tolerance only when accepted plus quarantined equals enqueued, all regressions are quarantined, none exceeded tolerance, and drain/persistence/source-loss checks remain valid. Both excluded populations stay excluded; this never grants whole-date approval. See the [first transition review](audits/main-machine-pattern-dual-track-research-review-2026-10-21.md#최초-전환의-native-장-종료-연결--2026-10-21).
+
+The reviewed quantity capture successor extends the existing exact handoff profile with the bounded native context reader and durable SELL-to-capture terminal delivery. It preserves the issued collector-close and first-transition generations and rejects missing, changed or mixed readers. No quantity, split, timeout or policy selection changes accompany this profile. Its code validation does not replace native market-close evidence for the first legacy transition or prove a naturally completed capture window. See the [quantity source review](audits/postclose-root-cause-recovery-review-2026-10-19.md#수량-실행-원천의-bounded-전달과-종료-영수증--2026-10-21).
+
+The quantity successor's frozen trailing reuse reads original completed-source byte observations only from exact manifest path/hash references already sealed in the approved input epoch. The existing completed owner shares schema, source epoch and filename validation with its current semantic reader, but returns no historical normalized-row binding to new code. Current extraction readers still require current code, and current research semantics run anew. Changed originals, dependencies, authority or manifest bytes remain invalid; the32MiB unproved-source budget is unchanged. The operator chose native natural closure for the first legacy transition; clock time alone never authorizes drain.
+
+
+### Normal-exit and holding-input source handoff
+
+The prepared holding-input generation binds the DB datetime producer, both Main HOLDING dispatch clocks, native rebound adapter, stop observation/quantity projections and holding vote cost context as one exact dependency set. `REVIEWED_HOLDING_INPUT_DEPENDENCY_VARIANTS` preserves issued predecessor policy/report readers; missing, dirty or mixed files reject preparation. It does not select a release or relax a trading guard. Before any authorized transition, verify this candidate's active-policy parity, delay/stop/holding code contracts, native report currentness and the existing natural-close receipt contract. Configured fee/current-book estimates remain modeled inputs; missing original receipts, actual broker costs and historical arm provenance remain unresolved under their existing source owners. See the [existing repair review](audits/postclose-root-cause-recovery-review-2026-10-19.md#2026-10-21-normal-exit-receipt-and-holding-input-repair).
+
+
+### Post-sell source reader preparation
+
+The reviewed post-sell successor binds its candidate recorder, route registration, exact-item recovery and 0D horizon reader as one complete code generation. `REVIEWED_POST_SELL_SOURCE_DEPENDENCY_VARIANTS` preserves issued predecessor readers. The code-only handoff does not select/restart a release. Native physical SOR venue ambiguity remains UNKNOWN/unverified separately from operator assignment and quote scope; it must not become a universal promotion/restart gate. Source-only horizons retain exact route/item, clock/depth/transport and existing bounded additive REG/retention contracts. See the [existing source review](audits/postclose-root-cause-recovery-review-2026-10-19.md#2026-10-21-post-sell-route-source-repair-and-unresolved-physical-venue).
+
+
+### Operator Market Default Candidate
+
+The operator KRX/SOR default candidate extends the prepared post-sell source
+release. Its source-only native fixtures, original active policy parity and
+exact complete dependency generation must verify before any transition.
+Original raw native venue and quote evidence cannot be repaired by selection.
+Preparation does not restart, reserve or schedule a transition. Main's
+incumbent collector must still produce its native natural-close evidence under
+`DirectFamilyPreopenPolicyHandoff` before the separately authorized ordered
+transition. [Default scope and proof boundaries](audits/postclose-root-cause-recovery-review-2026-10-19.md#2026-10-21-operator-krx-sor-defaults).
+
+### Evening Deployment And Postclose Continuation
+
+For the approved first natural-close transition, start preflight at19:55 KST.
+The installed20:05 EOD,20:10 postclose/controller/tuning and20:50 archive
+triggers do not wait for a deployment startup hold. Before their due times,
+the authorized operator must preserve and temporarily pause only the affected
+entries, including conflicting research/finalization triggers. Record the
+original bytes, hashes, owner and restoration condition, and preserve concurrent
+schedule changes. A deployment lock alone does not provide this pause.
+
+Do not force-stop the incumbent before its native epoch closure. Verify the
+original collector/WS actor, writer drain and complete terminal evidence, then
+use the reviewed candidate's ordered driver. Resume postclose computation only
+after exact successor PID/policy consumption and current observer/full-health
+verification. A failed transition retains its original phase, hold and attempts.
+Stop an incorrectly started postclose wrapper through its owned TERM/trap path;
+escalate only its verified surviving child group after the documented grace.
+Never erase a lock or hold, use a broad process kill, or force a terminal status.
+
+Resume the same source date through the existing stage/checkpoint contracts.
+Preserve EOD dependencies, original failed attempts and actual publication dates.
+The router's `finalize` target always passes `--resolve-effective-today`; a
+positional date is not an explicit source-date recovery interface. An authorized
+early finalization must use the selected release's existing source-date wrapper
+recovery, with its native terminals, custody, logging and lock checks. The next
+scheduled05:35 finalizer still rechecks the latest closed generation. Existing
+06:00 predecessor and06:50 finish limits remain in force.
+
+The prepared-startup ancestry repair accepts one consumed generation and at most
+its exact original prepared generation. Both retain full native verification,
+date, policy, source and bootstrap bindings. Unknown extra generations and mixed
+sources remain invalid; prior issued single-generation profiles remain readable.
+The [dated execution instruction](audits/postclose-root-cause-recovery-review-2026-10-19.md#1955-통합-전환과-장후-작업-실행-지시--2026-10-21)
+records the complete authorization and failure/resume sequence. Documentation
+and review do not execute, schedule or reserve that transition.
+
+Inside isolated startup validation, source-anchor checks seal the current mount
+information and compare every file's identity and lexical ancestry. Shared
+parents are checked once per pass and again at the boundary; aliases retain the
+original identity reader. A mount, inode, size, clock, permission, source or
+request generation change remains invalid. This bounds redundant metadata work
+without changing the child timeout, kernel isolation or native policy checks.
