@@ -484,3 +484,46 @@ Preparation does not restart, reserve or schedule a transition. Main's
 incumbent collector must still produce its native natural-close evidence under
 `DirectFamilyPreopenPolicyHandoff` before the separately authorized ordered
 transition. [Default scope and proof boundaries](audits/postclose-root-cause-recovery-review-2026-10-19.md#2026-10-21-operator-krx-sor-defaults).
+
+### Evening Deployment And Postclose Continuation
+
+For the approved first natural-close transition, start preflight at19:55 KST.
+The installed20:05 EOD,20:10 postclose/controller/tuning and20:50 archive
+triggers do not wait for a deployment startup hold. Before their due times,
+the authorized operator must preserve and temporarily pause only the affected
+entries, including conflicting research/finalization triggers. Record the
+original bytes, hashes, owner and restoration condition, and preserve concurrent
+schedule changes. A deployment lock alone does not provide this pause.
+
+Do not force-stop the incumbent before its native epoch closure. Verify the
+original collector/WS actor, writer drain and complete terminal evidence, then
+use the reviewed candidate's ordered driver. Resume postclose computation only
+after exact successor PID/policy consumption and current observer/full-health
+verification. A failed transition retains its original phase, hold and attempts.
+Stop an incorrectly started postclose wrapper through its owned TERM/trap path;
+escalate only its verified surviving child group after the documented grace.
+Never erase a lock or hold, use a broad process kill, or force a terminal status.
+
+Resume the same source date through the existing stage/checkpoint contracts.
+Preserve EOD dependencies, original failed attempts and actual publication dates.
+The router's `finalize` target always passes `--resolve-effective-today`; a
+positional date is not an explicit source-date recovery interface. An authorized
+early finalization must use the selected release's existing source-date wrapper
+recovery, with its native terminals, custody, logging and lock checks. The next
+scheduled05:35 finalizer still rechecks the latest closed generation. Existing
+06:00 predecessor and06:50 finish limits remain in force.
+
+The prepared-startup ancestry repair accepts one consumed generation and at most
+its exact original prepared generation. Both retain full native verification,
+date, policy, source and bootstrap bindings. Unknown extra generations and mixed
+sources remain invalid; prior issued single-generation profiles remain readable.
+The [dated execution instruction](audits/postclose-root-cause-recovery-review-2026-10-19.md#1955-통합-전환과-장후-작업-실행-지시--2026-10-21)
+records the complete authorization and failure/resume sequence. Documentation
+and review do not execute, schedule or reserve that transition.
+
+Inside isolated startup validation, source-anchor checks seal the current mount
+information and compare every file's identity and lexical ancestry. Shared
+parents are checked once per pass and again at the boundary; aliases retain the
+original identity reader. A mount, inode, size, clock, permission, source or
+request generation change remains invalid. This bounds redundant metadata work
+without changing the child timeout, kernel isolation or native policy checks.

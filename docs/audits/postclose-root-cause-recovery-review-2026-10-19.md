@@ -1291,3 +1291,97 @@ native active/delay/stop/holding 인계·4family capability·128scope/76,800row/
 code review 범위의 남은 finding0. 원본9SHA·선택ea68/PID1724066/start19233026/cwd와 collector epoch1792547808026387070 running을 보존했다. 기존19297/0b36/비상시/최초 전환/수량/지연/약세 연구 ancestry를 모두 포함한다. candidate_preflight_ready=true, actual_transition_ready=false이며 선택/재기동/전환 예약/실제 REG·REMOVE/provider/주문/Telegram0이다. 장 종료까지 대기하는 세션/자동 작업도 만들지 않았다. 다음 자연 종료/PID·quote/horizon 소비는 기존DirectFamilyPreopenPolicyHandoff에서 확인하고, 원 미복원 호가·actual 비용·최초 arm 등의 사실은 별도 보존한다.
 
 최종 변경량은 기준09a 대비 non-test source13파일 +371/-67, tests11파일 +249/-28이며 doc4파일에 운영 경계와 검토를 기록했다. 순증은 공통 기본값/직접 소비와 raw/authority 전달, bounded projection 및 exact historical code profile에 필요하다. 새 module/entrypoint/wrapper/worker/스케줄은 없고 교체·retained 경로는 앞 표와 같다. 미검증 표시의 최종 관련411·인계16 PASS; 앞선1,344/514/18/16/9는 겹치는 단계별 검사이므로 고유 검사 수로 합산하지 않는다.
+
+## 19:55 통합 전환과 장후 작업 실행 지시 — 2026-10-21
+
+이 절은 사용자가 실행 담당 세션에 전달할 지시문이다. 문서 작성·코드리뷰 자체는 배포·재기동·예약 변경을 실행하지 않는다. 이 검토 세션은 장 종료까지 대기하거나 자동 전환을 예약하지 않는다. 기존 실행 owner는 `DirectFamilyPreopenPolicyHandoff`이며, family 원천 보완은 기존 각 owner가 유지한다.
+
+실제 설치 예약 확인: EOD20:05, postclose/controller/tuning20:10, archive20:50, 약세 연구21:40 이후, finalization10/22 05:35. 따라서19:55는 전환 전 검증과 충돌 차단 시작 시각이며 배포 완료 시각이 아니다. 실제 전환은 원 epoch의 native closed 확인 후에만 시작한다.20:05/20:10에 맞추려고 종료·P5·정책 검증을 생략하지 않는다. 배포가 늦으면 원천일10/21을 유지한 채 장후 계산을 늦춘다.
+
+### 사용자 실행 지시문
+
+```text
+2026-10-21 19:55 KST부터 자연 종료 후 통합 전환과 장후 작업의 최종 정상 종료까지 관리하라.
+이미19:55가 지났으면 즉시 같은 순서로 시작하고, 지난 예약 시각의 실제 실행 여부를 먼저 확인하라.
+이 지시는 검증된 최종 통합본의 배포·재기동, 아래에 명시한 해당일 예약의 임시 보류·복원,
+실패한 장후 wrapper와 그 소유 child group의 중단, 기존 native 복구 경로의 필요한 재개를 승인한다.
+
+1. source_date=2026-10-21, next_effective_date=2026-10-22로 고정하라.
+   tmp/integrated-evening-handoff-review-20261021-1930/readiness.json의 최종 후보와 실제 Git HEAD,
+   clean source, 공유 mount, 전체 통합 ancestry를 확인하라. 이전 실패/대체 후보를 사용하지 마라.
+   selector·실제 Main PID/start ticks/cwd·collector epoch·정책/원천 해시와 다른 배포 세션을 다시 확인하라.
+   코드를 추가 수정하면 리뷰·회귀 후 새 immutable 후보를 만들고 영향을 받은 검증을 다시 하라.
+
+2. 20:05 이전에 해당일 EOD, postclose, controller, tuning, archive와 충돌하는 연구/최종화 trigger를
+   정확한 설치 항목 기준으로 임시 보류하라. 원 cron bytes/hash·보류 대상·복원 조건을 보존하고,
+   동시 변경을 확인하여 해당 항목만 수정하라. 전체 cron 서비스를 중단하거나 다른 owner 일정을 덮어쓰지 마라.
+   이미 시작한 관련 run이 있는지도 확인하라. startup hold/배포 lock만으로 장후 예약이 차단된다고 가정하지 마라.
+   장중 수집과 기존 Main은 자연 종료 증빙이 생기기 전까지 유지하라.
+   오래 걸릴 수 있는 P5보다 이 예약 보류를 먼저 완료하라.
+
+3. active-policy parity, active/delay/stop/holding native 인계, report currentness와 격리 P5를 실행 직전에 검증하라.
+   20:00 이후 같은 원 collector epoch의 native closed, 원 WS actor/PID/start/boot/root/commit,
+   writer drain, 종료 및 거부 증빙 전건과 engine market-close/unresolved 상태를 검증·보존하라.
+   시각 경과나 PID 부재만으로 정상 종료를 판정하지 마라. 원천이 running/미증명/불일치이면 전환하지 마라.
+   native 증빙과 실행 직전 검증이 모두 유효할 때 후보의 ordered_intraday_deploy로 전환하라.
+   새 selector, 실제 새 PID/start/cwd, bootstrap/정책 소비를 검증하고, 선택된 producer/lock으로 현재 observer를
+   발행한 뒤 첫 full health까지 확인하라. 이 단계가 끝나기 전에는 장후 정책 계산·발행을 재개하지 마라.
+
+4. 검증·배포·재기동·PID attestation·현재 observer/health가 실패하면 후속 장후 작업을 보류하라.
+   실패한 단계·attempt·selector·원 정책·startup hold·로그와 checkpoint를 보존하라.
+   잘못 시작한 장후 작업은 PID/start/cwd/PGID와 소유 자식을 확인한 후 wrapper에 TERM을 보내
+   기존 trap/drain/checkpoint 보존 경로로 중단하라. 문서화된 유예 뒤에도 살아 있는 동일 소유 그룹만 KILL하라.
+   기존 Main을 먼저 죽이거나 광역 pkill, lock 삭제, startup hold 수동 제거, 강제 DONE으로 우회하지 마라.
+   살아 있는 candidate Main이 있으면 임의 재기동하지 말고 정확한 실패 phase의 기존 native 복구 절차를 따르라.
+   코드 원인을 보수·리뷰·회귀하고 새 후보를 준비하라. 같은 실패 디렉터리나 오래된 PASS를 덮어쓰지 마라.
+
+5. 배포/PID/현재 관측 검증 완료 후 해당일 EOD를 먼저 확인하거나 새 선택 release로 한 번 실행하라.
+   exact-date EOD terminal 통과 후 postclose→각 독립 후행 producer/controller/tuning→archive를
+   실제 dependency graph와 native lock에 따라 재개하라. 독립 단계는 기존 자원 한도 안에서만 병행하라.
+   아직 시작하지 않은 작업은 기존 예약/라우터를 사용하고, 중단된 run은 검증된 checkpoint와 dispatcher의
+   해당 stage 및 영향받은 하류만 복구하라. --resume-from-initial-quantity/--resume-from-final-handoff 등은
+   그 경계의 native 증명이 있을 때만 사용하라. 실패할 때마다4번으로 돌아가라.
+   예약을 복원할 때 이미 수동으로 시작한 동일 run을 중복 기동하지 말고 원본과 동시 변경을 대사하라.
+   자정이 지나도 source_date를10/21로 유지하고 publication/effective date는 실제 native 계약을 따르라.
+
+6. 마지막 source generation의 summary/tower→다음 체크리스트→strict --require-summary-handoff→
+   whole-chain controller DONE→cleanup→final detector→next-date prepared readiness를 검증하라.
+   실제 순서는 기존 finalizer의 native 계약을 따르고 마지막 출력 후 generation이 바뀌면 해당 하류를 다시 결속하라.
+   오늘 밤 조기 최종화는 선택 release의 명시적 source-date 복구 경로를 사용하라.
+   finalize 라우터의 날짜 인자를 source-date 강제로 해석하지 마라. 그 라우터는 적용일 기준 직전 거래일을 계산한다.
+   10/22 05:35 정기 최종화와 중복 실행하지 말고 같은 owner/lock으로 관리하라.
+   선행 대기06:00·최종 종료06:50 상한을 지켜라. 기한 내 미해결이면 실패/보류·owner·정확한 재개점을 보고하고
+   다음 장전이 실패 generation을 성공으로 소비하게 하지 마라. 기한을 우회하여 정상 종료로 표시하지 마라.
+   최종 정상 종료는 원천일/세대/해시가 일치한 native terminal, controller/strict/finalization,
+   미종결 child 부재, 예약 복원 및 다음 적용일 준비본으로 입증하라.
+   역사 결손·미확정 비용·자연 검증 대기는 남겨 두되 새 결손은 계속 탐지하라.
+   완료될 때까지 원인→수리→회귀→마지막 소비를 확인하고 상태를 계속 보고하라.
+```
+
+`finalize YYYY-MM-DD --print-plan`은 선택 경로 확인에만 쓴다. 현재 router는 actual wrapper에 `--resolve-effective-today`를 전달하므로 오늘19시의 호출을10/21 source 최종화로 해석하면 안 된다. 조기 수동 복구는 기존 선택 release의 `run_postclose_finalization.sh SOURCE_DATE --recover-closed-target` 계약과 원 terminal/selected-root/custody/log/lock을 함께 확인하는 담당 작업이다. 임의 환경 우회나 미완료 선행 stage의 성공 합성은 허용하지 않는다. 밤에 먼저 완료돼도 다음05:35 실행의 최신 generation 재검증을 별도로 확인한다.
+
+배포 전 실패라면 incumbent을 보존한다. selector 교체 뒤 실패라면 새 Main/감독 프로세스 유무와 원 phase를 먼저 확인한다. `StoppedDeploymentRecovery`는 문서화된 정확한 phase/error와 stopped/hold/CAS 증명이 있는 경우에만 사용한다. 복구 불가능한 과거 종료/가격/비용 원천을 정상으로 소급 작성하지 않는다.
+
+### 통합본 P5 추가 리뷰에서 확인한 ancestry 소비 결함
+
+기준 code는b82a84620, 리뷰 기록 HEAD는edec3f17a였다.19:26 실제 격리 P5의 native preparation은 PASS지만 `startup_preserved_native_scope_invalid`로 intake가 실패했다. 원 준비본(d7d353b4a)과 현재ea68/PID가 실제 소비한 인계본이 같은 호출에서 함께 전달됐고, 기존 `_preserved_native_sources`가 record 개수1만 허용해 둘을 거부했다. [원 실패](../../data/report/main_startup_validation/2026-10-21/bf45a8dfe5684551aece6af086dbc011/final.json)는 보존했다. 동일 형태의 격리 회귀가 수정 전 같은 predicate에서 실패함을 확인했다.
+
+기존 startup code-context 소비자를 수리했다. 단일 소비 세대에 정확히 결속된 원 준비본1개만 추가로 허용하고, 기존 준비본 검증 분기로 날짜·index·선택 commit·정책·전체 원천·read-only full bootstrap을 다시 확인한다. 임의 두 건/추가 generation을 허용하거나 prepared를 PID 소비로 대신하지 않는다. 수정 후 직접 원인/음성 회귀46 PASS다. 중간c23의 P5는 새 code-context SHA가 기존 정책 인계의 완전한 의존성에 미등록돼 다시 차단됐으며 이 시도도 보존했다. 후속abd50은 기존 native handoff owner에 정확한 전체 후속 세대 profile을 추가했다. 기존 b82 단일세대 profile은 immutable 발행/과거 reader를 위해 retained이며 원래 계약으로 독립 검증한다.
+
+재리뷰에서 과거 준비 쌍을 검사하던4개 테스트가 최신AI 파일을 과거SHA와 비교하던 fixture drift도 확인했다. 실제 issued d927d0d70의 원 Git bytes로 고정한 뒤4 PASS다. exact 이전 profile로 완전히 되돌린 파일은 미승인 혼합이 아니므로 새 profile의 음성 행은 더 오래된 부분 세대를 사용하고, 즉시 이전 승인 profile은 별도 정상 행으로 보존했다. 최신 인계 행15 PASS이며 기존 operator profile30행은 변경 전후 같은 source 계약을 사용한다. 원 실패 테스트 로그와 중간 후보는 삭제하지 않는다.
+
+대체·제거: record1 전용 인계 분기는 동일 `_preserved_native_sources`의 exact ancestry 분기로 consolidated; current-full 준비본 독자와 이미 발행된 단일 인계 독자는 retained(현재 원 준비본/과거 immutable 호출 필요); 기존 operator generation은 retained(issued b82 검증); 별도 fallback/CLI/wrapper/worker/report producer/예약 추가0, 제거 유예0이다. 소스 증빙은 새 전용 검토 디렉터리에 보존하며 운영 정책·원 selector·incumbent epoch를 바꾸지 않는다. 최종 native/P5·검사·원본 보존 결과는 [동일 검토 readiness](../../tmp/integrated-evening-handoff-review-20261021-1930/readiness.json)에 결속한다.
+
+후속abd50 P5는 ancestry 뒤의 `startup_main_code_pair_unreviewed:src/engine/scalping/entry_machine_source_recovery.py`에서 중단됐다. 전체 native inventory·선택 코드·historical 준비 쌍을 한 번 대사한 결과 미등록은89845a56→a78c70c5 한 쌍이었다. 현재ea68와 후보가 이미 같은a78c70c5를 사용하며 새 매매 코드 변경이 아니다.193668e7f의 native invalidation root/판정ID/영수증 전달 보완을 Git 원본과 대조하고, 기존 cold-preparation owner에 그 정확한 쌍만 등록했다. 이전 거부·deadline·freshness predicate를 완화하지 않았다. 기존 과거AI 준비 쌍 테스트를 원 Git 세대 고정·음성 case와 함께 재사용했다. 추가 직접 ancestry/준비 쌍54 PASS, 최종 exact 인계15 PASS다. 전체 후속 source commit은 **2c144411f615eb38819483c720c9f34b4e4f5d2c**, 준비 root는 `/home/ubuntu/KORStockScan-runtime-releases/evening-handoff-20261021-2c144411f`이며 b82/c23/abd50의 P5 실패는 별도 원 attempt로 보존한다. [한 번에 대사한 cold inventory](../../tmp/integrated-evening-handoff-review-20261021-1930/cold-preparation-pair-inventory.json).
+
+마지막2c144의 실제 P5는 intake를 통과했으나 child가120초에 timeout됐다. 해당 attempt `7b854de0a8bf4cf6846888d045dcf397`과 빈 child output/종료 증빙을 보존했다. 종료 직전 read counter는약7.12GB였고 source 집합 자체는1,448파일/79.0MB였다. 기존 `_main_context`가 매 digest마다 전체 anchor의 `identity()`를 호출하면서 공통 조상 및 `/proc/self/mountinfo`를 파일별로 반복 조회하는 경로를 확인했다. 제한 시간·커널 격리·freshness를 늘리거나 완화하지 않는다. 동일 child의 full 검증 후 mount table 세대를 전후로 봉인하고, 각 조회에서 모든 file의 inode/size/mtime/ctime/mode/uid와 전체 lexical 조상을 검증하되 공통 조상은 한 pass에서 공유한다. symlink alias는 원 identity owner를 유지하고, 파일 교체/내용 변경/조상 symlink/권한 변경을 같은 기준으로 거부한다. 이 후속 성능 보완의 최종 후보·회귀·실제 P5 결과를 아래 readiness에서 확인한다.2c144는 이 timeout 이후 배포 승인 상태로 표시하지 않는다.
+
+후속 source commit은 **1c7fbf004d8c9348314db0a25ad0dc4cc0d4fc42**이다. 공통 조상 조회의 동일성/상한과 기존 원천·격리 회귀166 PASS, 앞선 전체 load/isolation305 PASS는 범위가 겹치므로 합산하지 않는다. 새 module·producer·wrapper·worker·예약은0이다. `_main_context`의 per-file 반복 identity 호출은 같은 owner의 전체 파일/공통 조상 비교로 consolidated했고, symlink alias 경로는 기존 identity owner를 retained한다. 동일 child의 mount table 전후 봉인·모든 파일/조상 재검증·원 timeout을 유지한다. 실제 P5 및 code/consumer 결과가 성공하기 전에는 이 후보를 배포 가능으로 표시하지 않는다.
+
+### 저녁 통합 후보의 최종 검증 결과
+
+최종 code **1c7fbf004**, immutable root `/home/ubuntu/KORStockScan-runtime-releases/evening-handoff-20261021-1c7fbf004`의 실제 P5 attempt `98eead59308041a1bec2568763d658de`는 **passed**, native intake/종료 후 재검증·12개 소비자·child 종료·protected sources unchanged를 통과했다. forbidden attempt0이며 원120초 child 제한과 OS 격리를 유지했다. [최종 P5](../../data/report/main_startup_validation/2026-10-21/98eead59308041a1bec2568763d658de/final.json). 원 timeout/각 중간 실패와 수정 전 재현 로그는 그대로 남긴다.
+
+최종 native active/delay/stop/holding·4family capability·정책128scope/76,800row/598hit parity 불일치0와 수량/트레일링 bounded 현재 소비를 재확인했다. 배포/장후547, venue/수량547, load/isolation305, 최종 code-context166, ancestry54, 최종 exact 인계15 PASS는 겹치는 검사 범위이므로 고유 수로 합산하지 않는다. code 기준edec 이후 source2파일의 순증은 exact ancestry/원 준비 쌍/metadata 비교와 승인 profile에 필요하며 tests2파일은 기존 fixture/parameterization을 확장했다. 문서는 이 audit·routing 운영 절차·기존 checklist owner만 변경했다. 새 module/entrypoint/wrapper/worker/스케줄0, 제거 유예0이다.
+
+현재 세션은 코드·검증·지시문만 준비했다. selector/정책/원본9SHA·incumbent PID/start/cwd를 보존했고 실제 배포·재기동·cron 보류/복원·자동 예약은0이다. 실제 전환은 별도 실행 지시 후 새로 핀한 원 epoch native closed·실행 직전 native/P5와 후속 PID/observer/첫 health가 필요하다.19:55가 지났으면 먼저 충돌 예약을 보류한 뒤 검증을 진행한다. 최종 [readiness](../../tmp/integrated-evening-handoff-review-20261021-1930/readiness.json)는 준비 검증과 실제 전환/PID 소비를 구분한다.
