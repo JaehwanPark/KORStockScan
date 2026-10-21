@@ -387,8 +387,9 @@ def test_error_detector_cron_install_preserves_release_routed_finalization(tmp_p
         )
     ],
 )
+@pytest.mark.parametrize('schema_version', [1, 2])
 def test_postclose_completion_shares_exact_bounded_running_gate(
-    monkeypatch, tmp_path, case, expected
+    monkeypatch, tmp_path, case, expected, schema_version
 ):
     import src.engine.error_detectors.cron_completion as cc
     from src.engine.error_detectors.artifact_freshness import ArtifactFreshnessDetector
@@ -405,7 +406,7 @@ def test_postclose_completion_shares_exact_bounded_running_gate(
     if case == "other_owner":
         job["id"] = "other_owner"
     payload = {
-        "schema_version": 1,
+        "schema_version": schema_version,
         "report_type": "threshold_cycle_postclose_status",
         "target_date": "2026-09-10",
         "status": "running",
@@ -414,6 +415,8 @@ def test_postclose_completion_shares_exact_bounded_running_gate(
         "runtime_effect": False,
         "started_at": "2026-09-10T20:10:04+09:00",
     }
+    if schema_version == 2:
+        payload.update(run_id='a'*32, code_commit='b'*40)
     if case == "failed":
         payload.update(status="failed", exit_code=1)
     elif case == "done":
