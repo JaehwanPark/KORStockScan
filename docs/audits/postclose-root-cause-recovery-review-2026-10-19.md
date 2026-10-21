@@ -998,3 +998,12 @@ Code review and current PID consumption are closed for the quantity/identity rep
 변경량(기준d2e9bedf3): non-test7파일 +231/-15, tests3파일 +146/-25, docs3파일 +24/-0. 이동0. 순증은 기존 owner의 streaming 검증·실제 SELL 종료 전달과 exact 코드 세대/실패 회귀이며 수량/매매 의사결정 기능을 늘린 것이 아니다. 원 canonical dirty 문서와 다른 세션 변경은 보존했다.
 
 통합 native 대조에서 추가 보완: 당일 PREOPEN 원 commit은 `d7d353b4a`였고, 최초 후보 `aea188706`의 handler 허용 pair는 그 실제 원 세대를 빠뜨려 delay/stop/holding 모두 `entry_consumer_unreviewed_change`로 차단됐다. 원 실패 로그를 보존하고 기존에 검토된 d7d353b4a→ea68 handler 변경(고정 관심종목 원천 signature, 미제출 SELL custody guard)과 이번 관측 변경을 함께 대조하여 정확한 원 SHA pair만 추가했다. 실제 원 세대 회귀3 PASS; 고유 검증 총874개다. 후속 변경량: non-test1파일 +3/-1, tests1파일 +9/-2, docs1파일 +2/-0. 현재 PID 종료/선택 변경은 여전히 수행하지 않았다.
+
+
+최초 전환의 사용자 선택: 현재 epoch의 종료 증빙을 보존하고 자연 종료 후 전환한다. 장중 중단을 미증명 표본으로 처리하는 대안은 채택하지 않았다. 현재 Main은 유지하며 실제 native market-close/closed 영수증이 없으면 시각만으로 전환하지 않는다. 후속 협력 종료는 새 코드/PID 소비 뒤 별도 자연 경로로 확인한다.
+
+후보 native 검증에서 두 직접 소비 결손을 추가 수리했다. (1) rising/holding의 현재 독립 fixture는 각각88/134개를 통과했지만 immutable 원 보고서에 연결할 정확한 새 code pair가 없었다. 기존 capability handoff에 원 report/fixture SHA와 독립 현재 fixture를 요구하는 두 pair만 연결했다. 원 보고서를 재봉인하거나 과거 판정을 현재 PASS로 바꾸지 않는다. (2) 수량 streaming 함수 추가로 completed offline reader의 전체 code SHA가 달라져 과거 enrollment의 원천 바이트 증빙도 조회에서 사라졌다. 9/29·9/30 등 exact manifest에 결속된 원본은 inode/size/mtime/ctime까지 불변이었다. 기존 completed owner의 동일 검증 함수를 공유하되 원 manifest path/byte SHA로 바이트 관측만 반환하고, 현재 normalized-row reader는 여전히 현재 code binding을 요구한다. 기존 reuse owner가 승인된 frozen manifest가 직접 참조한 증빙만 소비하도록 수정했다. source/의존성/원 manifest/authority 변경은 계속 실패한다. 무제한 탐색이나 원본 재추출·semantic verdict 재사용은 없다.
+
+원 candidate의 실패와 보완 후 census를 함께 보존했다. 동일 원천에서 proof4→7, 미증명 읽기340,216,300→15,394,493B이며 기존32MiB 한도는 불변이다. 검토 후 capability1041/byte-proof145회귀 PASS. 원 native preflight 실패와 [원 proof census](../../tmp/quantity-first-transition-20261021/reviewed-candidate/trailing-proof-census.json), [보완 census](../../tmp/quantity-first-transition-20261021/reviewed-candidate/trailing-proof-census-repaired.json)를 대조한다. 실제 full native 재검증·새 선택/PID는 별도 결과로 남긴다.
+
+교체·제거 보완: reuse의 current-code-only byte-proof 조회는 exact frozen-reference 조회로 `replaced`; 기존 enrollment의 schema/epoch/filename 검사는 `_offline_manifest` 한 구현으로 `consolidated`되어 semantic reader와 byte-proof consumer가 공유한다. 현재 code를 요구하는 normal row reader 및 과거 exact capability pair는 실제 현재/역사 소비자가 있어 `retained`. 새 module/receipt producer/스케줄/매매 branch는 없다. 기준a4299aeed 대비 non-test4파일 +83/-36, tests2파일 +70/-1, docs3파일 +12/-0. 순증은 바이트 증빙과 의미 검증의 구분 및 원 세대/변조 음성 회귀다.

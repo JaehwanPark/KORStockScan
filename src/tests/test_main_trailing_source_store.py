@@ -833,6 +833,69 @@ def test_completed_enrollment_admits_only_same_epoch_postclose_byte_hashes(tmp_p
             byte_generation(sidecar)
 
 
+@pytest.mark.parametrize('damage', [None, 'source', 'dependency', 'manifest_hash',
+                                   'manifest_seal', 'authority', 'symlink', 'foreign_path'])
+def test_frozen_replay_uses_exact_original_byte_proofs_without_old_semantic_binding(tmp_path, monkeypatch, damage):
+    from src.engine.automation import main_trailing_completed_store as completed
+    from src.engine.automation import main_trailing_source_reuse as reuse
+    from src.engine.lifecycle import research_storage as storage
+    from src.engine.lifecycle.holding_window_generation import byte_generation
+    root=tmp_path/'source'
+    day,raw,sidecar=_original_completed_source(root,monkeypatch,'native',False)
+    completed.prepare_window(root,[day])
+    binding,body=completed.offline_binding(root,day)
+    issuer=Path(binding['manifest_path'])
+    expected={p:byte_generation(p) for p in (raw,sidecar,issuer)}
+    original={p:p.read_bytes() for p in expected}
+    from src.engine.infrastructure.validation_digest_session import _native_proof_path
+    for path in (raw,sidecar):
+        _native_proof_path(root,path).unlink(missing_ok=True)
+    # New code must not consume old extraction rows as a current native index.
+    monkeypatch.setattr(completed,'_offline_code',lambda:'0'*64)
+    assert completed.offline_binding(root,day)==(None,None)
+    if damage=='source':raw.write_bytes(original[raw]+b' ')
+    elif damage=='dependency':
+        dependency=Path(str(sidecar)+'.dependencies.json')
+        dependency.write_bytes(dependency.read_bytes()+b' ')
+    elif damage=='manifest_hash':expected[issuer]['sha256']='0'*64
+    elif damage in {'manifest_seal','authority'}:
+        body['runtime_effect']=True
+        if damage=='authority':body['artifact_sha256']=completed.digest({k:v for k,v in body.items() if k!='artifact_sha256'})
+        issuer.write_text(json.dumps(body))
+    elif damage=='symlink':
+        target=tmp_path/'original.json';issuer.rename(target);issuer.symlink_to(target)
+    elif damage=='foreign_path':
+        foreign=tmp_path/issuer.name;foreign.write_bytes(original[issuer])
+        with pytest.raises(ValueError):
+            completed.original_byte_observations(root,foreign,expected[issuer])
+        return
+    assembly=tmp_path/'assembly';assembly.mkdir()
+    manifest=dict(schema='main_all_scope_exit_input_manifest_v2',source_date=day,target_date='2026-10-22',
+        consumed_dates=[day],assembly_inventory_ref=storage.write_tree(assembly,[]),
+        source_generations_ref=storage.write_tree(assembly,
+            (dict(path=str(p),generation=gen) for p,gen in expected.items())))
+    manifest['artifact_sha256']=completed.digest(manifest)
+    origin=assembly/'manifest.json';origin.write_text(json.dumps(manifest))
+    original_open=Path.open
+    def guarded(path,*args,**kwargs):
+        if path in {raw,sidecar}:pytest.fail('byte proof reopened original rows')
+        return original_open(path,*args,**kwargs)
+    monkeypatch.setattr(Path,'open',guarded)
+    if damage not in {None,'source','dependency'}:
+        with pytest.raises(ValueError):reuse.collect_proofs(root,origin)
+        return
+    catalog=reuse.collect_proofs(root,origin)
+    for p in (raw,sidecar):
+        if damage is None:
+            assert catalog['proofs'][str(p)]['kind']=='native_completed_source_enrollment'
+            assert catalog['proofs'][str(p)]['generation']==expected[p]
+        else:assert str(p) not in catalog['proofs']
+    assert completed.offline_binding(root,day)==(None,None)
+    if damage is None:
+        monkeypatch.setattr(Path,'open',original_open)
+        assert all(p.read_bytes()==value for p,value in original.items())
+
+
 def test_completed_enrollment_refuses_crc_valid_changed_logical_gzip(tmp_path,monkeypatch):
     import gzip,hashlib
     from src.engine.automation import main_trailing_completed_store as completed

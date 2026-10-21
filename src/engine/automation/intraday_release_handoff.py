@@ -3730,13 +3730,19 @@ REVIEWED_COLLECTOR_FIRST_TRANSITION_DEPENDENCY_VARIANTS = {
 
 # Quantity capture and offline context projection repair; trading rules are
 # unchanged. Pin one reviewed successor while preserving issued generations.
-REVIEWED_QUANTITY_CAPTURE_HASHES = {'src/engine/lifecycle/research_json_stream.py': 'f3c0e5c4facfa4e6cc63c99d13c0e22c26c35ceffc1ad571ba200c63b042b8bb',
+REVIEWED_QUANTITY_CAPTURE_HASHES = {'src/engine/automation/main_trailing_source_reuse.py': 'acf252905da4704ff54a3adffdd74ecf7c6b9ab056b52b6719fab8be91866b97',
+ 'src/engine/automation/main_trailing_completed_store.py': 'a5ebc1ab43334b5d8b3d418c6f16406187258fb6caffc868a5da23efa9d76f0f',
+ 'src/engine/monitoring/policy_generation_code_handoff.py': '858f6f949015f1c27d0185a0183df7a331f7fda971830408a5cdf53d16b39b5a',
+ 'src/engine/lifecycle/research_json_stream.py': 'f3c0e5c4facfa4e6cc63c99d13c0e22c26c35ceffc1ad571ba200c63b042b8bb',
  'src/engine/scalping/initial_quantity_cap_observation.py': 'b812ebdb125283b7f2e80e840edfb8f84fbd2160b73428bd5ae319c1f3c38560',
  'src/engine/scalping/initial_quantity_policy.py': 'b8559a2a6818478c5905adf8d7c1e9d5ae875a1da5aa3089e0ef251621388c38',
  'src/engine/scalping/initial_quantity_source_cache.py': 'b3bc59626fd28be5a5979751a96a23f95e534611f6c6bea5531f36b4d2c00e77',
  'src/engine/sniper_state_handlers.py': '8cc435544ceeda76309b9051179af20022f100c8b1bad48356636fb51b9f101c',
  'src/utils/pipeline_event_logger.py': '2e1c150e1b7d21adcb6fa586a15c1e018cdf2e6a2aab13daa067f414d9b4e6d3'}
-REVIEWED_QUANTITY_CAPTURE_PAIRS = {'src/engine/lifecycle/research_json_stream.py': (('1ea671f8ba5b5397257c2d1da513dee653b05379133073d1412ee4edf7a07a11',
+REVIEWED_QUANTITY_CAPTURE_PAIRS = {'src/engine/automation/main_trailing_source_reuse.py': (('272f0753cce9fc43324063a2d690394e844630f6eab8da7dace87596620ac0ab', 'acf252905da4704ff54a3adffdd74ecf7c6b9ab056b52b6719fab8be91866b97'), ('c190554546468617b2963e2ba013473e992f4d4ad638a5f4aee2f71027bc58ef', 'acf252905da4704ff54a3adffdd74ecf7c6b9ab056b52b6719fab8be91866b97')),
+ 'src/engine/automation/main_trailing_completed_store.py': (('2fc12700ccf64fa03667a0a859e13dc40515e932cc68da23ed9b3d962bdfdd5a', 'a5ebc1ab43334b5d8b3d418c6f16406187258fb6caffc868a5da23efa9d76f0f'),),
+ 'src/engine/monitoring/policy_generation_code_handoff.py': (('47db04eba70a27e3fbb5c4078e828be38920859efbf4224e3049582776ff6d5f', '858f6f949015f1c27d0185a0183df7a331f7fda971830408a5cdf53d16b39b5a'), ('86b6ea98d0af89360c350f24dc9771441c9332c22354059ae7d5dc1a7b2ac3e4', '858f6f949015f1c27d0185a0183df7a331f7fda971830408a5cdf53d16b39b5a'), ('905dd6a05df9f19fac25292a3a1e7fe579281e4aeabd84d4965855f9fef928b1', '858f6f949015f1c27d0185a0183df7a331f7fda971830408a5cdf53d16b39b5a')),
+ 'src/engine/lifecycle/research_json_stream.py': (('1ea671f8ba5b5397257c2d1da513dee653b05379133073d1412ee4edf7a07a11',
                                                    'f3c0e5c4facfa4e6cc63c99d13c0e22c26c35ceffc1ad571ba200c63b042b8bb'),
                                                   ('53bd6a0cec6435ff0cfb399ad75fc9edd0b479463c06dea77bc5cae5e59db4b6',
                                                    'f3c0e5c4facfa4e6cc63c99d13c0e22c26c35ceffc1ad571ba200c63b042b8bb')),

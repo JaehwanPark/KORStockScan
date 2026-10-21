@@ -137,6 +137,54 @@ def _manifest_binding(path,body):
         artifact_sha256=body['artifact_sha256'])
 
 
+def _offline_manifest(root, day, path, code):
+    """Validate one native enrollment, including its original source epochs."""
+    from src.engine.lifecycle.snapshot_archive import _regular
+    before=_regular(path)
+    body=_metadata(path)
+    if (body.get('schema')!=SCHEMA or body.get('source_date')!=day
+            or body.get('source_data_root')!=str(root) or body.get('runtime_effect') is not False
+            or body.get('allowed_runtime_apply') is not False
+            or body.get('extraction_schema')!='original_sealed_completed_stream_v1'
+            or body.get('original_stream_consumed_to_eof') is not True
+            or body.get('offline_code_sha256')!=code):
+        raise ValueError('trailing_completed_offline_manifest_invalid')
+    original=body.get('original_dependency')
+    if not isinstance(original,dict):raise ValueError('trailing_completed_offline_manifest_invalid')
+    current=_offline_epochs(root,day,original)
+    if current!=body.get('offline_source_epochs'):return None
+    _offline_logical_sources(root,day,body,current)
+    expected=_offline_key(original,body.get('projection_generation'),current,code)
+    if path.name!='offline-'+code+'-'+expected+'.json':
+        raise ValueError('trailing_completed_offline_manifest_invalid')
+    if _regular(path)!=before:raise ValueError('trailing_completed_offline_source_changed')
+    return body
+
+
+def original_byte_observations(data_root, path, generation):
+    """Read only byte proofs from an exact frozen native manifest reference.
+
+    Extraction code may differ from today's reader. This returns no normalized
+    rows or semantic binding; offline_binding still requires current code.
+    """
+    import re
+    from datetime import date
+    root=Path(data_root).resolve();path=Path(path)
+    day=path.parent.parent.name
+    if (date.fromisoformat(day).isoformat()!=day
+            or path.parent!=root/'report/main_trailing_completed_source'/day/'generations'
+            or re.fullmatch(r'offline-[0-9a-f]{64}-[0-9a-f]{64}\.json',path.name) is None):
+        raise ValueError('trailing_completed_byte_proof_path_invalid')
+    body=_offline_manifest(root,day,path,path.name.split('-')[1])
+    if body is None:return []
+    binding=_manifest_binding(path,body)
+    if binding['manifest_generation']!=generation:
+        raise ValueError('trailing_completed_byte_proof_generation_changed')
+    return [dict(path=name,generation=value,source_epoch=body['offline_source_epochs'][name],
+        issuer_path=str(path),issuer_sha256=generation['sha256'])
+        for name,value in body['offline_logical_generations'].items()]
+
+
 def offline_binding(data_root,day,*,dependency=None,projection_generation=None):
     """Small original-source cache lookup; never enroll or decode a source."""
     from datetime import date
@@ -154,26 +202,8 @@ def offline_binding(data_root,day,*,dependency=None,projection_generation=None):
     found=[]
     for path in paths:
         if not path.exists() and not path.is_symlink():continue
-        from src.engine.lifecycle.snapshot_archive import _regular
-        before=_regular(path)
-        if before['size']>1024*1024:raise ValueError('trailing_completed_metadata_budget_exceeded')
-        body=_metadata(path)
-        if (body.get('schema')!=SCHEMA or body.get('source_date')!=day
-                or body.get('source_data_root')!=str(root) or body.get('runtime_effect') is not False
-                or body.get('allowed_runtime_apply') is not False
-                or body.get('extraction_schema')!='original_sealed_completed_stream_v1'
-                or body.get('original_stream_consumed_to_eof') is not True):
-            raise ValueError('trailing_completed_offline_manifest_invalid')
-        if body.get('offline_code_sha256')!=code:continue
-        original=body.get('original_dependency')
-        if not isinstance(original,dict):raise ValueError('trailing_completed_offline_manifest_invalid')
-        current=_offline_epochs(root,day,original)
-        if current!=body.get('offline_source_epochs'):continue
-        _offline_logical_sources(root,day,body,current)
-        expected=_offline_key(original,body.get('projection_generation'),current,code)
-        if path.name!='offline-'+code+'-'+expected+'.json':raise ValueError('trailing_completed_offline_manifest_invalid')
-        if dependency is not None and expected!=key:raise ValueError('trailing_completed_offline_source_changed')
-        if _regular(path)!=before:raise ValueError('trailing_completed_offline_source_changed')
+        body=_offline_manifest(root,day,path,code)
+        if body is None:continue
         found.append((_manifest_binding(path,body),body))
     if len(found)>1:raise ValueError('trailing_completed_offline_generation_conflict')
     return found[0] if found else (None,None)
