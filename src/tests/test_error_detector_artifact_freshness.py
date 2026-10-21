@@ -199,8 +199,10 @@ def test_missing_reversal_execution_is_not_report_hash_corruption(tmp_path, comp
     assert alerts[0]['generation'] == hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-@pytest.mark.parametrize('damage', [None, 'failed_parent', 'expired', 'old_date', 'failed_stage', 'no_process', 'terminal_log'])
-def test_unstarted_reversal_stage_wait_requires_native_bounded_parent(tmp_path, monkeypatch, damage):
+@pytest.mark.parametrize('schema_version', [1, 2])
+@pytest.mark.parametrize('machine_completed', [False, True])
+@pytest.mark.parametrize('damage', [None, 'failed_parent', 'expired', 'old_date', 'failed_stage', 'no_process', 'terminal_log', 'missing_run', 'invalid_commit'])
+def test_unstarted_reversal_stage_wait_requires_native_bounded_parent(tmp_path, monkeypatch, damage, schema_version, machine_completed):
     from src.engine.scalping import continuous_reversal_postclose as reports
     from src.engine.scalping import continuous_reversal_operating_postclose as operating
     from src.engine.error_detectors import artifact_freshness as detector
@@ -210,23 +212,47 @@ def test_unstarted_reversal_stage_wait_requires_native_bounded_parent(tmp_path, 
     path.write_text(json.dumps(reports.seal(dict(schema=operating.SCHEMA, source_date=day, status='completed'))))
     parent = tmp_path/'data/report/threshold_cycle_postclose_status'/f'threshold_cycle_postclose_{day}.status.json'
     parent.parent.mkdir(parents=True)
-    parent.write_text(json.dumps(dict(schema_version=1, report_type='threshold_cycle_postclose_status',
+    payload = dict(schema_version=schema_version, report_type='threshold_cycle_postclose_status',
         runtime_effect=False, status='failed' if damage=='failed_parent' else 'running',
         target_date='2026-10-19' if damage=='old_date' else day, reason='started', exit_code=0,
-        started_at='2026-10-20T20:10:02+09:00')))
-    monkeypatch.setattr(detector, '_semantic_stage_binding', lambda *a, **k:
-        dict(status='failed' if damage=='failed_stage' else 'not_assessed'))
+        started_at='2026-10-20T20:10:02+09:00')
+    if schema_version == 2:
+        payload.update(run_id='a'*32, code_commit='b'*40, regeneration_scope='normal')
+        if damage == 'missing_run': payload.pop('run_id')
+        if damage == 'invalid_commit': payload['code_commit']='unverified'
+    parent.write_text(json.dumps(payload))
+    def stage(*args, **kwargs):
+        if machine_completed and args[2]=='main_machine_policy': return dict(status='succeeded')
+        return dict(status='failed' if damage=='failed_stage' else 'not_assessed')
+    monkeypatch.setattr(detector, '_semantic_stage_binding', stage)
     monkeypatch.setattr(detector.CronCompletionDetector, '_read_once_markers', lambda *a:
         '[START]\n[FAIL]' if damage=='terminal_log' else '[START]')
     monkeypatch.setattr(detector.ArtifactFreshnessDetector, '_has_matching_live_process',
         lambda *a, **k: damage!='no_process')
     now=datetime(2026,10,20,23,20,tzinfo=ZoneInfo('Asia/Seoul')) if damage=='expired' else datetime(2026,10,20,21,20,tzinfo=ZoneInfo('Asia/Seoul'))
     result=detector._continuous_reversal_result_semantics(tmp_path,day,'machine',now=now)
-    if damage is None:
+    if damage is None or (schema_version==1 and damage in {'missing_run','invalid_commit'}):
         assert result['status']=='unobservable' and result['findings']==[]
         assert result['reason']=='native_postclose_stage_not_started'
     else:
-        assert result['findings']==['continuous_reversal_execution_not_completed:main_machine_policy']
+        missing = 'main_auxiliary_policy' if machine_completed else 'main_machine_policy'
+        assert result['findings']==['continuous_reversal_execution_not_completed:'+missing]
+
+
+@pytest.mark.parametrize('stage,family_owner', [
+    ('main_machine_policy','DirectFamilySourceRepairMainMechanisticEntry'),
+    ('legacy_machine_report','DirectFamilySourceRepairMainMechanisticEntry'),
+    ('main_auxiliary_policy','DirectFamilySourceRepairCompactAuxiliary')])
+@pytest.mark.parametrize('owners', [set(), {'DirectFamilyPreopenPolicyHandoff'}, {'family','DirectFamilyPreopenPolicyHandoff'}])
+def test_reversal_alert_preserves_family_owner_or_uses_current_handoff(stage, family_owner, owners):
+    from src.engine.error_detectors.artifact_freshness import _project_semantic_owner
+    active = (owners-{'family'}) | ({family_owner} if 'family' in owners else set())
+    alert=dict(stage=stage, owner=stage, target_date='2026-10-22')
+    _project_semantic_owner(alert, active, '2026-10-21')
+    expected = family_owner if family_owner in active else ('DirectFamilyPreopenPolicyHandoff'
+        if 'DirectFamilyPreopenPolicyHandoff' in active else 'UNRESOLVED_CURRENT_OWNER:'+family_owner)
+    assert alert['owner']==expected
+    assert alert['historical_owner']==stage
 
 
 def test_auxiliary_v4_frozen_same_day_contract_and_cost_isolation():

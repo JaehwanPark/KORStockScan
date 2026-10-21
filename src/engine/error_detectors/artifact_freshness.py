@@ -2779,7 +2779,8 @@ def _project_semantic_owner(alert, current_owners, as_of_date):
         'main_market_weakness_research': 'MainMarketWeaknessPostcloseObservation1008',
     }
     owner = mapping.get(alert['stage'])
-    if (alert['stage'] == 'main_stop_confirmation' and owner not in current_owners
+    if (alert['stage'] in {'main_stop_confirmation', 'main_machine_policy',
+                          'main_auxiliary_policy', 'legacy_machine_report'} and owner not in current_owners
             and 'DirectFamilyPreopenPolicyHandoff' in current_owners):
         owner = 'DirectFamilyPreopenPolicyHandoff'
     if (alert['stage']=='main_market_weakness_research' and owner not in current_owners
@@ -4255,7 +4256,7 @@ class ArtifactFreshnessDetector(BaseDetector):
             if (
                 not isinstance(payload, dict)
                 or type(payload.get("schema_version")) is not int
-                or payload.get("schema_version") != 1
+                or payload.get("schema_version") not in {1, 2}
                 or payload.get("report_type") != "threshold_cycle_postclose_status"
                 or payload.get("runtime_effect") is not False
                 or payload.get("status") != "running"
@@ -4264,6 +4265,10 @@ class ArtifactFreshnessDetector(BaseDetector):
                 or type(payload.get("exit_code")) is not int
                 or payload["exit_code"] != 0
             ):
+                return False
+            if payload['schema_version'] == 2 and (
+                    not re.fullmatch(r'[0-9a-f]{32}', str(payload.get('run_id') or ''))
+                    or not re.fullmatch(r'[0-9a-f]{40}', str(payload.get('code_commit') or ''))):
                 return False
             started = datetime.fromisoformat(payload["started_at"])
             if (
