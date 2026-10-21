@@ -634,10 +634,10 @@ def test_is_valid_stock_blocks_fund_prefix_products():
         )
 
 
-@pytest.mark.parametrize('name', ['TIME 글로벌바이오액티브', ' time 글로벌바이오액티브 ',
-                                 'SOMETIME TECH', 'TIMEWORKS'])
-def test_product_name_filter_agrees_with_prefetch_without_partial_time_match(name):
-    expected = not name.strip().upper().startswith('TIME ')
+@pytest.mark.parametrize('name,expected', [('KoAct AI인프라액티브',False),
+    ('TIME 글로벌바이오액티브',False),(' time 글로벌바이오액티브 ',False),
+    ('SOMETIME TECH',True),('TIMEWORKS',True)])
+def test_product_name_filter_agrees_with_prefetch_without_partial_time_match(name,expected):
     assert kiwoom_utils.is_valid_stock('485810', name, current_price=10000) is expected
     assert scalping_scanner._is_low_rebound_prefetch_product_allowed(
         {'Code': '485810', 'Name': name, 'Price': 10000}) is expected

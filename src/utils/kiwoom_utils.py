@@ -5923,6 +5923,7 @@ def is_non_equity_product_name(name):
         "PLUS ",
         "TIMEFOLIO",
         "KIWOOM ",
+        "KOACT ",
         "선물",
         "레버리지",
         "블룸버그",

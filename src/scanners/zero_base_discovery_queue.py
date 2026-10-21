@@ -22,7 +22,7 @@ RESULTS = {
     "pattern_not_matched", "observation_incomplete",
 }
 ACTIONS = {"ENTER_NOW", "RECHECK", "BLOCK"}
-MAX_LONG_PROBES = 4  # Operator-approved allocation; retain one short physical slot.
+MAX_LONG_PROBES = 4  # Base reservation; runtime may borrow the idle fifth slot.
 
 
 @dataclass
@@ -163,6 +163,8 @@ class DiscoveryQueue:
         activity_claims_per_gainer: int = 3,
         residence_requirements=None,
         deferred_active_codes: set[str] | None = None,
+        product_check=None,
+        borrow_idle_short_slot: bool = False,
     ) -> list[dict]:
         """Return due generations, oldest last claim first, with a bounded budget."""
         from src.utils.kiwoom_utils import is_non_equity_product_name
@@ -179,15 +181,21 @@ class DiscoveryQueue:
             stale_count=0, in_flight_count=0, retry_not_due_count=0, route_ineligible_count=0,
             product_ineligible_count=0)
         eligible_wait = []
+        products = {}
         for candidate in self._candidates.values():
             # Activity is a discovery hint, not an entry decision. Keep one
             # bounded claim for gainers per source-rotation cycle.
             kind = "activity" if candidate.source_kind == "activity" else "gainers"
             cohort = (candidate.market, candidate.route, kind)
             cohort_claims[cohort] = cohort_claims.get(cohort, 0) + candidate.claim_count
+            if product_check is not None and not candidate.in_flight:
+                products[(candidate.code, candidate.route)] = product_check(
+                    candidate.code, candidate.name, candidate.market)
             if candidate.in_flight:
                 self.claim_eligibility['in_flight_count'] += 1
             elif is_non_equity_product_name(candidate.name):
+                self.claim_eligibility['product_ineligible_count'] += 1
+            elif product_check is not None and products[(candidate.code, candidate.route)].get('eligible') is not True:
                 self.claim_eligibility['product_ineligible_count'] += 1
             elif eligible_routes is not None and candidate.route not in eligible_routes:
                 self.claim_eligibility['route_ineligible_count'] += 1
@@ -218,17 +226,41 @@ class DiscoveryQueue:
             ))
         ready = []
         requirements = {}
+        # Keep the short reservation whenever any currently eligible candidate
+        # can use it. Borrow only with explicit runtime admission and no such
+        # demand; existing leases are never preempted or given a new deadline.
+        long_limit = MAX_LONG_PROBES
+        if borrow_idle_short_slot:
+            limit = min(limit, max(0, 5-self.in_flight_count()))
+        if borrow_idle_short_slot and limit > 0:
+            for rows in ready_by_cohort.values():
+                for row in rows:
+                    requirements[(row.code, row.route)] = (residence_requirements(row, now_epoch)
+                        if residence_requirements else {'minimum_seconds': 0})
+            short_demand = any(type(r.get('minimum_seconds')) in (int, float)
+                and isfinite(r['minimum_seconds']) and 0 <= r['minimum_seconds'] < 60
+                for r in requirements.values())
+            if not short_demand:
+                long_limit += 1
         long_used = sum(r.in_flight and r.residence_deadline_epoch-r.last_claim_epoch > 60
                         for r in self._candidates.values())
         allocation = {}
         self.residence_deferred = {}
         while len(ready) < limit:
-            for rows in ready_by_cohort.values():
-                if long_used < MAX_LONG_PROBES:
-                    # Mixed branches retain short admission. Rotate scarce
-                    # long observation to candidates that previously missed it.
-                    rows.sort(key=lambda row: (-row.long_residence_deferred_count,
-                        row.last_claim_epoch, row.first_seen_epoch, -row.discovery_volume, row.code))
+            for cohort_key, rows in ready_by_cohort.items():
+                # A global fourth turn always coincides with the gainer turn
+                # at the 3:1 ratio. Age within each cohort instead.
+                age_turn = cohort_claims[cohort_key] % 4 == 3
+                # Three activity/liquidity turns and one oldest-service turn.
+                # Never-tested rows precede retries; the oldest-service turn
+                # prevents an endless stream of active newcomers starving them.
+                rows.sort(key=lambda row: (
+                    -row.long_residence_deferred_count if long_used < long_limit else 0,
+                    (row.last_claim_epoch, row.first_seen_epoch, -row.discovery_volume)
+                        if age_turn else
+                    (bool(row.last_claim_epoch), -row.discovery_volume,
+                     -row.observed_epoch, row.last_claim_epoch, row.first_seen_epoch),
+                    row.code))
                 while rows:
                     row = rows[0]
                     key = (row.code, row.route)
@@ -238,7 +270,7 @@ class DiscoveryQueue:
                     needed = requirements[key].get('minimum_seconds')
                     valid_requirement = type(needed) in (float, int) and isfinite(needed) and needed >= 0
                     if (not valid_requirement or needed >= 150
-                            or (needed >= 60 and long_used >= MAX_LONG_PROBES)):
+                            or (needed >= 60 and long_used >= long_limit)):
                         reason = ('requirement_unobservable' if not valid_requirement
                                   else 'beyond_residence_limit' if needed >= 150 else 'long_slot_wait')
                         row.residence_wait_since_epoch = row.residence_wait_since_epoch or now_epoch
@@ -265,7 +297,7 @@ class DiscoveryQueue:
             needed = requirements[(row.code, row.route)]['minimum_seconds']
             full = requirements[(row.code, row.route)].get('full_input_requirement_seconds', needed)
             wants_long = type(full) in (int, float) and isfinite(full) and 60 <= full < 150
-            residence = 150 if long_used < MAX_LONG_PROBES and (needed >= 60 or wants_long or residence_requirements is None) else 60
+            residence = 150 if long_used < long_limit and (needed >= 60 or wants_long or residence_requirements is None) else 60
             if wants_long:
                 row.long_residence_deferred_count = (0 if residence > 60
                     else row.long_residence_deferred_count + 1)
@@ -286,6 +318,8 @@ class DiscoveryQueue:
         self._claim_sequence += len(ready)
         checked = [r.get('minimum_seconds') for r in requirements.values()]
         self.claim_eligibility.update(
+            long_slot_limit=long_limit,
+            idle_short_slot_borrowed=long_used > MAX_LONG_PROBES,
             residence_requirement_checked_count=len(checked),
             short_capable_checked_count=sum(type(v) in (float, int) and isfinite(v) and 0 <= v < 60 for v in checked),
             long_required_checked_count=sum(type(v) in (float, int) and isfinite(v) and 60 <= v < 150 for v in checked),
@@ -309,6 +343,7 @@ class DiscoveryQueue:
                 "residence_deadline_epoch": row.residence_deadline_epoch,
                 "physical_probe_lease_id": row.handoff_id,
                 "observation_requirements": requirements[(row.code, row.route)],
+                "product_binding": products.get((row.code, row.route), {}),
                 "long_residence_deferred_count": row.long_residence_deferred_count,
                 "residence_wait_seconds": max(0, now_epoch-row.residence_wait_since_epoch)
                     if row.residence_wait_since_epoch else 0,

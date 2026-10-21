@@ -22,6 +22,9 @@ def _selected_fixture_requirements(monkeypatch):
     # separately by the native source/readiness contract tests.
     from src.engine.scalping import reversal_source_diagnostics as D
     monkeypatch.setattr(D, 'residence_requirements', lambda *a: {'minimum_seconds': 0})
+    from src.scanners import zero_base_discovery_runtime as R
+    monkeypatch.setattr(R, 'discovery_product_filter', lambda *a:
+        lambda code, name, market: dict(eligible=True, status='fixture_equity'))
 
 
 class Bus:
@@ -574,3 +577,19 @@ def test_scanner_publishes_scheduler_diagnostics_in_both_cycle_paths(monkeypatch
                 'probe_active_target_snapshot_status', 'probe_active_target_snapshot_generation',
                 'queue_restored_candidate_count']:
         assert payload['fields']['zero_base_'+key] == summary[key]
+
+
+def test_restored_queue_product_rejection_never_dispatches_or_consumes_capacity(tmp_path, monkeypatch):
+    from src.scanners import zero_base_discovery_runtime as R
+    bus=Bus(); runtime=ZeroBaseDiscoveryRuntime(event_bus=bus, session_date='2026-09-28',state_path=tmp_path/'q.json')
+    runtime.queue.observe(code='487130', route='krx_nxt_integrated', observed_epoch=T0,
+        source_sha256='a'*64, source_scope='observed_panel',received_epoch=T0,name='Unlisted Brand',market='KOSPI')
+    runtime._persist()
+    runtime.close()
+    restored=ZeroBaseDiscoveryRuntime(event_bus=bus,session_date='2026-09-28',state_path=tmp_path/'q.json')
+    monkeypatch.setattr(R,'discovery_product_filter',lambda *a: lambda *args:dict(eligible=False,status='verified_non_common_stock'))
+    before=len(bus.events)
+    result=restored.dispatch_due_probes(now_epoch=T0+2)
+    assert result['probe_requested_count']==0 and restored.queue.in_flight_count()==0
+    assert restored.queue._candidates[('487130','krx_nxt_integrated')].claim_count==0
+    assert not [e for e in bus.events[before:] if e[0]==PROBE_REQUEST_EVENT]

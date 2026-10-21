@@ -185,3 +185,13 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
 
 
   - 10/21 현재 인계: 기존 collector 종료/전건 거부·warmup/terminal 신원 수리를 포함한 후보에 압축 재결속·다음 날 OPEN 인계를 보완했다. 재기동 없이 준비만 하며 운영 연구는 재발행하지 않는다. 과거435,526행 미증명·role_unverified는 유지한다. 실제 전환/optional code binding 갱신 후 새 closed→replay/label→누적 currentness→알림 disposition의 자연 수용을 확인한다. [원인·회귀·준비](../audits/main-market-weakness-source-completeness-and-status-review-2026-10-16.md#압축-재결속수집-증빙일일-인계-배포-후보--2026-10-21).
+
+
+## 비상시 관측 후속 수용
+
+- [ ] `[SubmissionMonitorSyncLineage1019] 비상시 상품 적격성·관측 배정 수리 및 자연 소비 수용` (`Due: 2026-10-21`, `Slot: INTRADAY`, `TimeWindow: 준비 검증 및 자연 종료 후 승인된 전환의 다음 관측 창`, `Track: RuntimeStability`)
+  - Source: [기존 동일 ID와 원 Acceptance·이력](2026-10-20-stage2-todo-checklist.md), [이번 원인·수리·제거 검토](../audits/postclose-root-cause-recovery-review-2026-10-19.md#비상시-상품-원천관측-배정-수리--2026-10-21).
+  - 신규 원인: KoAct487130 상품 필터·전 후보 최소60초와4long/1short의 유휴 배정. 기존 native metadata owner를 panel/복원 큐/claim에 연결하고 physical5 내 work-conserving borrowing·cohort aging을 검증한다. 이전 자연 source/short-horizon/PASS→Main 제출 Acceptance는 보존한다.
+  - 상태: source/probe/metadata/WS/prefetch577회귀 PASS. 무수신127 exact lease/REG 대조 완료지만 broker item 수용/거래 유무는 미확정(보통주123·EF3·DR1). 종목별 unknown은 유지하고 새 결손을 계속 탐지한다.
+  - 완료 기준: clean 통합 후보의 native policy/delay/stop/holding·report currentness PASS; 실제 전환은 동일 old epoch/native 자연 종료 및 거부 증거 전건 검증 뒤 별도 단계다. 후속 PID의 product 제외·단기/장기 slot·적격 대기·원천→정식 평가를 확인하고 원인 미확정은 exact 새 영수증으로만 종결한다. 주문/경제성과 구별한다.
+  - 권한: 이번은 배포본 준비만, 재기동/selector·정책/threshold/provider/물리 cap/stale/주문 변경0. 기존 DirectFamilyPreopenPolicyHandoff의 자연 종료 전환과 겹치는 실행 담당을 만들지 않는다.

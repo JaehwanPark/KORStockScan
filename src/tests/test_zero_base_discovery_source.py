@@ -1,12 +1,20 @@
 from datetime import datetime
 from zoneinfo import ZoneInfo
+import pytest
 
-from src.scanners.zero_base_discovery_source import fetch_discovery_panels
+from src.scanners.zero_base_discovery_source import fetch_discovery_panels, discovery_product_filter as _native_product_filter
 from src.utils import kiwoom_utils
 from src.utils.kiwoom_read_request_control import REQUEST_CLASS_SOURCE_ONLY
 
 
 T0 = datetime(2026, 9, 28, 10, 0, tzinfo=ZoneInfo("Asia/Seoul")).timestamp()
+
+
+@pytest.fixture(autouse=True)
+def _verified_fixture_products(monkeypatch):
+    from src.scanners import zero_base_discovery_source as S
+    monkeypatch.setattr(S, 'discovery_product_filter', lambda *a, **k:
+        lambda code, name, market: dict(eligible=True, status='fixture_equity'))
 
 
 def empty_activity(_token, **_kwargs):
@@ -230,3 +238,53 @@ def test_transition_does_not_fetch_panels():
     )
     assert result["source_status"] == "integrated_buy_session_unavailable"
     assert result["observations"] == []
+
+
+def test_product_master_exact_source_change_missing_and_future_dates_fail_closed(tmp_path):
+    import hashlib
+    import json
+    from src.tests.test_micro_reversion_symbol_master import _master_payload, _producer_hash
+    # Use the real canonical validator and real file/source identity checks.
+    from src.scanners.zero_base_discovery_source import _PRODUCT_CACHE
+    raw = tmp_path/'symbol_product_master.json'
+    raw.write_text('{}')
+    digest = hashlib.sha256(raw.read_bytes()).hexdigest()
+    payload = _master_payload()
+    source = payload['source_artifacts'][0]
+    source.update(resolved_path=str(raw), expected_sha256=digest, observed_sha256=digest,
+                  expected_size_bytes=2, observed_size_bytes=2)
+    payload['records'][0]['source_reference'] = 'policy://micro-reversion/symbol_product_master.json#sha256='+digest
+    payload['content_sha256'] = _producer_hash({k:v for k,v in payload.items() if k!='content_sha256'})
+    master = tmp_path/'micro_reversion_symbol_master_2026-08-25.json'
+    master.write_text(json.dumps(payload))
+    _PRODUCT_CACHE.clear()
+    check = _native_product_filter('2026-09-28', directory=tmp_path)
+    assert check('005930','Samsung','KOSPI')['eligible'] is True
+    assert check('005930','Samsung','KOSDAQ')['eligible'] is False
+    assert check('487130','Unknown ETF brand','KOSPI')['status'] == 'product_unverified'
+    assert check('005930','KoAct AI','KOSPI')['eligible'] is False
+    assert _native_product_filter('2026-08-24', directory=tmp_path)('005930','Samsung','KOSPI')['eligible'] is False
+    raw.write_text('[]')  # Same-size mutation must invalidate the cached source.
+    changed = _native_product_filter('2026-09-28', directory=tmp_path)
+    assert changed('005930','Samsung','KOSPI')['reason'] == 'product_master_source_changed'
+    raw.write_text('{"changed":true}')
+    changed = _native_product_filter('2026-09-28', directory=tmp_path)
+    assert changed('005930','Samsung','KOSPI')['eligible'] is False
+    assert changed('005930','Samsung','KOSPI')['reason'] == 'product_master_source_size_invalid'
+    master.unlink()
+    assert _native_product_filter('2026-09-28', directory=tmp_path)('005930','Samsung','KOSPI')['eligible'] is False
+
+
+def test_panel_product_check_is_part_of_source_hash_and_rejects_unknown_product(monkeypatch):
+    from src.scanners import zero_base_discovery_source as S
+    monkeypatch.setattr(S, 'discovery_product_filter', lambda *a,**k:
+        lambda code,name,market: dict(eligible=code=='005930', status='product_unverified', master_sha256='a'*64))
+    def fetcher(token, **kwargs):
+        return [dict(Code=code, RawInstrumentCode=code+'_AL', Name='New Brand',
+                     Price=10000, Volume=1000, ChangeRate=1.0) for code in ('487130','005930')], dict(
+            response_contract_status='verified_success',read_rate_control_status='admitted',
+            rest_received_ts_ms=int((T0+1)*1000))
+    result=S.fetch_discovery_panels('fixture',now_epoch=T0,fetcher=fetcher,activity_fetcher=empty_activity)
+    assert {r['code'] for r in result['observations']} == {'005930'}
+    assert all(r['product_binding']['master_sha256']=='a'*64 for r in result['observations'])
+    assert all(p['product_unverified_count']==1 for p in result['panels'] if p['kind']=='gainers')

@@ -1066,3 +1066,20 @@ trailing의 최초 직접 재생은 all_scope_assembly_code_changed로 차단됐
 
 이 범위의 코드·source-only 인계·원 실패 currentness는 완료다. 실제 selector는ea68c5a85/Main1724066/start19233026 그대로이고 epoch1792547808026387070은running이다. pin은 여전히deployment_collector_shutdown_actor_unproven으로 장중 종료 요청을 차단한다. 자연 종료 후 원 WS actor/동일 epoch/native immutable closed와 전건 거부 증빙을 검증해야 한다. 현재 지시는 준비만이며 ordered 실행·재기동·전환 예약·정책/수량 변경·provider/주문/Telegram은0이다. 마지막 owner 수용은 자연 종료/PID/실행 창·기존 비용 후속 모집단이며 코드 정리 미완료로 재개하지 않는다. [최종 준비](../../tmp/quantity-stage-handoff-20261021/readiness.json), [후속 stage](../../tmp/quantity-stage-handoff-20261021/successor.json), [원 실패 검사 PASS](../../tmp/quantity-stage-handoff-20261021/operating-report-currentness.json).
 실제 소비 기록의 문서 후속은 +13/-3이며 전체 기준5406 대비 docs +34/-3이다. non-test source/tests 증감과 대체·제거 처분은 위와 같고 추가 소스 변경은0이다. 최종 parser24/각 현재 owner1건·diff 및 관련 링크를 대조한다.
+
+
+## 비상시 상품 원천·관측 배정 수리 — 2026-10-21
+
+사용자의 재기동 없는 배포본 준비 지시로2835cfdff(수량3b6cfb80b 인계 포함)에서 격리 작업한다. 실행본ea68c5a85/PID1724066/start19233026와 현재 수집 epoch1792547808026387070은 유지한다. 범위는 비상시 상품 적격성·관측 배정·무수신127건의 기존 영수증 대조다. 매매 패턴/AI/stale/주문 안전·physical5·150초 lease·source-only 요청 예산을 변경하지 않는다.
+
+원인→수리: 기존 이름 목록만으로KoAct ETF487130을 보통주로 받아들였다. zero_base_discovery_source가 기존 VerifiedSymbolMaster와 official archive exclusion owner를 재사용하고, panel intake와 복원 큐의 dispatch 직전 검사를 연결한다. 유효 날짜/시장/common-stock·원본 SHA/파일 정체성을 확인하며 미확인은 종목별 product_unverified로 보류한다. 메타데이터는 제한용이며 매매 승인·수량/정책 publisher로 사용하지 않는다. 이름 helper의KoAct 제외는 기존 prefetch/REST 소비자를 위한 추가 방어다. 과거35건은 단순 master 부재로ETF라 부르지 않았고 이번에는 원본 archive로35건 모두 비보통주임을 확인했다. 최초 cold0.100초 이내·warm0.001초 이내의 동일 파일 정체성 cache를 사용하며 원본/압축/세대 변경 시 재검증한다.
+
+장기4/단기1 고정 분기는 단기 적격 수요가 없을 때 다섯 번째 슬롯을 장기에 빌려주는 동일 queue.claim으로 통합한다. 혼합 수요는4+1을 유지하고 신규 단기 수요가 들어와도 기존 lease를 선점/재시작하지 않는다. 종료 확인이 없는 cleanup_pending은 계속 물리 슬롯을 점유한다. 후보 배정은 각 market/route/source_kind cohort에서 활동성/최근 유량3회·오래된 서비스1회로 순환하며 미탐침을 재시도보다 먼저 배정한다. 리뷰에서 global fourth가 gainer turn에만 겹치는 기아와 limit0의 불필요한 native 요구시간 계산을 찾아 보완했다. 원천 이력을 lease 간 이어 붙이거나 deadline을 갱신하지 않는다. 오프라인 같은150초 요구의 배정4→5는 용량 계약 검증이며 수백 후보의 대기 해소·자연 ENTER_NOW/수익 개선 증명이 아니다.
+
+무수신127건은 원본12684028B/SHA86e2e9e25cc817832e560e96e3e434e467b68f3e52d6b752949d8565836f5b19를 한 번 읽어 exact item/lease/transport/local_request/source SHA를 보존했다. 전부REG sent, wire0B/0D=0, 개별 broker ACK 미증명이다. 현재 원본 상품 대조는 보통주123·EF3·DR1이며, 연결 범위 성공 응답을 개별 ACK로 승격하지 않았다. 수신 후 normalize 유실 증거와 API 장애/실제 거래 부재의 확정 근거는 없다. 기존 exact_probe_source_trace/control receipt가 필요한 경계를 이미 보존하므로 새 collector·재구독·무한 재시도는 추가하지 않는다. 원인 미확정은 기존 owner에서 자연 동일 경로의 다음 수신 증거로 확인한다.
+
+회귀: 생산자/queue/runtime/probe/native metadata/WS/prefetch577 PASS. 최초 테스트 oracle의KoAct 기대값은 명시 표본 표로 수정했다. 원래4개 장기 고갈과 이름 필터 재현, 전부 장기/혼합/기아/미확인·원본 변조/시장·날짜/복원 큐/cleanup을 검증했다. compile·diff-check와 새 완전 인계/구 수량 세대 검증을 수행한다. 정책값·원 generation/reference/실행 PID는 별도 보호하며 native report currentness와 prepared release 결과는 후속 기록으로 결속한다.
+
+대체·제거 disposition: 이름만으로 비상시 적격 판정하던 source/claim 분기는 consolidated(같은 metadata owner의 검사); 고정 short-only 유휴 분기는 replaced(단기 수요가 있을 때 reservation, 없을 때 동일 claim의 borrowing); 오래된-first 단일 순위는 replaced(cohort별 활동성+aging). 기존 native metadata parser/공용 이름 prefilter/150초 lease/closure ack/무수신 trace는 retained(각 실제 panel·prefetch·queue·WS 소비자). 새 source module/CLI/worker/일정/주문 진입점0, 제거 유예0. H의 구 issued 세대는 immutable 정책 소비 때문에 retained이며 새 정확한4파일과 metadata3의 완전 dependency profile을 별도로 검증한다. 기존 SubmissionMonitorSyncLineage1019로 신규 결함만 재개하고 과거 Acceptance/원 실패 bytes를 유지한다. 근거: [준비 증거](../../tmp/nonfixed-capacity-repair-20261021/), [원 분석](../../tmp/nonfixed-submission-cause-20261021-1526/report.md).
+
+기준2835cfdff 대비 범위 증감: non-test source +187/-13, tests +175/-9, docs +34/-0(이 계수 행 이전). 순증은 기존 source의 hash-bound metadata cache와 관측 배정·부정 회귀·완전 인계 증거이며, 새 module/주문 진입점/worker는0이다. 최종 반복 검증은 producer/consumer577와 인계30 PASS이며 구 수량 stage profile도 함께 통과했다.

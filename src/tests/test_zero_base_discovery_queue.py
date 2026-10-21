@@ -307,3 +307,83 @@ def test_four_long_leases_preserve_deadlines_capacity_and_cleanup_custody():
     assert replacement[0]['code'] not in {c['code'] for c in claims}
     assert all(queue._candidates[(c['code'], c['route'])].residence_deadline_epoch == T0+152
                for c in claims[1:])
+
+
+def test_all_long_demand_borrows_idle_slot_without_sixth_lease_or_deadline_renewal():
+    queue = DiscoveryQueue(DAY)
+    for i in range(1, 8):
+        _observe(queue, f'{i:06d}')
+    required = lambda *args: dict(minimum_seconds=60, full_input_requirement_seconds=120)
+    claims = queue.claim(now_epoch=T0+2, limit=50, residence_requirements=required,
+                         borrow_idle_short_slot=True)
+    assert len(claims) == queue.in_flight_count() == 5
+    assert queue.claim_eligibility['idle_short_slot_borrowed'] is True
+    assert all(c['residence_deadline_epoch'] == T0+152 for c in claims)
+    c = claims[0]
+    assert queue.resolve(c, result='observation_incomplete', next_due_epoch=T0+200,
+                         handoff_id=c['physical_probe_lease_id'])
+    queue.abandon_expired_claims(now_epoch=T0+153, timeout_sec=60)
+    assert queue.claim(now_epoch=T0+154, limit=5, residence_requirements=required,
+                       borrow_idle_short_slot=True) == []
+    assert queue.close_handoff(c, c['physical_probe_lease_id'])
+    replacements = queue.claim(now_epoch=T0+154, limit=5, residence_requirements=required,
+                               borrow_idle_short_slot=True)
+    assert len(replacements) == 1 and replacements[0]['physical_probe_lease_id'] != c['physical_probe_lease_id']
+    assert all(queue._candidates[(r['code'],r['route'])].residence_deadline_epoch == T0+152 for r in claims[1:])
+
+
+def test_short_demand_behind_long_backlog_keeps_its_reserved_slot():
+    queue = DiscoveryQueue(DAY)
+    for i in range(1, 9):
+        _observe(queue, f'{i:06d}')
+    required = lambda row, now: dict(minimum_seconds=0 if row.code == '000008' else 60,
+                                     full_input_requirement_seconds=120)
+    claims = queue.claim(now_epoch=T0+2, limit=5, residence_requirements=required,
+                         borrow_idle_short_slot=True)
+    assert len(claims) == 5
+    assert sum(c['residence_deadline_epoch'] == T0+152 for c in claims) == 4
+    assert next(c for c in claims if c['code'] == '000008')['residence_deadline_epoch'] == T0+62
+
+
+def test_fresh_activity_priority_keeps_one_oldest_service_turn():
+    queue = DiscoveryQueue(DAY)
+    _observe(queue, '000001', volume=1)
+    for i in range(2, 7):
+        _observe(queue, f'{i:06d}', volume=100*i, epoch=T0+10)
+    claims = queue.claim(now_epoch=T0+12, limit=4)
+    assert [r['code'] for r in claims] == ['000006','000005','000004','000001']
+
+
+def test_restored_products_are_rechecked_before_any_claim_is_consumed():
+    queue = DiscoveryQueue(DAY)
+    for code in ('487130','005930','123450'):
+        _observe(queue, code)
+    queue = DiscoveryQueue.restore(queue.snapshot(), session_date=DAY)
+    claims = queue.claim(now_epoch=T0+2, limit=5, product_check=lambda code, name, market:
+        dict(eligible=code == '005930', status='verified' if code == '005930' else 'unverified'))
+    assert [r['code'] for r in claims] == ['005930']
+    assert claims[0]['product_binding']['eligible'] is True
+    assert queue.claim_eligibility['product_ineligible_count'] == 2
+    assert all(r.claim_count == 0 for r in queue._candidates.values() if r.code != '005930')
+
+
+def test_no_available_budget_does_not_evaluate_native_requirements():
+    queue=DiscoveryQueue(DAY)
+    _observe(queue,'000001')
+    assert queue.claim(now_epoch=T0+2,limit=0,borrow_idle_short_slot=True,
+        residence_requirements=lambda *a: pytest.fail('no capacity: native work must stay idle')) == []
+
+
+def test_age_turn_is_per_cohort_not_locked_to_every_fourth_gainer():
+    queue=DiscoveryQueue(DAY)
+    _observe(queue,'000001',volume=1,kind='activity')
+    for i in range(2,7):
+        _observe(queue,f'{i:06d}',volume=100*i,kind='activity',epoch=T0+10)
+    _observe(queue,'000010',volume=100,kind='gainers')
+    first=queue.claim(now_epoch=T0+12,limit=4)
+    assert '000001' not in {r['code'] for r in first}
+    for claim in first:
+        assert queue.resolve(claim,result='pattern_not_matched',next_due_epoch=T0+100,
+                             handoff_id=claim['physical_probe_lease_id'])
+        assert queue.close_handoff(claim,claim['physical_probe_lease_id'])
+    assert queue.claim(now_epoch=T0+13,limit=1)[0]['code']=='000001'

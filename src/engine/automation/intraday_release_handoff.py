@@ -3811,6 +3811,33 @@ REVIEWED_QUANTITY_STAGE_DEPENDENCY_VARIANTS = {
 }
 
 
+# Exact nonfixed metadata and work-conserving scheduling successor.
+# Historical profiles remain independently verifiable; no policy values change.
+REVIEWED_NONFIXED_CAPACITY_HASHES = {'src/scanners/zero_base_discovery_queue.py': '46422619816d9ccffd272a0bd63a80f2265c61000c574bc21e51c7c1e455eda6',
+ 'src/scanners/zero_base_discovery_runtime.py': 'dc058e9520482506a7659ae9cbefe1e7ce2a3ac0f2dde0b8b053742aec0535f4',
+ 'src/scanners/zero_base_discovery_source.py': '7cb5b73e5501feea78cafbff43ef21e671c267daeec0768ee692f64c2e4b199b',
+ 'src/utils/kiwoom_utils.py': '00b0fffbf665ac0d598fa53bc02ad4b0a927943846ed9de94fb7449ec05a9a0f'}
+REVIEWED_NONFIXED_CAPACITY_PAIRS = {'src/scanners/zero_base_discovery_queue.py': (('9bbcaa6181f9a3f46d9c6c3328dc857e774d5fd7800f2e297bae5d3ea17cb7c8',
+                                                '46422619816d9ccffd272a0bd63a80f2265c61000c574bc21e51c7c1e455eda6'),),
+ 'src/scanners/zero_base_discovery_runtime.py': (('47347d90b4dad70233a55bca9dc282da20b14b3be4fda4090291ce1d7e66bb57',
+                                                  'dc058e9520482506a7659ae9cbefe1e7ce2a3ac0f2dde0b8b053742aec0535f4'),),
+ 'src/scanners/zero_base_discovery_source.py': (('9d0f424e9a82cc2c29e08797c6fc9172875adeeabc94f429e0ded10df4da0cbc',
+                                                 '7cb5b73e5501feea78cafbff43ef21e671c267daeec0768ee692f64c2e4b199b'),),
+ 'src/utils/kiwoom_utils.py': (('a21607460d8bc4817b80499414a796bf4ac8a3e8af10846c2682e1daa12e152f',
+                                '00b0fffbf665ac0d598fa53bc02ad4b0a927943846ed9de94fb7449ec05a9a0f'),)}
+REVIEWED_NONFIXED_CAPACITY_DEPENDENCY_VARIANTS = {
+    key: {**value,
+        'selector_path': 'src/scanners/zero_base_discovery_queue.py',
+        'selector_sha256': REVIEWED_NONFIXED_CAPACITY_HASHES['src/scanners/zero_base_discovery_queue.py'],
+        'dependencies': {**value['dependencies'], **REVIEWED_NONFIXED_CAPACITY_HASHES, **{'src/engine/scalping/micro_reversion/economic_reference_owner.py': 'ec0cbe43c548e77e2ccf81284a08bbc7faf16aa505ff16bf09b80aa9868b688b',
+ 'src/engine/scalping/micro_reversion/symbol_master.py': 'f1bef46a5213a18eed07a1b81a390a6523f3baa84b72d6dea8602ed2e1e71dd4',
+ 'src/utils/jsonl_io.py': 'c8e3058acdf08d411bfd19edee9cdfe3871bc0b004106038f449320727ab7fb1'}},
+        'contract_extensions': {origin: {name: REVIEWED_NONFIXED_CAPACITY_HASHES.get(os.path.normpath(name), digest)
+            for name, digest in paths.items()} for origin, paths in value['contract_extensions'].items()},
+    } for key, value in REVIEWED_QUANTITY_STAGE_DEPENDENCY_VARIANTS.items()
+}
+
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -3916,6 +3943,9 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     delay_machine_parent_present = any((root / name).is_file()
         and hashlib.sha256(candidate_bytes(name)).hexdigest() == sha
         for name, sha in REVIEWED_DELAY_MACHINE_PARENT_HASHES.items())
+    nonfixed_capacity_present = any((root / name).is_file()
+        and hashlib.sha256(candidate_bytes(name)).hexdigest() == sha
+        for name, sha in REVIEWED_NONFIXED_CAPACITY_HASHES.items())
     contract_names = {repository_name(name) for name in paths.values()}
     for trigger, generations in REVIEWED_HOLDING_RESEARCH_DEPENDENCIES.items():
         if trigger not in contract_names:
@@ -3924,7 +3954,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         dependencies = generations.get(trigger_sha, {})
         # New exact selectors precede their historical parent. The first match
         # selects one complete generation, never per-file SHA alternatives.
-        for variants in (REVIEWED_QUANTITY_STAGE_DEPENDENCY_VARIANTS,
+        for variants in (REVIEWED_NONFIXED_CAPACITY_DEPENDENCY_VARIANTS,
+                         REVIEWED_QUANTITY_STAGE_DEPENDENCY_VARIANTS,
                          REVIEWED_QUANTITY_CAPTURE_DEPENDENCY_VARIANTS,
                          REVIEWED_COLLECTOR_FIRST_TRANSITION_DEPENDENCY_VARIANTS,
                          REVIEWED_COLLECTOR_CLOSE_DEPENDENCY_VARIANTS,
@@ -4070,6 +4101,10 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
             dependencies = {**dependencies, **REVIEWED_QUANTITY_CAPTURE_HASHES}
         if quantity_stage_present:
             dependencies = {**dependencies, **REVIEWED_QUANTITY_STAGE_HASHES}
+        if nonfixed_capacity_present:
+            dependencies = {**dependencies, **REVIEWED_NONFIXED_CAPACITY_HASHES}
+            extensions = {name: REVIEWED_NONFIXED_CAPACITY_HASHES.get(repository_name(name), sha)
+                          for name, sha in extensions.items()}
         dependencies_by_trigger[trigger] = (trigger_sha, dependencies)
     for key, name in paths.items():
         after = candidate_bytes(name)
@@ -4086,7 +4121,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         if before == after:
             continue
         pair = (hashlib.sha256(before).hexdigest(), hashlib.sha256(after).hexdigest())
-        if (pair in REVIEWED_DELAY_MACHINE_PARENT_PAIRS.get(repository_name(name), ())
+        if (pair in REVIEWED_NONFIXED_CAPACITY_PAIRS.get(repository_name(name), ())
+                or pair in REVIEWED_DELAY_MACHINE_PARENT_PAIRS.get(repository_name(name), ())
                 or pair in REVIEWED_QUANTITY_STAGE_PAIRS.get(repository_name(name), ())
                 or pair in REVIEWED_QUANTITY_CAPTURE_PAIRS.get(repository_name(name), ())
                 or pair in REVIEWED_COLLECTOR_FIRST_TRANSITION_PAIRS.get(repository_name(name), ())

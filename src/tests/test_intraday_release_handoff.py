@@ -1771,7 +1771,8 @@ def test_archive_authority_successor_accepts_the_issued_full_reader_origin(avg_d
         *(['src/engine/infrastructure/startup_validation_code_context.py'] if generation=='source_integration' else [])))
     for fault in ([None,'missing','dirty','committed_change']+(['parent_mix'] if generation in ('sqlite_lifecycle','retired_review','clean_sqlite','delay_cleanup') else []))])
 def test_source_reader_handoff_preserves_issued_policy_and_exact_dependencies(tmp_path, family, fault, reader_path,generation, policy_origin=None):
-    prepared_stage = generation == 'quantity_stage'
+    nonfixed_capacity = generation == 'nonfixed_capacity'
+    prepared_stage = generation in ('quantity_stage', 'nonfixed_capacity')
     if prepared_stage:
         generation = 'quantity_capture'
     import hashlib
@@ -1800,7 +1801,8 @@ def test_source_reader_handoff_preserves_issued_policy_and_exact_dependencies(tm
     if generation in ('sqlite_lifecycle','clean_sqlite'):names.update(handoff.REVIEWED_SQLITE_LIFECYCLE_HASHES)
     if generation in ('retired_review','clean_sqlite','delay_cleanup','role_latency','startup_budget','delay_shutdown','routed_reuse','source_epoch','closed_observer','postclose_repair','logical_pipeline','historical_resolution','finalization_health','native_invalidation','fixed_wait','entry_receipt','buy_identity','collector_close','collector_first_transition','quantity_capture'):names.update(handoff.REVIEWED_RETIRED_REVIEW_HASHES)
     if generation in ('delay_cleanup','role_latency','startup_budget','delay_shutdown','routed_reuse','source_epoch','closed_observer','postclose_repair','logical_pipeline','historical_resolution','finalization_health','native_invalidation','fixed_wait','entry_receipt','buy_identity','collector_close','collector_first_transition','quantity_capture'):
-        for variant in (handoff.REVIEWED_QUANTITY_STAGE_DEPENDENCY_VARIANTS if prepared_stage else
+        for variant in (handoff.REVIEWED_NONFIXED_CAPACITY_DEPENDENCY_VARIANTS if nonfixed_capacity else
+                handoff.REVIEWED_QUANTITY_STAGE_DEPENDENCY_VARIANTS if prepared_stage else
                 handoff.REVIEWED_QUANTITY_CAPTURE_DEPENDENCY_VARIANTS if generation=='quantity_capture' else
                 handoff.REVIEWED_COLLECTOR_FIRST_TRANSITION_DEPENDENCY_VARIANTS if generation=='collector_first_transition' else
                 handoff.REVIEWED_COLLECTOR_CLOSE_DEPENDENCY_VARIANTS if generation=='collector_close' else
@@ -1825,10 +1827,10 @@ def test_source_reader_handoff_preserves_issued_policy_and_exact_dependencies(tm
         names.update(handoff.REVIEWED_DELAY_MACHINE_PARENT_HASHES)
     for name in names:
         path = root/name; path.parent.mkdir(parents=True,exist_ok=True)
-        path.write_bytes((canonical/name).read_bytes() if prepared_stage or
+        path.write_bytes((canonical/name).read_bytes() if nonfixed_capacity or
             name=='src/engine/automation/intraday_release_handoff.py' else subprocess.check_output(
                 ['git','-C',str(canonical),'show',
-                 ({'quantity_capture':'4368954cd','collector_first_transition':'d2e9bedf3','collector_close':'1fd10ef9c','buy_identity':'ea68c5a85','entry_receipt':'d76cbd56d','fixed_wait':'4809d898e','native_invalidation':'193668e7f','finalization_health':'6978f78c1','historical_resolution':'e427676c4','logical_pipeline':'6d259b5a09', 'postclose_repair':'0cfd32827','closed_observer':'04e19bad0','source_epoch':'88351a078','routed_reuse':'68213dd10','delay_shutdown':'49ef280dc','startup_budget':'105f6f031','role_latency':'6e037d078','source_reader':'0255cb05f','incident_order':'041caf05e','product_intake':'21d822a64',
+                 ({'quantity_capture':'3b6cfb80b' if prepared_stage else '4368954cd','collector_first_transition':'d2e9bedf3','collector_close':'1fd10ef9c','buy_identity':'ea68c5a85','entry_receipt':'d76cbd56d','fixed_wait':'4809d898e','native_invalidation':'193668e7f','finalization_health':'6978f78c1','historical_resolution':'e427676c4','logical_pipeline':'6d259b5a09', 'postclose_repair':'0cfd32827','closed_observer':'04e19bad0','source_epoch':'88351a078','routed_reuse':'68213dd10','delay_shutdown':'49ef280dc','startup_budget':'105f6f031','role_latency':'6e037d078','source_reader':'0255cb05f','incident_order':'041caf05e','product_intake':'21d822a64',
                    'sqlite_lifecycle':'c550a4c43','retired_review':'3d8abd012','clean_sqlite':'0ce816f7c','delay_cleanup':'661260e5f'}.get(generation,'99c51c85f'))
                  +':'+os.path.normpath(name)]))
     original = {key: hashlib.sha256(subprocess.check_output(
@@ -2110,3 +2112,10 @@ def test_prepared_quantity_stage_handoff_binds_producer_and_consumer(tmp_path, f
     test_source_reader_handoff_preserves_issued_policy_and_exact_dependencies(
         tmp_path, family, fault, tuple(handoff.REVIEWED_QUANTITY_STAGE_HASHES), 'quantity_stage',
         policy_origin='d7d353b4add257f0962abff8082a061bbc040ab7')
+
+
+@pytest.mark.parametrize('family', ['main_stop','holding_vote','pre_submit_delay'])
+@pytest.mark.parametrize('fault', [None,'missing','parent_mix','committed_change','dirty'])
+def test_nonfixed_capacity_handoff_binds_metadata_intake_queue_and_runtime(tmp_path,family,fault):
+    test_source_reader_handoff_preserves_issued_policy_and_exact_dependencies(
+        tmp_path,family,fault,tuple(handoff.REVIEWED_NONFIXED_CAPACITY_HASHES),'nonfixed_capacity')
