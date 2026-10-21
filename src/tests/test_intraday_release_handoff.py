@@ -1771,10 +1771,12 @@ def test_archive_authority_successor_accepts_the_issued_full_reader_origin(avg_d
         *(['src/engine/infrastructure/startup_validation_code_context.py'] if generation=='source_integration' else [])))
     for fault in ([None,'missing','dirty','committed_change']+(['parent_mix'] if generation in ('sqlite_lifecycle','retired_review','clean_sqlite','delay_cleanup') else []))])
 def test_source_reader_handoff_preserves_issued_policy_and_exact_dependencies(tmp_path, family, fault, reader_path,generation, policy_origin=None):
-    holding_input = generation == 'holding_input'
-    nonfixed_capacity = generation in ('nonfixed_capacity', 'holding_input')
+    post_sell_source = generation == 'post_sell_source'
+    issued_holding_input = generation == 'holding_input'
+    holding_input = generation in ('holding_input','post_sell_source')
+    nonfixed_capacity = generation in ('nonfixed_capacity', 'holding_input','post_sell_source')
     issued_nonfixed = generation == 'nonfixed_capacity'
-    prepared_stage = generation in ('quantity_stage', 'nonfixed_capacity', 'holding_input')
+    prepared_stage = generation in ('quantity_stage', 'nonfixed_capacity', 'holding_input','post_sell_source')
     if prepared_stage:
         generation = 'quantity_capture'
     import hashlib
@@ -1803,7 +1805,8 @@ def test_source_reader_handoff_preserves_issued_policy_and_exact_dependencies(tm
     if generation in ('sqlite_lifecycle','clean_sqlite'):names.update(handoff.REVIEWED_SQLITE_LIFECYCLE_HASHES)
     if generation in ('retired_review','clean_sqlite','delay_cleanup','role_latency','startup_budget','delay_shutdown','routed_reuse','source_epoch','closed_observer','postclose_repair','logical_pipeline','historical_resolution','finalization_health','native_invalidation','fixed_wait','entry_receipt','buy_identity','collector_close','collector_first_transition','quantity_capture'):names.update(handoff.REVIEWED_RETIRED_REVIEW_HASHES)
     if generation in ('delay_cleanup','role_latency','startup_budget','delay_shutdown','routed_reuse','source_epoch','closed_observer','postclose_repair','logical_pipeline','historical_resolution','finalization_health','native_invalidation','fixed_wait','entry_receipt','buy_identity','collector_close','collector_first_transition','quantity_capture'):
-        for variant in (handoff.REVIEWED_HOLDING_INPUT_DEPENDENCY_VARIANTS if holding_input else
+        for variant in (handoff.REVIEWED_POST_SELL_SOURCE_DEPENDENCY_VARIANTS if post_sell_source else
+                handoff.REVIEWED_HOLDING_INPUT_DEPENDENCY_VARIANTS if holding_input else
                 handoff.REVIEWED_NONFIXED_CAPACITY_DEPENDENCY_VARIANTS if nonfixed_capacity else
                 handoff.REVIEWED_QUANTITY_STAGE_DEPENDENCY_VARIANTS if prepared_stage else
                 handoff.REVIEWED_QUANTITY_CAPTURE_DEPENDENCY_VARIANTS if generation=='quantity_capture' else
@@ -1830,7 +1833,8 @@ def test_source_reader_handoff_preserves_issued_policy_and_exact_dependencies(tm
         names.update(handoff.REVIEWED_DELAY_MACHINE_PARENT_HASHES)
     for name in names:
         path = root/name; path.parent.mkdir(parents=True,exist_ok=True)
-        path.write_bytes(subprocess.check_output(['git','-C',str(canonical),'show','eeaed90f6:'+os.path.normpath(name)]) if issued_nonfixed and name!='src/engine/automation/intraday_release_handoff.py' else
+        path.write_bytes(subprocess.check_output(['git','-C',str(canonical),'show','0b36f17fc:'+os.path.normpath(name)]) if issued_holding_input and name!='src/engine/automation/intraday_release_handoff.py' else
+            subprocess.check_output(['git','-C',str(canonical),'show','eeaed90f6:'+os.path.normpath(name)]) if issued_nonfixed and name!='src/engine/automation/intraday_release_handoff.py' else
             (canonical/name).read_bytes() if nonfixed_capacity or
             name=='src/engine/automation/intraday_release_handoff.py' else subprocess.check_output(
                 ['git','-C',str(canonical),'show',
@@ -2137,3 +2141,10 @@ def test_reviewed_profile_registration_keeps_native_hash_helper_callable(tmp_pat
     path=tmp_path/'native-checklist'
     path.write_bytes(b'original-native-evidence')
     assert handoff._sha(path)==hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+@pytest.mark.parametrize('family',['main_stop','holding_vote','pre_submit_delay'])
+@pytest.mark.parametrize('fault',[None,'missing','parent_mix','committed_change','dirty'])
+def test_post_sell_source_handoff_binds_route_producer_and_horizon_reader(tmp_path,family,fault):
+    test_source_reader_handoff_preserves_issued_policy_and_exact_dependencies(
+        tmp_path,family,fault,tuple(handoff.REVIEWED_POST_SELL_SOURCE_HASHES),'post_sell_source')

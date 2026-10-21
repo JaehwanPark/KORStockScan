@@ -1183,3 +1183,51 @@ trailing의 최초 직접 재생은 all_scope_assembly_code_changed로 차단됐
 현재 정책 parity128 scopes/76,800rows/598hits/불일치0, 원 target10/21의 active/delay/stop/holding 인계 PASS, 4family capability PASS다. 변경된 rising_missed/holding_vote fixture만 새 코드 세대로 native 재검증했다. 닫힌10/20 입력을 기존 승인 producer로 재결속하여 trailing20,824scope native 재검증을53.3초/RSS182,888KiB에 완료했다. 원 holding report·initial policy는 보존했다. 최종 `verify_candidate_report_currentness` PASS이며 수량은 기존 code-bound prepared generation을 그대로 소비했다(`findings=[]`, 원 historical source_gap 유지).
 
 후보 준비 수용은 완료했지만 실제 전환/PID/자연 영수증 수용은 아니다. 실제 선택 `ea68c5a85`, PID1724066/start19233026/cwd와 원 selector·정책·고정 수량 산출물9개 SHA가 동일하다. 기존 epoch1792547808026387070은 여전히 running이다. 재기동·selector 변경·주문·provider·Telegram·전환 예약은0이며 자연 종료를 기다리는 세션 대기 작업도 만들지 않았다. 원 자연 종료 증빙과 후속 실행 지시의 범위에서 기존 ordered 전환 절차를 사용한다. 원 영수증7건·삼성 최초 arm·실제 비용·ADD 비교의 미확인 상태는 위 기존 owner에서 계속 남긴다.
+
+
+## 2026-10-21 post-sell route source repair and unresolved physical venue
+
+사용자 권한은 기존 통합 후보 `0b36f17fc`를 포함한 배포본 준비까지다. 문서 자식 `502b3c083`에서 격리 구현하며 선택본ea68/PID1724066·정책/시간창·Main/manual custody·broker/order/quantity/stale/cap은 유지한다. 현재 봇 재기동·실제 REG/REMOVE·provider·계좌/주문·Telegram을 실행하지 않는다. [원 15:39 감사](../../tmp/takeprofit-result-review-20261021/analysis.json), [이번 원인 검증](../../tmp/post-sell-route-source-repair-20261021/causal-verification.json).
+
+### 원문 식별 한계와 정책·런타임 영향
+
+관측 route, 요청한 주문 route, 물리 체결 venue는 독립 축이다. `_AL`/`krx_nxt_integrated`는 통합 시세, `_NX`/`nxt_only`는 NXT 시세라는 source scope이며 체결 거래소의 증명이 아니다. 원 체결 값이 `0/SOR`·SOR flagY뿐이면 이를 같은 원문으로 KRX/NXT로 복구할 수 없다. 원본12건 중3건은 원문NXT,9건은 nativeUNKNOWN이다. 10/16 사용자 지시에 따른 KRX 운영 귀속도 원 `broker_actual_execution_venue=UNKNOWN`, `actual_execution_venue_verified=false`, override/source를 그대로 유지한다. 이 구분을 정책 성공·실제 KRX 체결로 승격하지 않는다.
+
+| 소비 목적 | 허용되는 근거와 한계 |
+| --- | --- |
+| Main 주문·보유/청산 | 원 order/execution ID, 날짜/수량/체결·custody·잔고 대사와 각 hard guard를 검증한다. native SELL terminal에는 알려진0/SOR 미식별을 별도 검증하는 `known_venue_gap` 경로가 이미 있다. 미식별 하나를 일반적인 주문 실패로 바꾸거나 venue 증명을 새 정책 적용 gate로 추가하지 않는다. |
+| SOR 정책 연구 | 주문 routeSOR + 정확 관측 route/item/session + 원 신호/체결/비용/coverage/holdout의 해당 family 계약으로 비교한다. 물리 venue 구분이 불가능한 원문을 계속 기다리는 계약으로 만들지 않는다. `quote_route_binding`은 SOR에서 `underlying_event_venue_proven=false`를 유지한다. |
+| 물리 KRX/NXT별 체결 성과 | 원문 증명 없는9건을 실제 거래소별 성과로 확정하지 않는다. 운영 귀속 label과 원문 증명은 다르다. |
+| 순손익 | venue 미식별과 비용 미확정은 독립이다. 실제 비용을 결속하지 못하면 actual net은 null이다. 해당 family가 허용하는 증권사 확정 총비용의 연구 배분도 정확 체결 비용/실제 수익으로 바꾸지 않는다. |
+
+이번12건의 exact `holding_actual_costs/2026-10-21/<ID>.json`은 모두 없었다. 실제 비용 원천 부재를 route patch로 복구했다고 주장하지 않는다. 기존 장후 cost source→대사/배분→native consumer owner를 유지하며 실제 API 호출·원본 비용 receipt/status 수기 생성은 없다. 621개 비교 모집단의 common/eligible0을 물리 venue 미식별 하나의 결과로 단정하지 않는다. 청산 결정·수집 세대·후행 quote·cost 각각의 결손과 consumer 수용을 구분한다.
+
+### 최초 위반 계약과 수리
+
+1. `sniper_post_sell_feedback._post_sell_execution_route_contract`는 결정용 preferred route/open venues를 관측 경로의 필수 계약으로 적용했다. 이 때문에 원문NXT premarket3건과 explicit 통합 regular4건이 `venue_session_route_contract_mismatch`로 거절됐다. raw source route·실제 fill attribution을 보존하고, 올바른 session 계약을 확인한 source-only observer scope를 독립적으로 정한다. 등록 성공은 시세 수신 성공이나 경제성 수용이 아니다.
+2. 정상 등록5건의 원20개 horizon은 모두 `exact_route_subscription_missing`이었다. 현재 WS producer의 canonical `krx_only`를 복구 item mapper가 처리하지 못했다. canonical key를 기존 base REG item에 연결하며 old `krx_regular`은 발행된 historical/source-reader 호환으로만 같은 pure KRX 범위에 결속한다. exact subscription과0D item/route를 함께 확인하며 AL/NX/base를 서로 대체하지 않는다. 기존 additive observation-only REG3회/5초·REMOVE0·active8·10분·final grace15초를 유지한다.
+3. 기존 route-scoped reader가 현재 통합 aftermarket/close-only/terminal-exit session 이름을 처리하도록 보완한다. quote observer scopeSOR와 물리 체결 venue를 혼동하지 않도록 등록/관측 메타데이터를 분리한다. premarket 통합 source는 기존 KRX0·NXT양수·combined=NXT depth proof를 계속 요구한다. 제공된 current transport epoch와 snapshot epoch가 다르면 제외한다. fresh1초·미래 시각·잘못된 종목/route/session·crossed/누락 호가·양수 bid depth가 아닌 입력은 계속 gap이다. 진단 bid return은 체결/실제 수익이 아니다.
+4. self review에서 양수 bid 잔량 검증과 원 체결 venue의 verified/source/raw 상태를 horizon까지 전달하는 부분을 보완했다. source-only quote selector를 `quote_observer_scope`로 명명해 KRX/NXT 물리 체결 증명으로 읽히지 않게 했다. 기존 normal-exit 영수증·물타기 clock/사유/추정 비용 수리도 통합 부모에 그대로 포함된다.
+
+원본은 정확 ID/해시로 유지했다. 동결된 post_sell prefix57KiB와 원20개 raw offset을 seek하여 **214,570 bytes만** 읽고 각 SHA를 대사했다. 기존7개 등록 실패를 원 구현으로 재현했고 수리 후12개 route contract를 소비했다. 원20개 horizon이나 과거7개 결정 영수증을 소급 발행하지 않는다. 현재 수집 정상성/새PID 자연 등록·수신은 별도 수용이다. 정상0D·stale/future/item/route/transport/depth 음성 조건과 실제 source producer→registry→bounded fake REG→1/3/5/10분 native horizon 소비를 함께 검증한다.
+
+### 교체·제거와 검증 범위
+
+| 기존 구현 | 판정과 현재 소비 근거 |
+| --- | --- |
+| preferred route/decision open venue를 관측 admission에 재사용 | removed: 기존 post-sell owner의 source route/session 검증과 독립 quote scope로 교체 |
+| krx_regular만 처리하던 REG item 경계 | consolidated: canonical krx_only와 issued alias가 한 item mapper를 소비; alias는 historical/native reader용 retained |
+| 실제 venue를 quote selector로 사용 | replaced: source scope와 verified/source/raw fill 상태를 독립 전달 |
+| route-scoped0D helper | retained: 현재 post-sell reader가 소비한다. 기존 historical caller는 복원/활성화하지 않으며 shared source guard·legacy raw label을 보존한다. 새 module/wrapper/worker/report producer는0 |
+| 원 정책/보고서·과거 결손 | retained: source ID/원 bytes·null·동결 generation의 역사 증거; 새 실패 탐지는 계속 유지 |
+
+공식 upstream HEAD `953e5dbff123f437ab4d11a78a95191a685eb51f`와 inspected spec/core/realtime/packaged spec SHA·재조회 시각을 [reference gate](../../tmp/post-sell-route-source-repair-20261021/official-reference.json)에 보존했다. 현재 upstream에는kiwoom_docs가 없으며 새 FID/parser/packet/REST/order semantics를 정의하지 않는다. 기존 REG refresh1/0B·0D 및 item suffix 계약을 재사용한다. live 수신/실제 broker 동작은 테스트하지 않았다.
+
+최종 검증은 source/consumer587 PASS, 새 인계16 PASS와 기존 수량/비상시/holding 준비 세대 대표9 PASS를 기준으로 아래 배포본 준비 결과에 기록한다. 전체 전략의 무결함이나 정책 개선 성과를 뜻하지 않는다. 코드·release 선택·현재 PID·다음 자연 receipts·실제 비용/경제성은 별도다. 원 `HoldingProfitExitSourceContractRepair`의 Acceptance와 단일 전환 owner `DirectFamilyPreopenPolicyHandoff`를 유지한다.
+
+
+### 코드 리뷰·수정·검증 완료
+
+기준502b3c083 대비 source3파일 +99/-24, tests2파일 +102/-5, docs3파일 +47/-0(최종 준비 이력 전)이다. source 순증은 실행 venue와 독립된 quote scope/raw provenance, current epoch·양수 depth 검사 및 기존 발행 세대와 새 producer/consumer를 묶는 정확 hash profile 때문이다. helper/module/entrypoint 이동0·신규 module/entrypoint0이며 다른 세션 변경을 포함하지 않았다. 원 지점의 guard 교체와 canonical item mapper 통합을 완료했고 기존 historical reader는 위 현재 소비자 근거로 retained다.
+
+최종 source587 PASS, 새 exact-generation 인계16 PASS, 기존 준비 세대 대표9 PASS, Python compile·diff check·문서 print-only parser PASS다. self review의 수정은 quote selector를 물리 venue와 구분하는 scope 명명, verified/source/raw fill 상태 전달, bid 잔량의 양수 source 검증이다. 실패 실험의 test import 누락은 fixture에 pytest import를 보완해 재검증했다. 원본 실패 bytes/log와 역사 결손은 보존했다. 최종 native active-policy/parity·delay/stop/holding·4family fixture·report currentness와 actual PID/epoch 원본 보존은 아래 준비 결과에 별도로 기록한다.

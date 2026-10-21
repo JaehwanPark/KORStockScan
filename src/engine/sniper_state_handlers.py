@@ -37773,6 +37773,9 @@ def _risky_micro_route_scoped_0d_bbo(
         normalized = session.strip().lower()
         if normalized == "krx_regular":
             return datetime_time(9, 0) <= local_time <= TIME_15_30
+        if normalized in {"krx_nxt_aftermarket", "krx_nxt_aftermarket_close_only",
+                           "krx_nxt_aftermarket_terminal_exit"}:
+            return datetime_time(16, 0) <= local_time < TIME_20_00
         if normalized in {"krx_like_premarket", "premarket_krx_like", "nxt_premarket"}:
             return datetime_time(8, 0) <= local_time < datetime_time(8, 50)
         if normalized in {"nxt", "nxt_regular_overlap"}:
@@ -37794,16 +37797,19 @@ def _risky_micro_route_scoped_0d_bbo(
 
     route_snapshots = ws_data.get("realtime_type_snapshots_by_route")
     route_snapshots = route_snapshots if isinstance(route_snapshots, dict) else {}
-    premarket_cohort = venue == "PREMARKET_KRX_LIKE"
+    premarket_cohort = venue == "PREMARKET_KRX_LIKE" or (venue == "SOR"
+        and session.lower() in {"krx_like_premarket", "premarket_krx_like", "nxt_premarket"})
     required_route = (
-        "krx_regular"
+        "krx_only"
         if venue == "KRX"
-        else "krx_nxt_integrated" if premarket_cohort else "nxt_only"
+        else "krx_nxt_integrated" if premarket_cohort or venue == "SOR" else "nxt_only"
     )
     candidate_route = str(expected_market_route or required_route).strip().lower()
+    candidate_route = "krx_only" if candidate_route == "krx_regular" else candidate_route
     matches: list[tuple[dict[str, Any], str, str, str, dict[str, Any]]] = []
     exact_route_outside_session = False
     integrated_route_depth_proof_invalid = False
+    transport_epoch_mismatch = False
     for route_snapshot in route_snapshots.values():
         if not isinstance(route_snapshot, dict):
             continue
@@ -37812,9 +37818,16 @@ def _risky_micro_route_scoped_0d_bbo(
             continue
         observed_venue = str(snapshot.get("effective_venue") or "").strip().upper()
         observed_route = str(snapshot.get("market_route") or "").strip()
+        observed_route_key = "krx_only" if observed_route.lower() == "krx_regular" else observed_route.lower()
         observed_item = str(snapshot.get("item") or "").strip().upper()
         observed_code = observed_item.split("_", 1)[0][-6:]
         if observed_code != code:
+            continue
+        current_epoch = ws_data.get("market_data_transport_epoch")
+        if current_epoch is not None and (
+                type(current_epoch) is not int or type(snapshot.get("transport_epoch")) is not int
+                or snapshot["transport_epoch"] != current_epoch):
+            transport_epoch_mismatch = True
             continue
         route_scope_status = "exact_0d_route_snapshot"
         observed_venue_resolution = "subscription_item_exact_venue"
@@ -37823,14 +37836,14 @@ def _risky_micro_route_scoped_0d_bbo(
         if premarket_cohort:
             if (
                 candidate_route == "nxt_only"
-                and observed_route.lower() == "nxt_only"
+                and observed_route_key == "nxt_only"
                 and observed_venue == "NXT"
                 and observed_item == f"{code}_NX"
             ):
                 pass
             elif (
                 candidate_route == "krx_nxt_integrated"
-                and observed_route.lower() == "krx_nxt_integrated"
+                and observed_route_key == "krx_nxt_integrated"
                 and not observed_venue
                 and observed_item == f"{code}_AL"
             ):
@@ -37847,9 +37860,9 @@ def _risky_micro_route_scoped_0d_bbo(
             else:
                 continue
         elif (
-            venue == "KRX"
+            venue in {"KRX", "SOR"}
             and candidate_route == "krx_nxt_integrated"
-            and observed_route.lower() == candidate_route
+            and observed_route_key == candidate_route
             and observed_venue in {"", "SOR"}
             and observed_item == f"{code}_AL"
         ):
@@ -37864,7 +37877,7 @@ def _risky_micro_route_scoped_0d_bbo(
             depth_proof_status = "not_required_integrated_sor_execution"
         elif (
             observed_venue != venue
-            or observed_route.lower() != candidate_route
+            or observed_route_key != candidate_route
             or (venue == "KRX" and observed_item != code)
             or (venue == "NXT" and observed_item != f"{code}_NX")
         ):
@@ -37888,6 +37901,8 @@ def _risky_micro_route_scoped_0d_bbo(
     if not matches:
         if exact_route_outside_session:
             status = "exact_0d_route_snapshot_outside_candidate_session"
+        elif transport_epoch_mismatch:
+            status = "exact_0d_route_snapshot_transport_epoch_mismatch"
         elif integrated_route_depth_proof_invalid:
             status = "integrated_0d_route_depth_proof_missing_or_invalid"
         else:
@@ -38226,7 +38241,8 @@ def _post_sell_exact_route_subscription_snapshot(
         exact_route_present = bool(
             base_subscription_present
             and expected_market_route
-            and expected_market_route in registered_routes
+            and ("krx_only" if expected_market_route == "krx_regular" else expected_market_route)
+                in {"krx_only" if route == "krx_regular" else route for route in registered_routes}
         )
         if exact_route_present:
             resolution = "exact_registered_market_route_present"
@@ -38266,6 +38282,7 @@ def _post_sell_exact_route_subscription_item(
     if len(normalized) != 6 or not normalized.isdigit():
         return ""
     return {
+        "krx_only": normalized,
         "krx_regular": normalized,
         "nxt_only": f"{normalized}_NX",
         "krx_nxt_integrated": f"{normalized}_AL",
@@ -38417,6 +38434,8 @@ def _post_sell_executable_bbo_gap_reason(
     market_fields: dict[str, Any],
     bid: int,
     ask: int,
+    bid_qty: int,
+    bid_qty_source_valid: bool,
     quote_epoch: float,
     sell_epoch: float,
     quote_age_ms: float | None,
@@ -38449,6 +38468,8 @@ def _post_sell_executable_bbo_gap_reason(
         return "route_scoped_ws_price_missing"
     if bid <= 0 or ask < bid:
         return "route_scoped_bbo_missing_or_invalid"
+    if bid_qty <= 0 or not bid_qty_source_valid:
+        return "route_scoped_bid_depth_missing_or_invalid"
     if quote_epoch <= 0:
         return "route_scoped_quote_epoch_missing"
     if quote_epoch <= sell_epoch:
@@ -38507,7 +38528,7 @@ def observe_post_sell_executable_bbo_horizons(
             scoped_ws, route_scope_fields = _risky_micro_route_scoped_0d_bbo(
                 ws_data,
                 code=code,
-                venue=str(registration.get("venue") or "").strip().upper(),
+                venue=str(registration.get("quote_observer_scope") or registration.get("venue") or "").strip().upper(),
                 session=str(registration.get("session") or "").strip(),
                 expected_market_route=str(
                     registration.get("expected_market_route") or ""
@@ -38530,6 +38551,8 @@ def observe_post_sell_executable_bbo_horizons(
                 market_fields=market_fields,
                 bid=bid,
                 ask=ask,
+                bid_qty=_safe_int(scoped_ws.get("best_bid_qty"), 0),
+                bid_qty_source_valid=scoped_ws.get("best_bid_qty_source_valid") is True,
                 quote_epoch=quote_epoch,
                 sell_epoch=sell_epoch,
                 quote_age_ms=quote_age_ms,
@@ -38639,6 +38662,11 @@ def observe_post_sell_executable_bbo_horizons(
                     "post_sell_executable_bbo_broker_route": (
                         registration.get("broker_route") or "-"
                     ),
+                    "post_sell_executable_bbo_quote_observer_scope": registration.get("quote_observer_scope") or registration.get("venue"),
+                    "post_sell_executable_bbo_execution_venue_verified": registration.get("actual_execution_venue_verified") is True,
+                    "post_sell_executable_bbo_execution_venue_source": registration.get("actual_execution_venue_source") or "unknown",
+                    "post_sell_executable_bbo_broker_actual_execution_venue": registration.get("broker_actual_execution_venue") or "UNKNOWN",
+                    "post_sell_executable_bbo_best_bid_qty": _safe_int(scoped_ws.get("best_bid_qty"), 0),
                     "post_sell_executable_bbo_venue": (
                         registration.get("venue") or "UNKNOWN"
                     ),

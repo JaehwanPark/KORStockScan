@@ -3928,6 +3928,45 @@ for (_trigger, _holding_input_sha), _variant in REVIEWED_HOLDING_INPUT_DEPENDENC
     REVIEWED_HOLDING_RESEARCH_DEPENDENCIES[_trigger][_holding_input_sha] = _variant['dependencies']
 
 
+# Post-sell source registration consumes the exact native route vocabulary.
+# Unknown physical fill venue stays unresolved; issued source readers remain.
+REVIEWED_POST_SELL_SOURCE_HASHES = {'src/engine/sniper_post_sell_feedback.py': '03026d2b252fa18fc5c36aaa9e1df7c9f3a0ae43ad2debc541882a78e8a9c275',
+ 'src/engine/sniper_state_handlers.py': '9bf2d5b2a3fc5461beaaaf0ca4190e3bf8e4a12d4465d333a495b746f00f98b8'}
+REVIEWED_POST_SELL_SOURCE_PAIRS = {'src/engine/sniper_post_sell_feedback.py': (('8fcbf7de95acc2e5ba3121be0f20ece3bbefc7bd22fb57cc4cebe938115fc2d9',
+                                              '03026d2b252fa18fc5c36aaa9e1df7c9f3a0ae43ad2debc541882a78e8a9c275'),),
+ 'src/engine/sniper_state_handlers.py': (('02be17b70de8acfa2bc2750c25b2292117e4b5b6c1680a95b1d3e0e65b245d19',
+                                          '9bf2d5b2a3fc5461beaaaf0ca4190e3bf8e4a12d4465d333a495b746f00f98b8'),
+                                         ('5900377f71e90559ca111bf60448fa60375464af10693e1b5dd16158078c8eaf',
+                                          '9bf2d5b2a3fc5461beaaaf0ca4190e3bf8e4a12d4465d333a495b746f00f98b8'),
+                                         ('669b6109e36f81e9dee263d1c3e31011d55fd612d5641713c6ee109a827a9425',
+                                          '9bf2d5b2a3fc5461beaaaf0ca4190e3bf8e4a12d4465d333a495b746f00f98b8'),
+                                         ('7c24ee7d6fbd307be13e1d64e1c4995fa06a06f098b7c0144f54984b624a1c5d',
+                                          '9bf2d5b2a3fc5461beaaaf0ca4190e3bf8e4a12d4465d333a495b746f00f98b8'),
+                                         ('885af7dd480a520e98502bcd6729586b4d21016de8254a4a7d9e299389f09ed4',
+                                          '9bf2d5b2a3fc5461beaaaf0ca4190e3bf8e4a12d4465d333a495b746f00f98b8'),
+                                         ('8a0c18d2c097b063a8349907f39e6057d43b7ad9ef173e5f6c4e1be48f8b21f9',
+                                          '9bf2d5b2a3fc5461beaaaf0ca4190e3bf8e4a12d4465d333a495b746f00f98b8'),
+                                         ('8cc435544ceeda76309b9051179af20022f100c8b1bad48356636fb51b9f101c',
+                                          '9bf2d5b2a3fc5461beaaaf0ca4190e3bf8e4a12d4465d333a495b746f00f98b8'),
+                                         ('c47a60dccf7266e27880b94cb9bccf3b2c23c6c513ede76cce33bce212abfd55',
+                                          '9bf2d5b2a3fc5461beaaaf0ca4190e3bf8e4a12d4465d333a495b746f00f98b8'),
+                                         ('ee62c7703fe10c8c602ad13b351ffc5ab1976af5f0d0709e8f09f082a8a81d38',
+                                          '9bf2d5b2a3fc5461beaaaf0ca4190e3bf8e4a12d4465d333a495b746f00f98b8'),
+                                         ('f79445872ae7b091f494d9e0ee7880b0476f20cd009492803261e44bd70f3c42',
+                                          '9bf2d5b2a3fc5461beaaaf0ca4190e3bf8e4a12d4465d333a495b746f00f98b8'))}
+REVIEWED_POST_SELL_SOURCE_DEPENDENCY_VARIANTS = {
+    (trigger, REVIEWED_POST_SELL_SOURCE_HASHES.get(trigger, sha)): {**value,
+        'selector_path': 'src/engine/sniper_post_sell_feedback.py',
+        'selector_sha256': REVIEWED_POST_SELL_SOURCE_HASHES['src/engine/sniper_post_sell_feedback.py'],
+        'dependencies': {**value['dependencies'], **REVIEWED_POST_SELL_SOURCE_HASHES},
+        'contract_extensions': {origin: {name: REVIEWED_POST_SELL_SOURCE_HASHES.get(os.path.normpath(name), digest)
+            for name, digest in paths.items()} for origin, paths in value['contract_extensions'].items()},
+    } for (trigger, sha), value in REVIEWED_HOLDING_INPUT_DEPENDENCY_VARIANTS.items()
+}
+for (_trigger, _post_sell_source_sha), _variant in REVIEWED_POST_SELL_SOURCE_DEPENDENCY_VARIANTS.items():
+    REVIEWED_HOLDING_RESEARCH_DEPENDENCIES[_trigger][_post_sell_source_sha] = _variant['dependencies']
+
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -4039,6 +4078,9 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     nonfixed_capacity_present = any((root / name).is_file()
         and hashlib.sha256(candidate_bytes(name)).hexdigest() == sha
         for name, sha in REVIEWED_NONFIXED_CAPACITY_HASHES.items())
+    post_sell_source_present = any((root / name).is_file()
+        and hashlib.sha256(candidate_bytes(name)).hexdigest() == sha
+        for name, sha in REVIEWED_POST_SELL_SOURCE_HASHES.items())
     contract_names = {repository_name(name) for name in paths.values()}
     for trigger, generations in REVIEWED_HOLDING_RESEARCH_DEPENDENCIES.items():
         if trigger not in contract_names:
@@ -4047,7 +4089,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         dependencies = generations.get(trigger_sha, {})
         # New exact selectors precede their historical parent. The first match
         # selects one complete generation, never per-file SHA alternatives.
-        for variants in (REVIEWED_HOLDING_INPUT_DEPENDENCY_VARIANTS,
+        for variants in (REVIEWED_POST_SELL_SOURCE_DEPENDENCY_VARIANTS,
+                         REVIEWED_HOLDING_INPUT_DEPENDENCY_VARIANTS,
                          REVIEWED_NONFIXED_CAPACITY_DEPENDENCY_VARIANTS,
                          REVIEWED_QUANTITY_STAGE_DEPENDENCY_VARIANTS,
                          REVIEWED_QUANTITY_CAPTURE_DEPENDENCY_VARIANTS,
@@ -4204,6 +4247,10 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
                             **REVIEWED_HOLDING_INPUT_DEPENDENCY_HASHES}
             extensions = {name: REVIEWED_HOLDING_INPUT_DEPENDENCY_HASHES.get(repository_name(name), sha)
                           for name, sha in extensions.items()}
+        if post_sell_source_present:
+            dependencies = {**dependencies, **REVIEWED_POST_SELL_SOURCE_HASHES}
+            extensions = {name: REVIEWED_POST_SELL_SOURCE_HASHES.get(repository_name(name), sha)
+                          for name, sha in extensions.items()}
         dependencies_by_trigger[trigger] = (trigger_sha, dependencies)
     for key, name in paths.items():
         after = candidate_bytes(name)
@@ -4220,7 +4267,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         if before == after:
             continue
         pair = (hashlib.sha256(before).hexdigest(), hashlib.sha256(after).hexdigest())
-        if (pair in REVIEWED_HOLDING_INPUT_PAIRS.get(repository_name(name), ())
+        if (pair in REVIEWED_POST_SELL_SOURCE_PAIRS.get(repository_name(name), ())
+                or pair in REVIEWED_HOLDING_INPUT_PAIRS.get(repository_name(name), ())
                 or pair in REVIEWED_NONFIXED_CAPACITY_PAIRS.get(repository_name(name), ())
                 or pair in REVIEWED_DELAY_MACHINE_PARENT_PAIRS.get(repository_name(name), ())
                 or pair in REVIEWED_QUANTITY_STAGE_PAIRS.get(repository_name(name), ())
