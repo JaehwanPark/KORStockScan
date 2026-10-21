@@ -708,9 +708,6 @@ def verify_source(data_root, report, *, pipeline_reference_only=False):
     receipt = report.get('source_receipt')
     if not isinstance(receipt, dict) or receipt.get('schema') != 'pre_submit_delay_input_generation_v1':
         raise ValueError('initial_delay_source_window_unverified')
-    if report.get('machine_parent_compatibility') is not None:
-        from src.engine.automation.pre_submit_delay_situation_projection import machine_parent_mapping
-        machine_parent_mapping(report['machine_parent_compatibility'], target_date=report['effective_date'])
     if receipt.get('native_situation_projection'):
         from src.engine.automation.pre_submit_delay_situation_projection import verify
         verify(receipt['native_situation_projection'])

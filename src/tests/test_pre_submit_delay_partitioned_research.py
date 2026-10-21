@@ -129,7 +129,8 @@ def test_machine_parent_proof_rejects_wrong_date_hash_ancestry_and_missing_sourc
     with pytest.raises(FileNotFoundError):recovery.machine_parent_mapping(proof,target_date='2026-10-05')
 
 
-def test_cached_recalculation_verifies_new_native_sources_before_publication(tmp_path,monkeypatch):
+@pytest.mark.parametrize('native_changed', [False, True])
+def test_cached_recalculation_verifies_new_native_sources_before_publication(tmp_path,monkeypatch,native_changed):
     from src.engine.automation import pre_submit_delay_situation_projection as recovery
     original,_=fixture(tmp_path/'source',monkeypatch)
     _machine_chain(tmp_path/'native',monkeypatch)
@@ -138,10 +139,16 @@ def test_cached_recalculation_verifies_new_native_sources_before_publication(tmp
         proof=report.get('machine_parent_compatibility')
         assert proof is not None
         checked.append(recovery.machine_parent_mapping(proof,target_date=report['effective_date']))
+        if native_changed:
+            Path(proof['chain'][1]['path']).unlink()
     monkeypatch.setattr(initial,'verify_source',verify)
-    partitioned.run(tmp_path/'native',tmp_path/'candidate','2026-10-02',publication_date='2026-10-02',
-        effective_date='2026-10-05',require_ledger=True,dry_run=True,contract=initial.code_contract(),
-        cached=(original,iter(original['qualified_projection'])))
+    def run():
+        return partitioned.run(tmp_path/'native',tmp_path/'candidate','2026-10-02',publication_date='2026-10-02',
+            effective_date='2026-10-05',require_ledger=True,dry_run=True,contract=initial.code_contract(),
+            cached=(original,iter(original['qualified_projection'])))
+    if native_changed:
+        with pytest.raises(FileNotFoundError):run()
+    else:run()
     assert checked and checked[0]['a'*64]=='c'*64
 
 

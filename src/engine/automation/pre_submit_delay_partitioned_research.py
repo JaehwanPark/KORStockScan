@@ -544,12 +544,16 @@ def run(root, output, day, *, publication_date, effective_date, require_ledger, 
 
 
 def finish(output, day, report, policy, verify, dry_run):
-    verify()
+    def verify_selection_sources():
+        verify()
+        from .pre_submit_delay_situation_projection import machine_parent_mapping
+        machine_parent_mapping(report.get('machine_parent_compatibility'), target_date=report['effective_date'])
+    verify_selection_sources()
     if dry_run: return
     if policy['runtime_apply_allowed']:
         pointer=Path(output)/'threshold_cycle/pre_submit_delay_policy'/f'committed_{day}.json'
         incumbent=initial.committed_paths(output,day,validate_selection=False)[3]['manifest_sha256'] if pointer.exists() else None
-        initial.publish(output,report,policy,expected_incumbent=incumbent,source_verifier=verify)
+        initial.publish(output,report,policy,expected_incumbent=incumbent,source_verifier=verify_selection_sources)
     else:
         # A blocked root still retains its full census without activating it.
         base=Path(output)/'report/pre_submit_delay_tuning'/f'blocked-{day}-{initial.digest(report)}'
