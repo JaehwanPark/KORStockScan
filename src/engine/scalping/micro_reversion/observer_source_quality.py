@@ -95,12 +95,27 @@ def closed_pre_enqueue_epoch_quarantine_validation(
     for field in (
         *source_loss_counters(collector),
         "stale_sequence_epoch_envelope_count",
-        "path_exchange_timestamp_regression_count",
-        "path_exchange_timestamp_regression_exceeded_count",
-        "path_exchange_timestamp_regression_quarantined_count",
     ):
         if type(collector.get(field)) is not int or collector[field] != 0:
             return {**rejected, "invalid_counter": field}
+    total, quarantined, exceeded = (collector.get(field) for field in (
+        "path_exchange_timestamp_regression_count",
+        "path_exchange_timestamp_regression_quarantined_count",
+        "path_exchange_timestamp_regression_exceeded_count"))
+    if (any(type(value) is not int or value < 0 for value in (total,quarantined,exceeded))
+            or total != quarantined or exceeded != 0):
+        return rejected
+    if total:
+        # Main already preserves tolerated ordering rows as path-ineligible.
+        # Their exact accounting can coexist with a separate ingress rejection.
+        accepted=collector.get('path_accepted_envelope_count')
+        maximum=collector.get('path_exchange_timestamp_regression_max_ms')
+        tolerance=collector.get('path_exchange_timestamp_regression_tolerance_ms')
+        if (collector.get('source_contract') != MAIN_SOURCE_CONTRACT
+                or any(type(value) is not int or value < 0 for value in (accepted,maximum,tolerance))
+                or not 0 < maximum <= tolerance
+                or accepted + total != collector.get('enqueued_count')):
+            return rejected
     census = timestamp_source_quality_census(dict(collector))
     if (
         census.get("exact_rejected_row_exclusion_proven") is not True

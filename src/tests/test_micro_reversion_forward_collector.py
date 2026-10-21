@@ -2076,17 +2076,20 @@ def test_integrated_stream_preserves_raw_volume_lineage_without_inventing_missin
     assert row["trade_qty"] == 10 and row["actual_order_submitted"] is False
 
 
-def _closed_main_rejection_source(tmp_path, count=65, *, reconnect=False, close_day='2026-08-08'):
+def _closed_main_rejection_source(tmp_path, count=65, *, reconnect=False, close_day='2026-08-08', regression=False):
     from src.engine.scalping.micro_reversion.canary_monitor import write_canary_runtime_snapshot
     c = ForwardObservationCollector(
         flags=ObserverFeatureFlags(observer_enabled=True, path_capture_enabled=True),
         config=ForwardCollectorConfig(output_root=tmp_path/'data/observations/scalp_micro_reversion_forward'),
     )
     c.start()
-    c.observe_kiwoom_0b('000001', _snapshot(), realtime_type='0B')
+    received=int(datetime.fromisoformat('2026-08-08T09:00:54.121+09:00').timestamp()*1000)
+    c.observe_kiwoom_0b('000001', _snapshot(exchange_time='090054000',received_at_ms=received) if regression else _snapshot(), realtime_type='0B')
     deadline = time.monotonic() + 2
     while c.runtime_snapshot().writer_persisted_envelope_count != 1 and time.monotonic() < deadline:
         time.sleep(.005)
+    if regression:
+        c.observe_kiwoom_0b('000001',_snapshot(exchange_time='090053000',received_at_ms=received+4),realtime_type='0B')
     for i in range(count):
         if reconnect and i == count // 2:
             c.begin_transport_epoch()
@@ -2099,6 +2102,28 @@ def _closed_main_rejection_source(tmp_path, count=65, *, reconnect=False, close_
         now=datetime.fromisoformat(close_day+'T20:00:00+09:00'))
     closed = next((latest.parent/'closed').glob('2026-08-08-*.json'))
     return c, payload, closed
+
+
+@pytest.mark.parametrize('fault',[None,'counter','exceeded','accepted','missing','authority','receipt'])
+def test_closed_main_ingress_rejection_keeps_tolerated_path_rows_quarantined(tmp_path,fault):
+    import gzip
+    from src.engine.scalping.continuous_reversal_source import freeze_normalized_sources
+    from src.engine.scalping.micro_reversion.observer_source_quality import main_raw_epoch_validation
+    _,payload,_=_closed_main_rejection_source(tmp_path,count=1,regression=True)
+    snap=payload['collector_snapshot']
+    assert snap['path_exchange_timestamp_regression_quarantined_count']==1
+    assert snap['path_accepted_envelope_count']==1
+    if fault=='counter':snap['path_exchange_timestamp_regression_count']=2
+    elif fault=='exceeded':snap['path_exchange_timestamp_regression_exceeded_count']=1
+    elif fault=='accepted':snap['path_accepted_envelope_count']=2
+    elif fault=='missing':snap.pop('path_exchange_timestamp_regression_quarantined_count')
+    elif fault=='authority':snap['trading_runtime_effect']=True
+    elif fault=='receipt':snap['timestamp_rejection_ledger']['sha256']='0'*64
+    assert main_raw_epoch_validation(payload,source_date='2026-08-08')['eligible'] is (fault is None)
+    if fault is None:
+        parts=freeze_normalized_sources(tmp_path/'data','2026-08-08',tmp_path/'freeze')
+        rows=[row for part in parts for values in json.loads(gzip.decompress(Path(part['path']).read_bytes()))['symbols'].values() for row in values]
+        assert sum(row[8] for row in rows)==1
 
 
 @pytest.mark.parametrize('count,reconnect', [(64, False), (65, False), (121, False), (1000, True)])

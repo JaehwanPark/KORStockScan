@@ -4114,6 +4114,7 @@ for (_trigger, _operator_market_sha), _variant in REVIEWED_OPERATOR_MARKET_DEPEN
 REVIEWED_P5_ANCESTRY_HASHES = {
     'src/engine/infrastructure/startup_validation_code_context.py':
         '6366e821e8af94ff9b9ce582593a5c317f608b93a826e8d1951d8214e0b4922c',
+    'src/engine/scalping/micro_reversion/observer_source_quality.py': '9f87eb48e36b9a0d19ac97289f0fc667d9217da75a8270d60377fb2a351cce66',
 }
 REVIEWED_P5_ANCESTRY_DEPENDENCY_VARIANTS = {
     key: {**value,
