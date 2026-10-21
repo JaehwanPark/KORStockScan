@@ -1174,3 +1174,12 @@ trailing의 최초 직접 재생은 all_scope_assembly_code_changed로 차단됐
 수리→리뷰→보완→재리뷰를 완료했다. self review에서 비용 추정 provenance가 AI payload whitelist에서 빠지는 문제를 보완하고, native hash helper 이름과 충돌한 profile 등록 변수도 바로잡아 직접 회귀를 추가했다. 새로운 caller/branch는 기존 owner 안의 순수 projection·비용 모델·정상 FALSE 분류뿐이며 신규 dispatch/entrypoint/engine-root module은 없다. source8파일 +244/-20, tests5파일 +233/-5, docs3파일 +88/-0(후속 준비 결과 기록 전)이다. 이동은0, unrelated canonical 변경은 포함하지 않는다.
 
 최종 생산자·소비자 313 PASS, 새 인계 complete-generation 15개와 hash-helper1개 PASS(같은 실행의 선별된 source 포함327 PASS), 기존 수량/비상시 발행 세대 인계30 PASS다. Python compile·diff check·문서 parser/현재 owner 유일성도 확인했다. 첫 실험에서 발생한 test fixture의 quote-clock 누락/queue seal 누락은 실제 fixture 계약에 맞춰 고쳤으며 보호 한도는 변경하지 않았다. 확대 실행의 기존 WATCHING 테스트 `test_watching_state_logs_latency_entry_price_guard`는 준비 부모584d와 현재 모두 동일하게 실패했다(주문 mock 기대와 기존 preflight 차이). 이 작업의 HOLDING·청산 수리 회귀는 최종 별도 실행으로 모두 통과했다. 부모 실패는 이 source 수리의 성공으로 덮지 않으며 기존 entry owner에서 추적할 인접 한계다. 실제 provider·주문·Telegram·재기동 검증은 실행하지 않았다.
+
+
+### 최종 통합 배포본 준비 결과
+
+준비 코드 commit **`0b36f17fcdf099fb0bbabec112c79219504782a4`**, 배포 디렉터리 `/home/ubuntu/KORStockScan-runtime-releases/normal-exit-input-20261021-0b36f17fc`를 clean detached worktree로 만들고 native router 검증을 통과했다. `eeaed90f6`와 최초 전환/수량/지연/약세 연구의 기존8개 ancestry를 모두 확인했다. [최종 readiness](../../tmp/normal-exit-receipt-repair-20261021/readiness.json).
+
+현재 정책 parity128 scopes/76,800rows/598hits/불일치0, 원 target10/21의 active/delay/stop/holding 인계 PASS, 4family capability PASS다. 변경된 rising_missed/holding_vote fixture만 새 코드 세대로 native 재검증했다. 닫힌10/20 입력을 기존 승인 producer로 재결속하여 trailing20,824scope native 재검증을53.3초/RSS182,888KiB에 완료했다. 원 holding report·initial policy는 보존했다. 최종 `verify_candidate_report_currentness` PASS이며 수량은 기존 code-bound prepared generation을 그대로 소비했다(`findings=[]`, 원 historical source_gap 유지).
+
+후보 준비 수용은 완료했지만 실제 전환/PID/자연 영수증 수용은 아니다. 실제 선택 `ea68c5a85`, PID1724066/start19233026/cwd와 원 selector·정책·고정 수량 산출물9개 SHA가 동일하다. 기존 epoch1792547808026387070은 여전히 running이다. 재기동·selector 변경·주문·provider·Telegram·전환 예약은0이며 자연 종료를 기다리는 세션 대기 작업도 만들지 않았다. 원 자연 종료 증빙과 후속 실행 지시의 범위에서 기존 ordered 전환 절차를 사용한다. 원 영수증7건·삼성 최초 arm·실제 비용·ADD 비교의 미확인 상태는 위 기존 owner에서 계속 남긴다.
