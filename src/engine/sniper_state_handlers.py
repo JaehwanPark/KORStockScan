@@ -93690,6 +93690,12 @@ def _sell_cancel_reconciliation_blocks_holding(
 
     if not bool(stock.get("sell_cancel_reconciliation_required")):
         return False
+    # An allocation gap is not evidence of a submitted SELL. Keep the
+    # inventory interlock without inventing a cancel generation or order.
+    if stock.get("broker_symbol_allocation_conflict") and not any(stock.get(key)
+            for key in ("sell_odno", "sell_ord_no", "sell_submit_pending",
+                        "sell_submit_generation", "_sell_execution_receipt_state")):
+        return True
     retry_at = _safe_float(stock.get("sell_cancel_reconciliation_retry_at"), 0.0)
     if retry_at > now_ts:
         return True

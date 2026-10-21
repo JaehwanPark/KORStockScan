@@ -3558,6 +3558,42 @@ REVIEWED_FIXED_WAIT_DEPENDENCY_VARIANTS = {
 }
 
 
+# Exact native receipt handoff and bounded owned inventory recovery.
+REVIEWED_ENTRY_RECEIPT_HASHES = {'src/engine/sniper_state_handlers.py': 'c47a60dccf7266e27880b94cb9bccf3b2c23c6c513ede76cce33bce212abfd55',
+ 'src/engine/sniper_execution_receipts.py': '26b75b658f2fbb8f0411fed3d03a5a1f26923a2ad6d0610fa550aaf9a0ad4b51',
+ 'src/engine/sniper_sync.py': '95d5aab3d869cc3c49b8b4d416812603f767468e050277b11e3da89b4601b103',
+ 'src/engine/monitoring/policy_generation_code_handoff.py': '5e6fb25cea917d3d1285ea05f035abf1caeb9a1d657aa01db6617d3405ce44fe'}
+REVIEWED_ENTRY_RECEIPT_PAIRS = {'src/engine/sniper_state_handlers.py': (('885af7dd480a520e98502bcd6729586b4d21016de8254a4a7d9e299389f09ed4',
+                                          'c47a60dccf7266e27880b94cb9bccf3b2c23c6c513ede76cce33bce212abfd55'),
+                                         ('8a0c18d2c097b063a8349907f39e6057d43b7ad9ef173e5f6c4e1be48f8b21f9',
+                                          'c47a60dccf7266e27880b94cb9bccf3b2c23c6c513ede76cce33bce212abfd55'),
+                                         ('02be17b70de8acfa2bc2750c25b2292117e4b5b6c1680a95b1d3e0e65b245d19',
+                                          'c47a60dccf7266e27880b94cb9bccf3b2c23c6c513ede76cce33bce212abfd55')),
+ 'src/engine/sniper_execution_receipts.py': (('a169bb2c9d48b0ce289488985e7df6c6a8d83df9fc9257b63ef4bbf0e2fbbe80',
+                                              '26b75b658f2fbb8f0411fed3d03a5a1f26923a2ad6d0610fa550aaf9a0ad4b51'),
+                                             ('20d1f9b5403440f10571199bd33e1ba103aa611512e6b7d5151fbe07acd94620',
+                                              '26b75b658f2fbb8f0411fed3d03a5a1f26923a2ad6d0610fa550aaf9a0ad4b51')),
+ 'src/engine/sniper_sync.py': (('baed080aaa9dd6708f1999ed4a811a758df2bb683449a773e5418303affd4f34',
+                                '95d5aab3d869cc3c49b8b4d416812603f767468e050277b11e3da89b4601b103'),),
+ 'src/engine/monitoring/policy_generation_code_handoff.py': (('905dd6a05df9f19fac25292a3a1e7fe579281e4aeabd84d4965855f9fef928b1',
+                                                              '5e6fb25cea917d3d1285ea05f035abf1caeb9a1d657aa01db6617d3405ce44fe'),
+                                                             ('47db04eba70a27e3fbb5c4078e828be38920859efbf4224e3049582776ff6d5f',
+                                                              '5e6fb25cea917d3d1285ea05f035abf1caeb9a1d657aa01db6617d3405ce44fe'),
+                                                             ('78b3d4a55b89ccd784bc2120d7caf0cc47b65656ca75d4cb3bcd20e2edc6ac1a',
+                                                              '5e6fb25cea917d3d1285ea05f035abf1caeb9a1d657aa01db6617d3405ce44fe'),
+                                                             ('a398aec3dba6e1f5ece0d53955565f49f9673423c9a215d9c394defa3b62ed9d',
+                                                              '5e6fb25cea917d3d1285ea05f035abf1caeb9a1d657aa01db6617d3405ce44fe'))}
+REVIEWED_ENTRY_RECEIPT_DEPENDENCY_VARIANTS = {
+    key: {**value,
+        'selector_path': 'src/engine/sniper_execution_receipts.py',
+        'selector_sha256': REVIEWED_ENTRY_RECEIPT_HASHES['src/engine/sniper_execution_receipts.py'],
+        'dependencies': {**value['dependencies'], **REVIEWED_ENTRY_RECEIPT_HASHES},
+        'contract_extensions': {origin: {name: REVIEWED_ENTRY_RECEIPT_HASHES.get(os.path.normpath(name), digest)
+            for name, digest in paths.items()} for origin, paths in value['contract_extensions'].items()},
+    } for key, value in REVIEWED_FIXED_WAIT_DEPENDENCY_VARIANTS.items()
+}
+
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -3636,6 +3672,9 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     finalization_health_present = any((root / name).is_file()
         and hashlib.sha256(candidate_bytes(name)).hexdigest() == sha
         for name, sha in REVIEWED_FINALIZATION_HEALTH_HASHES.items())
+    entry_receipt_present = any((root / name).is_file()
+        and hashlib.sha256(candidate_bytes(name)).hexdigest() == sha
+        for name, sha in REVIEWED_ENTRY_RECEIPT_HASHES.items())
     fixed_wait_present = any((root / name).is_file()
         and hashlib.sha256(candidate_bytes(name)).hexdigest() == sha
         for name, sha in REVIEWED_FIXED_WAIT_HASHES.items())
@@ -3650,7 +3689,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         dependencies = generations.get(trigger_sha, {})
         # New exact selectors precede their historical parent. The first match
         # selects one complete generation, never per-file SHA alternatives.
-        for variants in (REVIEWED_FIXED_WAIT_DEPENDENCY_VARIANTS,
+        for variants in (REVIEWED_ENTRY_RECEIPT_DEPENDENCY_VARIANTS,
+                         REVIEWED_FIXED_WAIT_DEPENDENCY_VARIANTS,
                          REVIEWED_NATIVE_INVALIDATION_DEPENDENCY_VARIANTS,
                          REVIEWED_FINALIZATION_HEALTH_DEPENDENCY_VARIANTS,
                          REVIEWED_HISTORICAL_RESOLUTION_DEPENDENCY_VARIANTS,
@@ -3774,6 +3814,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
             dependencies = {**dependencies, **REVIEWED_NATIVE_INVALIDATION_HASHES}
         if fixed_wait_present:
             dependencies = {**dependencies, **REVIEWED_FIXED_WAIT_HASHES}
+        if entry_receipt_present:
+            dependencies = {**dependencies, **REVIEWED_ENTRY_RECEIPT_HASHES}
         dependencies_by_trigger[trigger] = (trigger_sha, dependencies)
     for key, name in paths.items():
         after = candidate_bytes(name)
@@ -3790,7 +3832,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         if before == after:
             continue
         pair = (hashlib.sha256(before).hexdigest(), hashlib.sha256(after).hexdigest())
-        if (pair in REVIEWED_FIXED_WAIT_PAIRS.get(repository_name(name), ())
+        if (pair in REVIEWED_ENTRY_RECEIPT_PAIRS.get(repository_name(name), ())
+                or pair in REVIEWED_FIXED_WAIT_PAIRS.get(repository_name(name), ())
                 or pair in REVIEWED_NATIVE_INVALIDATION_PAIRS.get(repository_name(name), ())
                 or pair in REVIEWED_FINALIZATION_HEALTH_PAIRS.get(repository_name(name), ())
                 or pair in REVIEWED_HISTORICAL_RESOLUTION_PAIRS.get(repository_name(name), ())

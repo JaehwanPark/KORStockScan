@@ -422,6 +422,7 @@ def test_post_aux_guard_successor_does_not_transitively_promote_older_reports(tm
     ('holding_vote','REVIEWED_HISTORICAL_RESOLUTION_SUCCESSORS'),
     *[(family,'REVIEWED_HOLDING_REPUBLICATION_SUCCESSORS') for family in ('entry_cancel_wait','auxiliary')],
     *[(family,'REVIEWED_FIXED_WAIT_SUCCESSORS') for family in ('rising_missed','holding_vote')],
+    *[(family,'REVIEWED_ENTRY_RECEIPT_SUCCESSORS') for family in ('entry_cancel_wait','rising_missed','holding_vote')],
 ])
 @pytest.mark.parametrize('damage', [None, 'missing', 'bytes', 'path', 'authority', 'seal', 'symlink',
                                    'current_missing', 'current_bytes', 'current_code'])
@@ -471,23 +472,19 @@ def test_successor_requires_preserved_prior_fixture_and_independent_current_fixt
 @pytest.mark.parametrize('family', list(validation.PLANS))
 def test_latest_capability_pair_is_current_and_keeps_original_source(family):
     from src.engine.monitoring import policy_generation_code_handoff as handoff
-    if family in handoff.REVIEWED_HOLDING_REPUBLICATION_SUCCESSORS:
-        old, current = handoff.REVIEWED_HOLDING_REPUBLICATION_SUCCESSORS[family]
-        prior = (handoff.REVIEWED_CLEANUP_SOURCE_SUCCESSORS if family == 'entry_cancel_wait'
-                 else handoff.REVIEWED_DELAY_CLEANUP_SUCCESSORS)
-        assert old == prior[family][1]
+    if family in handoff.REVIEWED_ENTRY_RECEIPT_SUCCESSORS:
+        old, current = handoff.REVIEWED_ENTRY_RECEIPT_SUCCESSORS[family]
         assert current == generation.code_generation(family)
+        if family == 'entry_cancel_wait':
+            assert old == handoff.REVIEWED_HOLDING_REPUBLICATION_SUCCESSORS[family][0]
+            assert old == '47eb1ef2e45d3c48e663f6b3df505bc95da07fc6bcd168394441840af4764fff'
+        else:
+            assert old == handoff.REVIEWED_FIXED_WAIT_SUCCESSORS[family][0]
         return
-    old, current = handoff.REVIEWED_FIXED_WAIT_SUCCESSORS[family]
-    assert current == generation.code_generation(family)
-    if family == 'holding_vote':
-        assert old == handoff.REVIEWED_HISTORICAL_RESOLUTION_SUCCESSORS[family][0]
-        assert old == '48b92485c831e215a1d7fe1ef8664113d68186e040a768087cbcb18ab0892ac3'
-        assert handoff.REVIEWED_DELAY_CLEANUP_SUCCESSORS[family][1] == 'b447ff4c7e39ed9f1d1884c3d032b567225d51b92d121c91e24c280c9e84c72b'
-        return
-    assert family == 'rising_missed'
+    assert family == 'auxiliary'
+    old, current = handoff.REVIEWED_HOLDING_REPUBLICATION_SUCCESSORS[family]
     assert old == handoff.REVIEWED_DELAY_CLEANUP_SUCCESSORS[family][1]
-    assert old == '8c2725f4e329c95b79a74df8167bc5bbab80d6e08fe80fb6d7e4aaaa4d4c6e8d'
+    assert current == generation.code_generation(family)
 
 
 

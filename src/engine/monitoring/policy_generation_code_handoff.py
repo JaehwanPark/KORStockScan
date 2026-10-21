@@ -280,6 +280,15 @@ REVIEWED_FIXED_WAIT_SUCCESSORS = {'rising_missed': ('8c2725f4e329c95b79a74df8167
                   '0065b34f2b56538b406ac2a2e78b2ee57fb76a88bcd3bf1e315a2d090bdb2733')}
 
 
+# Exact residual receipt custody and unit-leg inventory recovery successor.
+REVIEWED_ENTRY_RECEIPT_SUCCESSORS = {'entry_cancel_wait': ('47eb1ef2e45d3c48e663f6b3df505bc95da07fc6bcd168394441840af4764fff',
+                       'ef7a5a2134321f14b1c64a45a7f0987807a70f5623a450197e086978e1b9818e'),
+ 'rising_missed': ('8c2725f4e329c95b79a74df8167bc5bbab80d6e08fe80fb6d7e4aaaa4d4c6e8d',
+                   '12fc26d917da97f6c8478e1639f531d161cfd4085a283db372ea9ee1efd8a53a'),
+ 'holding_vote': ('48b92485c831e215a1d7fe1ef8664113d68186e040a768087cbcb18ab0892ac3',
+                  '4a2b6c4e105eb2ca538807222ce0b49ad189829f7a64d1d18dd4828b94a5e94f')}
+
+
 def _historical_fixture(contract, data, family, *, late_report=None):
     """Preserve a prior fixture without using it to certify the successor."""
     reference = contract.get('fixture_receipt')
@@ -387,7 +396,8 @@ def current_fixture_observation(observed, data):
                     or actual_pair == REVIEWED_DELAY_CLEANUP_SUCCESSORS.get(family)
                     or actual_pair == REVIEWED_HOLDING_REPUBLICATION_SUCCESSORS.get(family)
                     or actual_pair == REVIEWED_HISTORICAL_RESOLUTION_SUCCESSORS.get(family)
-                    or actual_pair == REVIEWED_FIXED_WAIT_SUCCESSORS.get(family))
+                    or actual_pair == REVIEWED_FIXED_WAIT_SUCCESSORS.get(family)
+                    or actual_pair == REVIEWED_ENTRY_RECEIPT_SUCCESSORS.get(family))
     if reader_match:
         pair = actual_pair
     if not pair or actual_pair != pair:

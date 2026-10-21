@@ -1022,6 +1022,103 @@ def _restore_registered_partial_sell(record, target, code, remaining_qty, mismat
                     source=reason)
 
 
+def _restore_registered_entry_buy(record, target, code, quantity, registry):
+    """Restore one complete unit-leg probe from its native owned fill census.
+
+    Aggregate account quantity is never a cost or ownership source. The existing
+    probe and registry owners must agree on every terminal leg before changing
+    the DB projection or releasing a phantom cancel state.
+    """
+    from src.engine import sniper_execution_receipts as receipts
+    from src.engine.scalping import entry_split_order_plan as probe
+    from src.trading.order.owner_custody_registry import OwnerOrderContext
+
+    old_qty = _to_int(getattr(record, "buy_qty", 0))
+    target_id = getattr(record, "id", None)
+    owner = f"main_scalping:{target_id}"
+    today = datetime.now(receipts._KST).date()
+    if (old_qty != 1 or type(quantity) is not int or quantity <= old_qty
+            or type(target_id) is not int or target_id <= 0
+            or str(getattr(record, "strategy", "")).upper() != "SCALPING"
+            or str(getattr(record, "status", "")).upper() not in {"HOLDING", "BUY_ORDERED", "SELL_ORDERED"}
+            or getattr(record, "buy_time", None) is None or record.buy_time.date() != today
+            or getattr(record, "sell_time", None) or _to_float(getattr(record, "sell_price", 0)) != 0
+            or evaluate_main_bot_control_exclusion(code).excluded
+            or receipts._sell_pending_submit_path(target_id).exists()
+            or receipts._sell_receipt_recovery_path(target_id).exists()):
+        return None
+    with _with_state_lock(), probe._PROBE_RUNTIME_STATE_LOCK:
+        if target is not None:
+            reason = str(target.get("sell_cancel_reconciliation_source") or "")
+            if (target.get("id") != target_id or target.get("code") != code
+                    or any(target.get(k) for k in ("sell_odno", "sell_ord_no", "sell_submit_pending",
+                        "sell_submit_generation", "_sell_execution_receipt_state", "pending_add_order", "exit_requested"))
+                    or (reason and not (reason.startswith("main_owner_registry_quantity_mismatch:")
+                        or reason.startswith("missing_original_order_no:")
+                        or reason == "cancel_intent_or_ack_exact_generation_required"))):
+                return None
+        rows = registry.position_intents(context=OwnerOrderContext(
+            "main_scalping", owner, owner, "entry_receipt_recovery"), symbol=code)
+        if not rows or any(row.get("owner_type") != "main_scalping"
+                or row.get("owner_id") != owner or row.get("position_id") != owner
+                or row.get("symbol") != code or row.get("order_date") != today.isoformat()
+                or row.get("side") != "BUY" or row.get("action") != "NEW" for row in rows):
+            return None
+        # A definitive local rejection is retained in the census, never a fill.
+        filled = [r for r in rows if not (r.get("state") == "INTENT_REJECTED"
+            and not r.get("broker_order_no") and r.get("filled_qty", 0) == 0 and r.get("fill_amount", 0) == 0)]
+        if (len(filled) != quantity or any(r.get("state") != "ORDER_TERMINAL"
+                or type(r.get("quantity")) is not int or r["quantity"] != 1
+                or type(r.get("filled_qty")) is not int or r["filled_qty"] != 1
+                or type(r.get("fill_amount")) is not int or r["fill_amount"] <= 0
+                or r.get("canceled_qty", 0) != 0 or not r.get("execution_no")
+                or not re.fullmatch(r"[0-9]{7}", str(r.get("broker_order_no") or ""))
+                or not re.fullmatch(r"[0-9a-f]{64}", str(r.get("event_hash") or "")) for r in filled)):
+            return None
+        by_order = {r["broker_order_no"]: r for r in filled}
+        payload = probe._load_probe_runtime_state(today.isoformat())
+        bundles = [b for b in (payload.get("bundles") or {}).values() if isinstance(b, dict)
+            and b.get("target_id") == target_id and b.get("code") == code
+            and b.get("phase") in {"residual_submitting", "residual_submitted", "complete"}]
+        if len(bundles) != 1:
+            return None
+        bundle = bundles[0]
+        expected = [bundle.get("order_no"), *(bundle.get("residual_order_nos") or [])]
+        first = by_order.get(bundle.get("order_no"))
+        if (len(by_order) != quantity or len(expected) != quantity or set(expected) != set(by_order)
+                or bundle.get("requested_qty") != quantity or not first
+                or not isclose(_to_float(record.buy_price), first["fill_amount"], abs_tol=0.0001)
+                or any(not str(r.get("client_intent_id") or "").startswith(
+                    owner+":"+str(target_id)+":"+(
+                        "ENTRY_BUY:" if r is first else "ENTRY_RESIDUAL_BUY:")) for r in filled)
+                or (target is not None and any(str(r.get("ord_no") or "") not in by_order
+                    for r in (target.get("pending_entry_orders") or [])))):
+            return None
+        amount = sum(r["fill_amount"] for r in filled)
+        evidence = dict(bundle_id=bundle["bundle_id"], quantity=quantity, fill_amount=amount,
+            registry_event_hashes={n:r["event_hash"] for n,r in by_order.items()})
+        # This is native receipt completion, not a synthesized broker terminal.
+        probe.update_probe_runtime_bundle(bundle["bundle_id"], phase="complete",
+            now=datetime.now(receipts._KST), filled_qty=quantity, actual_submitted_qty=quantity,
+            avg_buy_price=amount/quantity, registered_entry_recovery=evidence)
+        record.buy_qty = quantity
+        record.buy_price = amount / quantity
+        record.initial_buy_qty = quantity
+        record.status = "HOLDING"
+        if target is not None:
+            target.update(status="HOLDING", buy_qty=quantity, buy_price=amount/quantity, scale_in_locked=True,
+                initial_buy_qty=quantity, entry_split_probe_phase="complete",
+                entry_filled_qty=quantity, entry_fill_amount=amount)
+            target["_entry_receipt_requested_by_order_no"] = {n:1 for n in by_order}
+            target["_entry_receipt_filled_by_order_no"] = {n:1 for n in by_order}
+            target["_entry_receipt_filled_amount_by_order_no"] = {n:r["fill_amount"] for n,r in by_order.items()}
+            for key in ("broker_symbol_allocation_conflict", "sell_cancel_reconciliation_required",
+                        "sell_cancel_reconciliation_source", "sell_cancel_reconciliation_retry_at",
+                        "sell_order_time", "pending_entry_orders"):
+                target.pop(key, None)
+        return evidence
+
+
 def _preserve_coexistence_owner_inventory(
     *,
     record,
@@ -1091,10 +1188,15 @@ def _preserve_coexistence_owner_inventory(
             )
             partial = (_restore_registered_partial_sell(record, target, code, main_qty, mismatch)
                        if not reconciliation_errors else None)
-            if partial is None:
-                reconciliation_errors.append(mismatch)
-            else:
+            if partial is not None:
                 reconciliation["main_partial_sell_receipt"] = partial
+            else:
+                entry = (_restore_registered_entry_buy(record, target, code, main_qty, registry)
+                         if not reconciliation_errors else None)
+                if entry is None:
+                    reconciliation_errors.append(mismatch)
+                else:
+                    reconciliation["main_entry_buy_receipt"] = entry
     except OwnerRegistryError as exc:
         reconciliation_errors.append(str(exc))
     reconciliation_error = "|".join(dict.fromkeys(reconciliation_errors))

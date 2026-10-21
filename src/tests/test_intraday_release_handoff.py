@@ -1792,12 +1792,13 @@ def test_source_reader_handoff_preserves_issued_policy_and_exact_dependencies(tm
         names.update(variant['dependencies'])
     names.update(handoff.REVIEWED_SOURCE_READER_HASHES)
     if generation!='source_reader':names.update(handoff.REVIEWED_SOURCE_INTEGRATION_HASHES)
-    if generation in ('original_gap','incident_order','product_intake','sqlite_lifecycle','retired_review','clean_sqlite','delay_cleanup','role_latency','startup_budget','delay_shutdown','routed_reuse','source_epoch','closed_observer','postclose_repair','logical_pipeline','historical_resolution','finalization_health','native_invalidation','fixed_wait'):names.update(handoff.REVIEWED_ORIGINAL_GAP_HASHES)
-    if generation in ('product_intake','sqlite_lifecycle','retired_review','clean_sqlite','delay_cleanup','role_latency','startup_budget','delay_shutdown','routed_reuse','source_epoch','closed_observer','postclose_repair','logical_pipeline','historical_resolution','finalization_health','native_invalidation','fixed_wait'):names.update(handoff.REVIEWED_PRODUCT_INTAKE_HASHES)
+    if generation in ('original_gap','incident_order','product_intake','sqlite_lifecycle','retired_review','clean_sqlite','delay_cleanup','role_latency','startup_budget','delay_shutdown','routed_reuse','source_epoch','closed_observer','postclose_repair','logical_pipeline','historical_resolution','finalization_health','native_invalidation','fixed_wait','entry_receipt'):names.update(handoff.REVIEWED_ORIGINAL_GAP_HASHES)
+    if generation in ('product_intake','sqlite_lifecycle','retired_review','clean_sqlite','delay_cleanup','role_latency','startup_budget','delay_shutdown','routed_reuse','source_epoch','closed_observer','postclose_repair','logical_pipeline','historical_resolution','finalization_health','native_invalidation','fixed_wait','entry_receipt'):names.update(handoff.REVIEWED_PRODUCT_INTAKE_HASHES)
     if generation in ('sqlite_lifecycle','clean_sqlite'):names.update(handoff.REVIEWED_SQLITE_LIFECYCLE_HASHES)
-    if generation in ('retired_review','clean_sqlite','delay_cleanup','role_latency','startup_budget','delay_shutdown','routed_reuse','source_epoch','closed_observer','postclose_repair','logical_pipeline','historical_resolution','finalization_health','native_invalidation','fixed_wait'):names.update(handoff.REVIEWED_RETIRED_REVIEW_HASHES)
-    if generation in ('delay_cleanup','role_latency','startup_budget','delay_shutdown','routed_reuse','source_epoch','closed_observer','postclose_repair','logical_pipeline','historical_resolution','finalization_health','native_invalidation','fixed_wait'):
-        for variant in (handoff.REVIEWED_FIXED_WAIT_DEPENDENCY_VARIANTS if generation=='fixed_wait' else
+    if generation in ('retired_review','clean_sqlite','delay_cleanup','role_latency','startup_budget','delay_shutdown','routed_reuse','source_epoch','closed_observer','postclose_repair','logical_pipeline','historical_resolution','finalization_health','native_invalidation','fixed_wait','entry_receipt'):names.update(handoff.REVIEWED_RETIRED_REVIEW_HASHES)
+    if generation in ('delay_cleanup','role_latency','startup_budget','delay_shutdown','routed_reuse','source_epoch','closed_observer','postclose_repair','logical_pipeline','historical_resolution','finalization_health','native_invalidation','fixed_wait','entry_receipt'):
+        for variant in (handoff.REVIEWED_ENTRY_RECEIPT_DEPENDENCY_VARIANTS if generation=='entry_receipt' else
+                handoff.REVIEWED_FIXED_WAIT_DEPENDENCY_VARIANTS if generation=='fixed_wait' else
                 handoff.REVIEWED_NATIVE_INVALIDATION_DEPENDENCY_VARIANTS if generation=='native_invalidation' else
                 handoff.REVIEWED_FINALIZATION_HEALTH_DEPENDENCY_VARIANTS if generation=='finalization_health' else
                 handoff.REVIEWED_HISTORICAL_RESOLUTION_DEPENDENCY_VARIANTS if generation=='historical_resolution' else
@@ -1814,10 +1815,10 @@ def test_source_reader_handoff_preserves_issued_policy_and_exact_dependencies(tm
     names.add('src/engine/automation/intraday_release_handoff.py')
     for name in names:
         path = root/name; path.parent.mkdir(parents=True,exist_ok=True)
-        path.write_bytes((canonical/name).read_bytes() if generation=='fixed_wait' or
+        path.write_bytes((canonical/name).read_bytes() if generation=='entry_receipt' or
             name=='src/engine/automation/intraday_release_handoff.py' else subprocess.check_output(
                 ['git','-C',str(canonical),'show',
-                 ({'native_invalidation':'193668e7f','finalization_health':'6978f78c1','historical_resolution':'e427676c4','logical_pipeline':'6d259b5a09', 'postclose_repair':'0cfd32827','closed_observer':'04e19bad0','source_epoch':'88351a078','routed_reuse':'68213dd10','delay_shutdown':'49ef280dc','startup_budget':'105f6f031','role_latency':'6e037d078','source_reader':'0255cb05f','incident_order':'041caf05e','product_intake':'21d822a64',
+                 ({'fixed_wait':'4809d898e','native_invalidation':'193668e7f','finalization_health':'6978f78c1','historical_resolution':'e427676c4','logical_pipeline':'6d259b5a09', 'postclose_repair':'0cfd32827','closed_observer':'04e19bad0','source_epoch':'88351a078','routed_reuse':'68213dd10','delay_shutdown':'49ef280dc','startup_budget':'105f6f031','role_latency':'6e037d078','source_reader':'0255cb05f','incident_order':'041caf05e','product_intake':'21d822a64',
                    'sqlite_lifecycle':'c550a4c43','retired_review':'3d8abd012','clean_sqlite':'0ce816f7c','delay_cleanup':'661260e5f'}.get(generation,'99c51c85f'))
                  +':'+os.path.normpath(name)]))
     original = {key: hashlib.sha256(subprocess.check_output(
@@ -1838,7 +1839,7 @@ def test_source_reader_handoff_preserves_issued_policy_and_exact_dependencies(tm
         original_bytes = reader.read_bytes()
         if fault == 'missing': reader.unlink()
         elif fault == 'parent_mix':
-            parent = ('193668e7f' if generation == 'fixed_wait' else 'e0d07d4ab' if generation == 'native_invalidation' else 'e427676c4' if generation == 'finalization_health' else '6d259b5a09' if generation == 'historical_resolution' else '0cfd32827' if generation == 'logical_pipeline' else '04e19bad0' if generation == 'postclose_repair' else origin if generation == 'routed_reuse'
+            parent = ('4809d898e' if generation == 'entry_receipt' else '193668e7f' if generation == 'fixed_wait' else 'e0d07d4ab' if generation == 'native_invalidation' else 'e427676c4' if generation == 'finalization_health' else '6d259b5a09' if generation == 'historical_resolution' else '0cfd32827' if generation == 'logical_pipeline' else '04e19bad0' if generation == 'postclose_repair' else origin if generation == 'routed_reuse'
                       and reader_name in handoff.REVIEWED_ROUTED_REUSE_HASHES else '21d822a64')
             reader.write_bytes(subprocess.check_output(['git','-C',str(canonical),'show',parent+':'+reader_name]))
             revision=commit()
@@ -2043,3 +2044,10 @@ def test_native_invalidation_handoff_binds_complete_observation_successor(tmp_pa
 def test_fixed_wait_handoff_binds_new_identity_and_preserved_native_contracts(tmp_path, family, fault):
     test_source_reader_handoff_preserves_issued_policy_and_exact_dependencies(
         tmp_path, family, fault, tuple(handoff.REVIEWED_FIXED_WAIT_HASHES), 'fixed_wait')
+
+
+@pytest.mark.parametrize('family', ['main_stop', 'holding_vote', 'pre_submit_delay'])
+@pytest.mark.parametrize('fault', [None, 'missing', 'dirty', 'committed_change', 'parent_mix'])
+def test_entry_receipt_handoff_binds_exact_recovery_and_observation_successor(tmp_path, family, fault):
+    test_source_reader_handoff_preserves_issued_policy_and_exact_dependencies(
+        tmp_path, family, fault, tuple(handoff.REVIEWED_ENTRY_RECEIPT_HASHES), 'entry_receipt')

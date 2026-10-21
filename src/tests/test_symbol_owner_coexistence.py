@@ -691,3 +691,131 @@ def test_registry_event_binds_exact_policy_provenance(tmp_path):
     assert owner is not None
     assert owner["authority_policy_id"] == "same-symbol-policy"
     assert owner["authority_policy_hash"] == "f" * 64
+
+
+@pytest.mark.parametrize('fault', [None, 'unbound', 'other_target', 'quantity', 'other_action'])
+def test_registered_residual_fill_reaches_native_entry_ledger_before_rest_staging(tmp_path, monkeypatch, fault):
+    from types import SimpleNamespace
+    from src.engine import sniper_execution_receipts as receipts
+    day = datetime.now(receipts._KST).date()
+    registry = OrderOwnerRegistry(tmp_path/'registry.jsonl')
+    target = '102' if fault == 'other_target' else '101'
+    action = 'AVG_DOWN' if fault == 'other_action' else 'ENTRY_RESIDUAL_BUY'
+    owner = OwnerOrderContext('main_scalping', 'main_scalping:'+target, 'main_scalping:'+target,
+        f'main_scalping:{target}:{target}:{action}:entry_split_probe_residual_1:unique')
+    if fault != 'unbound':
+        intent = registry.reserve(context=owner, symbol=SYMBOL, side='BUY', quantity=1,
+                                  route='SOR', order_date=day)
+        registry.transition(intent,state='ORDER_BOUND',broker_order_no='0023803')
+    stock = dict(id=101, code=SYMBOL, status='BUY_ORDERED', strategy='SCALPING',
+        buy_qty=1, buy_price=10000, entry_filled_qty=1, entry_requested_qty=3,
+        entry_split_probe_phase='residual_submitting', entry_split_probe_bundle_id='bundle-101',
+        odno='0023795', pending_entry_orders=[dict(ord_no='0023795',qty=1,filled_qty=1,status='FILLED')])
+    monkeypatch.setattr(receipts, 'ACTIVE_TARGETS', [stock])
+    monkeypatch.setattr(receipts, '_get_fast_state', lambda _:None)
+    monkeypatch.setattr(receipts, 'resolve_symbol_owner_policy', lambda *a, **k:SimpleNamespace(coexistence_enabled=False))
+    monkeypatch.setattr(receipts, 'default_order_owner_registry', lambda:registry)
+    monkeypatch.setattr(receipts, 'log_info', lambda *a:None)
+    monkeypatch.setattr(receipts, 'log_error', lambda *a:None)
+    observed=[]
+    def consume(**kwargs):
+        observed.append(receipts._resolve_entry_effective_fill_qty(**{
+            k:v for k,v in kwargs.items() if k not in {'target_id','now'}}))
+    monkeypatch.setattr(receipts, '_handle_entry_buy_execution', consume)
+    event=dict(code=SYMBOL, type='BUY', order_no='0023803',price=10000,qty=1,
+        order_qty=2 if fault=='quantity' else 1,remaining_qty=0,cumulative_exec_amount=10000,
+        execution_no='8752',unit_exec_price=10000,unit_exec_qty=1)
+    receipts.handle_real_execution(event)
+    if fault is None:
+        assert observed[0]['status']=='final', observed
+        assert stock['_entry_receipt_filled_by_order_no']['0023803']==1
+        receipts.handle_real_execution(event)
+        assert observed[-1]['status']=='duplicate'
+    else:
+        assert not observed or observed[0]['status']=='invalid'
+        assert stock.get('_entry_receipt_filled_by_order_no',{}).get('0023803',0)==0
+
+
+@pytest.mark.parametrize('number', ['', '-', 'abc', '123', '0000000'])
+def test_empty_or_invalid_cancel_ack_number_is_false_without_exception(number):
+    from src.engine import sniper_execution_receipts as receipts
+    assert receipts.pending_sell_cancel_ack_exact(dict(id=101,code=SYMBOL),
+        code=SYMBOL,order_no=number) is False
+
+
+@pytest.mark.parametrize('fault', [None, 'missing', 'amount', 'open', 'sell', 'owner', 'date',
+    'bundle', 'extra_order', 'manual', 'foreign_guard', 'sell_custody', 'db_price', 'db_retry'])
+def test_sync_recovers_only_complete_exact_unit_entry_census(tmp_path, monkeypatch, fault):
+    from types import SimpleNamespace
+    from copy import deepcopy
+    from src.engine import sniper_sync as sync, sniper_execution_receipts as receipts
+    from src.engine.scalping import entry_split_order_plan as probe
+    today = datetime.now(receipts._KST)
+    rows=[dict(owner_type='main_scalping',owner_id='main_scalping:101',position_id='main_scalping:101',
+        symbol=SYMBOL,order_date=today.date().isoformat(),side='BUY',action='NEW',state='ORDER_TERMINAL',
+        quantity=1,filled_qty=1,fill_amount=10000 if i<2 else 9900,execution_no=str(8000+i),
+        broker_order_no=str(23795+i).zfill(7),event_hash=str(i+1)*64,
+        client_intent_id=f'main_scalping:101:101:{"ENTRY_BUY" if i==0 else "ENTRY_RESIDUAL_BUY"}:leg{i}:unique') for i in range(3)]
+    order_nos=[r['broker_order_no'] for r in rows]
+    bundle=dict(bundle_id='bundle-101',code=SYMBOL,target_id=101,phase='residual_submitted',requested_qty=3,
+        order_no=order_nos[0],residual_order_nos=order_nos[1:])
+    record=SimpleNamespace(id=101,stock_name='fixture',strategy='SCALPING',status='SELL_ORDERED',
+        buy_qty=1,buy_price=10000,buy_time=today,sell_price=0,sell_time=None,scale_in_locked=True)
+    target=dict(id=101,code=SYMBOL,status='SELL_ORDERED',buy_qty=2,buy_price=10000,
+        broker_symbol_allocation_conflict=True,sell_cancel_reconciliation_required=True,
+        sell_cancel_reconciliation_source='missing_original_order_no:pending_context_absent',
+        pending_entry_orders=[dict(ord_no=n,qty=1) for n in order_nos])
+    if fault=='missing':rows.pop()
+    elif fault=='amount':rows[1]['fill_amount']=0
+    elif fault=='open':rows[1]['state']='ORDER_BOUND'
+    elif fault=='sell':rows[1]['side']='SELL'
+    elif fault=='owner':rows[1]['owner_id']='manual_operator:other'
+    elif fault=='date':rows[1]['order_date']='2026-10-01'
+    elif fault=='bundle':bundle['residual_order_nos']=['7654321',order_nos[2]]
+    elif fault=='extra_order':target['pending_entry_orders'].append(dict(ord_no='7654321'))
+    elif fault=='foreign_guard':target['sell_cancel_reconciliation_source']='unproved_foreign_cancellation'
+    elif fault=='db_price':record.buy_price=9999
+    monkeypatch.setattr(probe,'PROBE_RUNTIME_STATE_PATH',tmp_path/'probe.json')
+    monkeypatch.setattr(receipts,'_sell_pending_submit_path',lambda _:tmp_path/'sell.json')
+    monkeypatch.setattr(receipts,'_sell_receipt_recovery_path',lambda _:tmp_path/'sell-receipt.json')
+    if fault=='sell_custody':(tmp_path/'sell.json').write_text('{}')
+    monkeypatch.setattr(sync,'evaluate_main_bot_control_exclusion',lambda _:SimpleNamespace(excluded=fault=='manual'))
+    monkeypatch.setattr(sync,'ACTIVE_TARGETS',[target])
+    monkeypatch.setattr(sync,'resolve_symbol_owner_policy',lambda _:SimpleNamespace(coexistence_enabled=True,
+        policy_id='main-native',policy_hash='a'*64))
+    registry=SimpleNamespace(symbol_registered=lambda _:True,decision_activation_matches=lambda _:True,position_intents=lambda **_:deepcopy(rows),
+        reconcile_symbol_quantity=lambda **_:dict(position_quantities={'main_scalping:101':3},external_manual_remainder=2))
+    monkeypatch.setattr(sync,'default_order_owner_registry',lambda:registry)
+    monkeypatch.setattr(sync,'log_error',lambda *a:None);monkeypatch.setattr(sync,'log_info',lambda *a:None)
+    probe.update_probe_runtime_bundle('bundle-101',phase=bundle['phase'],now=today,
+        **{k:v for k,v in bundle.items() if k not in {'bundle_id','phase'}})
+    before=probe.PROBE_RUNTIME_STATE_PATH.read_bytes()
+    assert sync._preserve_coexistence_owner_inventory(record=record,code=SYMBOL,
+        real_codes={SYMBOL:dict(qty=5)},source='periodic_account_sync')
+    if fault in {None,'db_retry'}:
+        assert record.buy_qty==3 and record.buy_price==pytest.approx(29900/3) and record.status=='HOLDING'
+        assert target['buy_qty']==3 and target['status']=='HOLDING'
+        assert not target.get('sell_cancel_reconciliation_required')
+        assert not target.get('broker_symbol_allocation_conflict')
+        assert target['scale_in_locked'] if 'scale_in_locked' in target else record.scale_in_locked
+        if fault=='db_retry':
+            record.buy_qty=1;record.buy_price=10000;record.status='SELL_ORDERED'
+            assert sync._restore_registered_entry_buy(record,None,SYMBOL,3,registry)
+            assert record.buy_qty==3
+    else:
+        assert record.buy_qty==1 and record.status=='SELL_ORDERED'
+        assert probe.PROBE_RUNTIME_STATE_PATH.read_bytes()==before
+        assert target['broker_symbol_allocation_conflict'] is True
+
+
+def test_allocation_gap_never_becomes_phantom_sell_cancel(monkeypatch):
+    from copy import deepcopy
+    from src.engine import sniper_state_handlers as handlers
+    stock=dict(id=101,code=SYMBOL,status='HOLDING',buy_qty=1,
+        broker_symbol_allocation_conflict=True,sell_cancel_reconciliation_required=True,
+        sell_cancel_reconciliation_source='main_owner_registry_quantity_mismatch:registry=2:db=1')
+    before=deepcopy(stock)
+    monkeypatch.setattr(handlers,'_broker_position_qty_for_sell_reconciliation',
+        lambda *a:pytest.fail('allocation conflict must not initiate cancel reconciliation'))
+    assert handlers._sell_cancel_reconciliation_blocks_holding(stock,SYMBOL,now_ts=1000) is True
+    assert stock==before

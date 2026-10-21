@@ -5521,8 +5521,8 @@ def pending_sell_cancel_ack_exact(
     if not all(
         (
             target_id > 0,
-            re.fullmatch(r"[0-9]{7}", normalized_order_no) is not None,
-            int(normalized_order_no) > 0,
+            (re.fullmatch(r"[0-9]{7}", normalized_order_no) is not None
+             and int(normalized_order_no) > 0),
             str(target_stock.get("code") or "").strip()[:6] == normalized_code,
             current_order_no == normalized_order_no,
             owner_position_qty > 0,
@@ -12024,6 +12024,7 @@ def handle_real_execution(exec_data):
 
     received_at = datetime.now(_KST)
     owner_target_id = None
+    owner_row = None
     try:
         owner_policy = resolve_symbol_owner_policy(code, target_date=received_at.date())
     except (SymbolOwnerPolicyError, OSError, ValueError) as exc:
@@ -12400,6 +12401,32 @@ def handle_real_execution(exec_data):
                     code, reason="scale_in_buy_receipt_order_identity_blocked"
                 )
             else:
+                # Native registry receipt custody may precede the REST return
+                # and residual staging. Carry that exact accepted order into
+                # the same entry ledger before its cumulative-fill validation.
+                residual_prefix = f"main_scalping:{target_id}:{target_id}:ENTRY_RESIDUAL_BUY:"
+                if (isinstance(owner_row, dict)
+                        and str(owner_row.get("client_intent_id") or "").startswith(residual_prefix)
+                        and owner_row.get("owner_type") == "main_scalping"
+                        and owner_row.get("owner_id") == f"main_scalping:{target_id}"
+                        and owner_row.get("position_id") == f"main_scalping:{target_id}"
+                        and owner_row.get("symbol") == code
+                        and owner_row.get("side") == "BUY" and owner_row.get("action") == "NEW"
+                        and owner_row.get("order_date") == received_at.date().isoformat()
+                        and owner_row.get("broker_order_no") == order_no
+                        and owner_row.get("quantity") == order_qty
+                        and target_stock.get("entry_split_probe_bundle_id")
+                        and str(target_stock.get("entry_split_probe_phase") or "") in {
+                            "residual_claimed", "residual_submitting", "residual_submitted",
+                            "residual_partial_submitted"}):
+                    pending = target_stock.get("pending_entry_orders") or []
+                    if (isinstance(pending, list) and all(isinstance(item, dict) for item in pending)
+                            and not any(str(item.get("ord_no") or "").strip() == order_no for item in pending)):
+                        target_stock["pending_entry_orders"] = pending
+                        pending.append(dict(ord_no=order_no, qty=order_qty, filled_qty=0,
+                            status="OPEN", broker_route=owner_row.get("route"),
+                            owner_registry_intent_id=owner_row.get("intent_id"),
+                            tag=str(owner_row["client_intent_id"])[len(residual_prefix):].rsplit(":", 1)[0]))
                 _handle_entry_buy_execution(
                     target_id=target_id,
                     target_stock=target_stock,
