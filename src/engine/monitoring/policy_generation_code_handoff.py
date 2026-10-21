@@ -430,7 +430,9 @@ def current_fixture_observation(observed, data):
                 or report_sha != observed.get('report_sha256') or contract['code_sha256'] != pair[0]
                 or fixture['code_sha256'] != pair[1]):
             raise ValueError('successor_historical_contract_changed')
-        late_report = ((path, report_sha) if actual_pair == REVIEWED_HISTORICAL_RESOLUTION_SUCCESSORS.get(family) else None)
+        late_report = ((path, report_sha) if any(actual_pair == successors.get(family)
+            for successors in (REVIEWED_HISTORICAL_RESOLUTION_SUCCESSORS,
+                               REVIEWED_FIXED_WAIT_SUCCESSORS, REVIEWED_ENTRY_RECEIPT_SUCCESSORS)) else None)
         historical_fixture = _historical_fixture(contract, data, family, late_report=late_report)
         if (integrated_match or readonly_match or cleanup_match or custody_match or reader_match or frozen_match) and historical_fixture is None:
             raise ValueError('successor_integrated_historical_fixture_required')

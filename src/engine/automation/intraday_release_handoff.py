@@ -3562,7 +3562,7 @@ REVIEWED_FIXED_WAIT_DEPENDENCY_VARIANTS = {
 REVIEWED_ENTRY_RECEIPT_HASHES = {'src/engine/sniper_state_handlers.py': 'c47a60dccf7266e27880b94cb9bccf3b2c23c6c513ede76cce33bce212abfd55',
  'src/engine/sniper_execution_receipts.py': '26b75b658f2fbb8f0411fed3d03a5a1f26923a2ad6d0610fa550aaf9a0ad4b51',
  'src/engine/sniper_sync.py': '95d5aab3d869cc3c49b8b4d416812603f767468e050277b11e3da89b4601b103',
- 'src/engine/monitoring/policy_generation_code_handoff.py': '5e6fb25cea917d3d1285ea05f035abf1caeb9a1d657aa01db6617d3405ce44fe'}
+ 'src/engine/monitoring/policy_generation_code_handoff.py': 'af5457739037ba9d29d39764dcdbd22bbe2377ae807792c30736f9d02f91b09f'}
 REVIEWED_ENTRY_RECEIPT_PAIRS = {'src/engine/sniper_state_handlers.py': (('885af7dd480a520e98502bcd6729586b4d21016de8254a4a7d9e299389f09ed4',
                                           'c47a60dccf7266e27880b94cb9bccf3b2c23c6c513ede76cce33bce212abfd55'),
                                          ('8a0c18d2c097b063a8349907f39e6057d43b7ad9ef173e5f6c4e1be48f8b21f9',
@@ -3576,13 +3576,13 @@ REVIEWED_ENTRY_RECEIPT_PAIRS = {'src/engine/sniper_state_handlers.py': (('885af7
  'src/engine/sniper_sync.py': (('baed080aaa9dd6708f1999ed4a811a758df2bb683449a773e5418303affd4f34',
                                 '95d5aab3d869cc3c49b8b4d416812603f767468e050277b11e3da89b4601b103'),),
  'src/engine/monitoring/policy_generation_code_handoff.py': (('905dd6a05df9f19fac25292a3a1e7fe579281e4aeabd84d4965855f9fef928b1',
-                                                              '5e6fb25cea917d3d1285ea05f035abf1caeb9a1d657aa01db6617d3405ce44fe'),
+                                                              'af5457739037ba9d29d39764dcdbd22bbe2377ae807792c30736f9d02f91b09f'),
                                                              ('47db04eba70a27e3fbb5c4078e828be38920859efbf4224e3049582776ff6d5f',
-                                                              '5e6fb25cea917d3d1285ea05f035abf1caeb9a1d657aa01db6617d3405ce44fe'),
+                                                              'af5457739037ba9d29d39764dcdbd22bbe2377ae807792c30736f9d02f91b09f'),
                                                              ('78b3d4a55b89ccd784bc2120d7caf0cc47b65656ca75d4cb3bcd20e2edc6ac1a',
-                                                              '5e6fb25cea917d3d1285ea05f035abf1caeb9a1d657aa01db6617d3405ce44fe'),
+                                                              'af5457739037ba9d29d39764dcdbd22bbe2377ae807792c30736f9d02f91b09f'),
                                                              ('a398aec3dba6e1f5ece0d53955565f49f9673423c9a215d9c394defa3b62ed9d',
-                                                              '5e6fb25cea917d3d1285ea05f035abf1caeb9a1d657aa01db6617d3405ce44fe'))}
+                                                              'af5457739037ba9d29d39764dcdbd22bbe2377ae807792c30736f9d02f91b09f'))}
 REVIEWED_ENTRY_RECEIPT_DEPENDENCY_VARIANTS = {
     key: {**value,
         'selector_path': 'src/engine/sniper_execution_receipts.py',

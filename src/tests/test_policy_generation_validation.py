@@ -505,8 +505,9 @@ def test_native_fixture_relative_reference_binds_data_owner_not_launcher_cwd(tmp
         assert result['status']=='verified'
 
 
+@pytest.mark.parametrize('successor', ['REVIEWED_HISTORICAL_RESOLUTION_SUCCESSORS', 'REVIEWED_FIXED_WAIT_SUCCESSORS', 'REVIEWED_ENTRY_RECEIPT_SUCCESSORS'])
 @pytest.mark.parametrize('damage', [None, 'report', 'missing', 'network', 'plan', 'count', 'wrong_pair'])
-def test_exact_successor_accepts_late_original_fixture_only_with_native_report_binding(tmp_path, monkeypatch, damage):
+def test_exact_successor_accepts_late_original_fixture_only_with_native_report_binding(tmp_path, monkeypatch, damage, successor):
     from src.engine.monitoring import policy_generation_code_handoff as handoff
     data=tmp_path/'data';family='holding_vote'
     _,report,run,current_path,current,seal=_fixture(data,family)
@@ -526,7 +527,7 @@ def test_exact_successor_accepts_late_original_fixture_only_with_native_report_b
     prior['receipt_sha256']=generation.digest({k:v for k,v in prior.items() if k!='receipt_sha256'})
     path=data/'report/postclose_generation_validation'/(family+'_'+old+'.json')
     if damage!='missing':path.write_text(json.dumps(prior))
-    monkeypatch.setattr(handoff,'REVIEWED_HISTORICAL_RESOLUTION_SUCCESSORS',
+    monkeypatch.setattr(handoff,successor,
         {family: ('c'*64 if damage=='wrong_pair' else old,new)})
     observed=generation.observations(tmp_path,DAY,data_root=data)[0]
     result=handoff.current_fixture_observation(observed,data)
