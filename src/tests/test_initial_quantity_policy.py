@@ -1091,7 +1091,8 @@ def test_source_quality_requires_exact_date_and_explicit_tuning_allowance(tmp_pa
         assert report["replay_counts"]["parent:source_quality_blocked"] == 1
 
 
-def test_split_anchor_uses_first_fill_and_original_notional_for_ev():
+@pytest.mark.parametrize("venue_proof", ["legacy", "assigned", "unverified"])
+def test_split_anchor_uses_first_fill_and_original_notional_for_ev(venue_proof):
     entry_at = datetime.fromisoformat("2026-09-23T09:30:00+09:00")
     trade = {"entry_date": "2026-09-23", "entry_at_fact_buy_time": entry_at.isoformat(),
              "exit_at": (entry_at + timedelta(minutes=5)).isoformat(),
@@ -1113,7 +1114,12 @@ def test_split_anchor_uses_first_fill_and_original_notional_for_ev():
                        "execution_no": "b", "clock_source": "broker_execution_observed_at"}],
             "prices": [{"at": entry_at + timedelta(seconds=30), "price": 97.0,
                         "venue": "KRX", "route": "KRX_0D", "epoch": "epoch-1"}]}
+    if venue_proof != "legacy":
+        for fill in path["fills"]:
+            fill.update(actual_execution_venue_verified=False, broker_actual_execution_venue="UNKNOWN",
+                venue_assignment_authority="user_2026_10_21_unresolved_venue_krx_route_sor" if venue_proof == "assigned" else None)
     result = _paired_candidate(trade, path, "two_leg_0_1tick")
+    assert result["venue_provenance"] == ("verified" if venue_proof == "legacy" else "unverified_conditional")
     assert result["status"] == "paired"
     assert result["counterfactual_anchor_price"] == 99.0
     assert result["parent_avg_buy_price"] == 100.0

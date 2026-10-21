@@ -2600,3 +2600,26 @@ def test_quantity_execution_cache_binds_shared_market_default_owner(monkeypatch)
     monkeypatch.setattr(Path, 'read_bytes', lambda path: original(path) +
         (b'\n# changed market authority\n' if path.resolve() == owner else b''))
     assert _execution_key({}, {}, {}, {}) != before
+
+
+@pytest.mark.parametrize('venue', ['KRX','NXT','UNKNOWN'])
+def test_large_quantity_fill_projection_preserves_native_and_operator_market_axes(venue):
+    import io
+    from src.engine.sniper_execution_receipts import _receipt_market_axes
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    fields=dict(actual_execution_venue=venue, broker_actual_execution_venue=venue,
+        broker_actual_execution_venue_source='official_fid_2134_2135' if venue!='UNKNOWN' else 'official_exchange_fields_ambiguous_or_missing',
+        broker_actual_exchange_code='1' if venue=='KRX' else '2' if venue=='NXT' else '0',
+        broker_actual_exchange_name=venue if venue!='UNKNOWN' else 'SOR',
+        broker_sor_flag='N' if venue!='UNKNOWN' else 'Y', broker_route_requested='SOR',
+        unused_context='x'*150000)
+    at=datetime(2026,10,21,10,tzinfo=ZoneInfo('Asia/Seoul'))
+    raw=json.dumps(dict(record_id=7,stock_code='005930',stage='position_rebased_after_fill',
+        emitted_at=at.isoformat(),fields=fields))+'\n'
+    projected=json.loads(next(policy._quantity_pipeline_rows(io.StringIO(raw),{'7':[]},{}))[0])['fields']
+    assert projected=={k:v for k,v in fields.items() if k!='unused_context'}
+    axes=_receipt_market_axes(projected,observed_at=at,requested_route_keys=('broker_route_requested',))
+    assert axes['actual_execution_venue']==('KRX' if venue=='UNKNOWN' else venue)
+    assert axes['actual_execution_venue_verified'] is (venue!='UNKNOWN')
+    assert projected['broker_actual_execution_venue']==venue

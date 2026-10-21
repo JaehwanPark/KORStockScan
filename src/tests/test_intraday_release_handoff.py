@@ -2159,3 +2159,10 @@ def test_post_sell_source_handoff_binds_route_producer_and_horizon_reader(tmp_pa
 def test_operator_market_handoff_binds_every_consumer_and_preserves_old_profiles(tmp_path,family,fault):
     test_source_reader_handoff_preserves_issued_policy_and_exact_dependencies(
         tmp_path,family,fault,tuple(handoff.REVIEWED_OPERATOR_MARKET_HASHES),'operator_market')
+
+
+@pytest.mark.parametrize('family',['main_stop','holding_vote','pre_submit_delay'])
+@pytest.mark.parametrize('fault',[None,'missing','parent_mix','committed_change','dirty'])
+def test_operator_quantity_provenance_handoff_retains_complete_generation(tmp_path,family,fault):
+    test_source_reader_handoff_preserves_issued_policy_and_exact_dependencies(
+        tmp_path,family,fault,'src/engine/scalping/initial_quantity_policy.py','operator_market')

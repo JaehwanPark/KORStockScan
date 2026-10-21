@@ -1271,3 +1271,12 @@ trailing의 최초 직접 재생은 all_scope_assembly_code_changed로 차단됐
 새 Python module/entrypoint/worker/wrapper/스케줄0. 기존 owner13개(인계 포함)를 수정했다. review baseline의 unrelated source/docs와 immutable release는 보존한다. 원본을 바꾸는 수동 status/hash 편집이나 경보 억제는 없다.
 
 검증: 격리 before/after12조건에서 미확정3시간대가 UNKNOWN/차단→KRX/SOR/수집 준비로 연결됐고 명시 NXT/KRX 및 충돌 구분을 보존했다. source1,344 PASS, 추가 비용/시장/cache 계약514 PASS, holding route18 PASS, 인계16 PASS, 기존 세대 대표9 PASS. 네 snapshot 테스트의 baseline 실패는 shared 실제 archive를 읽던 fixture 의존으로 재현됐고 fake archive를 명시해 격리했다(생산자 우회 없음). `git diff --check`와 관련 compile PASS. [원인·격리 증거](../../tmp/operational-market-defaults-20261021/causal-verification.json). 최종 native preflight/선택/PID 상태는 같은 절의 후속 기록과 readiness를 따른다.
+
+
+### 수량 native 소비에서 확인한 미검증 표시 전달 보완
+
+첫 후보acbef의 마지막 소비는 수량 code 결속 변경으로 `initial_quantity_stage_invalid:ValueError`에 차단됐다. 기존 timeout의 그대로 재사용도 native 검증에서 실패했으며 두 실패를 보존했다. 같은 frozen fact census·pipeline source를 새 reader로 재구성하자49340·49343·49347의 기존10/16 운영 KRX 지정이 드러났고, 그중49340에서 기존 shape 독자가 문자열 일치만으로 `venue_provenance=verified`로 표시하는 결함이 확인됐다. acbef와 그 code 전용 연구 산출물은 미선택 검토 증거이며 최종 후보가 아니다.
+
+기존 수량 producer를 추가 수리했다. large-row projection은 raw broker venue/source/exchange/flag와 지정 출처·route를 빠짐없이 전달한다(기존 크기 제한 유지). fill→cap-source→row에 `actual_execution_venue_verified`, raw broker venue와 지정 출처를 함께 보존하며, 운영 KRX/미검증 입력은 `venue_provenance=unverified_conditional`로 남긴다. 정확한 route/epoch 가격 관측은 별도 CF 근거이며 물리 체결소나 실제 체결 성과를 뜻하지 않는다. 명시 native KRX/NXT는 원문 근거가 있을 때만 verified다. 운영 기본값과 실제 증빙의 경계를 native 소비 결과로 확인한 보완이며 임계치·수량 상한 변경은 없다.
+
+후속 수량/monitor/cache/timeout411 PASS, 추가 exact code 인계16 PASS, compile/diff PASS다. 기존 주요 source1,344·추가 계약514·holding18·전체 의존성 인계16·이전 세대9 PASS는 앞 단계 범위의 결과로 구분한다. 최종 native 생산자에서 같은 census·원 pipeline·historical8 disposition을 보존한 후속 report/timeout/code 전용 stage를 생성하고 마지막 소비를 확인한다. 원 공용 committed/정책은 바꾸지 않는다. [최초 native 실패와 차이](../../tmp/operational-market-defaults-20261021/quantity-rebuild-row-differences.json), [최종 준비 증거](../../tmp/operational-market-defaults-20261021/final-candidate/readiness.json).

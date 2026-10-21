@@ -692,6 +692,10 @@ def _record_id(raw: str) -> str:
 
 _QUANTITY_PIPELINE_FIELDS = frozenset('''
 actual_execution_venue actual_order_submitted avg_buy_price binding_caps
+actual_execution_venue_source actual_execution_venue_verified execution_venue_override
+broker_actual_execution_venue broker_actual_execution_venue_source
+broker_actual_exchange_code broker_actual_exchange_name broker_sor_flag
+broker_route broker_route_requested broker_route_requested_raw broker_route_override
 broker_execution_observed_at broker_order_no buy_pressure_10t
 cap_tick_depth_item cap_tick_item cap_tick_market_route cap_tick_observed_epoch
 cap_tick_price_krw cap_tick_quantity cap_tick_transport_epoch
@@ -1229,6 +1233,7 @@ def _join_post_fill_paths_uncached(trades: list[dict[str, Any]], *, data_dir: Pa
                                           route_fields["broker_route_requested"] == "UNKNOWN" else
                                           route_fields["broker_route_requested"]),
                                 "venue_assignment_authority": venue_fields["execution_venue_override"],
+                                "actual_execution_venue_verified": venue_fields["actual_execution_venue_verified"],
                                 "broker_actual_execution_venue": fields.get("broker_actual_execution_venue", "UNKNOWN"),
                                 "order_no": str(fields.get("order_no") or ""),
                                 "execution_no": str(fields.get("execution_no") or ""),
@@ -1891,7 +1896,9 @@ def _paired_candidate(trade: dict[str, Any], path: dict[str, Any], shape: str) -
             "fill_at": first["at"].isoformat(), "fill_clock_source": first["clock_source"],
             "decision_stage": decision["stage"],
             "decision_emitted_after_fill_proxy": decision["at"] > first["at"],
-            "venue_provenance": "verified" if decision_venue in {"KRX", "NXT"}
+            "venue_provenance": "verified" if not first.get("venue_assignment_authority")
+                and first.get("actual_execution_venue_verified") is not False
+                and decision_venue in {"KRX", "NXT"}
                 and first["venue"] == decision_venue else "unverified_conditional"}
 
 
@@ -1974,7 +1981,9 @@ def build_initial_quantity_replay(as_of: str, *, data_dir: Path = DATA_DIR,
                 "capture_exit_epoch": _timestamp(trade['exit_at']).timestamp(),
                 "fills": [
                     {"at": fill["at"].isoformat(), "price": fill["price"],
-                     "qty": fill["qty"], "venue": fill["venue"]}
+                     "qty": fill["qty"], "venue": fill["venue"],
+                     **{key: fill.get(key) for key in ("route", "venue_assignment_authority",
+                         "actual_execution_venue_verified", "broker_actual_execution_venue")}}
                     for fill in sorted(unique_fills.values(),
                                        key=lambda item: item["at"])],
                 "following_ticks": path.get("cap_ticks") or [],
@@ -2002,6 +2011,8 @@ def build_initial_quantity_replay(as_of: str, *, data_dir: Path = DATA_DIR,
                      "entry_date": trade["entry_date"], "quantity_type": quantity_type,
                      "entry_fill_at": first_fill["at"].isoformat() if first_fill else None,
                      "entry_fill_venue": first_fill.get("venue") if first_fill else None,
+                     "entry_fill_venue_verified": first_fill.get("actual_execution_venue_verified") if first_fill else False,
+                     "entry_fill_venue_assignment_authority": first_fill.get("venue_assignment_authority") if first_fill else None,
                      "entry_fill_clock_source": (first_fill.get("clock_source")
                                                  if first_fill else None),
                      "applied_policy_status": parent.get("applied_policy_status"),
