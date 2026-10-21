@@ -1306,8 +1306,11 @@ def test_quantity_observer_bounds_committed_stage_before_hashing(tmp_path, monke
     pointer = original.parent / 'committed_stage.json'
     pointer.write_text(json.dumps(dict(schema='initial_quantity_stage_reference_v2',
         source_date='2026-09-28', stage_path=str(stage), stage_sha256=hashlib.sha256(stage.read_bytes()).hexdigest())))
-    monkeypatch.setattr(producer, 'committed_refresh_stage_path',
-                        lambda *a: pytest.fail('health invoked unbounded committed-stage resolver'))
+    resolve = producer.committed_refresh_stage_path
+    def bounded(*args, **kwargs):
+        assert callable(kwargs.get('read'))
+        return resolve(*args, **kwargs)
+    monkeypatch.setattr(producer, 'committed_refresh_stage_path', bounded)
     result = _initial_quantity_semantics(tmp_path, '2026-09-28')
     assert result['status'] == ('source_invalid' if oversize else 'valid_empty')
 
@@ -1320,6 +1323,34 @@ def test_quantity_invalid_committed_reference_cannot_claim_valid_contract(tmp_pa
     assert result['status'] == 'source_invalid'
     assert result['bounded_contract_validated'] is False
     assert result['observation_complete'] is False
+
+
+@pytest.mark.parametrize('damage', ['none', 'reference', 'parent', 'hash', 'code', 'stage'])
+def test_quantity_observer_consumes_only_exact_prepared_generation(tmp_path, monkeypatch, damage):
+    from src.engine.scalping import initial_quantity_policy as producer
+    from src.engine.scalping import initial_quantity_monitor_projection as projection
+    _quantity_semantic_fixture(tmp_path, monkeypatch, complete_stage=True)
+    original = _quantity_semantic_stage(tmp_path)
+    stage = original.parent/'generations/prepared/stage.json'
+    stage.parent.mkdir(parents=True)
+    stage.write_bytes(original.read_bytes())
+    committed = original.parent/'committed_stage.json'
+    committed.write_text(json.dumps(dict(schema='initial_quantity_stage_reference_v2', source_date='2026-09-28',
+        stage_path=str(stage), stage_sha256=hashlib.sha256(stage.read_bytes()).hexdigest())))
+    code = projection._code()
+    pointer = committed.with_name('committed_stage.' + producer._digest(code) + '.json')
+    reference = dict(schema='initial_quantity_stage_reference_v2', source_date='2026-09-28',
+        stage_path=str(stage), stage_sha256=hashlib.sha256(stage.read_bytes()).hexdigest(),
+        reader_code=code, committed_parent_sha256=hashlib.sha256(committed.read_bytes()).hexdigest())
+    if damage == 'reference': reference = {}
+    if damage == 'hash': reference.pop('stage_sha256')
+    if damage == 'code': reference['reader_code'] = {'other': '0'*64}
+    if damage == 'parent': committed.write_bytes(committed.read_bytes() + b' ')
+    if damage == 'stage': stage.write_bytes(b'x'*(1024*1024+1))
+    pointer.write_text(json.dumps(reference))
+    result = _initial_quantity_semantics(tmp_path, '2026-09-28')
+    assert result['status'] == ('valid_empty' if damage == 'none' else 'source_invalid')
+    assert result['observation_complete'] is (damage == 'none')
 
 
 def test_quantity_observer_reuses_one_decode_per_unchanged_source(tmp_path, monkeypatch):

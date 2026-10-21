@@ -1120,21 +1120,9 @@ def _initial_quantity_semantics_native(
         "full_source_revalidation_performed": False,
     }
     output_dir = root / 'data/report/initial_entry_quantity_type_policy' / f'refresh_postclose_{source_date}'
-    stage_expected_sha = None
     try:
-        pointer = output_dir / 'committed_stage.json'
-        if pointer.exists() or pointer.is_symlink():
-            ref = read(pointer, limit=65536)
-            stage_path = Path(ref['stage_path'])
-            stage_expected_sha = ref['stage_sha256']
-            if (ref.get('schema') != 'initial_quantity_stage_reference_v2'
-                    or ref.get('source_date') != source_date or not stage_path.is_absolute()
-                    or stage_path.is_symlink()
-                    or not stage_path.resolve().is_relative_to(output_dir.resolve() / 'generations')
-                    or re.fullmatch(r'[0-9a-f]{64}', str(stage_expected_sha)) is None):
-                raise ValueError('quantity_stage_reference_invalid')
-        else:
-            stage_path = output_dir / f'initial_quantity_refresh_stage_{source_date}.json'
+        from src.engine.scalping.initial_quantity_policy import committed_refresh_stage_path
+        stage_path = committed_refresh_stage_path(output_dir, source_date, read=read)
     except (OSError, ValueError, KeyError, TypeError):
         details["findings"].append("initial_quantity_stage_reference_invalid")
         details['status'] = 'source_invalid'
@@ -1144,7 +1132,7 @@ def _initial_quantity_semantics_native(
         try:
             if stage_path.is_symlink() or stage_path.stat().st_size > 1024 * 1024:
                 raise ValueError("stage_untrusted_or_oversize")
-            stage = read(stage_path, expected_sha=stage_expected_sha)
+            stage = read(stage_path)
             observed = _quantity_stage_observation(stage, source_date, read, stage_path=stage_path,
                                                    data_root=(root/'data').resolve())
             observation = (dict(observed['monitor_projection_observation'])

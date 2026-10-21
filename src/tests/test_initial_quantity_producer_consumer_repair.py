@@ -903,6 +903,78 @@ def test_v2_same_date_successors_and_consumer_pointer(tmp_path):
     with pytest.raises(ValueError,match='quantity_stage_reference_invalid'):policy.committed_refresh_stage_path(base,day)
 
 
+@pytest.mark.parametrize('change', ['none', 'code', 'parent', 'stage', 'reference'])
+def test_prepared_refresh_handoff_preserves_incumbent_and_binds_reader(tmp_path, monkeypatch, change):
+    from src.engine.scalping import initial_quantity_monitor_projection as projection
+    from src.engine.scalping.initial_quantity_timeout_research import build_timeout_research
+    parent, path = parent_fixture(tmp_path)
+    base, day = tmp_path/'refresh', '2026-10-08'
+    stages = []
+    for index, facts in enumerate(([], [{**actual_fact(), 'status': 'HOLDING'}])):
+        report = policy.build_initial_quantity_replay(day, data_dir=tmp_path, fact_rows=facts,
+            entry_on_or_after=policy.refresh_window(parent))
+        timeout = build_timeout_research(day, data_dir=tmp_path, fact_rows=facts,
+            entry_on_or_after=policy.refresh_window(parent), replay=report)
+        kwargs = {} if index == 0 else {'publish_current': False}
+        stages.append(policy.publish_refresh_quantity_evaluation(report, parent_policy=parent,
+            parent_policy_path=path, output_dir=base, timeout_research=timeout,
+            terminal_receipt=policy._natural_refresh_terminal_receipt(report), **kwargs))
+        if index == 0:
+            incumbent_ref = (base/'committed_stage.json').read_bytes()
+            incumbent = policy.committed_refresh_stage_path(base, day)
+            incumbent_raw = incumbent.read_bytes()
+    prepared = policy.committed_refresh_stage_path(base, day)
+    assert prepared != incumbent and json.loads(prepared.read_bytes()) == stages[1]
+    assert (base/'committed_stage.json').read_bytes() == incumbent_ref
+    assert incumbent.read_bytes() == incumbent_raw
+    reference = next(base.glob('committed_stage.*.json'))
+    if change == 'code':
+        monkeypatch.setattr(projection, '_code', lambda: {'other-reader': '0'*64})
+        assert policy.committed_refresh_stage_path(base, day) == incumbent
+    elif change != 'none':
+        target = {'parent': base/'committed_stage.json', 'stage': prepared, 'reference': reference}[change]
+        target.write_bytes(target.read_bytes() + b' ' if change != 'reference' else b'{}')
+        with pytest.raises(ValueError, match='quantity_stage_reference_invalid'):
+            policy.committed_refresh_stage_path(base, day)
+    else:
+        # Normal publication advances both views only through the producer.
+        report = json.loads(Path(stages[1]['report_path']).read_bytes())
+        timeout = json.loads(Path(stages[1]['timeout_research_path']).read_bytes())
+        policy.publish_refresh_quantity_evaluation(report, parent_policy=parent,
+            parent_policy_path=path, output_dir=base, timeout_research=timeout,
+            terminal_receipt=policy._natural_refresh_terminal_receipt(report))
+        assert policy.committed_refresh_stage_path(base, day) == prepared
+        assert json.loads((base/'committed_stage.json').read_bytes())['stage_path'] == str(prepared)
+
+
+@pytest.mark.parametrize('failure', ['validation', 'concurrent_commit'])
+def test_prepared_refresh_failure_cannot_select_unverified_generation(tmp_path, monkeypatch, failure):
+    from src.engine.scalping import initial_quantity_monitor_projection as projection
+    from src.engine.scalping.initial_quantity_timeout_research import build_timeout_research
+    parent, path = parent_fixture(tmp_path)
+    base, day = tmp_path/'refresh', '2026-10-08'
+    report = policy.build_initial_quantity_replay(day, data_dir=tmp_path, fact_rows=[],
+        entry_on_or_after=policy.refresh_window(parent))
+    timeout = build_timeout_research(day, data_dir=tmp_path, fact_rows=[],
+        entry_on_or_after=policy.refresh_window(parent), replay=report)
+    policy.publish_refresh_quantity_evaluation(report, parent_policy=parent,
+        parent_policy_path=path, output_dir=base, timeout_research=timeout)
+    pointer = base/'committed_stage.json'
+    before = pointer.read_bytes()
+    if failure == 'validation':
+        monkeypatch.setattr(policy, 'refresh_quantity_stage_terminal_valid', lambda _: False)
+    else:
+        def race(*args, **kwargs):
+            pointer.write_bytes(before + b' ')
+        monkeypatch.setattr(projection, 'publish', race)
+    with pytest.raises(ValueError, match='quantity_(generation_validation_failed|stage_cas_conflict)'):
+        policy.publish_refresh_quantity_evaluation(report, parent_policy=parent,
+            parent_policy_path=path, output_dir=base, timeout_research=timeout,
+            publish_current=False)
+    assert pointer.read_bytes() == before + (b' ' if failure == 'concurrent_commit' else b'')
+    assert not list(base.glob('committed_stage.*.json'))
+
+
 def test_public_stage_validator_preserves_v2_and_accepts_v3_selection(tmp_path, monkeypatch):
     from src.engine.scalping.initial_quantity_refresh_evaluation import VERSION, SELECTION_VERSION
     from src.engine.scalping.initial_quantity_timeout_research import build_timeout_research

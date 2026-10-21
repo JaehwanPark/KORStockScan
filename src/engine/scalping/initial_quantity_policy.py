@@ -2557,6 +2557,8 @@ def publish_refresh_quantity_evaluation(
     terminal_receipt: dict[str, Any] | None = None,
     following_bars: dict[str, Any] | None = None,
     timeout_research: dict[str, Any] | None = None,
+    publish_current: bool = True,
+    accepted_historical_record_ids: list[str] | None = None,
 ) -> dict[str, Any]:
     """Seal a post-apply replay and carry/eligible research decision.
 
@@ -2564,6 +2566,10 @@ def publish_refresh_quantity_evaluation(
     policy publisher must consume it before any runtime change is possible.
     """
     output_dir = _quantity_output_path(output_dir)
+    if type(publish_current) is not bool:
+        raise ValueError('quantity_stage_publication_mode_invalid')
+    if not publish_current and report.get('evaluation_algorithm') != REPAIR_VERSION:
+        raise ValueError('quantity_prepared_generation_requires_current_reader')
     from src.engine.scalping.initial_quantity_activation import (
         refresh_parent_policy_valid,
     )
@@ -2608,7 +2614,17 @@ def publish_refresh_quantity_evaluation(
     day = report["source_date"]
     base_output = output_dir
     committed = base_output / "committed_stage.json"
+    if committed.is_symlink() or (committed.exists() and committed.stat().st_size > 65536):
+        raise ValueError('quantity_stage_reference_invalid')
     previous_commit = committed.read_bytes() if committed.exists() else None
+    if previous_commit is not None:
+        _read_refresh_stage_reference(committed, base_output, day)
+    from src.engine.scalping import initial_quantity_monitor_projection as projection
+    reader_code = projection._code()
+    prepared = committed.with_name('committed_stage.' + _digest(reader_code) + '.json')
+    if prepared.is_symlink() or (prepared.exists() and prepared.stat().st_size > 65536):
+        raise ValueError('quantity_stage_reference_invalid')
+    previous_prepared = prepared.read_bytes() if prepared.exists() else None
     if report.get("evaluation_algorithm") == REPAIR_VERSION:
         verify_refresh_source_generations(report)
         run_hash = _digest({"report": report["report_content_sha256"],
@@ -2691,23 +2707,33 @@ def publish_refresh_quantity_evaluation(
     stage = {**body, "receipt_content_sha256": _digest(body)}
     stage_path = output_dir / f"initial_quantity_refresh_stage_{day}.json"
     stage_sha = _write_immutable_json(stage_path, stage)
-    from src.engine.scalping.initial_quantity_monitor_projection import publish as publish_monitor_projection
-    monitor_projection = publish_monitor_projection(stage_path, stage, report, data_root=DATA_DIR)
+    monitor_projection = projection.publish(stage_path, stage, report, data_root=DATA_DIR,
+        publish_current=publish_current, accepted_historical_record_ids=accepted_historical_record_ids)
     if report.get("evaluation_algorithm") == REPAIR_VERSION:
         from src.engine.scalping.pre_submit_delay_initial_policy import _atomic
         import fcntl
         if monitor_projection is None and not refresh_quantity_stage_terminal_valid(stage):
             raise ValueError("quantity_generation_validation_failed")
+        if reader_code != projection._code():
+            raise ValueError('quantity_stage_reader_changed')
         with (base_output / ".commit.lock").open("a+b") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX)
             latest = committed.read_bytes() if committed.exists() else None
             if latest != previous_commit:
-                if latest and json.loads(latest).get("stage_sha256") == stage_sha:
-                    return stage
-                raise ValueError("quantity_stage_cas_conflict")
-            _atomic(committed, {"schema":"initial_quantity_stage_reference_v2",
+                if not (publish_current and latest
+                        and json.loads(latest).get('stage_sha256') == stage_sha):
+                    raise ValueError("quantity_stage_cas_conflict")
+            if (prepared.read_bytes() if prepared.exists() else None) != previous_prepared:
+                raise ValueError('quantity_stage_cas_conflict')
+            reference = {"schema":"initial_quantity_stage_reference_v2",
                 "source_date":day, "stage_path":str(stage_path.resolve()),
-                "stage_sha256":stage_sha})
+                "stage_sha256":stage_sha}
+            if publish_current:
+                _atomic(committed, reference)
+            if not publish_current or previous_prepared is not None:
+                parent = committed.read_bytes() if committed.exists() else None
+                _atomic(prepared, dict(reference, reader_code=reader_code,
+                    committed_parent_sha256=(hashlib.sha256(parent).hexdigest() if parent is not None else None)))
     return stage
 
 
@@ -2757,22 +2783,50 @@ def verify_refresh_source_generations(report, *, pipeline_reference_only=False):
                 raise ValueError("quantity_source_quality_generation_changed")
 
 
-def committed_refresh_stage_path(output_dir: Path, day: str) -> Path:
-    legacy = output_dir / f"initial_quantity_refresh_stage_{day}.json"
-    pointer = output_dir / "committed_stage.json"
-    if not pointer.exists():
-        return legacy
+def _read_refresh_stage_reference(pointer, output_dir, day, *, read=None):
     if pointer.is_symlink() or pointer.stat().st_size > 65536:
-        raise ValueError("quantity_stage_reference_invalid")
-    ref = json.loads(pointer.read_bytes())
-    path = Path(ref["stage_path"])
-    if (ref.get("schema") != "initial_quantity_stage_reference_v2"
-            or ref.get("source_date") != day
-            or not path.is_absolute() or path.is_symlink()
-            or not path.resolve().is_relative_to(output_dir.resolve() / "generations")
-            or _file_sha256(path) != ref.get("stage_sha256")):
-        raise ValueError("quantity_stage_reference_invalid")
-    return path
+        raise ValueError('quantity_stage_reference_invalid')
+    ref = read(pointer, limit=65536) if read else json.loads(pointer.read_bytes())
+    if (not isinstance(ref, dict) or not isinstance(ref.get('stage_path'), str)
+            or ref.get('schema') != 'initial_quantity_stage_reference_v2'
+            or ref.get('source_date') != day
+            or re.fullmatch(r'[0-9a-f]{64}', str(ref.get('stage_sha256'))) is None):
+        raise ValueError('quantity_stage_reference_invalid')
+    path = Path(ref['stage_path'])
+    if (not path.is_absolute() or path.is_symlink()
+            or not path.resolve().is_relative_to(output_dir.resolve()/'generations')
+            or not path.is_file() or path.stat().st_size > 1024*1024
+            or (not read and _file_sha256(path) != ref['stage_sha256'])):
+        raise ValueError('quantity_stage_reference_invalid')
+    if read:
+        read(path, limit=1024*1024, expected_sha=ref['stage_sha256'])
+    return ref
+
+
+def committed_refresh_stage_path(output_dir: Path, day: str, *, read=None) -> Path:
+    """Resolve an exact reader's successor without changing the issued parent.
+
+    Another publication or a damaged exact reference must not silently fall back.
+    Health supplies its bounded, generation-tracked reader to the common parser.
+    """
+    from src.engine.scalping.initial_quantity_monitor_projection import _code
+    output_dir = _quantity_output_path(output_dir)
+    committed = output_dir/'committed_stage.json'
+    code = _code()
+    prepared = committed.with_name('committed_stage.' + _digest(code) + '.json')
+    exact = prepared.exists() or prepared.is_symlink()
+    pointer = prepared if exact else committed
+    if not pointer.exists() and not pointer.is_symlink():
+        return output_dir/f'initial_quantity_refresh_stage_{day}.json'
+    ref = _read_refresh_stage_reference(pointer, output_dir, day, read=read)
+    if exact:
+        if committed.exists() or committed.is_symlink():
+            _read_refresh_stage_reference(committed, output_dir, day, read=read)
+        parent_sha = _file_sha256(committed) if committed.exists() else None
+        if (ref.get('reader_code') != code or 'committed_parent_sha256' not in ref
+                or ref['committed_parent_sha256'] != parent_sha):
+            raise ValueError('quantity_stage_reference_invalid')
+    return Path(ref['stage_path'])
 
 
 def refresh_quantity_stage_terminal_valid(receipt: Any) -> bool:

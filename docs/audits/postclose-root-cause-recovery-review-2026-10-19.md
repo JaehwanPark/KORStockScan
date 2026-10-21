@@ -1041,3 +1041,18 @@ Code review and current PID consumption are closed for the quantity/identity rep
 기준b765 대비 증감(기존f428 통합 포함): non-test source +385/-57, tests +315/-30, docs +75/-0(이 계수 행 이전). 새로운 수량 의사결정/주문 진입점은0이며 순증은 기존 source/cache의 단일 읽기 byte proof와 실패 회귀·정확한 인계 기록이다.
 
 최종 준비 상태: 수량 통합 source commit4368954cd(부모b7654ac4b/f428295c6)의 clean managed release를 만들었다. producer269·consumer315·exact handoff33/마지막6·추가 source9 PASS, compile/diff/parser 및 현재 owner1건 PASS다. active policy와 delay/stop/holding native 인계,128scope/76,800행/598신호 parity 불일치0, trailing20,824scope native currentness도 PASS(56.280초, peak RSS183,108KiB)다. 원 수량 report는 이전8개 대형행 제외를 포함하므로 현재 후보 reader의 운영 currentness는 `deployment_quantity_report_not_current:initial_quantity_stage_invalid:ValueError`로 남는다. private successor의 full joint/native stage PASS를 운영 보고서 인계 PASS로 대체하지 않는다. 따라서436은 source 후보 준비이며 배포 가능 확정은 미완료다. 운영 preflight를 모두 통과했던 직전 후보는b765이며, 실행본은ea68/PID1724066/start19233026 그대로다. 원 수량 committed/current·정책/selector4개 SHA 불변, 재기동·전환 예약·Telegram/provider/order0을 마지막에 확인했다. 남은 owner는 기존InitialQuantityProducerConsumerRepair1010이고 closure는 원 generation을 보존한 native 후속 generation 인계→candidate 운영 currentness다. [정확한 준비·잔여 상태](../../tmp/quantity-currentness-integration-20261021/readiness.json).
+
+
+## 수량 후속 stage의 후보별 인계 — 2026-10-21
+
+사용자의 다음 액션 실행 지시로4368954cd/문서5406d42ee를 기준으로 수량 후속 generation의 준비 인계를 보완한다. 재기동·selector/정책 변경은 하지 않는다. 기존11건 private successor는 full joint PASS이나 공용 committed stage가 원 보고서를 가리켜 후보의 원 검사가 initial_quantity_stage_invalid:ValueError였다. 구 실행본ea68은 원 reader를 사용하므로 공용 참조를 곧바로 바꾸면 두 reader를 함께 이관하게 된다.
+
+기존 publish_refresh_quantity_evaluation에 publish_current=False를 추가했다. 같은 producer의 full source/evaluation/timeout/terminal/native gate를 통과한 immutable generation만 정확한 code-addressed stage 참조로 준비한다. 원 committed bytes의 SHA를 CAS 부모로 결속하고 같은 commit lock에서 동시 발행을 거부한다. 정상 발행은 공용 참조를 갱신하고 이미 준비된 같은 코드 참조도 함께 이관한다. 현재 reader가 달라지면 해당 준비 참조를 사용할 수 없으며, 맞는 참조가 손상됐거나 부모가 바뀌면 기존 stage로 fallback하지 않는다. source/date/hash/size와 기존 수집·비용·경제성 guard는 유지한다.
+
+감시의 중복 stage-reference 파서를 제거하고 기존 committed_refresh_stage_path의 bounded read callback을 사용한다. 공용/후속 참조 모두 같은 bounded parser로 원 stage까지 검증한다. 큰 원천 추가 재생이나 policy activation을 하지 않으며 원 stage/정책/역사 제외8건의 ID·fact SHA·사유를 보존한다. 이8건은 복구한 pipeline 큰 행8건과 다른 집단이다.
+
+검증: 새 준비 회귀7건은 원 코드에서 실패했고 수정 후 통과했다. source generation/잘못된 코드·손상/누락 SHA·부모 변경·동시 발행·정상 발행 이관과 bounded 실제 감시 소비자를 포함한3suite799 PASS, 기존/새 정책 코드 인계48 PASS다. 재리뷰에서 원 공용 참조의 날짜·경로·해시도 동일 parser로 검증하도록 보완했다. 실제 source-only 발행/후보 현재성 결과는 아래 후속 증거에 추가한다.
+
+대체·제거: artifact_freshness의 별도 참조 검사는 consolidated(기존 quantity resolver로 통합), legacy 공용 참조/default native publication은 retained(현재ea68과 정상 장후 consumer), private-only 발행은 retained(격리 검증 caller), exact code-bound 준비 모드는 같은 native publisher의 확장이다. 새 module/worker/CLI/주문 진입점/일정은0, 삭제 유예0이다. 기존 InitialQuantityProducerConsumerRepair1010의 source-only 인계와 DirectFamilyPreopenPolicyHandoff의 실제 자연 종료 전환을 분리한다. 근거는 tmp/quantity-stage-handoff-20261021이며 원 실패·799/48회귀·원 pointer/stage/policy 해시를 보존했다.
+
+기준5406d42ee(소스4368954cd) 대비 non-test source3파일 +106/-38, tests3파일 +120/-5, docs3파일 +21/-0(이 행 포함)이다. 이동0·새 engine-root module0·신규 진입점0이며 순증은 기존 발행자의 후보별 CAS 인계·bounded 공통 parser·정확한 회귀/리뷰다. compile6·diff·print-only parser24/현재 owner1건 PASS; 문서 링크와 원 strict snapshot72fe9d12를 확인했다.

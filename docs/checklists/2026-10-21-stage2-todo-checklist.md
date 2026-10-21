@@ -117,6 +117,7 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
 ## 미완료 원천 진단 인계
 
 - [ ] `[InitialQuantityProducerConsumerRepair1010] 매수수량 원천·fact·시간창·장후 소비 결손 수리와 자연 수용` (`Due: 2026-10-21`, `Slot: POSTCLOSE`, `TimeWindow: 16:30~23:59`, `Track: RuntimeStability`)
+  - 후보별 후속 인계: 원 공용 stage·정책/ea68을 보존하는 code-addressed 준비 경로와 bounded 공통 reader를 보완했다. producer/consumer799·정책 인계48 PASS. source-only 실제 발행→후보 currentness 재검증을 수행하며 재기동하지 않는다. [검토](../audits/postclose-root-cause-recovery-review-2026-10-19.md#수량-후속-stage의-후보별-인계--2026-10-21).
   - source 후보4368954cd는 수량11건/private successor·정책 인계·trailing 현재성/parity PASS이나 운영 수량 stage 인계/currentness는 미완료다. 마지막 전체 운영 preflight 통과 후보b765와 구분하며 ea68/PID1724066을 유지한다. [최종 준비 상태](/home/ubuntu/KORStockScan/tmp/quantity-currentness-integration-20261021/readiness.json).
   - 즉시 검증 결과: 고정11건 joint와 private successor native PASS, 원 큰 행8건의 해당 결손0건·carry_parent. 원 운영 stage/정책은 보존하며 원 generation을 새 reader로 동일 재현했다고 주장하지 않는다. 준비한 successor의 정식 인계·현재성/실제 PID는 OPEN이다. [소비 근거](/home/ubuntu/KORStockScan/tmp/quantity-currentness-integration-20261021/joint-result.json).
   - 10/21 즉시 재개: 자연 종료는 실제 전환 조건이며 과거 source 검증은 지금 수행한다. 대형 fingerprint→native index, 같은 semantic read의 물리 SHA, gzip 논리 full-source 검증과 stable cache key를 보완했다. f428은 최신 준비b765와 별도였으므로 격리 통합 후 native joint/후속 generation과 배포 전 currentness를 다시 확인한다. [정정·원인·검증](../audits/postclose-root-cause-recovery-review-2026-10-19.md#수량-통합-검증-즉시-재개와-후보-구분--2026-10-21).

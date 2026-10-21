@@ -3792,6 +3792,25 @@ REVIEWED_QUANTITY_CAPTURE_DEPENDENCY_VARIANTS = {
 }
 
 
+# Prepared research stages keep the incumbent reference and bind one exact reader.
+# Evidence: existing quantity producer/consumer review, 2026-10-21.
+REVIEWED_QUANTITY_STAGE_HASHES = {'src/engine/scalping/initial_quantity_policy.py': '9b18c05ff050cb8d182b03296ee71f30b8efa867341ba47b04a2f06dc55f87c7', 'src/engine/error_detectors/artifact_freshness.py': 'edd034fef32d08c01ea52e3a0022a5ac185d45bde9ff66ab190fdbc4fd7221e6'}
+REVIEWED_QUANTITY_STAGE_PAIRS = {
+    name: tuple((before, REVIEWED_QUANTITY_STAGE_HASHES[name])
+        for before in dict.fromkeys([value for pair in REVIEWED_QUANTITY_CAPTURE_PAIRS.get(name, ()) for value in pair]))
+    for name in REVIEWED_QUANTITY_STAGE_HASHES
+}
+REVIEWED_QUANTITY_STAGE_DEPENDENCY_VARIANTS = {
+    key: {**value,
+        'selector_path': 'src/engine/scalping/initial_quantity_policy.py',
+        'selector_sha256': REVIEWED_QUANTITY_STAGE_HASHES['src/engine/scalping/initial_quantity_policy.py'],
+        'dependencies': {**value['dependencies'], **REVIEWED_QUANTITY_STAGE_HASHES},
+        'contract_extensions': {origin: {name: REVIEWED_QUANTITY_STAGE_HASHES.get(os.path.normpath(name), digest)
+            for name, digest in paths.items()} for origin, paths in value['contract_extensions'].items()},
+    } for key, value in REVIEWED_QUANTITY_CAPTURE_DEPENDENCY_VARIANTS.items()
+}
+
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -3870,6 +3889,9 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     finalization_health_present = any((root / name).is_file()
         and hashlib.sha256(candidate_bytes(name)).hexdigest() == sha
         for name, sha in REVIEWED_FINALIZATION_HEALTH_HASHES.items())
+    quantity_stage_present = (root / 'src/engine/scalping/initial_quantity_policy.py').is_file() and (
+        hashlib.sha256(candidate_bytes('src/engine/scalping/initial_quantity_policy.py')).hexdigest()
+        == REVIEWED_QUANTITY_STAGE_HASHES['src/engine/scalping/initial_quantity_policy.py'])
     quantity_capture_present = (root / 'src/engine/scalping/initial_quantity_cap_observation.py').is_file() and (
         hashlib.sha256(candidate_bytes('src/engine/scalping/initial_quantity_cap_observation.py')).hexdigest()
         == REVIEWED_QUANTITY_CAPTURE_HASHES['src/engine/scalping/initial_quantity_cap_observation.py'])
@@ -3902,7 +3924,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         dependencies = generations.get(trigger_sha, {})
         # New exact selectors precede their historical parent. The first match
         # selects one complete generation, never per-file SHA alternatives.
-        for variants in (REVIEWED_QUANTITY_CAPTURE_DEPENDENCY_VARIANTS,
+        for variants in (REVIEWED_QUANTITY_STAGE_DEPENDENCY_VARIANTS,
+                         REVIEWED_QUANTITY_CAPTURE_DEPENDENCY_VARIANTS,
                          REVIEWED_COLLECTOR_FIRST_TRANSITION_DEPENDENCY_VARIANTS,
                          REVIEWED_COLLECTOR_CLOSE_DEPENDENCY_VARIANTS,
                          REVIEWED_BUY_IDENTITY_DEPENDENCY_VARIANTS,
@@ -4045,6 +4068,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
                           for name, sha in extensions.items()}
         if quantity_capture_present:
             dependencies = {**dependencies, **REVIEWED_QUANTITY_CAPTURE_HASHES}
+        if quantity_stage_present:
+            dependencies = {**dependencies, **REVIEWED_QUANTITY_STAGE_HASHES}
         dependencies_by_trigger[trigger] = (trigger_sha, dependencies)
     for key, name in paths.items():
         after = candidate_bytes(name)
@@ -4062,6 +4087,7 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
             continue
         pair = (hashlib.sha256(before).hexdigest(), hashlib.sha256(after).hexdigest())
         if (pair in REVIEWED_DELAY_MACHINE_PARENT_PAIRS.get(repository_name(name), ())
+                or pair in REVIEWED_QUANTITY_STAGE_PAIRS.get(repository_name(name), ())
                 or pair in REVIEWED_QUANTITY_CAPTURE_PAIRS.get(repository_name(name), ())
                 or pair in REVIEWED_COLLECTOR_FIRST_TRANSITION_PAIRS.get(repository_name(name), ())
                 or pair in REVIEWED_COLLECTOR_CLOSE_PAIRS.get(repository_name(name), ())
