@@ -422,6 +422,7 @@ def test_post_aux_guard_successor_does_not_transitively_promote_older_reports(tm
     ('holding_vote','REVIEWED_HISTORICAL_RESOLUTION_SUCCESSORS'),
     *[(family,'REVIEWED_HOLDING_REPUBLICATION_SUCCESSORS') for family in ('entry_cancel_wait','auxiliary')],
     *[(family,'REVIEWED_FIXED_WAIT_SUCCESSORS') for family in ('rising_missed','holding_vote')],
+    ('entry_cancel_wait','REVIEWED_BUY_IDENTITY_SUCCESSORS'),
     *[(family,'REVIEWED_ENTRY_RECEIPT_SUCCESSORS') for family in ('entry_cancel_wait','rising_missed','holding_vote')],
 ])
 @pytest.mark.parametrize('damage', [None, 'missing', 'bytes', 'path', 'authority', 'seal', 'symlink',
@@ -472,6 +473,11 @@ def test_successor_requires_preserved_prior_fixture_and_independent_current_fixt
 @pytest.mark.parametrize('family', list(validation.PLANS))
 def test_latest_capability_pair_is_current_and_keeps_original_source(family):
     from src.engine.monitoring import policy_generation_code_handoff as handoff
+    if family in handoff.REVIEWED_BUY_IDENTITY_SUCCESSORS:
+        old,current=handoff.REVIEWED_BUY_IDENTITY_SUCCESSORS[family]
+        assert current==generation.code_generation(family)
+        assert old==handoff.REVIEWED_ENTRY_RECEIPT_SUCCESSORS[family][0]
+        return
     if family in handoff.REVIEWED_ENTRY_RECEIPT_SUCCESSORS:
         old, current = handoff.REVIEWED_ENTRY_RECEIPT_SUCCESSORS[family]
         assert current == generation.code_generation(family)

@@ -1031,13 +1031,15 @@ def _restore_registered_entry_buy(record, target, code, quantity, registry):
     """
     from src.engine import sniper_execution_receipts as receipts
     from src.engine.scalping import entry_split_order_plan as probe
+    from src.engine.ai import holding_exit_vote as vote
+    from src.engine.scalping.main_stop_policy import bounded_object
     from src.trading.order.owner_custody_registry import OwnerOrderContext
 
     old_qty = _to_int(getattr(record, "buy_qty", 0))
     target_id = getattr(record, "id", None)
     owner = f"main_scalping:{target_id}"
     today = datetime.now(receipts._KST).date()
-    if (old_qty != 1 or type(quantity) is not int or quantity <= old_qty
+    if (type(quantity) is not int or quantity <= 1 or old_qty not in {1, quantity}
             or type(target_id) is not int or target_id <= 0
             or str(getattr(record, "strategy", "")).upper() != "SCALPING"
             or str(getattr(record, "status", "")).upper() not in {"HOLDING", "BUY_ORDERED", "SELL_ORDERED"}
@@ -1087,7 +1089,6 @@ def _restore_registered_entry_buy(record, target, code, quantity, registry):
         first = by_order.get(bundle.get("order_no"))
         if (len(by_order) != quantity or len(expected) != quantity or set(expected) != set(by_order)
                 or bundle.get("requested_qty") != quantity or not first
-                or not isclose(_to_float(record.buy_price), first["fill_amount"], abs_tol=0.0001)
                 or any(not str(r.get("client_intent_id") or "").startswith(
                     owner+":"+str(target_id)+":"+(
                         "ENTRY_BUY:" if r is first else "ENTRY_RESIDUAL_BUY:")) for r in filled)
@@ -1097,15 +1098,70 @@ def _restore_registered_entry_buy(record, target, code, quantity, registry):
         amount = sum(r["fill_amount"] for r in filled)
         evidence = dict(bundle_id=bundle["bundle_id"], quantity=quantity, fill_amount=amount,
             registry_event_hashes={n:r["event_hash"] for n,r in by_order.items()})
+        expected_price = first["fill_amount"] if old_qty == 1 else amount/quantity
+        if (not isclose(_to_float(record.buy_price), expected_price, abs_tol=0.0001)
+                or old_qty == quantity and (bundle.get("phase") != "complete"
+                    or bundle.get("registered_entry_recovery") != evidence)):
+            return None
+        recovered = dict(id=target_id, code=code, buy_time=record.buy_time,
+            buy_qty=quantity, buy_price=amount/quantity, entry_filled_qty=quantity,
+            _entry_receipt_filled_by_order_no={n:1 for n in by_order},
+            _entry_receipt_executions_by_order_no={n:{r["execution_no"]:dict(
+                cumulative_qty=1, cumulative_exec_amount=r["fill_amount"], order_qty=1,
+                remaining_qty=0, unit_exec_qty=1, unit_exec_price=r["fill_amount"])}
+                for n,r in by_order.items()},
+            _add_receipt_filled_by_order_no={}, _add_receipt_executions_by_order_no={})
+        identity = vote.buy_fill_identity_from_runtime(recovered)
+        try:
+            path = vote._buy_fill_receipt_path(receipts.DATA_DIR, recovered)
+            previous_sha = None
+            if path.exists() or path.is_symlink():
+                previous, previous_sha = bounded_object(path, vote._BUY_FILL_RECEIPT_MAX_BYTES)
+                prior = dict(id=target_id, code=code, buy_time=previous.get("buy_time"),
+                    buy_qty=previous.get("buy_qty"), buy_price=previous.get("buy_price"))
+                valid_times = {vote._buy_fill_receipt_time(record.buy_time)}
+                for row in filled:
+                    if row.get("fill_observed_at_kst"):
+                        at = datetime.fromisoformat(row["fill_observed_at_kst"])
+                        valid_times.add(vote._buy_fill_receipt_time(at.replace(microsecond=0)))
+                        valid_times.add(vote._buy_fill_receipt_time(at))
+                if (vote._buy_fill_receipt_time(prior["buy_time"]) not in valid_times
+                        or vote.restore_buy_fill_receipt(prior, receipts.DATA_DIR) != "restored"):
+                    return None
+                legs = vote.buy_fill_legs_from_runtime(prior)
+                if (not legs or first["broker_order_no"] not in {leg["order_no"] for leg in legs}
+                        or any(leg not in vote.buy_fill_legs_from_runtime(recovered) for leg in legs)
+                        or not isclose(float(prior["buy_price"]),
+                            sum(by_order[leg["order_no"]]["fill_amount"] for leg in legs)/len(legs),
+                            abs_tol=0.0001)):
+                    return None
+            # Persist the same exact native legs before committing DB quantity.
+            restored = dict(id=target_id, code=code, buy_time=record.buy_time,
+                buy_qty=quantity, buy_price=amount/quantity)
+            if (previous_sha is None or vote.restore_buy_fill_receipt(restored, receipts.DATA_DIR) != "restored"
+                    or vote.buy_fill_identity_from_runtime(restored) != identity):
+                vote.persist_buy_fill_receipt(recovered, receipts.DATA_DIR)
+            if (vote.restore_buy_fill_receipt(restored, receipts.DATA_DIR) != "restored"
+                    or vote.buy_fill_identity_from_runtime(restored) != identity):
+                raise ValueError("registered_entry_buy_identity_not_consumed")
+        except (OSError, ValueError, TypeError, KeyError) as exc:
+            log_error(f"[REGISTERED_ENTRY_BUY_IDENTITY_RECOVERY_BLOCKED] record_id={target_id} "
+                      f"code={code} reason={type(exc).__name__}:{exc}")
+            return None
         # This is native receipt completion, not a synthesized broker terminal.
         probe.update_probe_runtime_bundle(bundle["bundle_id"], phase="complete",
             now=datetime.now(receipts._KST), filled_qty=quantity, actual_submitted_qty=quantity,
-            avg_buy_price=amount/quantity, registered_entry_recovery=evidence)
+            avg_buy_price=amount/quantity, registered_entry_recovery=evidence,
+            buy_fill_identity_recovery=bundle.get("buy_fill_identity_recovery") or dict(
+                identity=identity, previous_receipt_sha256=previous_sha))
         record.buy_qty = quantity
         record.buy_price = amount / quantity
         record.initial_buy_qty = quantity
         record.status = "HOLDING"
         if target is not None:
+            target.update(restored)
+            target["buy_fill_identity_store_sha256"] = identity
+            target.pop("buy_fill_identity_store_gap", None)
             target.update(status="HOLDING", buy_qty=quantity, buy_price=amount/quantity, scale_in_locked=True,
                 initial_buy_qty=quantity, entry_split_probe_phase="complete",
                 entry_filled_qty=quantity, entry_fill_amount=amount)
@@ -1197,6 +1253,10 @@ def _preserve_coexistence_owner_inventory(
                     reconciliation_errors.append(mismatch)
                 else:
                     reconciliation["main_entry_buy_receipt"] = entry
+        elif not reconciliation_errors and (target is None or target.get("buy_fill_identity_store_gap")):
+            entry = _restore_registered_entry_buy(record, target, code, main_qty, registry)
+            if entry is not None:
+                reconciliation["main_entry_buy_receipt"] = entry
     except OwnerRegistryError as exc:
         reconciliation_errors.append(str(exc))
     reconciliation_error = "|".join(dict.fromkeys(reconciliation_errors))

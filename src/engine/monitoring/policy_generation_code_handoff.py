@@ -289,6 +289,12 @@ REVIEWED_ENTRY_RECEIPT_SUCCESSORS = {'entry_cancel_wait': ('47eb1ef2e45d3c48e663
                   '4a2b6c4e105eb2ca538807222ce0b49ad189829f7a64d1d18dd4828b94a5e94f')}
 
 
+# Completed owned-entry recovery also persists its native holding BUY identity.
+REVIEWED_BUY_IDENTITY_SUCCESSORS = {'entry_cancel_wait': (
+    '47eb1ef2e45d3c48e663f6b3df505bc95da07fc6bcd168394441840af4764fff',
+    '2382694e568af306027b58857aa2b5dff6fa0093347f4c8220a8ae6be001adef')}
+
+
 def _historical_fixture(contract, data, family, *, late_report=None):
     """Preserve a prior fixture without using it to certify the successor."""
     reference = contract.get('fixture_receipt')
@@ -397,7 +403,8 @@ def current_fixture_observation(observed, data):
                     or actual_pair == REVIEWED_HOLDING_REPUBLICATION_SUCCESSORS.get(family)
                     or actual_pair == REVIEWED_HISTORICAL_RESOLUTION_SUCCESSORS.get(family)
                     or actual_pair == REVIEWED_FIXED_WAIT_SUCCESSORS.get(family)
-                    or actual_pair == REVIEWED_ENTRY_RECEIPT_SUCCESSORS.get(family))
+                    or actual_pair == REVIEWED_ENTRY_RECEIPT_SUCCESSORS.get(family)
+                    or actual_pair == REVIEWED_BUY_IDENTITY_SUCCESSORS.get(family))
     if reader_match:
         pair = actual_pair
     if not pair or actual_pair != pair:
@@ -432,7 +439,8 @@ def current_fixture_observation(observed, data):
             raise ValueError('successor_historical_contract_changed')
         late_report = ((path, report_sha) if any(actual_pair == successors.get(family)
             for successors in (REVIEWED_HISTORICAL_RESOLUTION_SUCCESSORS,
-                               REVIEWED_FIXED_WAIT_SUCCESSORS, REVIEWED_ENTRY_RECEIPT_SUCCESSORS)) else None)
+                               REVIEWED_FIXED_WAIT_SUCCESSORS, REVIEWED_ENTRY_RECEIPT_SUCCESSORS,
+                               REVIEWED_BUY_IDENTITY_SUCCESSORS)) else None)
         historical_fixture = _historical_fixture(contract, data, family, late_report=late_report)
         if (integrated_match or readonly_match or cleanup_match or custody_match or reader_match or frozen_match) and historical_fixture is None:
             raise ValueError('successor_integrated_historical_fixture_required')

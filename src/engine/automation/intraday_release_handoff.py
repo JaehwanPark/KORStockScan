@@ -3594,6 +3594,25 @@ REVIEWED_ENTRY_RECEIPT_DEPENDENCY_VARIANTS = {
 }
 
 
+# Preserve the deployed receipt profile; require its exact durable-identity successor.
+REVIEWED_BUY_IDENTITY_HASHES = {'src/engine/monitoring/policy_generation_code_handoff.py': '86b6ea98d0af89360c350f24dc9771441c9332c22354059ae7d5dc1a7b2ac3e4',
+ 'src/engine/sniper_sync.py': '2a2cdc2f144bbe2abd7649b4c4b9f4a6ff50ae751ab3e978699c2da49a06199d'}
+REVIEWED_BUY_IDENTITY_PAIRS = {
+    name: tuple(dict.fromkeys((old, current) for old in
+        [*(pair[0] for pair in REVIEWED_ENTRY_RECEIPT_PAIRS[name]), REVIEWED_ENTRY_RECEIPT_HASHES[name]]))
+    for name,current in REVIEWED_BUY_IDENTITY_HASHES.items()
+}
+REVIEWED_BUY_IDENTITY_DEPENDENCY_VARIANTS = {
+    key: {**value,
+        'selector_path': 'src/engine/sniper_sync.py',
+        'selector_sha256': REVIEWED_BUY_IDENTITY_HASHES['src/engine/sniper_sync.py'],
+        'dependencies': {**value['dependencies'], **REVIEWED_BUY_IDENTITY_HASHES},
+        'contract_extensions': {origin: {name: REVIEWED_BUY_IDENTITY_HASHES.get(os.path.normpath(name), digest)
+            for name,digest in paths.items()} for origin,paths in value['contract_extensions'].items()},
+    } for key,value in REVIEWED_ENTRY_RECEIPT_DEPENDENCY_VARIANTS.items()
+}
+
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -3672,6 +3691,9 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     finalization_health_present = any((root / name).is_file()
         and hashlib.sha256(candidate_bytes(name)).hexdigest() == sha
         for name, sha in REVIEWED_FINALIZATION_HEALTH_HASHES.items())
+    buy_identity_present = any((root / name).is_file()
+        and hashlib.sha256(candidate_bytes(name)).hexdigest() == sha
+        for name, sha in REVIEWED_BUY_IDENTITY_HASHES.items())
     entry_receipt_present = any((root / name).is_file()
         and hashlib.sha256(candidate_bytes(name)).hexdigest() == sha
         for name, sha in REVIEWED_ENTRY_RECEIPT_HASHES.items())
@@ -3689,7 +3711,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         dependencies = generations.get(trigger_sha, {})
         # New exact selectors precede their historical parent. The first match
         # selects one complete generation, never per-file SHA alternatives.
-        for variants in (REVIEWED_ENTRY_RECEIPT_DEPENDENCY_VARIANTS,
+        for variants in (REVIEWED_BUY_IDENTITY_DEPENDENCY_VARIANTS,
+                         REVIEWED_ENTRY_RECEIPT_DEPENDENCY_VARIANTS,
                          REVIEWED_FIXED_WAIT_DEPENDENCY_VARIANTS,
                          REVIEWED_NATIVE_INVALIDATION_DEPENDENCY_VARIANTS,
                          REVIEWED_FINALIZATION_HEALTH_DEPENDENCY_VARIANTS,
@@ -3816,6 +3839,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
             dependencies = {**dependencies, **REVIEWED_FIXED_WAIT_HASHES}
         if entry_receipt_present:
             dependencies = {**dependencies, **REVIEWED_ENTRY_RECEIPT_HASHES}
+        if buy_identity_present:
+            dependencies = {**dependencies, **REVIEWED_BUY_IDENTITY_HASHES}
         dependencies_by_trigger[trigger] = (trigger_sha, dependencies)
     for key, name in paths.items():
         after = candidate_bytes(name)
@@ -3832,7 +3857,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         if before == after:
             continue
         pair = (hashlib.sha256(before).hexdigest(), hashlib.sha256(after).hexdigest())
-        if (pair in REVIEWED_ENTRY_RECEIPT_PAIRS.get(repository_name(name), ())
+        if (pair in REVIEWED_BUY_IDENTITY_PAIRS.get(repository_name(name), ())
+                or pair in REVIEWED_ENTRY_RECEIPT_PAIRS.get(repository_name(name), ())
                 or pair in REVIEWED_FIXED_WAIT_PAIRS.get(repository_name(name), ())
                 or pair in REVIEWED_NATIVE_INVALIDATION_PAIRS.get(repository_name(name), ())
                 or pair in REVIEWED_FINALIZATION_HEALTH_PAIRS.get(repository_name(name), ())

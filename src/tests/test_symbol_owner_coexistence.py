@@ -1,5 +1,5 @@
 from src.engine import kiwoom_orders
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 import json
 import pytest
 from src.trading.order.owner_custody_registry import (OrderOwnerRegistry, OwnerOrderContext, OwnerRegistryBusy, OwnerRegistryConflict, OwnerRegistryError)
@@ -744,16 +744,19 @@ def test_empty_or_invalid_cancel_ack_number_is_false_without_exception(number):
 
 
 @pytest.mark.parametrize('fault', [None, 'missing', 'amount', 'open', 'sell', 'owner', 'date',
-    'bundle', 'extra_order', 'manual', 'foreign_guard', 'sell_custody', 'db_price', 'db_retry'])
+    'bundle', 'extra_order', 'manual', 'foreign_guard', 'sell_custody', 'db_price', 'db_retry',
+    'db_already', 'db_already_unbound', 'prior_receipt', 'receipt_conflict', 'receipt_time', 'receipt_price', 'receipt_write'])
 def test_sync_recovers_only_complete_exact_unit_entry_census(tmp_path, monkeypatch, fault):
     from types import SimpleNamespace
     from copy import deepcopy
     from src.engine import sniper_sync as sync, sniper_execution_receipts as receipts
     from src.engine.scalping import entry_split_order_plan as probe
+    from src.engine.ai import holding_exit_vote as vote
     today = datetime.now(receipts._KST)
     rows=[dict(owner_type='main_scalping',owner_id='main_scalping:101',position_id='main_scalping:101',
         symbol=SYMBOL,order_date=today.date().isoformat(),side='BUY',action='NEW',state='ORDER_TERMINAL',
         quantity=1,filled_qty=1,fill_amount=10000 if i<2 else 9900,execution_no=str(8000+i),
+        fill_observed_at_kst=(today+timedelta(seconds=i)).isoformat(),
         broker_order_no=str(23795+i).zfill(7),event_hash=str(i+1)*64,
         client_intent_id=f'main_scalping:101:101:{"ENTRY_BUY" if i==0 else "ENTRY_RESIDUAL_BUY"}:leg{i}:unique') for i in range(3)]
     order_nos=[r['broker_order_no'] for r in rows]
@@ -789,11 +792,44 @@ def test_sync_recovers_only_complete_exact_unit_entry_census(tmp_path, monkeypat
     monkeypatch.setattr(sync,'log_error',lambda *a:None);monkeypatch.setattr(sync,'log_info',lambda *a:None)
     probe.update_probe_runtime_bundle('bundle-101',phase=bundle['phase'],now=today,
         **{k:v for k,v in bundle.items() if k not in {'bundle_id','phase'}})
+    monkeypatch.setattr(receipts,'DATA_DIR',tmp_path/'data')
+    if fault in {'db_already','db_already_unbound'}:
+        record.buy_qty=3;record.buy_price=29900/3;record.status='HOLDING'
+        target['buy_fill_identity_store_gap']='position_generation_mismatch'
+        proof=dict(bundle_id='bundle-101',quantity=3,fill_amount=29900,
+            registry_event_hashes={r['broker_order_no']:r['event_hash'] for r in rows})
+        probe.update_probe_runtime_bundle('bundle-101',phase='complete',now=today,
+            registered_entry_recovery=proof if fault=='db_already' else {})
+    if fault in {'prior_receipt','receipt_conflict','receipt_time','receipt_price','db_already'}:
+        first,last=rows[0],rows[-1]
+        orders=[first['broker_order_no'],last['broker_order_no']]
+        prior=dict(id=101,code=SYMBOL,buy_qty=2,buy_price=9950,
+            buy_time=today+timedelta(seconds=2),entry_filled_qty=2,
+            _entry_receipt_filled_by_order_no={n:1 for n in orders},
+            _entry_receipt_executions_by_order_no={r['broker_order_no']:{
+                ('99999' if fault=='receipt_conflict' else r['execution_no']):dict(cumulative_qty=1)} for r in [first,last]})
+        if fault=='receipt_time':prior['buy_time']=today-timedelta(days=1)
+        if fault=='receipt_price':prior['buy_price']=9990
+        vote.persist_buy_fill_receipt(prior,receipts.DATA_DIR)
+    if fault=='receipt_write':
+        monkeypatch.setattr(vote,'persist_buy_fill_receipt',lambda *a,**k: (_ for _ in ()).throw(OSError('fixture')))
     before=probe.PROBE_RUNTIME_STATE_PATH.read_bytes()
     assert sync._preserve_coexistence_owner_inventory(record=record,code=SYMBOL,
         real_codes={SYMBOL:dict(qty=5)},source='periodic_account_sync')
-    if fault in {None,'db_retry'}:
+    if fault in {None,'db_retry','prior_receipt','db_already'}:
         assert record.buy_qty==3 and record.buy_price==pytest.approx(29900/3) and record.status=='HOLDING'
+        restored=dict(id=101,code=SYMBOL,buy_qty=record.buy_qty,buy_price=record.buy_price,buy_time=record.buy_time)
+        assert vote.restore_buy_fill_receipt(restored,receipts.DATA_DIR)=='restored'
+        assert len(vote.buy_fill_legs_from_runtime(restored))==3
+        if fault=='db_already':
+            from src.engine import kiwoom_sniper_v2 as main
+            restored.update(strategy='SCALPING',status='HOLDING',name='fixture',position_tag='SCALP_BASE')
+            monkeypatch.setattr(main,'DATA_DIR',receipts.DATA_DIR)
+            monkeypatch.setattr(main,'highest_prices',{})
+            monkeypatch.setattr(main.POSITION_PEAK_LEDGER,'restore_peak',lambda stock:(0,'missing'))
+            main._restore_holding_runtime_state([restored])
+            assert restored['buy_fill_identity_restore_status']=='restored'
+            assert 'buy_fill_identity_store_gap' not in restored
         assert target['buy_qty']==3 and target['status']=='HOLDING'
         assert not target.get('sell_cancel_reconciliation_required')
         assert not target.get('broker_symbol_allocation_conflict')
@@ -803,7 +839,8 @@ def test_sync_recovers_only_complete_exact_unit_entry_census(tmp_path, monkeypat
             assert sync._restore_registered_entry_buy(record,None,SYMBOL,3,registry)
             assert record.buy_qty==3
     else:
-        assert record.buy_qty==1 and record.status=='SELL_ORDERED'
+        assert record.buy_qty==(3 if fault=='db_already_unbound' else 1)
+        assert record.status==('HOLDING' if fault=='db_already_unbound' else 'SELL_ORDERED')
         assert probe.PROBE_RUNTIME_STATE_PATH.read_bytes()==before
         assert target['broker_symbol_allocation_conflict'] is True
 
