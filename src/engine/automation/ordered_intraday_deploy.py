@@ -386,6 +386,53 @@ def _compatible_validation_session(previous, candidate, module):
     except (OSError,ValueError,SyntaxError,UnicodeError):
         return False
 
+def pin_collector_shutdown(workspace, identity):
+    """Pin the actual collector actor before any stop request is published."""
+    path = Path(workspace) / 'data/runtime/scalp_micro_reversion_forward_collector/latest.json'
+    raw = path.read_bytes()
+    payload = json.loads(raw)
+    snapshot = payload.get('collector_snapshot') or {}
+    if (snapshot.get('process_pid') != identity['pid']
+            or snapshot.get('process_start_ticks') != identity['start_ticks']
+            or snapshot.get('collector_lifecycle') != 'running'
+            or type(snapshot.get('sequence_epoch')) is not int
+            or snapshot['sequence_epoch'] <= 0
+            or payload.get('valid_until_epoch', 0) < time.time()
+            or snapshot.get('source_contract') != 'main_market_source_v1'):
+        raise ValueError('deployment_collector_shutdown_actor_unproven')
+    return dict(path=str(path), sha256=_digest(raw), pid=identity['pid'],
+                start_ticks=identity['start_ticks'], sequence_epoch=snapshot['sequence_epoch'],
+                enqueued_count=snapshot['enqueued_count'])
+
+
+def verify_collector_shutdown(pin):
+    """Process exit is insufficient: require its immutable, native closed epoch."""
+    from src.engine.scalping.micro_reversion.observer_source_quality import main_raw_epoch_validation
+    path = Path(pin['path'])
+    payload = json.loads(path.read_bytes())
+    snapshot = payload.get('collector_snapshot') or {}
+    epochs = snapshot.get('reconciled_sequence_epochs') or []
+    if (snapshot.get('process_pid') != pin['pid']
+            or snapshot.get('process_start_ticks') != pin['start_ticks']
+            or pin['sequence_epoch'] not in epochs
+            or snapshot.get('enqueued_count', -1) < pin['enqueued_count']):
+        raise ValueError('deployment_collector_closed_identity_invalid')
+    dates = sorted(snapshot.get('writer_bytes_by_trade_date') or {})
+    if not dates:
+        dates = [datetime.fromisoformat(payload['generated_at']).astimezone(H.KST).date().isoformat()]
+    proofs = []
+    for day in dates:
+        receipt = path.parent / 'closed' / f"{day}-{snapshot['sequence_epoch']}.json"
+        raw = receipt.read_bytes()
+        closed = json.loads(raw)
+        if (closed.get('collector_snapshot') != snapshot
+                or not main_raw_epoch_validation(closed, source_date=day).get('eligible')):
+            raise ValueError('deployment_collector_closed_epoch_invalid')
+        proofs.append(dict(path=str(receipt), sha256=_digest(raw), source_date=day))
+    return dict(status='verified', pid=pin['pid'], start_ticks=pin['start_ticks'],
+                sequence_epochs=epochs, receipts=proofs)
+
+
 class Deployment:
     def __init__(self, workspace, candidate, day, confirm, *, adopt_failed_hold=False):
         if confirm != CONFIRM:
@@ -465,6 +512,8 @@ class Deployment:
                 or self.identity['cwd'] != str(self.previous / 'src')
                 or _main_pids() != ([] if self.closed_predecessor else [self.identity['pid']])):
             raise ValueError('deployment_predecessor_not_current_singleton')
+        if not self.closed_predecessor:
+            self.collector_shutdown_pin = pin_collector_shutdown(self.workspace, self.identity)
         self.launcher = self.launcher_stat = None
         if self.closed_predecessor:
             if not _session_absent():
@@ -742,6 +791,8 @@ class Deployment:
         if Path('/proc', str(self.launcher), 'stat').read_text().rsplit(')', 1)[1].split()[19] != self.launcher_stat:
             raise ValueError('deployment_supervisor_identity_changed')
         self.assert_unchanged()
+        self.collector_shutdown_pin = pin_collector_shutdown(self.workspace, self.identity)
+        self.checkpoint(self.phase, collector_shutdown_pin=self.collector_shutdown_pin)
         with self.flag.open('x') as out:
             out.write('source=ordered_intraday_deploy old_pid=' + str(self.identity['pid']) + '\n')
             out.flush()
@@ -753,7 +804,8 @@ class Deployment:
               'deployment_supervisor_stop_timeout')
         if _main_pids() or self.flag.exists():
             raise ValueError('deployment_drain_not_complete')
-        self.checkpoint('drained', drained_at=datetime.now(H.KST).isoformat())
+        closure = verify_collector_shutdown(self.collector_shutdown_pin)
+        self.checkpoint('drained', drained_at=datetime.now(H.KST).isoformat(), collector_shutdown=closure)
 
     def publish(self):
         self.assert_hold()

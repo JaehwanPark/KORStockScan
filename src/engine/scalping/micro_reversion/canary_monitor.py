@@ -181,6 +181,44 @@ def load_canary_guard(path: Path | str = DEFAULT_GUARD_PATH) -> CanaryGuard:
     )
 
 
+def _timestamp_rejection_receipts(snapshot):
+    """Stream the sealed native journal; legacy snapshots keep their exact tail."""
+    ledger = snapshot.get("timestamp_rejection_ledger")
+    if ledger is None:
+        receipts = snapshot.get("timestamp_rejection_samples")
+        if not isinstance(receipts, (list, tuple)):
+            raise ValueError("timestamp_rejection_receipts_missing")
+        yield from receipts
+        return
+    import hashlib
+    import stat
+    if (not isinstance(ledger, dict) or ledger.get("schema") != "timestamp_rejection_ledger_v1"
+            or ledger.get("sealed") is not True or ledger.get("errors") != 0
+            or type(ledger.get("rows")) is not int or ledger["rows"] <= 0
+            or ledger["rows"] != snapshot.get("timestamp_rejection_sample_total")
+            or type(ledger.get("bytes")) is not int or ledger["bytes"] <= 0):
+        raise ValueError("timestamp_rejection_ledger_incomplete")
+    digest = hashlib.sha256()
+    with os.fdopen(os.open(ledger["path"], os.O_RDONLY | os.O_NOFOLLOW), "rb") as source:
+        before = os.fstat(source.fileno())
+        if not stat.S_ISREG(before.st_mode) or before.st_size != ledger["bytes"]:
+            raise ValueError("timestamp_rejection_ledger_size")
+        count = 0
+        while raw := source.readline(65537):
+            if len(raw) > 65536 or not raw.endswith(b"\n"):
+                raise ValueError("timestamp_rejection_ledger_partial_row")
+            digest.update(raw)
+            count += 1
+            if count > ledger["rows"]:
+                raise ValueError("timestamp_rejection_ledger_extra_row")
+            yield json.loads(raw)
+        after = os.fstat(source.fileno())
+        identity = lambda x: (x.st_dev, x.st_ino, x.st_size, x.st_mtime_ns, x.st_ctime_ns)
+        if (identity(before) != identity(after) or count != ledger["rows"]
+                or digest.hexdigest() != ledger["sha256"]):
+            raise ValueError("timestamp_rejection_ledger_changed_or_hash_invalid")
+
+
 def timestamp_source_quality_census(snapshot: dict[str, Any]) -> dict[str, Any]:
     """Keep pre-enqueue timestamp loss separate from collector stop authority."""
     fields = [
@@ -201,7 +239,6 @@ def timestamp_source_quality_census(snapshot: dict[str, Any]) -> dict[str, Any]:
         elif count > 0:
             issues.append(f"timestamp_source_rejected_before_enqueue:{field}={count}")
     rejection_total = snapshot.get("timestamp_rejection_sample_total")
-    rejection_samples = snapshot.get("timestamp_rejection_samples")
     invalid_trade_count = counts.get("invalid_exchange_timestamp_count")
     invalid_depth_count = counts.get("invalid_depth_timestamp_count", 0)
     expected_rejection_total = (
@@ -209,34 +246,35 @@ def timestamp_source_quality_census(snapshot: dict[str, Any]) -> dict[str, Any]:
         if type(invalid_trade_count) is int and type(invalid_depth_count) is int
         else None
     )
-    receipts_are_valid = bool(
-        isinstance(rejection_samples, (list, tuple))
-        and all(
-            _valid_timestamp_rejection_receipt(sample) for sample in rejection_samples
-        )
-    )
-    receipt_type_counts_match = bool(
-        receipts_are_valid
-        and sum(sample["realtime_type"] == "0B" for sample in rejection_samples)
-        == invalid_trade_count
-        and sum(sample["realtime_type"] == "0D" for sample in rejection_samples)
-        == invalid_depth_count
-        and sum(
-            sample["realtime_type"] == "0B"
-            and sample["reason"] == "stale_exchange_timestamp"
-            for sample in rejection_samples
-        )
-        == counts.get("stale_exchange_timestamp_block_count")
-    )
+    seen = trade = depth = stale = 0
+    receipts_are_valid = True
+    pid = None
+    epochs = snapshot.get("reconciled_sequence_epochs") or [snapshot.get("sequence_epoch")]
+    journal = snapshot.get("timestamp_rejection_ledger") is not None
+    try:
+        for sample in _timestamp_rejection_receipts(snapshot):
+            seen += 1
+            if (not _valid_timestamp_rejection_receipt(sample)
+                    or sample.get("rejection_index") != seen):
+                raise ValueError("timestamp_rejection_receipt_invalid")
+            if pid is None:
+                pid = sample["process_pid"]
+            if journal and (sample["process_pid"] != pid
+                    or sample["local_observer_epoch"] not in epochs
+                    or pid != snapshot.get("process_pid")
+                    or not snapshot.get("process_start_ticks")
+                    or sample.get("process_start_ticks") != snapshot["process_start_ticks"]):
+                raise ValueError("timestamp_rejection_actor_or_epoch_invalid")
+            trade += sample["realtime_type"] == "0B"
+            depth += sample["realtime_type"] == "0D"
+            stale += sample["realtime_type"] == "0B" and sample["reason"] == "stale_exchange_timestamp"
+    except (OSError, ValueError, TypeError, KeyError):
+        receipts_are_valid = False
     sample_population_complete = bool(
-        type(rejection_total) is int
-        and rejection_total > 0
-        and expected_rejection_total == rejection_total
-        and isinstance(rejection_samples, (list, tuple))
-        and len(rejection_samples) == rejection_total
-        and receipt_type_counts_match
-        and [sample.get("rejection_index") for sample in rejection_samples]
-        == list(range(1, rejection_total + 1))
+        receipts_are_valid and type(rejection_total) is int and rejection_total > 0
+        and expected_rejection_total == rejection_total == seen
+        and trade == invalid_trade_count and depth == invalid_depth_count
+        and stale == counts.get("stale_exchange_timestamp_block_count")
     )
     return {
         "metric_role": "source_quality_gate",
@@ -253,11 +291,7 @@ def timestamp_source_quality_census(snapshot: dict[str, Any]) -> dict[str, Any]:
         "counts": counts,
         "issues": issues,
         "rejection_stage": "before_observer_enqueue",
-        "rejection_receipt_count": (
-            len(rejection_samples)
-            if isinstance(rejection_samples, (list, tuple))
-            else None
-        ),
+        "rejection_receipt_count": seen,
         "rejection_receipt_expected_count": expected_rejection_total,
         "rejection_receipt_coverage_status": (
             "complete_current_process"
@@ -512,25 +546,49 @@ def write_canary_runtime_snapshot(
     temporary = destination.with_name(
         f".{destination.name}.{os.getpid()}.{time.time_ns()}.tmp"
     )
+    def persist(raw):
+        with temporary.open("w", encoding="utf-8") as handle:
+            handle.write(raw)
+            handle.flush()
+            os.fsync(handle.fileno())
+
     try:
-        temporary.write_text(
-            encoded,
-            encoding="utf-8",
-        )
-        temporary.replace(destination)
         from .observer_source_quality import MAIN_SOURCE_CONTRACT
         if (collector_snapshot.get('source_contract') == MAIN_SOURCE_CONTRACT
                 and collector_snapshot.get('collector_lifecycle') == 'closed'):
-            # A subsequent boot may replace latest.json. Preserve this closed
-            # collector receipt once, without rewriting historical generations.
-            epoch=collector_snapshot.get('sequence_epoch')
-            if type(epoch) is not int or epoch<=0:raise ValueError('invalid_closed_source_epoch')
-            closed=destination.parent/'closed'
+            epoch = collector_snapshot.get('sequence_epoch')
+            if type(epoch) is not int or epoch <= 0:
+                raise ValueError('invalid_closed_source_epoch')
+            closed = destination.parent / 'closed'
             closed.mkdir(exist_ok=True)
-            receipt=closed/f'{generated_at.astimezone(KST).date().isoformat()}-{epoch}.json'
-            temporary.write_text(encoded,encoding='utf-8')
-            try:os.link(temporary,receipt)
-            except FileExistsError:pass
+            dates = collector_snapshot.get('writer_bytes_by_trade_date') or {}
+            dates = sorted(dates) or [generated_at.astimezone(KST).date().isoformat()]
+            for day in dates:
+                # Keep the real close timestamp and bind each persisted source date.
+                body = {**normalized_payload, 'source_date': day}
+                receipt = closed / f'{day}-{epoch}.json'
+                persist(json.dumps(body, ensure_ascii=False, separators=(",", ":")))
+                try:
+                    os.link(temporary, receipt)
+                except FileExistsError:
+                    previous = json.loads(receipt.read_bytes())
+                    if (previous.get('collector_snapshot') != normalized_payload['collector_snapshot']
+                            or previous.get('source_date') != day
+                            or previous.get('canary_guard') != normalized_payload['canary_guard']):
+                        raise ValueError('closed_source_epoch_conflict')
+                temporary.unlink()
+            fd = os.open(closed, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+        persist(encoded)
+        temporary.replace(destination)
+        fd = os.open(destination.parent, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
     finally:
         try:
             temporary.unlink(missing_ok=True)

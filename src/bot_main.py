@@ -78,7 +78,9 @@ from src.engine.error_detector import (
     iter_daemon_alert_events,
     REPORT_DIR as ERROR_REPORT_DIR,
 )
-from src.engine.infrastructure.restart_requests import consume_restart_request
+from src.engine.infrastructure.restart_requests import (
+    consume_restart_request, request_shutdown, shutdown_requested, finish_main_shutdown,
+)
 
 
 # ==========================================
@@ -537,6 +539,8 @@ def dispatch_daily_report_if_due(now: datetime, already_sent: bool) -> bool:
 # 🎯 메인 실행부 (Main Thread)
 # ==========================================
 if __name__ == "__main__":
+    signal.signal(signal.SIGTERM, request_shutdown)
+    engine_thread = None
     install_dual_logger()
     print("🤖 KORStockScan v13.0 통합 관제 시스템 기동 중...")
 
@@ -606,7 +610,7 @@ if __name__ == "__main__":
 
         # 💡 [아키텍처 포인트 3] 콜백(broadcast_alert) 파라미터 완전 제거!
         engine_thread = threading.Thread(
-            target=kiwoom_sniper_v2.run_sniper, daemon=True
+            target=kiwoom_sniper_v2.run_sniper, daemon=False
         )
         engine_thread.start()
         write_heartbeat("sniper_engine")
@@ -657,7 +661,7 @@ if __name__ == "__main__":
     monitor_archive_sent = False
 
     heartbeat_counter = 0
-    while True:
+    while not shutdown_requested():
         try:
             now = datetime.now()
             heartbeat_counter += 1
@@ -693,9 +697,8 @@ if __name__ == "__main__":
                     },
                 )
                 time.sleep(65)  # 23:51분으로 넘겨서 무한 재시작 방지
-                from src.utils.pipeline_event_logger import drain_pipeline_event_summary_before_termination
-                drain_pipeline_event_summary_before_termination()
-                os.kill(os.getpid(), signal.SIGTERM)
+                request_shutdown()
+                break
 
             # [스케줄러 3] 관리자의 우아한 재시작(restart.flag) 감지
             if RESTART_FLAG_PATH.exists():
@@ -717,20 +720,21 @@ if __name__ == "__main__":
                     "🔄 [시스템] 수동 재시작 플래그 감지. 관제탑을 종료합니다. "
                     f"request={restart_request or 'source=unknown_legacy_touch'}"
                 )
-                time.sleep(3)  # 다른 쓰레드들이 종료될 시간을 잠시 부여
-                from src.utils.pipeline_event_logger import drain_pipeline_event_summary_before_termination
-                drain_pipeline_event_summary_before_termination()
-                os.kill(os.getpid(), signal.SIGTERM)
+                request_shutdown()
+                break
 
             # 메인 루프 부하 방지
             time.sleep(1)
 
         except KeyboardInterrupt:
             print("\n🛑 관리자에 의해 통합 관제 시스템이 종료되었습니다.")
-            sys.exit(0)
+            request_shutdown()
+            break
 
         except Exception as e:
             from src.utils.logger import log_error
 
             log_error(f"메인 관제탑 루프 에러: {e}")
             time.sleep(5)
+
+    finish_main_shutdown(engine_thread)

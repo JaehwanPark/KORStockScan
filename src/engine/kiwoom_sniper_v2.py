@@ -51,7 +51,7 @@ from src.utils import kiwoom_utils
 from src.utils.logger import log_error, log_info
 from src.utils.constants import DATA_DIR, RESTART_FLAG_PATH, TRADING_RULES
 from src.utils.pipeline_event_logger import emit_pipeline_event
-from src.engine.infrastructure.restart_requests import consume_restart_request
+from src.engine.infrastructure.restart_requests import consume_restart_request, request_shutdown, shutdown_requested
 from src.database.db_manager import (
     DBManager,
     SWING_REAL_WATCHING_ENABLED_ENV,
@@ -12530,7 +12530,7 @@ def _run_sniper_iterations(
     frozen external inputs; evaluation, scheduling and safety remain native.
     A yield marks the existing end-of-iteration wake boundary, not an order.
     """
-    while True:
+    while not shutdown_requested():
         loop_work_started = time.perf_counter()
         from src.engine.monitoring.runtime_performance import record_main_phase
         record_main_phase('loop_prepare')
@@ -12574,9 +12574,7 @@ def _run_sniper_iterations(
                 },
             )
             _sn_whb("sniper_engine", alive=False)
-            from src.utils.pipeline_event_logger import drain_pipeline_event_summary_before_termination
-            drain_pipeline_event_summary_before_termination()
-            os.kill(os.getpid(), signal.SIGTERM)
+            request_shutdown()
             break
 
         today_key = now.date().isoformat()
@@ -16449,56 +16447,57 @@ def run_sniper(is_test_mode=False):
         print("\n🛑 스나이퍼 매매 엔진 종료")
 
     finally:
-        radar.shutdown()
         try:
-            if getattr(AI_ENGINE, '_transport_warmup', None) is not None:
-                AI_ENGINE.stop_transport_warmup()
-        except Exception as warmup_error:
-            log_error(f"[AI_TRANSPORT_WARMUP_STOP_FAILED] type={type(warmup_error).__name__}")
-        try:
-            from src.engine.error_detectors.process_health import (
-                write_heartbeat as _sniper_final_heartbeat,
-            )
+            radar.shutdown()
+            try:
+                if getattr(AI_ENGINE, '_transport_warmup', None) is not None:
+                    AI_ENGINE.stop_transport_warmup()
+            except Exception as warmup_error:
+                log_error(f"[AI_TRANSPORT_WARMUP_STOP_FAILED] type={type(warmup_error).__name__}")
+            try:
+                from src.engine.error_detectors.process_health import (
+                    write_heartbeat as _sniper_final_heartbeat,
+                )
 
-            _sniper_final_heartbeat("sniper_engine", alive=False)
-        except Exception as heartbeat_error:
-            log_error("[SNIPER_HEARTBEAT_FINALIZE_FAILED] " f"error={heartbeat_error}")
-        smoothing_source_only_observer.stop()
-        fast_exit_monitor.stop()
-        if WS_MANAGER is not None and hasattr(WS_MANAGER, "set_fast_exit_wakeup"):
-            WS_MANAGER.set_fast_exit_wakeup(None)
-        async_coordinator = getattr(
-            run_sniper,
-            "scanner_async_eval_coordinator",
-            None,
-        )
-        hot_path_dispatcher = getattr(
-            run_sniper,
-            "hot_path_ai_dispatcher",
-            None,
-        )
-        if isinstance(async_coordinator, ScannerAsyncEvalCoordinator):
+                _sniper_final_heartbeat("sniper_engine", alive=False)
+            except Exception as heartbeat_error:
+                log_error("[SNIPER_HEARTBEAT_FINALIZE_FAILED] " f"error={heartbeat_error}")
+            smoothing_source_only_observer.stop()
+            fast_exit_monitor.stop()
+            if WS_MANAGER is not None and hasattr(WS_MANAGER, "set_fast_exit_wakeup"):
+                WS_MANAGER.set_fast_exit_wakeup(None)
+            async_coordinator = getattr(
+                run_sniper,
+                "scanner_async_eval_coordinator",
+                None,
+            )
+            hot_path_dispatcher = getattr(
+                run_sniper,
+                "hot_path_ai_dispatcher",
+                None,
+            )
+            if isinstance(async_coordinator, ScannerAsyncEvalCoordinator):
+                try:
+                    async_coordinator.shutdown(wait=False)
+                except Exception as e:
+                    log_error(f"scanner async coordinator stop failed: {e}")
+                finally:
+                    from src.engine.monitoring.runtime_performance import set_native_ready_event
+                    set_native_ready_event(None)
+                    run_sniper.scanner_async_eval_coordinator = None
+            if isinstance(hot_path_dispatcher, HotPathAIDispatcher):
+                try:
+                    hot_path_dispatcher.shutdown(wait=False)
+                except Exception as e:
+                    log_error(f"hot path AI dispatcher stop failed: {e}")
+                finally:
+                    run_sniper.hot_path_ai_dispatcher = None
+        finally:
             try:
-                async_coordinator.shutdown(wait=False)
-            except Exception as e:
-                log_error(f"scanner async coordinator stop failed: {e}")
+                if WS_MANAGER and WS_MANAGER.stop() is False:
+                    raise RuntimeError("main_collector_shutdown_incomplete")
             finally:
-                from src.engine.monitoring.runtime_performance import set_native_ready_event
-                set_native_ready_event(None)
-                run_sniper.scanner_async_eval_coordinator = None
-        if isinstance(hot_path_dispatcher, HotPathAIDispatcher):
-            try:
-                hot_path_dispatcher.shutdown(wait=False)
-            except Exception as e:
-                log_error(f"hot path AI dispatcher stop failed: {e}")
-            finally:
-                run_sniper.hot_path_ai_dispatcher = None
-        close_observation_sources()
-        if WS_MANAGER:
-            try:
-                WS_MANAGER.stop()
-            except Exception as e:
-                log_error(f"WS manager stop failed: {e}")
+                close_observation_sources()
 
 
 if __name__ == "__main__":
@@ -16506,6 +16505,8 @@ if __name__ == "__main__":
     python src/engine/kiwoom_sniper_v2.py 로 직접 실행할 때만 작동합니다.
     운영 환경(bot_main.py) 배포 시 이 블록은 투명인간 취급되므로 지울 필요가 없습니다!
     """
+
+    signal.signal(signal.SIGTERM, request_shutdown)
 
     # 1. 텔레그램 매니저 로드 (이벤트 리스너 가동)
     try:

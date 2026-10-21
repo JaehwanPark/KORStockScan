@@ -108,11 +108,12 @@ def closed_pre_enqueue_epoch_quarantine_validation(
         or guard.get("source_quality_row_exclusions") != census["issues"]
     ):
         return rejected
-    receipts = collector["timestamp_rejection_samples"]
-    if len({r["process_pid"] for r in receipts}) != 1 or any(
-        not 0 < r["local_observer_epoch"] <= epoch for r in receipts
-    ):
-        return rejected
+    if collector.get("timestamp_rejection_ledger") is None:
+        receipts = collector["timestamp_rejection_samples"]
+        if len({r["process_pid"] for r in receipts}) != 1 or any(
+            not 0 < r["local_observer_epoch"] <= epoch for r in receipts
+        ):
+            return rejected
     groups = [
         (
             "enqueued_count",
@@ -137,7 +138,7 @@ def closed_pre_enqueue_epoch_quarantine_validation(
         "eligible": True,
         "status": "fully_accounted_pre_enqueue_epoch_only",
         "allowed_sequence_epoch": epoch,
-        "quarantined_row_count": len(receipts),
+        "quarantined_row_count": census["rejection_receipt_count"],
         "whole_date_approval": False,
         "runtime_effect": False,
         "allowed_runtime_apply": False,
@@ -372,7 +373,12 @@ def main_raw_epoch_validation(payload: Mapping[str, Any], *, source_date: str) -
         from datetime import datetime
         from zoneinfo import ZoneInfo
         generated = datetime.fromisoformat(payload["generated_at"])
-        if generated.tzinfo is None or generated.astimezone(ZoneInfo("Asia/Seoul")).date().isoformat() != source_date:
+        if generated.tzinfo is None:
+            return {**rejected, "status": "source_date_mismatch"}
+        close_date = generated.astimezone(ZoneInfo("Asia/Seoul")).date().isoformat()
+        bound_date = payload.get("source_date", close_date)
+        if (bound_date != source_date or source_date > close_date
+                or source_date != close_date and not (c.get("writer_bytes_by_trade_date") or {}).get(source_date)):
             return {**rejected, "status": "source_date_mismatch"}
     except (KeyError, TypeError, ValueError):
         return rejected

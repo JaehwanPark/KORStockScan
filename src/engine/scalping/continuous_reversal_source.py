@@ -69,7 +69,7 @@ def _source_quality_receipt(data_root, day):
         try:value=json.loads(content)
         except ValueError:continue
         if not isinstance(value,dict):continue
-        if not str(value.get("generated_at", "")).startswith(day):continue
+        if value.get("source_date", str(value.get("generated_at", ""))[:10]) != day:continue
         record=dict(path=str(path.resolve()),sha256=hashlib.sha256(content).hexdigest(),
                     **main_raw_epoch_validation(value,source_date=day))
         records.append(record)

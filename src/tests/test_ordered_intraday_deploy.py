@@ -358,6 +358,8 @@ def test_source_epoch_failure_cannot_acquire_hold_or_drain(tmp_path):
 @pytest.fixture
 def driver(tmp_path, monkeypatch):
     monkeypatch.setattr(D, "verify_candidate_report_currentness", lambda *a:dict(status="pass"), raising=False)
+    monkeypatch.setattr(D, "pin_collector_shutdown", lambda *a: dict(pid=123, start_ticks="123"))
+    monkeypatch.setattr(D, "verify_collector_shutdown", lambda *a: dict(status="verified"))
     d = object.__new__(D.Deployment)
     d.workspace = tmp_path
     runtime = tmp_path / 'data/runtime'; runtime.mkdir(parents=True)
@@ -1300,3 +1302,45 @@ def test_prepare_binds_native_source_window_before_start(monkeypatch, tmp_path, 
     else:
         driver.prepare()
         assert calls[-1] == ('prepared', {'sentinel_source_window':proof})
+
+
+@pytest.mark.parametrize('damage', [None, 'pid', 'start', 'old_generation', 'stale'])
+def test_collector_pin_rejects_unproven_incumbent_without_stop_request(tmp_path, damage):
+    identity = dict(pid=123, start_ticks='456')
+    snapshot = dict(process_pid=123, process_start_ticks='456', collector_lifecycle='running',
+                    sequence_epoch=9, enqueued_count=1, source_contract='main_market_source_v1')
+    payload = dict(collector_snapshot=snapshot, valid_until_epoch=D.time.time()+30)
+    if damage == 'pid': snapshot['process_pid'] = 124
+    if damage == 'start': snapshot['process_start_ticks'] = '999'
+    if damage == 'old_generation': snapshot.pop('process_pid');snapshot.pop('process_start_ticks')
+    if damage == 'stale': payload['valid_until_epoch'] = 0
+    path = tmp_path/'data/runtime/scalp_micro_reversion_forward_collector/latest.json'
+    path.parent.mkdir(parents=True);path.write_text(json.dumps(payload))
+    if damage:
+        with pytest.raises(ValueError, match='actor_unproven'):D.pin_collector_shutdown(tmp_path, identity)
+    else:
+        assert D.pin_collector_shutdown(tmp_path, identity)['sequence_epoch'] == 9
+    assert not (tmp_path/'restart.flag').exists()
+
+
+@pytest.mark.parametrize('damage', [None, 'missing', 'foreign', 'unclosed', 'prior_epoch', 'loss'])
+def test_ordered_drain_consumes_exact_native_closed_epoch(tmp_path, damage):
+    from src.tests.test_micro_reversion_forward_collector import _closed_main_rejection_source
+    _, payload, receipt = _closed_main_rejection_source(tmp_path)
+    c = payload['collector_snapshot']
+    latest = receipt.parent.parent/'latest.json'
+    pin = dict(path=str(latest), pid=c['process_pid'], start_ticks=c['process_start_ticks'],
+               sequence_epoch=c['sequence_epoch'], enqueued_count=1)
+    if damage == 'missing': receipt.unlink()
+    elif damage == 'foreign': pin['start_ticks'] = 'foreign'
+    elif damage == 'prior_epoch': pin['sequence_epoch'] = 1
+    elif damage:
+        if damage == 'unclosed': c['collector_lifecycle'] = 'running'
+        if damage == 'loss': c['writer_dropped_envelope_count'] = 1
+        latest.write_text(json.dumps(payload))
+        closed = json.loads(receipt.read_bytes());closed['collector_snapshot'] = c
+        receipt.write_text(json.dumps(closed))
+    if damage:
+        with pytest.raises((ValueError, FileNotFoundError)):D.verify_collector_shutdown(pin)
+    else:
+        assert D.verify_collector_shutdown(pin)['status'] == 'verified'

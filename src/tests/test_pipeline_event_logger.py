@@ -1589,17 +1589,9 @@ os.kill(os.getpid(), signal.SIGTERM)
         assert bool(paths) is drained
         if drained:
             assert sum(json.loads(line)["event_count"] for p in paths for line in p.read_text().splitlines()) == 5
-    # All existing graceful self-termination calls must first reach the owner drain.
-    import ast
-    for relative in ("src/bot_main.py", "src/engine/kiwoom_sniper_v2.py"):
-        tree = ast.parse((Path(__file__).parents[2] / relative).read_text())
-        for parent in ast.walk(tree):
-            for _, children in ast.iter_fields(parent):
-                if not isinstance(children, list):
-                    continue
-                for index, child in enumerate(children):
-                    if isinstance(child, ast.Expr) and isinstance(child.value, ast.Call) and ast.unparse(child.value).startswith("os.kill(os.getpid(), signal.SIGTERM"):
-                        assert index > 0 and "drain_pipeline_event_summary_before_termination()" in ast.unparse(children[index - 1])
+    # Self-SIGTERM was removed: Main joins the engine's real collector finally
+    # before the existing summary drain. End-to-end branches live in the restart
+    # race suite; this test keeps only its original summary-loss demonstration.
 
 
 def test_restart_drain_keeps_late_scanner_rows_bound_to_first_stage(monkeypatch, tmp_path):

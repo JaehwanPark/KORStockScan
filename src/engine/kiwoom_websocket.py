@@ -2884,8 +2884,7 @@ class KiwoomWSManager:
     def stop(self):
         if self._stop_event.is_set():
             self._micro_reversion_canary_monitor_stop_event.set()
-            self._close_micro_reversion_forward_collector()
-            return
+            return self._close_micro_reversion_forward_collector()
 
         self._stop_event.set()
         self._micro_reversion_canary_monitor_stop_event.set()
@@ -2929,8 +2928,9 @@ class KiwoomWSManager:
             if thread and thread is not current_thread and thread.is_alive():
                 thread.join(timeout=2)
 
-        self._close_micro_reversion_forward_collector()
+        closed = self._close_micro_reversion_forward_collector()
         self.websocket = None
+        return closed
 
     def _close_micro_reversion_forward_collector(self):
         """Close the one-shot observer, retaining it when shutdown needs a retry."""
@@ -2938,7 +2938,7 @@ class KiwoomWSManager:
         with self._micro_reversion_forward_collector_close_lock:
             collector = self._micro_reversion_forward_collector
             if collector is None:
-                return
+                return not bool(self._micro_reversion_forward_collector_error)
             try:
                 collector.close(timeout_sec=10.0)
             except Exception as exc:
@@ -2947,6 +2947,7 @@ class KiwoomWSManager:
                     "[WS] micro-reversion forward observer shutdown isolated "
                     f"failure: {exc}"
                 )
+                return False
             else:
                 if self._micro_reversion_forward_collector is collector:
                     final_snapshot_error = None
@@ -2958,14 +2959,16 @@ class KiwoomWSManager:
                             "[WS] micro-reversion final canary snapshot isolated "
                             f"failure: {exc}"
                         )
-                    self._micro_reversion_forward_collector = None
                     self._micro_reversion_canary_monitor_stop_event.set()
                     if final_snapshot_error is None:
                         self._micro_reversion_forward_collector_error = ""
+                        self._micro_reversion_forward_collector = None
+                        return True
                     else:
                         self._micro_reversion_forward_collector_error = type(
                             final_snapshot_error
                         ).__name__
+                        return False
 
     @staticmethod
     def _is_login_success_message(msg_dict):

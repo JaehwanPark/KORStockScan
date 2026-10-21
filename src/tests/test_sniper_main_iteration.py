@@ -34,6 +34,16 @@ def _native_loop():
     assert len(function.body) == 2  # docstring, original loop
     loop = deepcopy(function.body[1])
     assert isinstance(loop, ast.While)
+    assert ast.unparse(loop.test) == 'not shutdown_requested()'
+    loop.test = ast.Constant(value=True)
+    restart = next(n for n in loop.body if isinstance(n, ast.If)
+                   and ast.unparse(n.test) == 'RESTART_FLAG_PATH.exists()')
+    index = next(i for i, n in enumerate(restart.body) if ast.unparse(n) == 'request_shutdown()')
+    restart.body[index:index+1] = ast.parse("""
+from src.utils.pipeline_event_logger import drain_pipeline_event_summary_before_termination
+drain_pipeline_event_summary_before_termination()
+os.kill(os.getpid(), signal.SIGTERM)
+""").body
     marker = loop.body.pop()
     assert isinstance(marker, ast.Expr) and isinstance(marker.value, ast.Yield)
     assert isinstance(marker.value.value, ast.Constant) and marker.value.value.value is None
@@ -68,6 +78,22 @@ def test_live_startup_consumes_native_iterator_with_original_exception_and_clean
     # Replacing only the invocation with the original body reconstructs the
     # whole pre-refactor function: startup, continue/break, catches and cleanup.
     parent.body[idx] = _native_loop()
+    # Prove the new nested finally guarantees both cleanup owners, then restore
+    # only that reviewed shutdown delta for the original trading-body parity.
+    shutdown = parent.finalbody[0]
+    assert len(parent.finalbody) == 1 and isinstance(shutdown, ast.Try)
+    source_close = shutdown.finalbody[0]
+    assert isinstance(source_close, ast.Try)
+    assert ast.unparse(source_close.finalbody[0]) == 'close_observation_sources()'
+    assert ast.unparse(source_close.body[0].test) == 'WS_MANAGER and WS_MANAGER.stop() is False'
+    parent.finalbody = shutdown.body + ast.parse("""
+close_observation_sources()
+if WS_MANAGER:
+    try:
+        WS_MANAGER.stop()
+    except Exception as e:
+        log_error(f"WS manager stop failed: {e}")
+""").body
     cleanup = next(node for node in parent.finalbody if isinstance(node, ast.Expr)
                    and isinstance(node.value, ast.Call)
                    and ast.unparse(node.value) == 'close_observation_sources()')

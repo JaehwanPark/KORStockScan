@@ -3613,6 +3613,101 @@ REVIEWED_BUY_IDENTITY_DEPENDENCY_VARIANTS = {
 }
 
 
+# Exact cooperative collector-close generation; retain every issued predecessor.
+REVIEWED_COLLECTOR_CLOSE_HASHES = {'src/bot_main.py': '468b479d71b728715f4638614f50d4c1fa9f6f6d32416a21200a395392866302',
+ 'src/engine/automation/ordered_intraday_deploy.py': '8026643f4f2de6ff94f39e4e5f2ad9bbfd5dae11740a603b7e6725dcb1ccd80d',
+ 'src/engine/infrastructure/restart_requests.py': 'b94b2c81039bd6299c5b2062da89dfba38fb70a3d9ca4ee875dd92b7a2a1c7b9',
+ 'src/engine/kiwoom_sniper_v2.py': 'ac1bcb15d252715133c256970dabc03985522f4a2a6fced0ead54b75309481e8',
+ 'src/engine/kiwoom_websocket.py': '215a0e3d6388df5938a4d70e8e5afad689fa8087280a3a53b81619a2295e35e3',
+ 'src/engine/scalping/continuous_reversal_source.py': 'fb3d91a378457c244a805a49183572f74f3c4541cb3efdca4aa9f3c1a52df082',
+ 'src/engine/scalping/micro_reversion/canary_monitor.py': '1a767cc4e34ac8add1ec4318e305317f6faa35c469951dd422b45ec814258891',
+ 'src/engine/scalping/micro_reversion/forward_collector.py': '975d0b0061398a488244c80e869336a4aaac14e37d653b57c8115b83382e465e',
+ 'src/engine/scalping/micro_reversion/observer_source_quality.py': '189b61810654f59055c0dcf863c8e3e1bf17fc308f624b4feac09808676d7e7c'}
+REVIEWED_COLLECTOR_CLOSE_PAIRS = {'src/bot_main.py': (('a2e8ec8578bb6b52cc91348584a8c4627fdc06412dc505a71c2c9ebf8f6bd526',
+                      '468b479d71b728715f4638614f50d4c1fa9f6f6d32416a21200a395392866302'),
+                     ('d98fbcddf8f3d2735385fcb92f1d5d43a631bc1b7ab11e2d5c7311c838ae969a',
+                      '468b479d71b728715f4638614f50d4c1fa9f6f6d32416a21200a395392866302'),
+                     ('f8c2f1626d60502234c002bb75f99fb6e092c620ad2ae6ae87eac6db76da1f0c',
+                      '468b479d71b728715f4638614f50d4c1fa9f6f6d32416a21200a395392866302')),
+ 'src/engine/automation/ordered_intraday_deploy.py': (('2b25345a2cc0711a42a2a39898961c157dfb927c0b1eb4929b74fe3c624af626',
+                                                       '8026643f4f2de6ff94f39e4e5f2ad9bbfd5dae11740a603b7e6725dcb1ccd80d'),
+                                                      ('4345d7b8ea95b13b7c7862bc54c24b9add92e6da79806190308bfb17b15ba3b9',
+                                                       '8026643f4f2de6ff94f39e4e5f2ad9bbfd5dae11740a603b7e6725dcb1ccd80d'),
+                                                      ('48b9376c7683466e5d0e195ac971c93d1ed1cd442e9968eddacc2031e38e75a9',
+                                                       '8026643f4f2de6ff94f39e4e5f2ad9bbfd5dae11740a603b7e6725dcb1ccd80d'),
+                                                      ('85671b2217e554dd573d23fe8616ce177726bcfdd771bc3893a37dae2b19f9b6',
+                                                       '8026643f4f2de6ff94f39e4e5f2ad9bbfd5dae11740a603b7e6725dcb1ccd80d'),
+                                                      ('9b16f12badd137f866cd77b09e356ef75e70ce40fa1a1455c16581fea98fbea0',
+                                                       '8026643f4f2de6ff94f39e4e5f2ad9bbfd5dae11740a603b7e6725dcb1ccd80d'),
+                                                      ('d67e4f0b2c1ae0d7a88de0cffaeb8f76cb114e4b34c55dfb5575b0e464a17d90',
+                                                       '8026643f4f2de6ff94f39e4e5f2ad9bbfd5dae11740a603b7e6725dcb1ccd80d')),
+ 'src/engine/infrastructure/restart_requests.py': (('1f0152ce292b77d466fc04be58da263e194e5c7e9ab344de2ab13de97a0954b0',
+                                                    'b94b2c81039bd6299c5b2062da89dfba38fb70a3d9ca4ee875dd92b7a2a1c7b9'),),
+ 'src/engine/kiwoom_sniper_v2.py': (('2498fb498de2d796fd9abc695caad99ccc61b914c2999a640d88f3f5c96f8dac',
+                                     'ac1bcb15d252715133c256970dabc03985522f4a2a6fced0ead54b75309481e8'),
+                                    ('3b35fc7133fc87cf5b23ae6f03c3272b9b78b61840f3bc1c6f0e84db5ba8def4',
+                                     'ac1bcb15d252715133c256970dabc03985522f4a2a6fced0ead54b75309481e8'),
+                                    ('44133e57f1c20521b80cfa5fa1e7dadb7c89b010ab461cce3959fd1ba6fd4997',
+                                     'ac1bcb15d252715133c256970dabc03985522f4a2a6fced0ead54b75309481e8'),
+                                    ('4454e6051c47ef959f0b8201526901fe5bd2dfff3b25aaa5593605cf7f53cd33',
+                                     'ac1bcb15d252715133c256970dabc03985522f4a2a6fced0ead54b75309481e8'),
+                                    ('45a139a2ed413afb888cd244ae73d60d5f312b503a8e1c54cc1ce599b048d279',
+                                     'ac1bcb15d252715133c256970dabc03985522f4a2a6fced0ead54b75309481e8'),
+                                    ('4cbd06363b1156761fd748c51ac9fbb4f54e69b64771f9f86e6770bba5ce177c',
+                                     'ac1bcb15d252715133c256970dabc03985522f4a2a6fced0ead54b75309481e8'),
+                                    ('51280b79c7eee85279c9d649c76888cb03954f73c18c1e0ba41a863c4ea8a0a1',
+                                     'ac1bcb15d252715133c256970dabc03985522f4a2a6fced0ead54b75309481e8'),
+                                    ('522bc4a71a1375144db798b2e451fcee03a44e80d57323c7996fa365bf20c71c',
+                                     'ac1bcb15d252715133c256970dabc03985522f4a2a6fced0ead54b75309481e8'),
+                                    ('647f24d8805d0d9d6c1489df272b258706c7314111121e8660c01ee72930e713',
+                                     'ac1bcb15d252715133c256970dabc03985522f4a2a6fced0ead54b75309481e8'),
+                                    ('6f1abc2ad7c532d693b832fb041ff519874ce141b52d2f1c724b445467440c0e',
+                                     'ac1bcb15d252715133c256970dabc03985522f4a2a6fced0ead54b75309481e8'),
+                                    ('96319c0071dfce04980af151ff9e22b91352a704281bb727c8e68d604ee6aa20',
+                                     'ac1bcb15d252715133c256970dabc03985522f4a2a6fced0ead54b75309481e8'),
+                                    ('ab335b38a3aff9362bd17a29fde787b425a4478f60e0d328c7b60553800cc21e',
+                                     'ac1bcb15d252715133c256970dabc03985522f4a2a6fced0ead54b75309481e8'),
+                                    ('b7cec7cbec7082c9c98a8861638485432ee20346ce687dbd06d82196551548bb',
+                                     'ac1bcb15d252715133c256970dabc03985522f4a2a6fced0ead54b75309481e8'),
+                                    ('bb8cc6f224428a073f60826f8aa70e97d4b68b0383c907d681b8be5473a2d7c6',
+                                     'ac1bcb15d252715133c256970dabc03985522f4a2a6fced0ead54b75309481e8'),
+                                    ('d19c471856511889cf9728a3fee7f13c4bcdfce29566dbea80ae5b581d9e8777',
+                                     'ac1bcb15d252715133c256970dabc03985522f4a2a6fced0ead54b75309481e8'),
+                                    ('d3740c011a60c9a6214e2744e8a57da1767ea5608ccf6586c714df68d941e8da',
+                                     'ac1bcb15d252715133c256970dabc03985522f4a2a6fced0ead54b75309481e8'),
+                                    ('e1f43d4d08a0606db678c59f5755b94fbb976ef4ce55ece812ecc00e97c8973e',
+                                     'ac1bcb15d252715133c256970dabc03985522f4a2a6fced0ead54b75309481e8')),
+ 'src/engine/kiwoom_websocket.py': (('5016a58492f59a0728d9bbf979d76cc59a10de4681e92a5fcac21bf6c1cffde2',
+                                     '215a0e3d6388df5938a4d70e8e5afad689fa8087280a3a53b81619a2295e35e3'),
+                                    ('63293b9abbd511ade33dccca9598eba3e0e32e0eefa06c33a2ba5c411c67a130',
+                                     '215a0e3d6388df5938a4d70e8e5afad689fa8087280a3a53b81619a2295e35e3'),
+                                    ('9aca69dc06a8fffee8999d8c8c2cdece1760e9fdb21e3c8eddf8cda87a6da9e2',
+                                     '215a0e3d6388df5938a4d70e8e5afad689fa8087280a3a53b81619a2295e35e3'),
+                                    ('b760d5aa69b20f31060a00a5dc81670d29f1c7760c19a775499609d90e867363',
+                                     '215a0e3d6388df5938a4d70e8e5afad689fa8087280a3a53b81619a2295e35e3'),
+                                    ('e60b5435694e74fc9afa65101b4b407af4da365d07dbac0b38263c66bf8e8921',
+                                     '215a0e3d6388df5938a4d70e8e5afad689fa8087280a3a53b81619a2295e35e3')),
+ 'src/engine/scalping/continuous_reversal_source.py': (('401ff28d4f2b20db778768aa10486bffdac01466480e7429a428d3fa14705b02',
+                                                        'fb3d91a378457c244a805a49183572f74f3c4541cb3efdca4aa9f3c1a52df082'),
+                                                       ('96f1edc13538616832ec4270064afcc9a6bacab8274903cd57b2838573a1155d',
+                                                        'fb3d91a378457c244a805a49183572f74f3c4541cb3efdca4aa9f3c1a52df082')),
+ 'src/engine/scalping/micro_reversion/canary_monitor.py': (('d1d6bec4b4ee96988345b87c8c1d8b8384b813693bf66a13fa98b50592245db0',
+                                                            '1a767cc4e34ac8add1ec4318e305317f6faa35c469951dd422b45ec814258891'),),
+ 'src/engine/scalping/micro_reversion/forward_collector.py': (('e4bbf5c481058e0a8eb31927347340154265d20d59c1d3c711faebaf4e8a3af6',
+                                                               '975d0b0061398a488244c80e869336a4aaac14e37d653b57c8115b83382e465e'),),
+ 'src/engine/scalping/micro_reversion/observer_source_quality.py': (('a7959ab7ad37e4b9d70f5448803424e0a8c05a368d138dc4a14571b0c372b410',
+                                                                     '189b61810654f59055c0dcf863c8e3e1bf17fc308f624b4feac09808676d7e7c'),)}
+REVIEWED_COLLECTOR_CLOSE_DEPENDENCY_VARIANTS = {
+    key: {**value,
+        'selector_path': 'src/engine/scalping/micro_reversion/forward_collector.py',
+        'selector_sha256': REVIEWED_COLLECTOR_CLOSE_HASHES['src/engine/scalping/micro_reversion/forward_collector.py'],
+        'dependencies': {**value['dependencies'], **REVIEWED_COLLECTOR_CLOSE_HASHES},
+        'contract_extensions': {origin: {name: REVIEWED_COLLECTOR_CLOSE_HASHES.get(os.path.normpath(name), digest)
+            for name, digest in paths.items()} for origin, paths in value['contract_extensions'].items()},
+    } for key, value in REVIEWED_BUY_IDENTITY_DEPENDENCY_VARIANTS.items()
+}
+
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -3691,6 +3786,9 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     finalization_health_present = any((root / name).is_file()
         and hashlib.sha256(candidate_bytes(name)).hexdigest() == sha
         for name, sha in REVIEWED_FINALIZATION_HEALTH_HASHES.items())
+    collector_close_present = any((root / name).is_file()
+        and hashlib.sha256(candidate_bytes(name)).hexdigest() == sha
+        for name, sha in REVIEWED_COLLECTOR_CLOSE_HASHES.items())
     buy_identity_present = any((root / name).is_file()
         and hashlib.sha256(candidate_bytes(name)).hexdigest() == sha
         for name, sha in REVIEWED_BUY_IDENTITY_HASHES.items())
@@ -3711,7 +3809,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         dependencies = generations.get(trigger_sha, {})
         # New exact selectors precede their historical parent. The first match
         # selects one complete generation, never per-file SHA alternatives.
-        for variants in (REVIEWED_BUY_IDENTITY_DEPENDENCY_VARIANTS,
+        for variants in (REVIEWED_COLLECTOR_CLOSE_DEPENDENCY_VARIANTS,
+                         REVIEWED_BUY_IDENTITY_DEPENDENCY_VARIANTS,
                          REVIEWED_ENTRY_RECEIPT_DEPENDENCY_VARIANTS,
                          REVIEWED_FIXED_WAIT_DEPENDENCY_VARIANTS,
                          REVIEWED_NATIVE_INVALIDATION_DEPENDENCY_VARIANTS,
@@ -3841,6 +3940,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
             dependencies = {**dependencies, **REVIEWED_ENTRY_RECEIPT_HASHES}
         if buy_identity_present:
             dependencies = {**dependencies, **REVIEWED_BUY_IDENTITY_HASHES}
+        if collector_close_present:
+            dependencies = {**dependencies, **REVIEWED_COLLECTOR_CLOSE_HASHES}
         dependencies_by_trigger[trigger] = (trigger_sha, dependencies)
     for key, name in paths.items():
         after = candidate_bytes(name)
@@ -3857,7 +3958,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         if before == after:
             continue
         pair = (hashlib.sha256(before).hexdigest(), hashlib.sha256(after).hexdigest())
-        if (pair in REVIEWED_BUY_IDENTITY_PAIRS.get(repository_name(name), ())
+        if (pair in REVIEWED_COLLECTOR_CLOSE_PAIRS.get(repository_name(name), ())
+                or pair in REVIEWED_BUY_IDENTITY_PAIRS.get(repository_name(name), ())
                 or pair in REVIEWED_ENTRY_RECEIPT_PAIRS.get(repository_name(name), ())
                 or pair in REVIEWED_FIXED_WAIT_PAIRS.get(repository_name(name), ())
                 or pair in REVIEWED_NATIVE_INVALIDATION_PAIRS.get(repository_name(name), ())
