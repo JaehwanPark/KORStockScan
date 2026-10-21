@@ -281,6 +281,45 @@ def test_final_resume_after_recovered_native_producer_requires_complete_current_
     assert path.read_bytes() == before
 
 
+@pytest.mark.parametrize('damage', [None, 'wrong_date', 'wrong_phase', 'successful_attempt',
+    'wrong_clock', 'wrong_duration', 'missing_attempt', 'ambiguous', 'stage_invalid', 'snapshot_invalid',
+    'wrong_commit', 'incomplete', 'symlink', 'oversize', 'invalid_json'])
+def test_final_resume_after_recovered_holding_suffix_binds_original_native_failure(tmp_path, damage):
+    import json, hashlib
+    n,day,path,status,log,metrics,prior=_native_final_resume_fixture(tmp_path)
+    status.update(scoped_resume=None,regeneration_scope='normal',reused_steps_receipt=None,
+        started_at=day+'T20:24:04+09:00',finished_at=day+'T21:54:10+09:00')
+    metrics[:]=[m for m in metrics if m['producer_module']!='src.engine.runtime_approval_summary']
+    metrics[-1].update(producer_module=None,target_date=day,code_commit=status['code_commit'],
+        measurement_complete=True,wall_sec=93.24 if damage!='wrong_duration' else 30)
+    if damage=='wrong_commit':metrics[-1]['code_commit']='b'*40
+    if damage=='incomplete':metrics[-1]['measurement_complete']=False
+    attempt=tmp_path/'tmp/run_monitor_snapshot.aBc123';attempt.parent.mkdir()
+    row=dict(target_date=day,status='failed',profile='postclose_exit',postclose_phase='holding_suffix',
+        started_at=day+' 21:52:37',finished_at=day+' 21:54:10',error='shared_research_budget_partition_resume_required')
+    if damage=='wrong_date':row['target_date']='2026-10-12'
+    if damage=='wrong_phase':row['postclose_phase']='completion_prefix'
+    if damage=='successful_attempt':row['status']='success'
+    if damage=='wrong_clock':row['finished_at']=day+' 21:54:09'
+    if damage!='missing_attempt':attempt.write_text(json.dumps(row)+'\n')
+    if damage=='invalid_json':attempt.write_text('{"target_date":')
+    if damage=='oversize':attempt.write_text('x'*(1024*1024+1))
+    if damage=='symlink':
+        original=attempt.with_suffix('.original');attempt.rename(original);attempt.symlink_to(original)
+    if damage=='ambiguous':(attempt.parent/'run_monitor_snapshot.aBc124').write_bytes(attempt.read_bytes())
+    if damage=='stage_invalid':n['stage_receipt_issues']=lambda *a:['source_changed']
+    if damage=='snapshot_invalid':n['verified_postclose_exit_snapshot_manifest']=lambda *a,**k:None
+    path.write_text(json.dumps(status));log.write_text(''.join('[PERF] '+json.dumps(m)+'\n' for m in metrics))
+    before=path.read_bytes()
+    if damage:
+        with pytest.raises(ValueError,match='final_resume_'):n['final_handoff_resume'](tmp_path,day)
+    else:
+        proof=n['final_handoff_resume'](tmp_path,day)
+        assert proof['recovered_snapshot_attempt']==dict(path=str(attempt),sha256=hashlib.sha256(attempt.read_bytes()).hexdigest())
+        assert proof['recovered_native_producer'] is True
+    assert path.read_bytes()==before
+
+
 def test_final_resume_binds_native_prefix_and_preserves_previous_proof(tmp_path):
     import hashlib
     n, day, path, status, log, metrics, prior = _native_final_resume_fixture(tmp_path)

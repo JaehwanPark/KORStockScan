@@ -945,7 +945,7 @@ if [[ "$RESUME_FINAL_HANDOFF" == "true" ]]; then
   compact_entry_split_report_storage
   publish_entry_split_verification
   POSTCLOSE_FINAL_HANDOFF_RESUME_RECEIPT="$("$VENV_PY" - "$PROJECT_DIR" "$TARGET_DATE" <<'PY_FINAL_RESUME'
-import hashlib, json, sys
+import hashlib, json, re, sys
 from pathlib import Path
 from src.engine.automation.postclose_summary_handoff import (
     _stage_write, _stage_sources, active_stage_names, stage_receipt_issues)
@@ -972,6 +972,44 @@ def final_handoff_resume(project, day):
         and failed_command.get('exit_code') == 1 and failed_command.get('measurement_complete') is True
         and failed_command.get('target_date') == day
         and failed_command.get('code_commit') == status.get('code_commit'))
+    recovered_snapshot = None
+    if (failed_command.get('producer_module') is None and failed_command.get('exit_code') == 1
+            and failed_command.get('measurement_complete') is True
+            and failed_command.get('target_date') == day
+            and failed_command.get('code_commit') == status.get('code_commit')):
+        # The original shell command had no Python module label. Bind its
+        # native attempt bytes and exact terminal clock/duration instead.
+        from datetime import datetime
+        try:
+            finished = datetime.fromisoformat(status['finished_at']).replace(tzinfo=None)
+            started = datetime.fromisoformat(status['started_at']).replace(tzinfo=None)
+        except (KeyError, TypeError, ValueError):
+            raise ValueError('final_resume_snapshot_clock_invalid') from None
+        attempts = sorted((project/'tmp').glob('run_monitor_snapshot.*'))
+        if len(attempts) > 128: raise ValueError('final_resume_snapshot_attempt_inventory_unbounded')
+        for attempt in attempts:
+            if not re.fullmatch(r'run_monitor_snapshot\.[A-Za-z0-9]{6}', attempt.name): continue
+            if attempt.is_symlink() or not attempt.is_file() or attempt.stat().st_size > 1024*1024: continue
+            with attempt.open('rb') as handle: encoded = handle.read(1024*1024+1)
+            if len(encoded) > 1024*1024: continue
+            try:
+                rows = [json.loads(line) for line in encoded.splitlines() if line.startswith(b'{"target_date":')]
+            except json.JSONDecodeError: continue
+            if not rows or any(row.get('target_date') != day or row.get('status') != 'failed'
+                    or row.get('profile') != 'postclose_exit' or row.get('postclose_phase') != 'holding_suffix'
+                    for row in rows): continue
+            if rows[-1].get('finished_at') != finished.strftime('%Y-%m-%d %H:%M:%S'): continue
+            try:
+                first = datetime.fromisoformat(rows[0]['started_at'])
+                last = datetime.fromisoformat(rows[-1]['finished_at'])
+            except (KeyError, TypeError, ValueError):
+                raise ValueError('final_resume_snapshot_attempt_clock_invalid') from None
+            if (type(failed_command.get('wall_sec')) in {int, float}
+                    and started <= first <= last == finished
+                    and abs((last-first).total_seconds()-failed_command['wall_sec']) <= 2):
+                if recovered_snapshot is not None: raise ValueError('final_resume_snapshot_attempt_ambiguous')
+                recovered_snapshot = dict(path=str(attempt.resolve()), sha256=hashlib.sha256(encoded).hexdigest())
+        recovered_producer = recovered_snapshot is not None
     if (not recovered_producer and (failed_command.get('producer_module'), failed_command.get('exit_code')) not in {
             ('src.engine.automation.tuning_performance_control_tower', 1),
             ('src.engine.build_next_stage2_checklist', 1),
@@ -1037,8 +1075,11 @@ def final_handoff_resume(project, day):
     quantity = committed_refresh_stage_path(report / 'initial_entry_quantity_type_policy' / f'refresh_postclose_{day}', day)
     if not refresh_quantity_stage_terminal_valid(json.loads(quantity.read_bytes())):
         raise ValueError('final_resume_quantity_stage_invalid')
+    if recovered_snapshot and _stage_sources({'attempt':Path(recovered_snapshot['path'])})['attempt']['sha256'] != recovered_snapshot['sha256']:
+        raise ValueError('final_resume_snapshot_attempt_changed')
     return dict(schema='postclose_final_handoff_resume_v1', source_date=day,
         recovered_native_producer=recovered_producer, failed_command_receipt=failed_command,
+        recovered_snapshot_attempt=recovered_snapshot,
         origin_run_id=status['run_id'], origin_code_commit=status['code_commit'],
         origin_status_sha256=hashlib.sha256(raw).hexdigest(), prior_scoped_resume=prior,
         completed_command_receipts=completed,
