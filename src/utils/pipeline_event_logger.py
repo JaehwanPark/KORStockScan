@@ -1143,6 +1143,12 @@ def emit_pipeline_event(
     # Diagnostic failure must never prevent raw or threshold-companion writes.
     # Its disk flush also must not hold the raw writer's process-wide lock.
     if raw_append_succeeded:
+        if safe_pipeline == 'HOLDING_PIPELINE' and safe_stage == 'sell_completed':
+            try:
+                from src.engine.scalping.initial_quantity_cap_observation import observe_position_terminal
+                observe_position_terminal(event_payload)
+            except Exception as exc:
+                log_error(f"[QUANTITY_CAPTURE_TERMINAL_SOURCE_FAILED] record_id={record_id}: {type(exc).__name__}")
         try:
             compactor = _get_producer_compactor()
             if compactor is not None:

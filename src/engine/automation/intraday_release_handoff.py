@@ -3743,6 +3743,53 @@ REVIEWED_DELAY_MACHINE_PARENT_PAIRS = {'src/engine/automation/pre_submit_delay_p
                                                                 '7dc2c312ce3fe14d5f3343d668e22d90f083a214e5ed25144f446e26f6dec8d3')),
  'src/engine/automation/pre_submit_delay_situation_projection.py': (('c77e565c1f29b64551e690f0e0901226c73baba2c53a61b6c49239be76c39f28',
                                                                      '572758cce22a8ba5ac6159ad9b670c3ac45d1112c30fc31907f8eb0d02ca7454'),)}
+# Quantity capture and offline context projection repair; trading rules are
+# unchanged. Pin one reviewed successor while preserving issued generations.
+REVIEWED_QUANTITY_CAPTURE_HASHES = {'src/engine/automation/main_trailing_source_reuse.py': 'acf252905da4704ff54a3adffdd74ecf7c6b9ab056b52b6719fab8be91866b97',
+ 'src/engine/automation/main_trailing_completed_store.py': 'a5ebc1ab43334b5d8b3d418c6f16406187258fb6caffc868a5da23efa9d76f0f',
+ 'src/engine/monitoring/policy_generation_code_handoff.py': '858f6f949015f1c27d0185a0183df7a331f7fda971830408a5cdf53d16b39b5a',
+ 'src/engine/lifecycle/research_json_stream.py': '8fd211dc5409ee6a5bdd619bef772255c07687e921b075d473f50f70303a6201',
+ 'src/engine/scalping/initial_quantity_cap_observation.py': 'b812ebdb125283b7f2e80e840edfb8f84fbd2160b73428bd5ae319c1f3c38560',
+ 'src/engine/scalping/initial_quantity_policy.py': 'c9496cee9ce0305a75fd0e1c2df93370e18ea4792b61b3d47d8de9937aaef4d4',
+ 'src/engine/scalping/initial_quantity_source_cache.py': 'f76427a4e0c75e5062149daff971362962acdc22c599bac957a5dfd3f4c04a70',
+ 'src/engine/sniper_state_handlers.py': '8cc435544ceeda76309b9051179af20022f100c8b1bad48356636fb51b9f101c',
+ 'src/utils/pipeline_event_logger.py': '2e1c150e1b7d21adcb6fa586a15c1e018cdf2e6a2aab13daa067f414d9b4e6d3'}
+REVIEWED_QUANTITY_CAPTURE_PAIRS = {'src/engine/automation/main_trailing_source_reuse.py': (('272f0753cce9fc43324063a2d690394e844630f6eab8da7dace87596620ac0ab', 'acf252905da4704ff54a3adffdd74ecf7c6b9ab056b52b6719fab8be91866b97'), ('c190554546468617b2963e2ba013473e992f4d4ad638a5f4aee2f71027bc58ef', 'acf252905da4704ff54a3adffdd74ecf7c6b9ab056b52b6719fab8be91866b97')),
+ 'src/engine/automation/main_trailing_completed_store.py': (('2fc12700ccf64fa03667a0a859e13dc40515e932cc68da23ed9b3d962bdfdd5a', 'a5ebc1ab43334b5d8b3d418c6f16406187258fb6caffc868a5da23efa9d76f0f'),),
+ 'src/engine/monitoring/policy_generation_code_handoff.py': (('47db04eba70a27e3fbb5c4078e828be38920859efbf4224e3049582776ff6d5f', '858f6f949015f1c27d0185a0183df7a331f7fda971830408a5cdf53d16b39b5a'), ('86b6ea98d0af89360c350f24dc9771441c9332c22354059ae7d5dc1a7b2ac3e4', '858f6f949015f1c27d0185a0183df7a331f7fda971830408a5cdf53d16b39b5a'), ('905dd6a05df9f19fac25292a3a1e7fe579281e4aeabd84d4965855f9fef928b1', '858f6f949015f1c27d0185a0183df7a331f7fda971830408a5cdf53d16b39b5a')),
+ 'src/engine/lifecycle/research_json_stream.py': (('1ea671f8ba5b5397257c2d1da513dee653b05379133073d1412ee4edf7a07a11',
+                                                   '8fd211dc5409ee6a5bdd619bef772255c07687e921b075d473f50f70303a6201'),
+                                                  ('53bd6a0cec6435ff0cfb399ad75fc9edd0b479463c06dea77bc5cae5e59db4b6',
+                                                   '8fd211dc5409ee6a5bdd619bef772255c07687e921b075d473f50f70303a6201')),
+ 'src/engine/scalping/initial_quantity_cap_observation.py': (('11d5fe453033bfdc158d64f423f2d299443401b6782955440d643079ad864667',
+                                                              'b812ebdb125283b7f2e80e840edfb8f84fbd2160b73428bd5ae319c1f3c38560'),),
+ 'src/engine/scalping/initial_quantity_policy.py': (('806875b857f58895a39ec116ed0a3b619539f7d782fc1996581c1af84c201a34',
+                                                     'c9496cee9ce0305a75fd0e1c2df93370e18ea4792b61b3d47d8de9937aaef4d4'),
+                                                    ('4567eed7de944395133eb6ebc975c823cf3840e6abe9424877455130feb55c87',
+                                                     'c9496cee9ce0305a75fd0e1c2df93370e18ea4792b61b3d47d8de9937aaef4d4')),
+ 'src/engine/scalping/initial_quantity_source_cache.py': (('77a7b57d5f752c760332fc6fd46a4fb121d4c0042ceb464a689fae1dc23c5704',
+                                                           'f76427a4e0c75e5062149daff971362962acdc22c599bac957a5dfd3f4c04a70'),
+                                                          ('353795e63675a34743f1bdf0823f684cbdcdd472cdf12790dc17896e1aa107db',
+                                                           'f76427a4e0c75e5062149daff971362962acdc22c599bac957a5dfd3f4c04a70')),
+ 'src/engine/sniper_state_handlers.py': (('8a0c18d2c097b063a8349907f39e6057d43b7ad9ef173e5f6c4e1be48f8b21f9',
+                                          '8cc435544ceeda76309b9051179af20022f100c8b1bad48356636fb51b9f101c'),
+                                         ('885af7dd480a520e98502bcd6729586b4d21016de8254a4a7d9e299389f09ed4',
+                                          '8cc435544ceeda76309b9051179af20022f100c8b1bad48356636fb51b9f101c'),
+                                         ('c47a60dccf7266e27880b94cb9bccf3b2c23c6c513ede76cce33bce212abfd55',
+                                          '8cc435544ceeda76309b9051179af20022f100c8b1bad48356636fb51b9f101c')),
+ 'src/utils/pipeline_event_logger.py': (('02d713d72647ce18e49c13f40843415611260a4fd5ba6be34712d6bfb9b83416',
+                                         '2e1c150e1b7d21adcb6fa586a15c1e018cdf2e6a2aab13daa067f414d9b4e6d3'),
+                                        ('fde49c9a27dfc5c858d765353a0a898ac45728d57ecfa0526c4a6df4fef4c99e',
+                                         '2e1c150e1b7d21adcb6fa586a15c1e018cdf2e6a2aab13daa067f414d9b4e6d3'))}
+REVIEWED_QUANTITY_CAPTURE_DEPENDENCY_VARIANTS = {
+    key: {**value,
+        'selector_path': 'src/engine/scalping/initial_quantity_cap_observation.py',
+        'selector_sha256': REVIEWED_QUANTITY_CAPTURE_HASHES['src/engine/scalping/initial_quantity_cap_observation.py'],
+        'dependencies': {**value['dependencies'], **REVIEWED_QUANTITY_CAPTURE_HASHES},
+        'contract_extensions': {origin: {name: REVIEWED_QUANTITY_CAPTURE_HASHES.get(os.path.normpath(name), digest)
+            for name, digest in paths.items()} for origin, paths in value['contract_extensions'].items()},
+    } for key, value in REVIEWED_COLLECTOR_FIRST_TRANSITION_DEPENDENCY_VARIANTS.items()
+}
 
 
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
@@ -3823,6 +3870,9 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     finalization_health_present = any((root / name).is_file()
         and hashlib.sha256(candidate_bytes(name)).hexdigest() == sha
         for name, sha in REVIEWED_FINALIZATION_HEALTH_HASHES.items())
+    quantity_capture_present = (root / 'src/engine/scalping/initial_quantity_cap_observation.py').is_file() and (
+        hashlib.sha256(candidate_bytes('src/engine/scalping/initial_quantity_cap_observation.py')).hexdigest()
+        == REVIEWED_QUANTITY_CAPTURE_HASHES['src/engine/scalping/initial_quantity_cap_observation.py'])
     first_transition_present = (root / 'src/engine/automation/ordered_intraday_deploy.py').is_file() and (
         hashlib.sha256(candidate_bytes('src/engine/automation/ordered_intraday_deploy.py')).hexdigest()
         == REVIEWED_COLLECTOR_FIRST_TRANSITION_HASHES['src/engine/automation/ordered_intraday_deploy.py'])
@@ -3852,7 +3902,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         dependencies = generations.get(trigger_sha, {})
         # New exact selectors precede their historical parent. The first match
         # selects one complete generation, never per-file SHA alternatives.
-        for variants in (REVIEWED_COLLECTOR_FIRST_TRANSITION_DEPENDENCY_VARIANTS,
+        for variants in (REVIEWED_QUANTITY_CAPTURE_DEPENDENCY_VARIANTS,
+                         REVIEWED_COLLECTOR_FIRST_TRANSITION_DEPENDENCY_VARIANTS,
                          REVIEWED_COLLECTOR_CLOSE_DEPENDENCY_VARIANTS,
                          REVIEWED_BUY_IDENTITY_DEPENDENCY_VARIANTS,
                          REVIEWED_ENTRY_RECEIPT_DEPENDENCY_VARIANTS,
@@ -3992,6 +4043,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
             dependencies = {**dependencies, **REVIEWED_DELAY_MACHINE_PARENT_HASHES}
             extensions = {name: REVIEWED_DELAY_MACHINE_PARENT_HASHES.get(repository_name(name), sha)
                           for name, sha in extensions.items()}
+        if quantity_capture_present:
+            dependencies = {**dependencies, **REVIEWED_QUANTITY_CAPTURE_HASHES}
         dependencies_by_trigger[trigger] = (trigger_sha, dependencies)
     for key, name in paths.items():
         after = candidate_bytes(name)
@@ -4009,6 +4062,7 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
             continue
         pair = (hashlib.sha256(before).hexdigest(), hashlib.sha256(after).hexdigest())
         if (pair in REVIEWED_DELAY_MACHINE_PARENT_PAIRS.get(repository_name(name), ())
+                or pair in REVIEWED_QUANTITY_CAPTURE_PAIRS.get(repository_name(name), ())
                 or pair in REVIEWED_COLLECTOR_FIRST_TRANSITION_PAIRS.get(repository_name(name), ())
                 or pair in REVIEWED_COLLECTOR_CLOSE_PAIRS.get(repository_name(name), ())
                 or pair in REVIEWED_BUY_IDENTITY_PAIRS.get(repository_name(name), ())

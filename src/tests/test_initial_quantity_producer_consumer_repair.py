@@ -16,6 +16,96 @@ from src.tests.test_initial_quantity_policy import _cap_context, _quality, _fact
 from src.tests.test_initial_quantity_timeout import _research_trade_path
 
 
+@pytest.mark.parametrize('compressed', [False, True])
+def test_quantity_features_hash_physical_source_in_one_read(tmp_path, compressed, monkeypatch):
+    import gzip
+    day='2026-10-08'; _quality(tmp_path,day)
+    path=tmp_path/'pipeline_events'/f'pipeline_events_{day}.jsonl'
+    path.parent.mkdir()
+    raw=(json.dumps(dict(record_id=1,stock_code='005930',stage='other',
+                        emitted_at=day+'T09:30:00+09:00',fields={}))+'\n').encode()
+    if compressed:
+        path=Path(str(path)+'.gz'); path.write_bytes(gzip.compress(raw))
+    else:path.write_bytes(raw)
+    rows,_=policy.completed_trade_fact_census(day,data_dir=tmp_path,
+        fact_rows=[actual_fact()],entry_on_or_after='2026-09-29')
+    monkeypatch.setattr(policy,'_file_sha256',lambda *a: pytest.fail('second full raw hash'))
+    receipts={};proofs={}
+    policy._join_post_fill_paths_uncached(rows,data_dir=tmp_path,source_receipts=receipts,
+                                         source_byte_proofs=proofs)
+    assert receipts[day]['sha256']==hashlib.sha256(path.read_bytes()).hexdigest()
+    assert proofs[day]['generation']['sha256']==receipts[day]['sha256']
+
+
+@pytest.mark.parametrize('damage',[None,'hash','size','physical'])
+def test_full_quantity_generation_accepts_verified_logical_pipeline_archive(tmp_path,monkeypatch,damage):
+    import gzip
+    from src.engine.automation import main_trailing_source_store as S
+    from src.engine.compress_db_backfilled_files import native_raw_archive_receipt
+    monkeypatch.setattr(policy,'DATA_DIR',tmp_path)
+    path=tmp_path/'pipeline_events/pipeline_events_2026-10-08.jsonl';path.parent.mkdir()
+    raw=b'{}\n';path.write_bytes(raw)
+    while not S.build_step(tmp_path,path)['complete']:pass
+    native=S.generation(tmp_path,path);before=path.stat()
+    identity=lambda s:dict(device=s.st_dev,inode=s.st_ino,size=s.st_size,mtime_ns=s.st_mtime_ns,ctime_ns=s.st_ctime_ns)
+    archive=Path(str(path)+'.gz');archive.write_bytes(gzip.compress(raw))
+    receipt=native_raw_archive_receipt(path,logical_sha256=hashlib.sha256(raw).hexdigest(),logical_size=len(raw),source_identity=identity(before),archive_identity=identity(archive.stat()),indexed=native)
+    Path(str(archive)+'.archive_receipt.json').write_text(json.dumps(receipt));path.unlink()
+    gen=dict(path=str(path),sha256=hashlib.sha256(raw).hexdigest(),size_bytes=len(raw),archive_identity_valid=None)
+    if damage=='hash':gen['sha256']='0'*64
+    elif damage=='size':gen['size_bytes']+=1
+    elif damage=='physical':archive.write_bytes(gzip.compress(raw+b'{}\n'))
+    report=dict(census={},pipeline_source_receipts={'2026-10-08':gen})
+    if damage:
+        with pytest.raises((ValueError,S.InputPending)):policy.verify_refresh_source_generations(report)
+    else:policy.verify_refresh_source_generations(report)
+
+
+def test_large_indexed_quantity_fingerprint_never_rehashes_raw(tmp_path, monkeypatch):
+    from src.engine.scalping import initial_quantity_source_cache as C
+    from src.engine.automation import main_trailing_source_store as S
+    day='2026-10-08';_quality(tmp_path,day)
+    path=tmp_path/'pipeline_events'/f'pipeline_events_{day}.jsonl'
+    path.parent.mkdir();line=(json.dumps(dict(record_id=2,fields=dict(padding='x'*1024)))+'\n').encode()
+    path.write_bytes(line*4200)
+    while not S.build_step(tmp_path,path)['complete']:pass
+    rows,_=policy.completed_trade_fact_census(day,data_dir=tmp_path,fact_rows=[actual_fact()],entry_on_or_after='2026-09-29')
+    monkeypatch.setattr(C,'byte_generation',lambda *a:pytest.fail('full raw fingerprint'))
+    before=C.fingerprint(rows,path,600)
+    assert before['source']['schema']==S.SCHEMA+':generation'
+    path.write_bytes(path.read_bytes()+line)
+    with pytest.raises(S.InputPending):C.fingerprint(rows,path,600)
+
+
+@pytest.mark.parametrize('virtual_identity', [False, True])
+def test_indexed_quantity_byte_proof_keeps_warm_cache_key_stable(tmp_path, monkeypatch, virtual_identity):
+    from src.engine.scalping import initial_quantity_source_cache as C
+    from src.engine.automation import main_trailing_source_store as S
+    from src.engine.infrastructure.validation_digest_session import postclose_session
+    from src.engine.lifecycle import research_json_stream as stream
+    day='2026-10-08';_quality(tmp_path,day)
+    path=tmp_path/'pipeline_events'/f'pipeline_events_{day}.jsonl';path.parent.mkdir()
+    line=(json.dumps(dict(record_id=2,fields=dict(padding='x'*1024)))+'\n').encode()
+    path.write_bytes(line*4200)
+    while not S.build_step(tmp_path,path)['complete']:pass
+    if virtual_identity:
+        # Native gzip enrollment may retain the original plain identity in
+        # its logical generation. Digest admission owns current physical bytes.
+        original=S.generation
+        def retained_plain(*args):
+            value=original(*args)
+            return {**value,'source_stat':[1,2,value['size']*2,3,4]}
+        monkeypatch.setattr(S,'generation',retained_plain)
+    rows,_=policy.completed_trade_fact_census(day,data_dir=tmp_path,fact_rows=[actual_fact()],entry_on_or_after='2026-09-29')
+    with postclose_session(tmp_path,day) as session:
+        session.native_read_budget=dict(remaining=0)
+        first=C.join(rows,data_dir=tmp_path)
+        expected=hashlib.sha256(path.read_bytes()).hexdigest()
+        monkeypatch.setattr(stream,'hashed_text_source',lambda *a:pytest.fail('warm raw reread'))
+        assert C.join(rows,data_dir=tmp_path)==first
+        assert session.digest(path)==expected
+
+
 @pytest.mark.parametrize('population', ['source_quality_by_entry_date', 'source_quality_by_exit_date'])
 def test_refresh_refuses_preflight_replaced_by_final_quality(tmp_path, population):
     source = tmp_path / 'quality.json'
@@ -40,7 +130,7 @@ def test_oversized_unrelated_pipeline_row_preserves_next_record(late_identity, p
     relevant = json.dumps({'record_id': 7, 'fields': {}}) + '\n'
     source = relevant + json.dumps(fields, ensure_ascii=False) + '\n' + relevant
     receipt = {}
-    assert list(policy._quantity_pipeline_rows(io.StringIO(source), {'7': []}, receipt)) == [relevant, relevant]
+    assert list(policy._quantity_pipeline_rows(io.StringIO(source), {'7': []}, receipt)) == [(relevant, None), (relevant, None)]
     assert receipt == {'oversized_out_of_cohort_records': 1}
 
 
@@ -87,7 +177,7 @@ def test_large_native_quantity_row_preserves_policy_fields(late_identity, paddin
     if late_identity:
         row = dict(reversed(list(row.items())))
     receipt = {}
-    parsed = [json.loads(value) for value in policy._quantity_pipeline_rows(
+    parsed = [json.loads(value) for value, _ in policy._quantity_pipeline_rows(
         io.StringIO(json.dumps(row, ensure_ascii=False)+'\n'), {'7': []}, receipt)]
     assert len(parsed)==1 and parsed[0]['record_id']==7
     assert parsed[0]['fields']=={k:v for k,v in fields.items() if k in policy._QUANTITY_PIPELINE_FIELDS}
@@ -134,6 +224,54 @@ def test_large_required_quantity_field_remains_an_identified_gap():
     receipt={}
     assert list(policy._quantity_pipeline_rows(io.StringIO(json.dumps(row)+'\n'),{'7':[]},receipt))==[]
     assert receipt['oversized_in_cohort_record_ids']==['7']
+
+
+@pytest.mark.parametrize('damage', [None, 'hash', 'nested', 'duplicate', 'truncated', 'nonfinite'])
+def test_native_large_cancel_wait_context_reaches_quantity_order_clock(tmp_path, damage):
+    from src.engine.scalping.entry_cancel_wait_runtime import submission_fields
+    from src.engine.scalping.strategy_owner_components import digest
+    day='2026-10-08'; _quality(tmp_path, day)
+    directory=tmp_path/'pipeline_events';directory.mkdir()
+    frozen=datetime.fromisoformat(day+'T09:29:59+09:00')
+    stock=dict(code='005930',position_tag='SCALP_BASE',entry_mode='normal')
+    seed=dict(plan_sha256='a'*64,operating_contract={str(i).zfill(4): {'source':'x'*130,'value':i} for i in range(759)},
+        mixed=[None,True,-1,1.5,1e-25,'quote\" slash\\ line\n',chr(0x1f600),'x'*8191])
+    fields=submission_fields(stock,dict(tag='entry_leg'),seed=seed,qty=1,price=100000,
+                             route='KRX',timeout_sec=60,now_ts=frozen.timestamp())
+    fields.update(actual_order_submitted=True,broker_order_no='11')
+    context=json.loads(fields['entry_cancel_wait_submission_context'])
+    if damage=='hash':context['sha256']='0'*64
+    if damage=='nested':context['seed']['operating_contract']['0000']['value']=99
+    if damage=='nonfinite':context['seed']['bad']=float('nan')
+    fields['entry_cancel_wait_submission_context']=json.dumps(context,sort_keys=True,separators=(',',':'))
+    if damage=='duplicate':fields['entry_cancel_wait_submission_context']=fields['entry_cancel_wait_submission_context'].replace('"stock_code":','"stock_code":"009999","stock_code":')
+    if damage=='truncated':fields['entry_cancel_wait_submission_context']=fields['entry_cancel_wait_submission_context'][:-1]
+    event=dict(record_id=1,stock_code='005930',stage='entry_cancel_wait_submission',
+               emitted_at=day+'T09:29:59.500000+09:00',fields=fields)
+    path=directory/f'pipeline_events_{day}.jsonl'
+    path.write_text(json.dumps(event)+'\n')
+    rows,_=policy.completed_trade_fact_census(day,data_dir=tmp_path,fact_rows=[actual_fact()],entry_on_or_after='2026-09-29')
+    receipts={}; result=policy._join_post_fill_paths_uncached(rows,data_dir=tmp_path,source_receipts=receipts)['fact:1']
+    if damage:
+        assert result['source_gap']==['pipeline_record_partition_required']
+        assert result['order_starts']==[]
+    else:
+        assert not result['source_gap']
+        assert result['order_starts']==[dict(at=frozen,order_no='11',
+            source='entry_cancel_wait_submission_context_frozen_at',total_wait_sec=60,
+            frozen_context_valid=True,probe_applied=False,
+            emitted_at=datetime.fromisoformat(event['emitted_at']))]
+        assert context['sha256']==digest({k:v for k,v in context.items() if k!='sha256'})
+        assert len(path.read_bytes())>65536
+
+
+def test_streamed_context_validity_cannot_be_supplied_by_a_raw_event(tmp_path):
+    import io
+    row=dict(record_id=7,stock_code='005930',stage='entry_cancel_wait_submission',
+        emitted_at='2026-10-16T09:00:00+09:00',verified_context={'sha256':'claimed'},
+        fields={'entry_cancel_wait_submission_context':'{}','verified_context':True})
+    raw=json.dumps(row)+'\n'
+    assert list(policy._quantity_pipeline_rows(io.StringIO(raw),{'7':[]},{}))==[(raw,None)]
 
 
 def test_native_fact_sync_preserves_null_real_zero_and_provenance(monkeypatch,tmp_path):

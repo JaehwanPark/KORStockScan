@@ -29,7 +29,7 @@ from src.engine.scalping.initial_quantity_type import (
     kst_timestamp as _timestamp, type_from_decision_receipt as _type_from_decision_receipt,
 )
 from src.utils.constants import DATA_DIR, PROJECT_ROOT
-from src.utils.jsonl_io import existing_or_gzip_path, open_text_auto
+from src.utils.jsonl_io import existing_or_gzip_path
 
 BASELINE = date(2026, 6, 5)
 REPORT_SCHEMA = "initial_entry_quantity_completed_trade_replay_v1"
@@ -725,7 +725,7 @@ def _quantity_pipeline_rows(handle, records, receipt):
     Full raw generations remain byte-bound by the caller. Only fields consumed
     by quantity path reconstruction enter this bounded offline projection.
     """
-    from src.engine.lifecycle.research_json_stream import Reader
+    from src.engine.lifecycle.research_json_stream import Reader, sealed_sorted_object_projection
 
     class Line:
         def __init__(self, first):
@@ -744,10 +744,11 @@ def _quantity_pipeline_rows(handle, records, receipt):
 
     while raw := handle.readline(64 * 1024 + 1):
         if len(raw.encode('utf-8')) <= 64 * 1024:
-            yield raw
+            yield raw, None
             continue
         identity, projected = {}, {}
         blocked = [False]
+        verified_context = [None]
 
         def project_fields(reader):
             reader.spaces()
@@ -773,6 +774,30 @@ def _quantity_pipeline_rows(handle, records, receipt):
                 seen.add(key)
                 reader.take(':')
                 if key in _QUANTITY_PIPELINE_FIELDS and not blocked[0]:
+                    if key == 'entry_cancel_wait_submission_context':
+                        reader.spaces()
+                        if reader.peek() != '"':
+                            blocked[0] = True; reader.skip()
+                            first = False
+                            continue
+                        stream = reader.string_stream()
+                        try:
+                            context = sealed_sorted_object_projection(stream,
+                                {'schema', 'stock_code', 'frozen_at', 'actual_timeout_sec', 'child_id'})
+                        except ValueError as exc:
+                            if str(exc) == 'shared_research_budget_partition_resume_required':raise
+                            # Only this identified row is unusable. Drain its
+                            # encoded field before reading the next envelope.
+                            context = None
+                        while stream.read(65536):pass
+                        verified_context[0] = context
+                        if context is None:
+                            blocked[0] = True
+                        else:
+                            retained_bytes += len(json.dumps(context).encode('utf-8'))
+                            if retained_bytes > 64 * 1024:blocked[0] = True
+                        first = False
+                        continue
                     try:
                         result[key] = reader.value(64 * 1024)
                         retained_bytes += len(json.dumps({key: result[key]},
@@ -818,7 +843,9 @@ def _quantity_pipeline_rows(handle, records, receipt):
                 if len(encoded.encode('utf-8')) <= 64 * 1024:
                     receipt['oversized_projected_rows'] = receipt.get('oversized_projected_rows', 0) + 1
                     receipt['oversized_projection_contract'] = 'quantity_execution_fields_v1'
-                    yield encoded
+                    # Verified metadata stays in memory beside the projection;
+                    # raw fields cannot claim that their own hash was checked.
+                    yield encoded, verified_context[0]
                     continue
             affected = receipt.setdefault('oversized_in_cohort_record_ids', [])
             if identity['record_id'] not in affected:
@@ -909,6 +936,7 @@ def _quantity_capture_lifecycle_sources(data_dir, day, *, decode=False):
 def _join_post_fill_paths_uncached(trades: list[dict[str, Any]], *, data_dir: Path = DATA_DIR,
                          scan_seconds: dict[str, float] | None = None,
                          source_receipts: dict[str, Any] | None = None,
+                         source_byte_proofs: dict[str, Any] | None = None,
                          price_horizon_seconds: int = LEG_TTL_SECONDS) -> dict[str, dict[str, Any]]:
     """Stream only matching record IDs from each native pipeline partition."""
     by_date: dict[str, dict[str, list[dict[str, Any]]]] = defaultdict(lambda: defaultdict(list))
@@ -982,7 +1010,7 @@ def _join_post_fill_paths_uncached(trades: list[dict[str, Any]], *, data_dir: Pa
                 archive_identity_valid = False
         if source_receipts is not None:
             source_receipts[day] = {"path": str(path), "size_bytes": stat.st_size,
-                                    "sha256": _file_sha256(path),
+                                    "sha256": None,
                                     "archive_identity_valid": archive_identity_valid,
                                     "capture_lifecycle_generation": lifecycle_generation}
             if logical_source is not None and archive_identity_valid:
@@ -995,9 +1023,10 @@ def _join_post_fill_paths_uncached(trades: list[dict[str, Any]], *, data_dir: Pa
         for group in records.values():
             for trade in group:
                 result[trade["trade_id"]]["source_path"] = str(path)
-        with open_text_auto(path) as handle:
+        from src.engine.lifecycle.research_json_stream import hashed_text_source
+        with hashed_text_source(path) as (handle, physical_digest):
             scan_receipt = source_receipts[day] if source_receipts is not None else {}
-            for raw in _quantity_pipeline_rows(handle, records, scan_receipt):
+            for raw, verified_context in _quantity_pipeline_rows(handle, records, scan_receipt):
                 rid = _record_id(raw)
                 group = records.get(rid)
                 if not group:
@@ -1055,7 +1084,8 @@ def _join_post_fill_paths_uncached(trades: list[dict[str, Any]], *, data_dir: Pa
                     if stage == "entry_cancel_wait_submission" and within_entry_join:
                         context_raw = fields.get("entry_cancel_wait_submission_context")
                         try:
-                            context = json.loads(context_raw) if isinstance(context_raw, str) else {}
+                            context = (verified_context if verified_context is not None else
+                                       json.loads(context_raw) if isinstance(context_raw, str) else {})
                         except ValueError:
                             context = {}
                         order_start = _timestamp(context.get("frozen_at"))
@@ -1068,7 +1098,8 @@ def _join_post_fill_paths_uncached(trades: list[dict[str, Any]], *, data_dir: Pa
                                 "source": "entry_cancel_wait_submission_context_frozen_at",
                                 "total_wait_sec": context.get('actual_timeout_sec'),
                                 "frozen_context_valid": bool(context.get('schema')=='entry_cancel_wait_submitted_paired_v2'
-                                    and context.get('sha256')==_digest({k:v for k,v in context.items() if k!='sha256'})),
+                                    and (verified_context is not None
+                                         or context.get('sha256')==_digest({k:v for k,v in context.items() if k!='sha256'}))),
                                 "probe_applied": str(context.get("child_id") or "").startswith(
                                     "entry_split_probe"),
                                 "emitted_at": emitted})
@@ -1208,6 +1239,8 @@ def _join_post_fill_paths_uncached(trades: list[dict[str, Any]], *, data_dir: Pa
                                     "epoch": str(fields.get("classifier_transport_epoch")
                                                  or fields.get("market_data_transport_epoch") or ""),
                                     "stage": stage})
+        if source_receipts is not None and logical_source is None:
+            source_receipts[day]['sha256'] = physical_digest.hexdigest()
         for rid in scan_receipt.get('oversized_in_cohort_record_ids', []):
             for trade in records[rid]:
                 result[trade['trade_id']]['source_gap'].append('pipeline_record_partition_required')
@@ -1234,6 +1267,10 @@ def _join_post_fill_paths_uncached(trades: list[dict[str, Any]], *, data_dir: Pa
                     bucket["capture_receipts"].clear()
                     bucket["source_gap"].append("pipeline_changed_during_scan")
         if source_stable:
+            if source_byte_proofs is not None:
+                from src.engine.lifecycle.holding_window_generation import source_stat
+                source_byte_proofs[day] = dict(source_stat=list(source_stat(stat_after)),
+                    generation=dict(path=path.name,size=stat.st_size,sha256=physical_digest.hexdigest()))
             for group in records.values():
                 for trade in group:
                     bucket = result[trade["trade_id"]]
@@ -2698,7 +2735,21 @@ def verify_refresh_source_generations(report, *, pipeline_reference_only=False):
                 if not native.source_receipt_matches(gen, data_root=DATA_DIR):
                     raise ValueError("quantity_pipeline_source_generation_changed")
                 continue
-        if _file_sha256(Path(gen["path"])) != gen.get("sha256"):
+        path=Path(gen['path'])
+        if not path.exists() and path.name.endswith('.jsonl'):
+            from src.engine.automation.main_trailing_source_store import _archive_logical_authority, _archive_generation
+            # The native compressor/enrollment already verified complete
+            # logical SHA/size and gzip CRC against this physical generation.
+            proof=_archive_logical_authority(path)
+            if proof is None:
+                raise ValueError('quantity_pipeline_source_generation_changed')
+            _archive_generation(DATA_DIR,path)
+            if (gen.get('sha256')!=proof[0]['logical_content_sha256']
+                    or gen.get('size_bytes')!=proof[0]['logical_size_bytes']
+                    or gen.get('archive_identity_valid') is not None):
+                raise ValueError('quantity_pipeline_source_generation_changed')
+            continue
+        if _file_sha256(path) != gen.get("sha256"):
             raise ValueError("quantity_pipeline_source_generation_changed")
     for key in ("source_quality_by_entry_date", "source_quality_by_exit_date"):
         for gen in census.get(key, {}).values():

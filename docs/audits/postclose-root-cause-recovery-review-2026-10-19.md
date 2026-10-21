@@ -975,3 +975,67 @@ Final authorized successor ea68c5a850ce88919c1a6d19a18d461f0fb1183d completed or
 Native first full health10:58:29, SHAe43e63718c293dd2d805e61c299b7fd0eb45ed7ed352af1aa5a1cb3790674f15, uses selectedea68 and confirms startup consumption ready plus producer/observer exits0. Actual semantic verification separately reports fail0, log_scanner PASS/no new errors, process/resource/lock PASS. Warnings remain: same49415 original TP signal1792546999.427:SCALP_TRAILING_LIMIT_WEAK has tp_signal_buy_generation_missing and tp_terminal_buy_generation_unbound, with original signal hash3b73133f0ebd53c276fa9e9df2e2266f602d1dec977e64d90b72840db6f4bd88 and terminal hash449772cb0b155b033139364e1c314e497977f6f070026a3906446637b712a03b; no-applicable scanner observations; original postclose finalization recovered after06:50. The two TP reasons refer to one already completed position, not two orders or a newly failed collector. Original source21 records remain actionable under HoldingProfitExitSourceContractRepair pending the native historical-resolution/current-collection acceptance; no invented original BUY generation, report mutation or warning suppression.
 
 Code review and current PID consumption are closed for the quantity/identity repair. Original49415 closed naturally before the final successor, so this restart does not prove a newly recovered live position's boot identity. That future natural path remains under the same DirectFamily owner; exact frozen-source/native boot regressions prove the repaired contract now. All original failed attempts and source bytes remain in live-d76cbd56d; final evidence is live-ea68c5a85. Policies, source-age/order/custody/manual/retired guards and null/unproven economics remain unchanged. Replacement/removal dispositions above are unchanged; this final record adds only audit/checklist progress, with no runtime source change or additional restart.
+
+
+### 수량 실행 원천의 bounded 전달과 종료 영수증 — 2026-10-21
+
+기준 `d2e9bedf3`(최초 안전 전환) / 상위 `1fd10ef9c`(collector 종료 수리). `InitialQuantityProducerConsumerRepair1010`에서 큰 실행 context와 후행 수집 종료 전달을 보완했다. 12:12:35 KST selector는 `ea68c5a85`, Main1724066/start19233026, collector epoch1792547808026387070/running/enqueued61,373이었다. 후보의 native pin은 `deployment_collector_shutdown_actor_unproven`으로 종료 요청 전에 차단했다. 현재 실행 PID에 신호·재시작 요청을 보내지 않았다. [현재 pin](../../tmp/quantity-first-transition-20261021/incumbent-current-pin.json).
+
+**큰 행의 첫 위반.** 10/20 record49389 원 행207,248B/SHA `5d6131ddca7e56fc3ae32120b0d3a4c080268ec0055314492450d130dfda69d9`에는 context100,521B가 있고 그 안에 기존 정책759개 규칙 snapshot이 있었다. 기존 소비자는 필요한 context 전체를64KiB 값으로 디코드하려다 해당 거래를 제외했다. 원 생산자의 sorted canonical JSON과 SHA를 streaming으로 전부 검증하고 실제 소비 필드(schema/code/frozen_at/timeout/child)만990B 투영에 전달하도록 기존 reader/quantity join을 연결했다. hash 검증 결과는 raw가 주장할 수 없는 메모리상의 별도 값으로 전달한다. scalar/선택 필드64KiB, 기존4096-key/runtime 계약, 깊이64, 전체 원천 binding을 유지하며 size limit 상향·필드 절단으로 해결하지 않았다. source-cache fingerprint에 실제 reader owner를 추가했다.
+
+원 함수는 동일 행을 partition_required로 제외하고 수정 함수는 원 context SHA `8c446b881db3f64a4b62f6ac4105892825d28b10e9e089f8e67d35f5d0759c6b`를 그대로 검증한다. 단일 행 검증 peak2,364,207B/0.448초(tracemalloc 포함). bounded 원천 추출에서49340·49343·49389·49391의 동일 전달 계약도 확인했다. 날짜별512MiB 한도에서16일49345·49347·49351과19일49374는 도달하지 않아 중단했다. 20일은 보존 offset부터 이어 읽었다. 후속 full replay나8건 전체 정책 재평가 PASS를 주장하지 않는다. [실제 행 대조](../../tmp/quantity-first-transition-20261021/large-row-baseline-comparison.json), [bounded 읽기량과 미도달 ID](../../tmp/quantity-first-transition-20261021/eight-context-projection-proof.json).
+
+**수집 종료의 첫 위반.** 실제 SELL 완료는 `sniper_execution_receipts` 또는 broker reconciliation에서 공통 pipeline writer로 전달되지만, 종전 cap interruption은 state-handler 전용 logger에만 연결돼 있었다. 실제 완료 뒤 `_ACTIVE`에 남은 수집이 재시작 때 process_shutdown으로 기록되는 경로를 격리 재현했다. 공통 writer가 real_record_bound/실제 주문 SELL 원문을 저장한 후에만 기존 cap owner에 전달하도록 통합했다. 같은 record/code/PID/start/planned clock의 등록 source를 사용하고 원 SELL 이벤트 SHA를 보존한다. 정상 청산 전 관측과 horizon terminal 누락을 다른 interruption 사유로 남기며, 후자를 정상 finished로 소급 승인하지 않는다. queue/raw 실패·다른 ID/PID·모의/불명확한 실행은 계속 실패/미완료다. horizon 종료 판단은 마지막 quote 유무와 분리하되 실제 order clock과 원1200초 계약을 유지한다. 닫힌 capture의 mutable trace는 다음 정상 observation pass에서 제거한다.
+
+과거10/20의5개·10/21의7개 interrupted 영수증은 exact ID/원 SHA로 보존했다. 49412/49415의 매도 완료와 과거 process-shutdown 기록의 순서도 read-only DB와 대조했다. 회복 시각이나 청산 이후 시각만으로 과거 정상20분 수집을 증명하지 않는다. [원 terminal census](../../tmp/quantity-first-transition-20261021/capture-terminal-census.json), [원 position 시간](../../tmp/quantity-first-transition-20261021/capture-positions-readonly.json).
+
+검토·보완·재검증: 새 native SELL regression은 원 기준에서 closed receipt0개로 실패하고 수정본은 원 writer→queue drain→dated native consumer→horizon 분류까지 통과한다. 완전 context 해시와 Unicode/escape/float, 변조/중복/누락/비유한 값, raw의 자체 검증 주장도 검증했다. 관련 고유 회귀871 PASS(ordered257, quantity/pipeline362, 추가 quantity/research/entry-wait207, 이전·최초전환·통합 handoff45). 최종 consumer 보강306개는 다시 PASS. 모든 provider/주문 호출0, 과거 보고서/PnL/정책 선택 변경0이다. 증거는 [검증 디렉터리](../../tmp/quantity-first-transition-20261021/)의 원 실패/통과 로그에 있다.
+
+교체·제거: state-handler만 소비하던 SELL interruption block은 `removed`, 공통 durable writer→기존 cap owner로 `consolidated`; 모든 실제 receipt/reconciliation caller가 같은 writer를 사용한다. context 전체 상주 디코드는 큰 행 경로에서 streaming native SHA/필드 projection으로 `replaced`; 작은 원 행 reader는 기존 소비자가 있어 `retained`. 기존 queue/pending/closed writer와 policy guard·allocator·split/timeout은 `retained`. 새 module/worker/스케줄/주문 branch는 없다. exact quantity handoff profile은 기존 verifier에 통합하고 발행된 이전 두 collector generation을 역사적 정책 소비 때문에 `retained`한다. 삭제할 임시 wrapper나 미설명 중복 구현은 없다.
+
+남은 수용: 현재 epoch의 최초 전환은 [native 장 종료 연결](main-machine-pattern-dual-track-research-review-2026-10-21.md#최초-전환의-native-장-종료-연결--2026-10-21)에 따라 자연 market_close/원 WS actor/immutable closed를 모두 검증한 뒤에만 진행한다. 20시라는 시각만으로 재시작하지 않는다. 실제 새 PID/새 epoch/정상 수집창 소비는 미관측이다. 복원 연구 비용49268·49293·49294의 후속 운영 generation 반영과 전체8건 재평가는 기존 quantity owner의 후속 작업이며 이번 원천 전달 수리로 완료 처리하지 않았다. 원19완료/11적격/8제외와 frozen committed stage는 그대로다. 나머지 복구 불가 원천은 null/원 ID·SHA·사유를 보존한다. 새로운 결손 탐지는 계속 유지한다.
+
+변경량(기준d2e9bedf3): non-test7파일 +231/-15, tests3파일 +146/-25, docs3파일 +24/-0. 이동0. 순증은 기존 owner의 streaming 검증·실제 SELL 종료 전달과 exact 코드 세대/실패 회귀이며 수량/매매 의사결정 기능을 늘린 것이 아니다. 원 canonical dirty 문서와 다른 세션 변경은 보존했다.
+
+통합 native 대조에서 추가 보완: 당일 PREOPEN 원 commit은 `d7d353b4a`였고, 최초 후보 `aea188706`의 handler 허용 pair는 그 실제 원 세대를 빠뜨려 delay/stop/holding 모두 `entry_consumer_unreviewed_change`로 차단됐다. 원 실패 로그를 보존하고 기존에 검토된 d7d353b4a→ea68 handler 변경(고정 관심종목 원천 signature, 미제출 SELL custody guard)과 이번 관측 변경을 함께 대조하여 정확한 원 SHA pair만 추가했다. 실제 원 세대 회귀3 PASS; 고유 검증 총874개다. 후속 변경량: non-test1파일 +3/-1, tests1파일 +9/-2, docs1파일 +2/-0. 현재 PID 종료/선택 변경은 여전히 수행하지 않았다.
+
+
+최초 전환의 사용자 선택: 현재 epoch의 종료 증빙을 보존하고 자연 종료 후 전환한다. 장중 중단을 미증명 표본으로 처리하는 대안은 채택하지 않았다. 현재 Main은 유지하며 실제 native market-close/closed 영수증이 없으면 시각만으로 전환하지 않는다. 후속 협력 종료는 새 코드/PID 소비 뒤 별도 자연 경로로 확인한다.
+
+후보 native 검증에서 두 직접 소비 결손을 추가 수리했다. (1) rising/holding의 현재 독립 fixture는 각각88/134개를 통과했지만 immutable 원 보고서에 연결할 정확한 새 code pair가 없었다. 기존 capability handoff에 원 report/fixture SHA와 독립 현재 fixture를 요구하는 두 pair만 연결했다. 원 보고서를 재봉인하거나 과거 판정을 현재 PASS로 바꾸지 않는다. (2) 수량 streaming 함수 추가로 completed offline reader의 전체 code SHA가 달라져 과거 enrollment의 원천 바이트 증빙도 조회에서 사라졌다. 9/29·9/30 등 exact manifest에 결속된 원본은 inode/size/mtime/ctime까지 불변이었다. 기존 completed owner의 동일 검증 함수를 공유하되 원 manifest path/byte SHA로 바이트 관측만 반환하고, 현재 normalized-row reader는 여전히 현재 code binding을 요구한다. 기존 reuse owner가 승인된 frozen manifest가 직접 참조한 증빙만 소비하도록 수정했다. source/의존성/원 manifest/authority 변경은 계속 실패한다. 무제한 탐색이나 원본 재추출·semantic verdict 재사용은 없다.
+
+원 candidate의 실패와 보완 후 census를 함께 보존했다. 동일 원천에서 proof4→7, 미증명 읽기340,216,300→15,394,493B이며 기존32MiB 한도는 불변이다. 검토 후 capability1041/byte-proof145회귀 PASS. 원 native preflight 실패와 [원 proof census](../../tmp/quantity-first-transition-20261021/reviewed-candidate/trailing-proof-census.json), [보완 census](../../tmp/quantity-first-transition-20261021/reviewed-candidate/trailing-proof-census-repaired.json)를 대조한다. 실제 full native 재검증·새 선택/PID는 별도 결과로 남긴다.
+
+교체·제거 보완: reuse의 current-code-only byte-proof 조회는 exact frozen-reference 조회로 `replaced`; 기존 enrollment의 schema/epoch/filename 검사는 `_offline_manifest` 한 구현으로 `consolidated`되어 semantic reader와 byte-proof consumer가 공유한다. 현재 code를 요구하는 normal row reader 및 과거 exact capability pair는 실제 현재/역사 소비자가 있어 `retained`. 새 module/receipt producer/스케줄/매매 branch는 없다. 기준a4299aeed 대비 non-test4파일 +83/-36, tests2파일 +70/-1, docs3파일 +12/-0. 순증은 바이트 증빙과 의미 검증의 구분 및 원 세대/변조 음성 회귀다.
+
+
+## 수량 통합 검증 즉시 재개와 후보 구분 — 2026-10-21
+
+사용자 질문에 대한 정정: 최초 전환d2e9bedf3는 지연 부모 호환성faa67a01d와 약세 원천b7654ac4b에 포함된 기반이다. 수량f428295c6는 별도 분기였으며 b765에 포함되지 않았다. 자연 종료는 실제 전환의 조건이고, 닫힌 과거 원천의 수량 검증을 장 종료까지 미룰 조건이 아니다. 이 세션에서 지금 수량 소스 연결·검증을 재개하며 재기동·selector 변경은 하지 않는다. 최종 배포 가능 후보와 검증 중인 통합 코드를 구분한다.
+
+기준b7654ac4b에 기존 f428 수리를 격리 병합했다. 지연 부모와 수량 exact profile을 함께 유지하고, 테스트 fixture가 통합된 두 집단을 모두 전달하도록 병합 충돌을 보완했다. canonical의 다른 수정과 원 committed stage·정책·PID·strict 증빙은 보존한다.
+
+### 원인 → 수리 → 회귀
+
+- 최초 중단점은 `source_cache.fingerprint`가 reader 교체 후 10/15·16·19·20의 252/204/1768/1434MB 물리 pipeline을 다시 해시하려던 경로다. 대형 원천의 캐시 신원은 기존 native index의 완전 coverage·chain·현재 세대로 확인하며4MiB 이하의 기존 byte 검증은 유지한다. index 부재/불완전/세대 변경은 여전히 차단한다. full native source read32MiB budget은 늘리지 않았다.
+- cold feature 생성은 기존 streaming reader와 같은 읽기에서 물리 SHA를 계산한다. 기존의 별도 전체 hash→semantic scan을 한 번의 hash+scan으로 통합했다. 완료 cache의 byte attestation만 정확한 현재 물리 세대에 결속하여 native digest session에 전달한다. cache hit은 raw를 다시 읽지 않는다. semantic 검증 결과나 연구 판정 PASS를 재사용하지 않는다.
+- native gzip index가 원 plain identity를 유지하는 경우를 실제10/16 자료에서 확인했다. 논리 index identity와 현재 물리 identity를 구분하여 byte proof를 결속했다. digest proof 등록으로 다음 cache key가 달라져 재독하던 경우도 재현·수리했다.
+- 후속 full-stage 소비자가 이미 압축된 논리 `.jsonl`을 직접 열던 결함을 추가로 확인했다. 기존 native archiver/enrollment의 logical SHA·size·현재 gzip 세대·CRC 완료 증명과만 연결하며 원 raw를 복원하거나 reference-only 판정으로 full 검증을 대체하지 않는다. 다른 SHA/size/물리 세대는 계속 거부한다.
+
+새 원천 회귀9 PASS, 관련 producer/consumer263 및315 PASS, exact 통합 handoff33 PASS와 마지막 source hash 갱신 후6 PASS를 확인했다. 실행 수는 중복되므로 합산한 고유 총계로 보고하지 않는다. 원 실패 로그와 보완 전 native 실패는 아래 증거 디렉터리에 보존했다. 격리 작업본의 data 경로 차이로 난 초기 비용 세대 불일치는 실제 배포본과 같은 canonical data mount로 재검증했다.
+
+### 대체·제거와 검증 범위
+
+| 기존 경로 | 처분 | 현재 caller/consumer와 이유 |
+| --- | --- | --- |
+| source cache의 대형 raw byte fingerprint | consolidated | 같은 fingerprint가 native index 세대를 사용하고 작은 원천의 기존 검증은 유지한다. |
+| 별도 `_file_sha256(raw)` 후 text 재독 | removed | 기존 lifecycle streaming owner의 `hashed_text_source`가 semantic read와 같은 물리 바이트를 해시한다. 별도 worker/module/CLI는 없다. |
+| 완료 feature cache·32MiB digest budget·역사 원본 | retained | native byte epoch/reader/cohort/horizon 검증, 원 증거 및 기존 제한에 필요하다. |
+| raw-only full-generation 검증 | consolidated | 같은 native verifier가 직접 원문 또는 검증된 gzip 논리 원천을 소비한다. |
+| f428 협력 종료·큰 context·실제 SELL 종료 및 source proof 수리 | retained | 기존 quantity/native capture 소비자에 필요하며 이번 통합에서 중복 구현하지 않았다. |
+
+삭제 유예0·모듈 이동0·새 engine-root module0이다. 현재 봇/epoch와 운영 정책·기존 수량 committed stage는 보존하며 자연 closed/PID 수용은 별도 OPEN이다. 고정11건의 복구와 이전 비용 제외8건 전체의 복원을 혼동하지 않는다. 실제 joint/native 후속 generation 결과·배포 준비 상태는 [최종 대사](../../tmp/quantity-currentness-integration-20261021/readiness.json)에 기록한다. 원천 재구성은 닫힌4날짜에만 한정하고 날짜별120초/512MiB·한 worker·낮은 CPU/I/O 우선순위로 실행하며, 실패 시 같은 전체 입력을 그대로 재시도하지 않는다.
+
+실제 수용: 고정11건의 replay·full joint timeout·private successor stage native 검증 PASS, warm 전체3.628초다. 원8건49340·49343·49345·49347·49351·49374·49389·49391의 `pipeline_record_partition_required`는 후속 generation에서0건이며 이들은 과거 비용 제외8건과 다른 집단이다. 후속 stage는 carry_parent이고 운영 정책은 바꾸지 않는다. 기존 보고서는 옛 제외 결과를 보존하므로 새 reader로 동일 재현되지 않으며, 원 generation을 덮거나 새 PASS로 꾸미지 않는다. 실제 운영 generation 인계/현재성 및 배포·PID 수용은 준비한 후속 원천과 함께 별도 수행해야 한다. [실제 검증 결과](../../tmp/quantity-currentness-integration-20261021/joint-result.json).
+
+기준b765 대비 증감(기존f428 통합 포함): non-test source +385/-57, tests +315/-30, docs +75/-0(이 계수 행 이전). 새로운 수량 의사결정/주문 진입점은0이며 순증은 기존 source/cache의 단일 읽기 byte proof와 실패 회귀·정확한 인계 기록이다.

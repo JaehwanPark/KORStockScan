@@ -279,6 +279,48 @@ def interrupt(*,code,name,record_id,trace,reason,now=None):
         fields=fields,observed_at_epoch=now)
 
 
+def capture_active(identity):
+    with _LOCK:
+        return identity in _ACTIVE
+
+
+def observe_position_terminal(event):
+    """Censor the exact current capture after durable native SELL completion.
+
+    Receipt/reconciliation writers do not call the state-handler logger. The
+    shared raw writer reaches this owner only after persisting the original
+    real terminal; a mutable target or a queued event is not terminal proof.
+    """
+    fields=event.get('fields') or {}
+    if (event.get('pipeline')!='HOLDING_PIPELINE' or event.get('stage')!='sell_completed'
+            or fields.get('pipeline_lifecycle_population_scope')!='real_record_bound'
+            or fields.get('actual_order_submitted')!='True'
+            or fields.get('broker_order_forbidden')!='False'):
+        return
+    at=datetime.fromisoformat(event['emitted_at'])
+    if at.tzinfo is None:at=at.replace(tzinfo=ZoneInfo('Asia/Seoul'))
+    now=at.timestamp()
+    with _LOCK:
+        matches=[{**row,'fields':dict(row['fields'])} for row in _ACTIVE.values()
+            if str(row['record_id'])==str(event.get('record_id')) and row['code']==event.get('stock_code')]
+    for row in matches:
+        source=row['fields'];planned=source.get('capture_planned_epoch')
+        if (source.get('capture_runtime_pid')!=os.getpid()
+                or source.get('capture_runtime_start_ticks')!=_process_start(os.getpid())
+                or type(planned) not in (int,float) or not math.isfinite(planned) or now<planned):
+            with _LOCK:_COUNTS['terminal_capture_binding_invalid']+=1
+            continue
+        end=source.get('capture_end_epoch')
+        reason=('position_completed_before_capture_horizon' if type(end) in (int,float)
+            and math.isfinite(end) and now<end else 'capture_horizon_terminal_missing_at_position_completion')
+        append(code=row['code'],name=row['name'],record_id=row['record_id'],
+            stage='initial_quantity_cap_capture_interrupted', observed_at_epoch=now,
+            fields={**source,'capture_disposition':'interrupted','capture_interruption_reason':reason,
+                'capture_position_terminal_sha256':hashlib.sha256(json.dumps(event,sort_keys=True,
+                    separators=(',',':'),ensure_ascii=False,allow_nan=False).encode()).hexdigest(),
+                'actual_order_submitted':False,'broker_order_forbidden':True,'runtime_effect':False})
+
+
 def quote_route_binding(item, market_route, *, legacy=False):
     """Bind an existing local quote receipt without inferring fill venue.
 

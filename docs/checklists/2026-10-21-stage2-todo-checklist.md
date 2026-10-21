@@ -117,6 +117,8 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
 ## 미완료 원천 진단 인계
 
 - [ ] `[InitialQuantityProducerConsumerRepair1010] 매수수량 원천·fact·시간창·장후 소비 결손 수리와 자연 수용` (`Due: 2026-10-21`, `Slot: POSTCLOSE`, `TimeWindow: 16:30~23:59`, `Track: RuntimeStability`)
+  - 즉시 검증 결과: 고정11건 joint와 private successor native PASS, 원 큰 행8건의 해당 결손0건·carry_parent. 원 운영 stage/정책은 보존하며 원 generation을 새 reader로 동일 재현했다고 주장하지 않는다. 준비한 successor의 정식 인계·현재성/실제 PID는 OPEN이다. [소비 근거](/home/ubuntu/KORStockScan/tmp/quantity-currentness-integration-20261021/joint-result.json).
+  - 10/21 즉시 재개: 자연 종료는 실제 전환 조건이며 과거 source 검증은 지금 수행한다. 대형 fingerprint→native index, 같은 semantic read의 물리 SHA, gzip 논리 full-source 검증과 stable cache key를 보완했다. f428은 최신 준비b765와 별도였으므로 격리 통합 후 native joint/후속 generation과 배포 전 currentness를 다시 확인한다. [정정·원인·검증](../audits/postclose-root-cause-recovery-review-2026-10-19.md#수량-통합-검증-즉시-재개와-후보-구분--2026-10-21).
   - Source closure deployment: candidate81 preflight retained Main904787; exact-AI archive/index handoff repaired with116 source-store and133 producer tests. Bounded four-file historical enrollment, native trailing currentness, final ordered deployment and detector consumption remain pending under the same owner.
   - Candidate preflight repair: code-addressed native monitor proof with `publish_current=False` preserves incumbent visibility; 534 targeted tests pass. Actual ordered deployment/PID acceptance remains separate.
   - 2026-10-21 복구 검증: 원본 ID/해시와 현재 수집 계약을 검증한 역사 진단 분리. 이 세션 배포·재기동 승인. 코드/원천 복구와 실제 배포·PID 및 금일 새 결손 탐지 확인은 별도 수용. [원인·복구·회귀·소비 근거](../audits/postclose-root-cause-recovery-review-2026-10-19.md#historical-source-resolution-and-authorized-release--2026-10-21).

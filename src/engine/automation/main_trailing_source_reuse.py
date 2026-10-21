@@ -136,18 +136,18 @@ def collect_proofs(data_root, original_manifest_path):
             _,sha=read_json(proof_path,private=True,limit=4096)
             add(name,proof['source_stat'],proof_path,sha,'native_monitor_snapshot_writer')
 
-    # Older completed cohorts were enrolled once by the native streaming
-    # reader. Its exact code/epoch/source checks own those existing proofs.
-    from .main_trailing_completed_store import offline_binding
-    for day in manifest['consumed_dates']:
-        bound,body=offline_binding(root,day)
-        if body:
-            for name in body['offline_logical_generations']:
-                epoch=body['offline_source_epochs'][name]
-                gen=body['offline_logical_generations'][name]
-                if Path(name).is_file() and expected.get(name)==gen:
-                    add(name,_receipt_stat(epoch),bound['manifest_path'],
-                        bound['manifest_generation']['sha256'],'native_completed_source_enrollment')
+    # The approved frozen input binds exact enrollment bytes. Their byte proofs
+    # survive reader changes; current semantic extraction bindings do not.
+    from .main_trailing_completed_store import original_byte_observations
+    for name,generation in expected.items():
+        path=Path(name)
+        if (path.parent.parent.parent==root/'report/main_trailing_completed_source'
+                and path.parent.name=='generations' and path.name.startswith('offline-')):
+            for proof in original_byte_observations(root,path,generation):
+                source=proof['path']
+                if Path(source).is_file() and expected.get(source)==proof['generation']:
+                    add(source,_receipt_stat(proof['source_epoch']),proof['issuer_path'],
+                        proof['issuer_sha256'],'native_completed_source_enrollment')
 
     # A native issued research report binds each SHA to its observed stat epoch.
     pointer_path=root/'threshold_cycle/main_stop_confirmation'/f'committed_{source_date}.json'

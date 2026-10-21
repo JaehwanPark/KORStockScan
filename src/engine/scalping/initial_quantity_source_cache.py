@@ -140,7 +140,9 @@ def fingerprint(trades,path,horizon):
     if len(dates) != 1:
         raise ValueError('quantity_capture_cache_date_invalid')
     captures, _ = _quantity_capture_lifecycle_sources(path.parents[1], next(iter(dates)))
-    leaf=byte_generation(path) if path.exists() else None
+    from src.engine.automation.main_trailing_source_store import generation
+    leaf=(byte_generation(path) if path.stat().st_size<=4*1024*1024
+          else generation(path.parents[1], path)) if path.exists() else None
     archive=Path(str(path)+'.archive_receipt.json')
     engine=Path(__file__).resolve().parents[1]
     readers={name:engine/'scalping'/name for name in (
@@ -148,6 +150,7 @@ def fingerprint(trades,path,horizon):
         'initial_quantity_cap_observation.py','initial_quantity_type.py')}
     readers['utils/jsonl_io.py']=engine.parent/'utils/jsonl_io.py'
     readers['lifecycle/research_input_budget.py']=engine/'lifecycle/research_input_budget.py'
+    readers['lifecycle/research_json_stream.py']=engine/'lifecycle/research_json_stream.py'
     readers['automation/main_trailing_source_store.py']=engine/'automation/main_trailing_source_store.py'
     reader={name:hashlib.sha256(path.read_bytes()).hexdigest()
             for name,path in readers.items()}
@@ -159,7 +162,9 @@ def fingerprint(trades,path,horizon):
     execution_fields = ('trade_id','record_id','stock_code','entry_date','exit_date',
                         'entry_at_fact_buy_time','exit_at','buy_qty','buy_price','sell_price')
     allocated = any(r.get('cost_basis') == 'broker_confirmed_total_allocated' for r in trades)
+    from src.engine.lifecycle.holding_window_generation import source_stat
     return dict(schema='initial_quantity_source_features_v6' if allocated else 'initial_quantity_source_features_v5',source=leaf,
+                physical_source_stat=list(source_stat(path.stat())) if path.exists() else None,
                 archive=byte_generation(archive) if archive.exists() else None,
                 capture_lifecycle_generation=captures,
                 reader=reader, horizon=horizon,
@@ -214,9 +219,10 @@ def join(trades, *, data_dir, scan_seconds=None, source_receipts=None, price_hor
                 cached=None
                 base=base/('repair-'+uuid.uuid4().hex)
         if cached is None:
-            receipts={};timing={}
+            receipts={};timing={};byte_proofs={}
             cached=_join_post_fill_paths_uncached(rows,data_dir=data_dir,source_receipts=receipts,
-                scan_seconds=timing,price_horizon_seconds=price_horizon_seconds)
+                scan_seconds=timing,price_horizon_seconds=price_horizon_seconds,
+                source_byte_proofs=byte_proofs)
             if fingerprint(rows,raw,price_horizon_seconds)!=before:raise ValueError('quantity_raw_generation_changed')
             def records():
                 for tid,bucket in sorted(cached.items()):
@@ -227,7 +233,8 @@ def join(trades, *, data_dir, scan_seconds=None, source_receipts=None, price_hor
                             for item in value:yield dict(trade_id=tid,kind='list',field=field,value=encode(item))
                         else:yield dict(trade_id=tid,kind='scalar',field=field,value=encode(value))
             tree=storage.write_tree(base,records())
-            body=dict(manifest=before,tree=tree,tree_root=str(base.resolve()),source_receipts=receipts)
+            body=dict(manifest=before,tree=tree,tree_root=str(base.resolve()),source_receipts=receipts,
+                      source_byte_proofs=byte_proofs)
             _atomic(base/'index.json',{**body,'sha256':_digest(body)})
             if index!=base/'index.json':
                 # Only this disposable lookup changes. The immutable repaired
@@ -235,10 +242,24 @@ def join(trades, *, data_dir, scan_seconds=None, source_receipts=None, price_hor
                 _atomic(index,{**body,'sha256':_digest(body)})
             if source_receipts is not None:source_receipts.update(receipts)
             if scan_seconds is not None:scan_seconds.update(timing)
+            value={**body,'sha256':_digest(body)}
         # Cold lists already own an admitted claim. Warm decoded features are
         # admitted before they escape this partition into the retained result.
         result.partitions.append(cached)
         if fingerprint(rows,raw,price_horizon_seconds)!=before:raise ValueError('quantity_raw_generation_changed')
+        # Reuse only the full byte hash produced in this exact native epoch;
+        # every semantic validator still executes against the current readers.
+        from src.engine.infrastructure.validation_digest_session import ACTIVE
+        active=ACTIVE.get()
+        proof=value.get('source_byte_proofs',{}).get(day)
+        if active is not None and proof is not None and before.get('source',{}).get('source_stat'):
+            observed=before['physical_source_stat']
+            if (active.binding['role']!='postclose' or list(proof['source_stat'])!=list(observed)
+                    or proof['generation']['path']!=raw.name
+                    or proof['generation']['size']!=observed[2]):
+                raise ValueError('quantity_feature_byte_proof_unbound')
+            active.admit_native_generation(raw,proof['generation'],observed,
+                                           proof_sha256=value['sha256'])
         result.update(cached)
     return result
 
