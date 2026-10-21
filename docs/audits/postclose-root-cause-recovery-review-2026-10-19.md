@@ -1280,3 +1280,14 @@ trailing의 최초 직접 재생은 all_scope_assembly_code_changed로 차단됐
 기존 수량 producer를 추가 수리했다. large-row projection은 raw broker venue/source/exchange/flag와 지정 출처·route를 빠짐없이 전달한다(기존 크기 제한 유지). fill→cap-source→row에 `actual_execution_venue_verified`, raw broker venue와 지정 출처를 함께 보존하며, 운영 KRX/미검증 입력은 `venue_provenance=unverified_conditional`로 남긴다. 정확한 route/epoch 가격 관측은 별도 CF 근거이며 물리 체결소나 실제 체결 성과를 뜻하지 않는다. 명시 native KRX/NXT는 원문 근거가 있을 때만 verified다. 운영 기본값과 실제 증빙의 경계를 native 소비 결과로 확인한 보완이며 임계치·수량 상한 변경은 없다.
 
 후속 수량/monitor/cache/timeout411 PASS, 추가 exact code 인계16 PASS, compile/diff PASS다. 기존 주요 source1,344·추가 계약514·holding18·전체 의존성 인계16·이전 세대9 PASS는 앞 단계 범위의 결과로 구분한다. 최종 native 생산자에서 같은 census·원 pipeline·historical8 disposition을 보존한 후속 report/timeout/code 전용 stage를 생성하고 마지막 소비를 확인한다. 원 공용 committed/정책은 바꾸지 않는다. [최초 native 실패와 차이](../../tmp/operational-market-defaults-20261021/quantity-rebuild-row-differences.json), [최종 준비 증거](../../tmp/operational-market-defaults-20261021/final-candidate/readiness.json).
+
+
+### 운영 KRX SOR 최종 통합 후보 준비 완료
+
+최종 code commit **`b82a846205daf5f592fe27977db4b80a67ed78c6`**, managed release `/home/ubuntu/KORStockScan-runtime-releases/operator-market-20261021-b82a84620`을 준비했다. acbef는 수량 물리 검증 표시 보완 전의 미선택 증거이며 최종 배포 대상으로 사용하지 않는다. [최종 readiness](../../tmp/operational-market-defaults-20261021/final-candidate/readiness.json).
+
+native active/delay/stop/holding 인계·4family capability·128scope/76,800row/598hit parity 불일치0·trailing20,824scope(52.42초/RSS182,576KiB)·최종 운영 report consumer PASS다. 수량은 같은 frozen census/pipeline 원천으로 report/timeout을 새 reader에 맞춰 생성하고 full joint/native producer→code 전용 prepared stage→bounded 소비까지108.90초에 통과했다. 운영 귀속된 fill은 cap-source/row/shape 모두 raw UNKNOWN·verified=false를 유지하며 가격 route 검증과 물리 venue 증명을 구분한다. 원 공용 committed/정책 참조는 보존했고 source_gap의 역사 제외8건은 정확한 ID/사유/해시가 원 disposition과 같다. 기존 ea68 수량 독자도 사후 findings[]/bounded 검증 PASS다.
+
+code review 범위의 남은 finding0. 원본9SHA·선택ea68/PID1724066/start19233026/cwd와 collector epoch1792547808026387070 running을 보존했다. 기존19297/0b36/비상시/최초 전환/수량/지연/약세 연구 ancestry를 모두 포함한다. candidate_preflight_ready=true, actual_transition_ready=false이며 선택/재기동/전환 예약/실제 REG·REMOVE/provider/주문/Telegram0이다. 장 종료까지 대기하는 세션/자동 작업도 만들지 않았다. 다음 자연 종료/PID·quote/horizon 소비는 기존DirectFamilyPreopenPolicyHandoff에서 확인하고, 원 미복원 호가·actual 비용·최초 arm 등의 사실은 별도 보존한다.
+
+최종 변경량은 기준09a 대비 non-test source13파일 +371/-67, tests11파일 +249/-28이며 doc4파일에 운영 경계와 검토를 기록했다. 순증은 공통 기본값/직접 소비와 raw/authority 전달, bounded projection 및 exact historical code profile에 필요하다. 새 module/entrypoint/wrapper/worker/스케줄은 없고 교체·retained 경로는 앞 표와 같다. 미검증 표시의 최종 관련411·인계16 PASS; 앞선1,344/514/18/16/9는 겹치는 단계별 검사이므로 고유 검사 수로 합산하지 않는다.
