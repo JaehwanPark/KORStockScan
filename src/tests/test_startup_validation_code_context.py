@@ -1078,37 +1078,62 @@ assert_no_forbidden_attempts()
 
 
 @pytest.mark.parametrize('fault', [None,'missing','scope','date','release','full','source',
-    'bootstrap','activation','source_date','native_pid','prepared_manifest','index','authority'])
-def test_isolated_prepared_native_closure_keeps_full_bootstrap_and_exact_sources(request_fixture,monkeypatch,fault):
+    'bootstrap','activation','source_date','native_pid','prepared_manifest','index','authority',
+    'extra_generation','schema'])
+@pytest.mark.parametrize('consumed_ancestry', [False, True])
+def test_isolated_prepared_native_closure_keeps_full_bootstrap_and_exact_sources(request_fixture,monkeypatch,fault,consumed_ancestry):
     f=request_fixture;main=_main_fixture(f,monkeypatch);proof=main['proof'];request=f['request']
     data=Path(request['data_root']);commit=f['original_commit'];native=proof['native_verification']
+    prepared_commit='a'*40 if consumed_ancestry else commit
     closure=proof['closure'];closure['manifests']={};proof['historical_semantic_code_sources']={}
     directory=data/'runtime/policy_bootstrap/prepared'/DAY/'original';directory.mkdir(parents=True)
     prepared=directory/'readiness.json'
     receipt=dict(schema='next_preopen_readiness_v1',status='prepared_verified',target_date=DAY,
-        source_date=native['source_date'],selected_release_commit=commit,runtime_effect=False,
+        source_date=native['source_date'],selected_release_commit=prepared_commit,runtime_effect=False,
         actual_pid_consumed=False,manifest_content_sha256='b'*64,
         activation_candidate=dict(bundle_sha256=proof['policy_sha256']),policy_receipts=[])
     refs={}
     for name,digest in (('manifest_path','manifest_file_sha256'),('env_path','env_sha256'),
             ('verification_path','verification_sha256'),('controller_path','controller_sha256'),
             ('summary_path','summary_sha256')):
-        source=directory/(name+'.json')
-        source.write_text(json.dumps(dict(manifest_sha256='b'*64,target_date=DAY,selected_release_sha=commit)))
+        source=directory/(('runtime_policy_bootstrap_'+DAY) if name=='manifest_path' else name)
+        source=source.with_suffix('.json')
+        source.write_text(json.dumps(dict(manifest_sha256='b'*64,target_date=DAY,selected_release_sha=prepared_commit)))
         receipt[name]=str(source);receipt[digest]=C._sha(source);refs[str(source)]=C._sha(source)
     prepared.write_text(json.dumps(receipt));sha=C._sha(prepared);refs[str(prepared)]=sha
     index=directory.parent/'latest.json'
     index.write_text(json.dumps(dict(schema='next_preopen_readiness_index_v1',target_date=DAY,
         receipt_path=str(prepared),receipt_sha256=sha)))
     record=dict(schema='startup_native_prepared_preopen_closure_v1',target_date=DAY,
-        selected_release_commit=commit,prepared_receipt_path=str(prepared),sources=refs,
+        selected_release_commit=prepared_commit,prepared_receipt_path=str(prepared),sources=refs,
         prepared_manifest_sha256='b'*64,full_bootstrap=dict(path=receipt['manifest_path'],
             sha256=receipt['manifest_file_sha256'],write=False,full_native_verification=True,
             result=dict(status='pass',findings=[],target_date=DAY,manifest_sha256='b'*64)))
     closure['preserved_generations']={sha:record}
+    if consumed_ancestry:
+        native.update(validation_scope='intraday_preserved_historical_generation',
+            handoff_basis='intraday_preserved_preopen_generation_current_postclose_resealed',
+            preserved_preopen_commit=prepared_commit)
+        proof['delegation_basis']=C._native_main_basis(native)
+        request['manifest']['selected_release_sha']=prepared_commit
+        path=data/'runtime/policy_bootstrap/intraday_handoff'/DAY/(commit+'.json')
+        path.parent.mkdir(parents=True)
+        handoff=dict(schema='intraday_policy_preserving_release_handoff_v1',status='prepared_verified',
+            target_date=DAY,selected_release_commit=commit,release_root=str(f['selected']),
+            actual_pid_consumed=False,manifest_sha256='d'*64,prepared_receipt_path=str(prepared),
+            prepared_receipt_sha256=sha,frozen_files={**refs,str(index):C._sha(index)})
+        path.write_text(json.dumps(handoff));live_sha=C._sha(path)
+        consumed=path.with_name(commit+'.consumed.json')
+        consumed.write_text(json.dumps(dict(schema='intraday_policy_preserving_consumption_v1',status='pass',
+            actual_pid_consumed=True,handoff_sha256=live_sha,manifest_sha256='d'*64,target_date=DAY,
+            selected_release_commit=commit,release_root=str(f['selected']),pid_identity={'pid':123,'start_ticks':'456'})))
+        closure['preserved_generations'][live_sha]=dict(schema='startup_native_preserved_preopen_closure_v1',
+            target_date=DAY,selected_release_commit=commit,handoff_path=str(path),consumed_path=str(consumed),
+            manifest_sha256='d'*64,prepared_manifest_sha256='b'*64,full_bootstrap=record['full_bootstrap'],
+            sources={**handoff['frozen_files'],str(path):live_sha,str(consumed):C._sha(consumed)})
     proof['source_hashes'].update(C._preserved_native_sources(proof));request['source_hashes'].update(proof['source_hashes'])
     if fault=='missing':closure['preserved_generations']={}
-    elif fault=='scope':native['validation_scope']='intraday_preserved_historical_generation'
+    elif fault=='scope':native['validation_scope']='current_full_contract' if consumed_ancestry else 'intraday_preserved_historical_generation'
     elif fault=='date':record['target_date']='2026-10-20'
     elif fault=='release':record['selected_release_commit']='e'*40
     elif fault=='full':record['full_bootstrap']=None
@@ -1120,6 +1145,8 @@ def test_isolated_prepared_native_closure_keeps_full_bootstrap_and_exact_sources
     elif fault=='prepared_manifest':record['prepared_manifest_sha256']='e'*64
     elif fault=='index':index.write_text('{}')
     elif fault=='authority':record['full_bootstrap']['write']=True
+    elif fault=='extra_generation':closure['preserved_generations']['e'*64]=dict(record)
+    elif fault=='schema':record['schema']='startup_native_preserved_preopen_closure_v1'
     _write_request(f,request)
     result=_child(f,MAIN_CHILD_SETUP+'''
 proof=request['main_preparation_code_handoff']

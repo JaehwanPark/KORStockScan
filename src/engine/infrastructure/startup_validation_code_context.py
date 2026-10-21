@@ -631,7 +631,7 @@ def _preserved_native_sources(proof):
         return refs
     if (native.get('validation_scope')!='intraday_preserved_historical_generation'
             or _native_main_basis(native)!='same_invocation_selected_intraday_native_validation'
-            or not isinstance(records,dict) or len(records)!=1):
+            or not isinstance(records,dict) or len(records) not in {1,2}):
         raise ValueError('startup_preserved_native_scope_invalid')
     data=Path(proof['policy_path']).parents[3];day=proof['target_date']
     commit=proof['selected_release_commit'];selected=proof['selected_release_root']
@@ -677,6 +677,22 @@ def _preserved_native_sources(proof):
             or _json(bootstrap).get('manifest_sha256')!=value['manifest_content_sha256']):
         raise ValueError('startup_preserved_full_bootstrap_unbound')
     refs[str(bootstrap)]=full['sha256']
+    if len(records)==2:
+        # A full native handoff can also visit its original prepared generation.
+        # Admit only that exact ancestor and recheck its complete native contract.
+        prepared_sha=handoff['prepared_receipt_sha256']
+        ancestor=records.get(prepared_sha)
+        if (set(records)!={sha,prepared_sha} or not isinstance(ancestor,dict)
+                or ancestor.get('prepared_receipt_path')!=str(prepared)
+                or ancestor.get('full_bootstrap')!=full):
+            raise ValueError('startup_preserved_native_ancestry_invalid')
+        ancestor_refs=_preserved_native_sources(dict(proof,
+            selected_release_commit=value.get('selected_release_commit'),
+            native_verification=dict(native,validation_scope='current_full_contract'),
+            closure=dict(closure,preserved_generations={prepared_sha:ancestor})))
+        if any(path in refs and refs[path]!=digest for path,digest in ancestor_refs.items()):
+            raise ValueError('startup_preserved_native_ancestry_source_changed')
+        refs.update(ancestor_refs)
     return refs
 
 
