@@ -2108,6 +2108,18 @@ def _quantity_sell_receipt_observations(events: list[HoldingEvent], *, record_id
                     stock["last_watching_ai_attempt_decision_trace_id"] = native.get("native_receipt_entry_trace_id")
                 identity = _native_sell_receipt_identity(
                     stock, key[0], record, "sell_completed", restored, received_at)
+                # Issued v1 UNKNOWN-venue wrappers predate these two metadata
+                # fields. Authenticate the original complete identity; neither
+                # omission may replace custody, the source gap, or raw clocks.
+                venue_metadata = {"native_receipt_operational_venue",
+                                  "native_receipt_venue_assignment_authority"}
+                if (schema == "broker_position_sell_receipt_v1"
+                        and set(identity) - set(native_fields) == venue_metadata
+                        and set(native_fields) <= set(identity)
+                        and native.get("native_receipt_execution_venue_status") == "unknown_preserved"
+                        and native.get("native_receipt_source_gap") == "actual_execution_venue_unresolved"
+                        and restored.get("actual_execution_venue") == "UNKNOWN"):
+                    identity = {k: v for k, v in identity.items() if k not in venue_metadata}
                 identity_valid = bool(identity and set(identity) == set(native_fields)
                     and all(str(native_fields[k]) == str(v) for k, v in identity.items()))
                 observation_provenance_valid = observation_provenance_valid or (
