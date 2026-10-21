@@ -4125,6 +4125,63 @@ REVIEWED_P5_ANCESTRY_DEPENDENCY_VARIANTS = {
 }
 
 
+# Reviewed archive/source/TTL recovery extends one complete P5 generation.
+# Preserve every issued predecessor; unknown or mixed bytes still fail closed.
+# Review: docs/audits/postclose-root-cause-recovery-review-2026-10-19.md.
+REVIEWED_POSTCLOSE_RECOVERY_HASHES = {'src/engine/ai/holding_vote_replay_source.py': 'cd40fbcbfabcd43430b0817bf284e7745c1cf4a1cbb4fee62e238a2d1de51653',
+ 'src/engine/automation/main_stop_postclose.py': '873679d1d6169c84d7480953c23db66d9ed3af8e44e60fe4ae74e0588645b40e',
+ 'src/engine/automation/main_trailing_source_assembler.py': 'af2d5343723e53093eb2fcc8debcf70b7d13c964b448ff10a094d61971ad4d29',
+ 'src/engine/infrastructure/validation_digest_session.py': '5a8fc66dc1cb1626de559efb024e2ee30afa9e68bce83fd6c31be2456f677d86',
+ 'src/engine/error_detectors/artifact_freshness.py': '09c1d34cc554ef68060125590e84545e75a335add5ed2b87043b4a6a6b2eafb9',
+ 'deploy/run_threshold_cycle_postclose.sh': 'c5e60200a9cf27839204a8fd7d46733f0c10c1a4a0ddeef5bfae35f683b29470',
+ 'src/engine/automation/postclose_finalization_generation.py': 'add8eaa8de08300a3da458e880ecf24884da4d0467b2ab0c6da0eb09c8349fa7'}
+REVIEWED_POSTCLOSE_RECOVERY_PAIRS = {'src/engine/ai/holding_vote_replay_source.py': (('51a90688f175c9fc242367811e4aab8c2509d1287e8b92d3cdf340badc68421a',
+                                                  'cd40fbcbfabcd43430b0817bf284e7745c1cf4a1cbb4fee62e238a2d1de51653'),
+                                                 ('52a1e362c6ac8ad551428a840f96e100a5bb7ee679555ebe2933dfa2f5b95559',
+                                                  'cd40fbcbfabcd43430b0817bf284e7745c1cf4a1cbb4fee62e238a2d1de51653'),
+                                                 ('6aa1db742f4f2354c17ed9bd24cfb1bcfaace5e0130a8d0dceef84343ea6a428',
+                                                  'cd40fbcbfabcd43430b0817bf284e7745c1cf4a1cbb4fee62e238a2d1de51653')),
+ 'src/engine/automation/main_trailing_source_assembler.py': (('4ad0ea7a311c1ee6745f6bec364c92582fd3b2f7b591291970692fa28295951b',
+                                                              'af2d5343723e53093eb2fcc8debcf70b7d13c964b448ff10a094d61971ad4d29'),
+                                                             ('921fcb2621dfd444e029fe6ddd8bd9c1d933c4fbbc0f4dda2ec0b3ae97939fa8',
+                                                              'af2d5343723e53093eb2fcc8debcf70b7d13c964b448ff10a094d61971ad4d29'),
+                                                             ('e64c9943e0894558ded208637e4f2ef87565fa469745b299cc872ecd1d4c3bfa',
+                                                              'af2d5343723e53093eb2fcc8debcf70b7d13c964b448ff10a094d61971ad4d29'),
+                                                             ('edf4f62628db48829848fb12b6d5d3446c9c82d49223e3676e4d4dac18fe4b25',
+                                                              'af2d5343723e53093eb2fcc8debcf70b7d13c964b448ff10a094d61971ad4d29')),
+ 'deploy/run_threshold_cycle_postclose.sh': (('594cd0a6613cbcd5c642ba818a8468fcafbeb4474a7cbd08e1b013ad0556911c',
+                                              'c5e60200a9cf27839204a8fd7d46733f0c10c1a4a0ddeef5bfae35f683b29470'),
+                                             ('e56ebd50f596b142083df248f301f8bce8a7d55ca67dbeb646224e5fb17dd9c5',
+                                              'c5e60200a9cf27839204a8fd7d46733f0c10c1a4a0ddeef5bfae35f683b29470')),
+ 'src/engine/automation/main_stop_postclose.py': (('616a22f236d89de67e18001dbb3564aca6ed5b87e1b26ade3a119a711e1ab057',
+                                                   '873679d1d6169c84d7480953c23db66d9ed3af8e44e60fe4ae74e0588645b40e'),
+                                                  ('ad0eb4c9eea9b260fb63bed150ff8882671ae126500d005dc00af5f3361dd3ae',
+                                                   '873679d1d6169c84d7480953c23db66d9ed3af8e44e60fe4ae74e0588645b40e'),
+                                                  ('d20e955fdbc79529efd72d10957cf329acc0d0447c54f798ebfd59ecb87a978b',
+                                                   '873679d1d6169c84d7480953c23db66d9ed3af8e44e60fe4ae74e0588645b40e')),
+ 'src/engine/automation/postclose_finalization_generation.py': (('1ac7c5d9a4269f73a9a9f82656d22a277689813b32c94b3a526e0b37452d3041',
+                                                                 'add8eaa8de08300a3da458e880ecf24884da4d0467b2ab0c6da0eb09c8349fa7'),
+                                                                ('d4d4d0819c4a1845baf10bcaf7935137aa9d925544a374a8c47ead6259f51e43',
+                                                                 'add8eaa8de08300a3da458e880ecf24884da4d0467b2ab0c6da0eb09c8349fa7'),
+                                                                ('e4454cb3da9c7542177cb49f30579970978717538baae4fd3bab9dfbdf269b63',
+                                                                 'add8eaa8de08300a3da458e880ecf24884da4d0467b2ab0c6da0eb09c8349fa7')),
+ 'src/engine/infrastructure/validation_digest_session.py': (('87ea421cd28cd81d06fabecbfeed4c03d041b771f31dba6057857283a53828da',
+                                                             '5a8fc66dc1cb1626de559efb024e2ee30afa9e68bce83fd6c31be2456f677d86'),),
+ 'src/engine/error_detectors/artifact_freshness.py': (('edd034fef32d08c01ea52e3a0022a5ac185d45bde9ff66ab190fdbc4fd7221e6',
+                                                       '09c1d34cc554ef68060125590e84545e75a335add5ed2b87043b4a6a6b2eafb9'),)}
+REVIEWED_POSTCLOSE_RECOVERY_DEPENDENCY_VARIANTS = {
+    key: {**value,
+        'selector_path': 'src/engine/ai/holding_vote_replay_source.py',
+        'selector_sha256': REVIEWED_POSTCLOSE_RECOVERY_HASHES['src/engine/ai/holding_vote_replay_source.py'],
+        'dependencies': {**value['dependencies'], **REVIEWED_POSTCLOSE_RECOVERY_HASHES},
+        'contract_extensions': {
+            origin: {name: REVIEWED_POSTCLOSE_RECOVERY_HASHES.get(os.path.normpath(name), sha)
+                     for name, sha in paths.items()}
+            for origin, paths in value['contract_extensions'].items()},
+    } for key, value in REVIEWED_P5_ANCESTRY_DEPENDENCY_VARIANTS.items()
+}
+
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -4242,6 +4299,10 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     p5_ancestry_present = any((root / name).is_file()
         and hashlib.sha256(candidate_bytes(name)).hexdigest() == sha
         for name, sha in REVIEWED_P5_ANCESTRY_HASHES.items())
+    postclose_recovery_selector = 'src/engine/ai/holding_vote_replay_source.py'
+    postclose_recovery_present = ((root / postclose_recovery_selector).is_file()
+        and hashlib.sha256(candidate_bytes(postclose_recovery_selector)).hexdigest()
+            == REVIEWED_POSTCLOSE_RECOVERY_HASHES[postclose_recovery_selector])
     post_sell_source_present = any((root / name).is_file()
         and hashlib.sha256(candidate_bytes(name)).hexdigest() == sha
         for name, sha in REVIEWED_POST_SELL_SOURCE_HASHES.items())
@@ -4253,7 +4314,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         dependencies = generations.get(trigger_sha, {})
         # New exact selectors precede their historical parent. The first match
         # selects one complete generation, never per-file SHA alternatives.
-        for variants in (REVIEWED_P5_ANCESTRY_DEPENDENCY_VARIANTS,
+        for variants in (REVIEWED_POSTCLOSE_RECOVERY_DEPENDENCY_VARIANTS,
+                         REVIEWED_P5_ANCESTRY_DEPENDENCY_VARIANTS,
                          REVIEWED_OPERATOR_MARKET_DEPENDENCY_VARIANTS,
                          REVIEWED_POST_SELL_SOURCE_DEPENDENCY_VARIANTS,
                          REVIEWED_HOLDING_INPUT_DEPENDENCY_VARIANTS,
@@ -4418,7 +4480,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
             extensions = {name: REVIEWED_POST_SELL_SOURCE_HASHES.get(repository_name(name), sha)
                           for name, sha in extensions.items()}
         if operator_market_present:
-            operator_variants = (REVIEWED_P5_ANCESTRY_DEPENDENCY_VARIANTS if p5_ancestry_present
+            operator_variants = (REVIEWED_POSTCLOSE_RECOVERY_DEPENDENCY_VARIANTS if postclose_recovery_present
+                                 else REVIEWED_P5_ANCESTRY_DEPENDENCY_VARIANTS if p5_ancestry_present
                                  else REVIEWED_OPERATOR_MARKET_DEPENDENCY_VARIANTS)
             operator_variant = operator_variants.get((trigger, trigger_sha))
             if operator_variant is None:
@@ -4426,6 +4489,9 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
             dependencies = {**dependencies, **operator_variant['dependencies']}
             extensions = {name: REVIEWED_OPERATOR_MARKET_HASHES.get(repository_name(name), sha)
                           for name, sha in extensions.items()}
+            if postclose_recovery_present:
+                extensions = {name: REVIEWED_POSTCLOSE_RECOVERY_HASHES.get(repository_name(name), sha)
+                              for name, sha in extensions.items()}
         dependencies_by_trigger[trigger] = (trigger_sha, dependencies)
     for key, name in paths.items():
         after = candidate_bytes(name)
@@ -4500,7 +4566,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
                 or pair == REVIEWED_AUXILIARY_HISTORY_SOURCES.get(name)):
             changed.append(name)
             continue
-        if (pair in REVIEWED_SOURCE_INTEGRATION_PAIRS.get(repository_name(name), ())
+        if (pair in REVIEWED_POSTCLOSE_RECOVERY_PAIRS.get(repository_name(name), ())
+                or pair in REVIEWED_SOURCE_INTEGRATION_PAIRS.get(repository_name(name), ())
                 or pair in REVIEWED_SOURCE_READER_PAIRS.get(repository_name(name), ())
                 or pair in REVIEWED_FROZEN_INPUT_PAIRS.get(repository_name(name), ())
                 or pair in REVIEWED_BROKER_CUSTODY_PAIRS.get(repository_name(name), ())

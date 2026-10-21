@@ -1771,8 +1771,9 @@ def test_archive_authority_successor_accepts_the_issued_full_reader_origin(avg_d
         *(['src/engine/infrastructure/startup_validation_code_context.py'] if generation=='source_integration' else [])))
     for fault in ([None,'missing','dirty','committed_change']+(['parent_mix'] if generation in ('sqlite_lifecycle','retired_review','clean_sqlite','delay_cleanup') else []))])
 def test_source_reader_handoff_preserves_issued_policy_and_exact_dependencies(tmp_path, family, fault, reader_path,generation, policy_origin=None):
-    p5_ancestry = generation == 'p5_ancestry'
-    operator_market = generation in ('operator_market', 'p5_ancestry')
+    postclose_recovery = generation == 'postclose_recovery'
+    p5_ancestry = generation in ('p5_ancestry', 'postclose_recovery')
+    operator_market = generation in ('operator_market', 'p5_ancestry', 'postclose_recovery')
     if p5_ancestry:
         generation = 'operator_market'
     issued_post_sell_source = generation == 'post_sell_source'
@@ -1840,7 +1841,8 @@ def test_source_reader_handoff_preserves_issued_policy_and_exact_dependencies(tm
         names.update(handoff.REVIEWED_DELAY_MACHINE_PARENT_HASHES)
     for name in names:
         path = root/name; path.parent.mkdir(parents=True,exist_ok=True)
-        path.write_bytes(subprocess.check_output(['git','-C',str(canonical),'show','b82a84620:'+os.path.normpath(name)]) if operator_market and not p5_ancestry and name!='src/engine/automation/intraday_release_handoff.py' else
+        path.write_bytes(subprocess.check_output(['git','-C',str(canonical),'show','e3665f20a:'+os.path.normpath(name)]) if p5_ancestry and not postclose_recovery and name!='src/engine/automation/intraday_release_handoff.py' else
+            subprocess.check_output(['git','-C',str(canonical),'show','b82a84620:'+os.path.normpath(name)]) if operator_market and not p5_ancestry and name!='src/engine/automation/intraday_release_handoff.py' else
             subprocess.check_output(['git','-C',str(canonical),'show','19297ead7:'+os.path.normpath(name)]) if issued_post_sell_source and name!='src/engine/automation/intraday_release_handoff.py' else
             subprocess.check_output(['git','-C',str(canonical),'show','0b36f17fc:'+os.path.normpath(name)]) if issued_holding_input and name!='src/engine/automation/intraday_release_handoff.py' else
             subprocess.check_output(['git','-C',str(canonical),'show','eeaed90f6:'+os.path.normpath(name)]) if issued_nonfixed and name!='src/engine/automation/intraday_release_handoff.py' else
@@ -2182,3 +2184,17 @@ def test_operator_quantity_provenance_handoff_retains_complete_generation(tmp_pa
 def test_p5_ancestry_handoff_keeps_complete_operator_generation(tmp_path,family,fault):
     test_source_reader_handoff_preserves_issued_policy_and_exact_dependencies(
         tmp_path,family,fault,tuple(handoff.REVIEWED_P5_ANCESTRY_HASHES),'p5_ancestry')
+
+
+@pytest.mark.parametrize('family',['main_stop','holding_vote','pre_submit_delay'])
+@pytest.mark.parametrize('fault',[None,'missing','parent_mix','committed_change','dirty'])
+def test_postclose_recovery_handoff_keeps_complete_reviewed_generation(tmp_path,family,fault):
+    paths=('src/engine/ai/holding_vote_replay_source.py',
+        'src/engine/automation/main_stop_postclose.py',
+        'src/engine/automation/main_trailing_source_assembler.py',
+        'src/engine/infrastructure/validation_digest_session.py',
+        'src/engine/error_detectors/artifact_freshness.py',
+        'deploy/run_threshold_cycle_postclose.sh',
+        'src/engine/automation/postclose_finalization_generation.py')
+    test_source_reader_handoff_preserves_issued_policy_and_exact_dependencies(
+        tmp_path,family,fault,paths,'postclose_recovery')

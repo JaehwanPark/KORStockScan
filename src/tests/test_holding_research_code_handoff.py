@@ -187,7 +187,9 @@ def test_native_handoff_rechecks_helper_and_provenance_closure(candidate, depend
             c.committed[dependency] = path.read_bytes()
     expected = ('missing' if fault in {'missing', 'symlink'} else
                 'dirty' if fault == 'dirty_git' else 'unreviewed')
-    with pytest.raises(ValueError, match='entry_consumer_reviewed_dependency_' + expected):
+    error = (r'entry_consumer_(?:reviewed_dependency_missing|code_source_symlink)'
+             if fault == 'symlink' else 'entry_consumer_reviewed_dependency_' + expected)
+    with pytest.raises(ValueError, match=error):
         c.verify()
 
 
