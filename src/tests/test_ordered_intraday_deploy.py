@@ -375,6 +375,7 @@ def driver(tmp_path, monkeypatch):
     d.directory = runtime / 'transition'; d.directory.mkdir()
     d.state = {}; d.phase = 'preflight'; d.hold_bytes = None
     d.validation_session = '1' * 32
+    d.collector_shutdown_pin = dict(pid=123, start_ticks='123')
     d.checklist = tmp_path / 'checklist.md'; d.checklist.write_text('original')
     d.document_before = b'original'; d.document_after = b'reviewed candidate'
     d.frozen = {str(d.checklist): D._digest(d.document_before)}
@@ -1344,3 +1345,101 @@ def test_ordered_drain_consumes_exact_native_closed_epoch(tmp_path, damage):
         with pytest.raises((ValueError, FileNotFoundError)):D.verify_collector_shutdown(pin)
     else:
         assert D.verify_collector_shutdown(pin)['status'] == 'verified'
+
+
+@pytest.fixture
+def market_closed_collector(tmp_path, monkeypatch):
+    from datetime import datetime
+    from src.tests.test_micro_reversion_forward_collector import _closed_main_rejection_source
+    _, payload, receipt = _closed_main_rejection_source(tmp_path, count=0)
+    snapshot = payload['collector_snapshot']
+    # Native legacy receipt: actor comes from the existing WS producer, not
+    # from adding missing fields to an operational closed receipt.
+    snapshot.pop('process_pid'); snapshot.pop('process_start_ticks')
+    identity = dict(pid=123, start_ticks='456', cwd=str(tmp_path/'old/src'))
+    selection = dict(release_root=str(tmp_path/'old'), git_commit='a'*40, actual_pid_consumed=True,
+        actual_pid_receipt=dict(pid=123, start_ticks='456', process_cwd=identity['cwd'],
+                               recorded_at_kst='2026-08-08T10:00:00+09:00'))
+    frame = dict(generated_at_epoch=datetime.fromisoformat('2026-08-08T19:59:59+09:00').timestamp(),
+        shared_transport_producer=dict(schema='shared_ws_transport_producer_v1',
+            process=dict(pid=123, start_ticks=456,
+                boot_id=Path('/proc/sys/kernel/random/boot_id').read_text().strip()),
+            source_root=selection['release_root'], source_commit=selection['git_commit'],
+            completed_bar_integrity=dict(observer_epoch=snapshot['sequence_epoch'])))
+    heartbeat = dict(main_loop=dict(pid=123), ai_circuit=dict(pid=123, process_start_ticks='456'),
+        threads=dict(sniper_engine=dict(alive=False, terminal_reason='market_close',
+            last_beat='2026-08-08T20:00:00+09:00', unresolved_scalping_count=0, unresolved_scalping_codes='')))
+    values = {receipt: payload, receipt.parent.parent/'latest.json': payload,
+        tmp_path/'data/runtime/runtime_release_selection.json': selection,
+        tmp_path/'data/runtime/kiwoom_ws_snapshot/latest.json': frame,
+        tmp_path/'tmp/error_detector_heartbeat.json': heartbeat}
+    def persist():
+        for path, value in values.items():
+            path.parent.mkdir(parents=True, exist_ok=True); path.write_text(json.dumps(value))
+    persist()
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):return datetime.fromisoformat('2026-08-08T20:01:00+09:00').astimezone(tz)
+    monkeypatch.setattr(D, 'datetime', Clock)
+    return identity, payload, receipt, selection, frame, heartbeat, persist
+
+
+@pytest.mark.parametrize('damage', [None, 'running', 'pid', 'start', 'boot', 'commit', 'root',
+    'epoch', 'future_frame', 'future_close', 'previous_day', 'terminal_reason', 'unresolved',
+    'alive', 'heartbeat_actor', 'conflicting_collector_actor', 'loss', 'missing_closed',
+    'closed_symlink', 'closed_changed', 'missing_frame', 'unaccounted_rejections'])
+def test_legacy_first_transition_requires_native_closure_before_any_stop(tmp_path, market_closed_collector, damage):
+    identity, payload, receipt, selection, frame, heartbeat, persist = market_closed_collector
+    c = payload['collector_snapshot']; producer = frame['shared_transport_producer']
+    terminal = heartbeat['threads']['sniper_engine']
+    if damage == 'running': c['collector_lifecycle'] = 'running'
+    if damage == 'pid': producer['process']['pid'] = 124
+    if damage == 'start': producer['process']['start_ticks'] = 457
+    if damage == 'boot': producer['process']['boot_id'] = 'another-boot'
+    if damage == 'commit': producer['source_commit'] = 'b'*40
+    if damage == 'root': producer['source_root'] = str(tmp_path/'other')
+    if damage == 'epoch': producer['completed_bar_integrity']['observer_epoch'] += 1
+    if damage == 'future_frame': frame['generated_at_epoch'] += 600
+    if damage == 'future_close': payload['generated_at'] = '2026-08-08T20:02:00+09:00'
+    if damage == 'previous_day': selection['actual_pid_receipt']['recorded_at_kst'] = '2026-08-07T10:00:00+09:00'
+    if damage == 'terminal_reason': terminal['terminal_reason'] = 'crash'
+    if damage == 'unresolved': terminal['unresolved_scalping_count'] = 1
+    if damage == 'alive': terminal['alive'] = True
+    if damage == 'heartbeat_actor': heartbeat['ai_circuit']['process_start_ticks'] = '457'
+    if damage == 'conflicting_collector_actor': c['process_pid'] = 124
+    if damage == 'loss': c['writer_dropped_envelope_count'] = 1
+    if damage == 'unaccounted_rejections':
+        c['timestamp_rejection_sample_total'] = 65
+        payload['canary_guard']['raw_row_exclusion_required'] = True
+    persist()
+    if damage == 'missing_closed': receipt.unlink()
+    if damage == 'closed_symlink':
+        other = receipt.with_suffix('.original'); receipt.rename(other); receipt.symlink_to(other)
+    if damage == 'closed_changed':
+        changed = json.loads(receipt.read_bytes()); changed['collector_snapshot']['enqueued_count'] += 1
+        receipt.write_text(json.dumps(changed))
+    if damage == 'missing_frame': (tmp_path/'data/runtime/kiwoom_ws_snapshot/latest.json').unlink()
+    if damage:
+        with pytest.raises((ValueError, FileNotFoundError)):
+            D.pin_collector_shutdown(tmp_path, identity)
+    else:
+        pin = D.pin_collector_shutdown(tmp_path, identity)
+        assert pin['basis'] == 'native_market_close'
+        assert D.verify_collector_shutdown(pin)['status'] == 'verified'
+        # This is actor binding only; never rewrite the legacy producer bytes.
+        assert 'process_pid' not in json.loads(receipt.read_bytes())['collector_snapshot']
+    assert not (tmp_path/'restart.flag').exists()
+    assert not (tmp_path/'data/runtime/operator_startup_hold.json').exists()
+
+
+@pytest.mark.parametrize('changed', ['frame', 'latest', 'closed'])
+def test_first_transition_rechecks_closed_proof_after_process_exit(tmp_path, market_closed_collector, changed):
+    identity, payload, receipt, selection, frame, heartbeat, persist = market_closed_collector
+    pin = D.pin_collector_shutdown(tmp_path, identity)
+    path = {'frame': tmp_path/'data/runtime/kiwoom_ws_snapshot/latest.json',
+            'latest': receipt.parent.parent/'latest.json', 'closed': receipt}[changed]
+    value = json.loads(path.read_bytes())
+    if changed == 'closed': value['collector_snapshot']['writer_dropped_envelope_count'] = 1
+    else: value['changed_generation'] = True
+    path.write_text(json.dumps(value))
+    with pytest.raises(ValueError): D.verify_collector_shutdown(pin)

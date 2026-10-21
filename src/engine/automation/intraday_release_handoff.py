@@ -3708,6 +3708,26 @@ REVIEWED_COLLECTOR_CLOSE_DEPENDENCY_VARIANTS = {
 }
 
 
+# First transition consumes the already sealed native market-close epoch.
+# Preserve the earlier cooperative successor as an issued compatibility reader.
+REVIEWED_COLLECTOR_FIRST_TRANSITION_HASHES = {**REVIEWED_COLLECTOR_CLOSE_HASHES,
+    'src/engine/automation/ordered_intraday_deploy.py': '92d30c0ec38266d9fe1cc7abd144c71b7d0227b88fb42d4beb384096bbeb31ab'}
+REVIEWED_COLLECTOR_FIRST_TRANSITION_PAIRS = {
+    name: tuple(dict.fromkeys((old, current) for old in
+        [*(pair[0] for pair in REVIEWED_COLLECTOR_CLOSE_PAIRS[name]), REVIEWED_COLLECTOR_CLOSE_HASHES[name]]))
+    for name, current in REVIEWED_COLLECTOR_FIRST_TRANSITION_HASHES.items()
+}
+REVIEWED_COLLECTOR_FIRST_TRANSITION_DEPENDENCY_VARIANTS = {
+    key: {**value,
+        'selector_path': 'src/engine/automation/ordered_intraday_deploy.py',
+        'selector_sha256': REVIEWED_COLLECTOR_FIRST_TRANSITION_HASHES['src/engine/automation/ordered_intraday_deploy.py'],
+        'dependencies': {**value['dependencies'], **REVIEWED_COLLECTOR_FIRST_TRANSITION_HASHES},
+        'contract_extensions': {origin: {name: REVIEWED_COLLECTOR_FIRST_TRANSITION_HASHES.get(os.path.normpath(name), digest)
+            for name, digest in paths.items()} for origin, paths in value['contract_extensions'].items()},
+    } for key, value in REVIEWED_COLLECTOR_CLOSE_DEPENDENCY_VARIANTS.items()
+}
+
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -3786,6 +3806,9 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     finalization_health_present = any((root / name).is_file()
         and hashlib.sha256(candidate_bytes(name)).hexdigest() == sha
         for name, sha in REVIEWED_FINALIZATION_HEALTH_HASHES.items())
+    first_transition_present = (root / 'src/engine/automation/ordered_intraday_deploy.py').is_file() and (
+        hashlib.sha256(candidate_bytes('src/engine/automation/ordered_intraday_deploy.py')).hexdigest()
+        == REVIEWED_COLLECTOR_FIRST_TRANSITION_HASHES['src/engine/automation/ordered_intraday_deploy.py'])
     collector_close_present = any((root / name).is_file()
         and hashlib.sha256(candidate_bytes(name)).hexdigest() == sha
         for name, sha in REVIEWED_COLLECTOR_CLOSE_HASHES.items())
@@ -3809,7 +3832,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         dependencies = generations.get(trigger_sha, {})
         # New exact selectors precede their historical parent. The first match
         # selects one complete generation, never per-file SHA alternatives.
-        for variants in (REVIEWED_COLLECTOR_CLOSE_DEPENDENCY_VARIANTS,
+        for variants in (REVIEWED_COLLECTOR_FIRST_TRANSITION_DEPENDENCY_VARIANTS,
+                         REVIEWED_COLLECTOR_CLOSE_DEPENDENCY_VARIANTS,
                          REVIEWED_BUY_IDENTITY_DEPENDENCY_VARIANTS,
                          REVIEWED_ENTRY_RECEIPT_DEPENDENCY_VARIANTS,
                          REVIEWED_FIXED_WAIT_DEPENDENCY_VARIANTS,
@@ -3942,6 +3966,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
             dependencies = {**dependencies, **REVIEWED_BUY_IDENTITY_HASHES}
         if collector_close_present:
             dependencies = {**dependencies, **REVIEWED_COLLECTOR_CLOSE_HASHES}
+        if first_transition_present:
+            dependencies = {**dependencies, **REVIEWED_COLLECTOR_FIRST_TRANSITION_HASHES}
         dependencies_by_trigger[trigger] = (trigger_sha, dependencies)
     for key, name in paths.items():
         after = candidate_bytes(name)
@@ -3958,7 +3984,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         if before == after:
             continue
         pair = (hashlib.sha256(before).hexdigest(), hashlib.sha256(after).hexdigest())
-        if (pair in REVIEWED_COLLECTOR_CLOSE_PAIRS.get(repository_name(name), ())
+        if (pair in REVIEWED_COLLECTOR_FIRST_TRANSITION_PAIRS.get(repository_name(name), ())
+                or pair in REVIEWED_COLLECTOR_CLOSE_PAIRS.get(repository_name(name), ())
                 or pair in REVIEWED_BUY_IDENTITY_PAIRS.get(repository_name(name), ())
                 or pair in REVIEWED_ENTRY_RECEIPT_PAIRS.get(repository_name(name), ())
                 or pair in REVIEWED_FIXED_WAIT_PAIRS.get(repository_name(name), ())

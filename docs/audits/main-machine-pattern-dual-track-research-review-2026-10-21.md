@@ -142,3 +142,16 @@ Kiwoom 공식 gate는11:08:57 KST upstream `953e5dbff123f437ab4d11a78a95191a685e
 최종 검증: 관련 계약699개, pipeline56개, 원/후속 정책 handoff30개로 고유785개 PASS를 확인했다. 이후 단계 상태 보완의 ordered232개와 고정 소스 후속 handoff15개도 PASS다. compile·diff·문서 링크·print-only parser를 확인하며 canonical current owner는1개다. 초기 혼합 실행의 writer lock 경합 실패는 격리 및 전체 pipeline56개로 재검증했고, 검증 중 수정된 fingerprint 혼합 시도도 원 로그를 보존한 뒤 고정 소스로 재검증했다. `b53ebf689` 대비 non-test source +462/-131, tests +277/-23, docs 자체 수정 +196/-0; 새로 추적한 기존 audit121행은 별도 보존분이다. 이동0·새 module0·새 스케줄0이며 source 순증331행은 협력 종료·완전한 증빙 보존/검증·기존 handoff의 정확한 소스 결속이다. 배포/새 PID 소비/자연 종료 수용/경제성은 이 코드 검증과 별개이며 미완료다.
 
 코드 commit `fb51bb3a8`과 고정된 후속 검증에서 기존 정책128scope·76,800행·598신호·동일 신호SHA `958e471cca3b0e833e20486dbef9aecd6973b0273c53979d8ff1d9a4eb1a42fc`의 native parity PASS를 확인했다. [parity 원본](../../tmp/main-machine-cumulative-dual-track-research-20261021/epoch-repair/fresh-confirmation-parity-provenance.json). 기계 정책 native module 변경0, provider/주문 호출0이다. 후속 문서 +2/-0은 앞선 코드 commit 계수와 별개다. 현재 selector/PID는 그대로 유지하고 원천 미증명 상태를 배포 성공으로 표시하지 않았다.
+
+
+### 최초 전환의 native 장 종료 연결 — 2026-10-21
+
+기준 `1fd10ef9c`, 실제 incumbent `ea68c5a85`/Main1724066/start19233026. 장중 두 restart 분기는 여전히 self-SIGTERM이지만, 20:00 native market-close 분기는 반복문을 종료하여 기존 finally와 WS/collector close를 실행한다. 기존 ordered pin은 running+새 actor 필드만 허용하여, 이미 정상 종료된 legacy collector도 전환하지 못했다. 기존 shared WS frame의 process PID/start/boot/root/commit과 completed_bar_integrity.observer_epoch가 빠진 collector actor 결속을 제공함을 현 PID에서 확인했다. 원 snapshot과 종료 영수증에 필드를 소급 추가하지 않는다.
+
+기존 ordered owner의 pin을 확장했다. 같은 날의 실제 소비 selector, 정상 market_close heartbeat/미종결0, 원 WS actor/epoch와 native immutable closed receipt를 재시작 요청 전에 모두 검증한다. 살아 있는 Main은 기존 flag/소유 hold/정책 preflight/90초 종료 절차를 유지한다. 이미 장후 격리된 Main은 기존 closed-consumption 증명에 같은 collector 종료 검증을 추가한다. 종료 후 latest, WS frame, closed receipt 원본 해시를 다시 검증하며 하나라도 변경되면 selection으로 진행하지 않는다. 현재 running legacy PID는 계속 차단한다. 20:00라는 시각이나 프로세스 부재 자체는 전환 승인이 아니다.
+
+회귀: 원 기준은 정상 legacy 종료 fixture에서도 actor_unproven으로 실패했다. 수리본 ordered tests257 및 구 collector-close/새 최초 전환의 delay·stop·holding handoff30 PASS. 다른 PID/start/boot/root/commit/epoch, 미래·전일 시각, 비정상 종료·미종결·alive, 원천 손실, 누락/심볼릭 링크/변경 closed, 불완전 거부 증빙을 차단한다. 원 정책과 앞선 정확 코드 세대는 보존한다. compile 및 diff-check PASS. 증거는 `tmp/quantity-first-transition-20261021/first-transition-baseline.log`; 현재 파일 검증과 자연 수용을 구분한다.
+
+교체·제거: 기존 running-only pin을 동일 owner의 running/이미 종료된 native source 분기로 `consolidated`; 별도 종료 명령·worker·모듈·스케줄 추가 없음. 기존 WS producer, heartbeat, native epoch validator는 현재 caller가 있으므로 `retained`; 이미 발행한 collector-close handoff는 구 후보/정책 읽기 때문에 `retained`. 이전의 첫 전환 경로 미구현은 이 연결로 보완했으나 실제20:00 종료 증빙/PID 전환은 아직 미관측이다. 기존 DirectFamilyPreopenPolicyHandoff에서 동일 PID의 자연 closed와 현재 정책/parity를 확인한 뒤 후보의 ordered CLI로 전환하고 새 PID 소비/observer/full-health를 검증한다. 수량 원천 보완은 별도 기존 InitialQuantityProducerConsumerRepair1010에서 진행한다.
+
+변경량(기준1fd10ef9c): non-test2파일 +108/-12, tests2파일 +115/-8, docs3파일 +17/-0. 이동0. 순증은 기존 종료 증빙을 첫 전환에서 검증하는 분기와 잘못된 원천/세대 음성 회귀이며 매매 기준·수량·guard 변경 없음.

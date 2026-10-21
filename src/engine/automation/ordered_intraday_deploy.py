@@ -389,9 +389,10 @@ def _compatible_validation_session(previous, candidate, module):
 def pin_collector_shutdown(workspace, identity):
     """Pin the actual collector actor before any stop request is published."""
     path = Path(workspace) / 'data/runtime/scalp_micro_reversion_forward_collector/latest.json'
-    raw = path.read_bytes()
-    payload = json.loads(raw)
+    payload, raw = R._startup_receipt(path)
     snapshot = payload.get('collector_snapshot') or {}
+    if snapshot.get('collector_lifecycle') == 'closed':
+        return _pin_market_closed_collector(Path(workspace), identity, path, payload, raw)
     if (snapshot.get('process_pid') != identity['pid']
             or snapshot.get('process_start_ticks') != identity['start_ticks']
             or snapshot.get('collector_lifecycle') != 'running'
@@ -405,15 +406,82 @@ def pin_collector_shutdown(workspace, identity):
                 enqueued_count=snapshot['enqueued_count'])
 
 
+def _pin_market_closed_collector(workspace, identity, path, payload, raw):
+    """Bind a native market-close receipt before stopping an old supervisor.
+
+    Legacy collectors lack actor fields. Their existing WS frame binds the
+    epoch to PID/start/boot/root/commit; the native engine terminal proves why
+    collection ended. Neither a clock cutoff nor PID absence grants closure.
+    The caller separately verifies live or native closed policy consumption.
+    """
+    from src.engine.error_detectors.process_health import _is_expected_thread_terminal
+    selected, _ = R._startup_receipt(workspace/'data/runtime/runtime_release_selection.json')
+    frame_path = workspace/'data/runtime/kiwoom_ws_snapshot/latest.json'
+    frame, frame_raw = R._startup_receipt(frame_path)
+    heartbeat, _ = R._startup_receipt(workspace/'tmp/error_detector_heartbeat.json')
+    receipt = selected.get('actual_pid_receipt') or {}
+    producer = frame.get('shared_transport_producer') or {}
+    process = producer.get('process') or {}
+    terminal = (heartbeat.get('threads') or {}).get('sniper_engine') or {}
+    circuit = heartbeat.get('ai_circuit') or {}
+    snapshot = payload['collector_snapshot']
+    now = datetime.now(H.KST)
+    recorded = datetime.fromisoformat(str(receipt.get('recorded_at_kst') or ''))
+    closed = datetime.fromisoformat(str(payload.get('generated_at') or ''))
+    ended = datetime.fromisoformat(str(terminal.get('last_beat') or ''))
+    frame_at = frame.get('generated_at_epoch')
+    epoch = snapshot.get('sequence_epoch')
+    if (any(value.tzinfo is None for value in (recorded, closed, ended))
+            or type(frame_at) not in (int, float)
+            or not recorded.timestamp() <= frame_at <= closed.timestamp() <= now.timestamp()
+            or not recorded <= ended <= closed
+            or any(value.astimezone(H.KST).date() != now.date() for value in (recorded, closed, ended))
+            or selected.get('actual_pid_consumed') is not True
+            or receipt.get('pid') != identity['pid'] or receipt.get('start_ticks') != identity['start_ticks']
+            or receipt.get('process_cwd') != identity['cwd']
+            or producer.get('schema') != 'shared_ws_transport_producer_v1'
+            or process != dict(pid=identity['pid'], start_ticks=int(identity['start_ticks']),
+                               boot_id=Path('/proc/sys/kernel/random/boot_id').read_text().strip())
+            or producer.get('source_root') != selected.get('release_root')
+            or identity['cwd'] != str(Path(producer.get('source_root') or '')/'src')
+            or producer.get('source_commit') != selected.get('git_commit')
+            or type(epoch) is not int or epoch <= 0
+            or (producer.get('completed_bar_integrity') or {}).get('observer_epoch') != epoch
+            or (heartbeat.get('main_loop') or {}).get('pid') != identity['pid']
+            or circuit.get('pid') != identity['pid'] or circuit.get('process_start_ticks') != identity['start_ticks']
+            or terminal.get('alive') is not False
+            or type(terminal.get('unresolved_scalping_count')) is not int
+            or terminal['unresolved_scalping_count'] != 0 or terminal.get('unresolved_scalping_codes') != ''
+            or not _is_expected_thread_terminal('sniper_engine', terminal, now_ts=now.timestamp())
+            or ('process_pid' in snapshot or 'process_start_ticks' in snapshot) and (
+                snapshot.get('process_pid') != identity['pid']
+                or snapshot.get('process_start_ticks') != identity['start_ticks'])):
+        raise ValueError('deployment_market_closed_collector_unproven')
+    pin = dict(path=str(path), sha256=_digest(raw), pid=identity['pid'],
+        start_ticks=identity['start_ticks'], sequence_epoch=epoch,
+        enqueued_count=snapshot['enqueued_count'], basis='native_market_close',
+        actor_source=dict(path=str(frame_path), sha256=_digest(frame_raw)),
+        terminal=terminal)
+    # Require durable full native closure BEFORE publishing a restart flag.
+    pin['closed_receipts'] = verify_collector_shutdown(pin)['receipts']
+    return pin
+
+
 def verify_collector_shutdown(pin):
     """Process exit is insufficient: require its immutable, native closed epoch."""
     from src.engine.scalping.micro_reversion.observer_source_quality import main_raw_epoch_validation
     path = Path(pin['path'])
-    payload = json.loads(path.read_bytes())
+    payload, raw = R._startup_receipt(path)
     snapshot = payload.get('collector_snapshot') or {}
     epochs = snapshot.get('reconciled_sequence_epochs') or []
-    if (snapshot.get('process_pid') != pin['pid']
-            or snapshot.get('process_start_ticks') != pin['start_ticks']
+    market_closed = pin.get('basis') == 'native_market_close'
+    if market_closed:
+        actor = pin['actor_source']
+        if (_digest(raw) != pin['sha256']
+                or _digest(R._startup_receipt(Path(actor['path']))[1]) != actor['sha256']):
+            raise ValueError('deployment_market_closed_collector_changed')
+    if (not market_closed and (snapshot.get('process_pid') != pin['pid']
+            or snapshot.get('process_start_ticks') != pin['start_ticks'])
             or pin['sequence_epoch'] not in epochs
             or snapshot.get('enqueued_count', -1) < pin['enqueued_count']):
         raise ValueError('deployment_collector_closed_identity_invalid')
@@ -423,12 +491,13 @@ def verify_collector_shutdown(pin):
     proofs = []
     for day in dates:
         receipt = path.parent / 'closed' / f"{day}-{snapshot['sequence_epoch']}.json"
-        raw = receipt.read_bytes()
-        closed = json.loads(raw)
+        closed, raw = R._startup_receipt(receipt)
         if (closed.get('collector_snapshot') != snapshot
                 or not main_raw_epoch_validation(closed, source_date=day).get('eligible')):
             raise ValueError('deployment_collector_closed_epoch_invalid')
         proofs.append(dict(path=str(receipt), sha256=_digest(raw), source_date=day))
+    if 'closed_receipts' in pin and proofs != pin['closed_receipts']:
+        raise ValueError('deployment_collector_closed_receipts_changed')
     return dict(status='verified', pid=pin['pid'], start_ticks=pin['start_ticks'],
                 sequence_epochs=epochs, receipts=proofs)
 
@@ -512,8 +581,7 @@ class Deployment:
                 or self.identity['cwd'] != str(self.previous / 'src')
                 or _main_pids() != ([] if self.closed_predecessor else [self.identity['pid']])):
             raise ValueError('deployment_predecessor_not_current_singleton')
-        if not self.closed_predecessor:
-            self.collector_shutdown_pin = pin_collector_shutdown(self.workspace, self.identity)
+        self.collector_shutdown_pin = pin_collector_shutdown(self.workspace, self.identity)
         self.launcher = self.launcher_stat = None
         if self.closed_predecessor:
             if not _session_absent():
@@ -784,7 +852,8 @@ class Deployment:
                     or _main_pids() or not _session_absent() or self.flag.exists()):
                 raise ValueError('deployment_closed_predecessor_changed')
             self.checkpoint('drained', drained_at=datetime.now(H.KST).isoformat(),
-                drain_basis='native_postclose_stopped_consumption_verified')
+                drain_basis='native_postclose_stopped_consumption_verified',
+                collector_shutdown=verify_collector_shutdown(self.collector_shutdown_pin))
             return
         if H._identity(self.identity['pid']) != self.identity:
             raise ValueError('deployment_predecessor_identity_changed')
