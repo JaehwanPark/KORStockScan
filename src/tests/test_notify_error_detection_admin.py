@@ -3,6 +3,27 @@ import json
 from src.engine import notify_error_detection_admin as notifier
 
 
+def test_optional_research_alert_distinguishes_last_work_and_cumulative_dates():
+    incident = dict(source_date='2026-10-13', target_date=None,
+        stage='main_market_weakness_research', scope='report',
+        reason='optional_research_code_binding_unverified', status='source_invalid',
+        generation='a'*64, owner='MainMarketWeaknessPostcloseObservation1008',
+        source_date_role='last_completed_work_source', latest_attempt_source_date=None,
+        last_completed_source_date='2026-10-13', research_through_date='2026-10-20',
+        research_source_date_count=13)
+    report = dict(target_date='2026-10-21', results=[dict(
+        detector_id='artifact_freshness', severity='warning', details=dict(
+            semantic_alerts=[incident], semantic_source_bindings=[
+                dict(incident, as_of_date='2026-10-21')]))])
+    alerts = notifier._alert_results(report)
+    assert len(alerts) == 1
+    message = notifier._build_message(report, alerts, mode='full', log_file='log')
+    assert 'source_role=last_completed_work_source' in message
+    assert 'last_completed_source=2026-10-13' in message
+    assert 'cumulative_through=2026-10-20 source_days=13' in message
+    assert 'optional_research_code_binding_unverified' in message
+
+
 def test_native_machine_alert_and_exact_bound_recovery(tmp_path, monkeypatch):
     report, state = tmp_path/'report.json', tmp_path/'state.json'
     sent = []

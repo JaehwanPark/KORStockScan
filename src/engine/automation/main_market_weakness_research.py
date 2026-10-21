@@ -294,7 +294,7 @@ def check_seal(value):
     return value
 
 
-def code_hash():
+def code_hash(code_root=None):
     modules = [
         Path(__file__),
         Path(R.__file__),
@@ -304,6 +304,9 @@ def code_hash():
         Path(R.__file__).parents[1] / "market_panic_breadth_collector.py",
         Path(R.__file__).parent / "micro_reversion/symbol_master.py",
     ]
+    if code_root is not None:
+        executing_root = Path(__file__).resolve().parents[3]
+        modules = [Path(code_root) / p.resolve().relative_to(executing_root) for p in modules]
     return R.digest(
         {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in modules}
     )
@@ -2700,17 +2703,17 @@ def selected_optional_code(workspace):
     from src.engine.infrastructure.runtime_release_router import selected_release
 
     selected, _ = selected_release(Path(workspace))
-    names = (
-        "src/engine/scalping/market_weakness_research.py",
-        "src/engine/automation/main_market_weakness_research.py",
-        "src/engine/automation/main_market_weakness_research_notify.py",
-        "deploy/run_main_market_weakness_research_postclose.sh",
-    )
-    if any(
-        not (selected / name).is_file()
-        or (selected / name).read_bytes() != (Path(workspace) / name).read_bytes()
-        for name in names
-    ):
+    executing_root = Path(__file__).resolve().parents[3]
+    wrapper = "deploy/run_main_market_weakness_research_postclose.sh"
+    try:
+        # Canonical workspace owns shared data and cron, not deployed code.
+        # Bind all existing research dependencies and the actual launch wrapper.
+        matches = (code_hash(selected) == code_hash()
+                   and (selected / wrapper).read_bytes()
+                   == (executing_root / wrapper).read_bytes())
+    except (OSError, ValueError):
+        matches = False
+    if not matches:
         raise ValueError("optional_selected_release_code_not_reviewed")
     return str(selected)
 

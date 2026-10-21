@@ -874,6 +874,43 @@ def test_selected_optional_code_requires_all_reviewed_modules(tmp_path, monkeypa
         A.selected_optional_code(Path(__file__).resolve().parents[2])
 
 
+@pytest.mark.parametrize("damage", [None, "source", "wrapper", "dependency"])
+def test_optional_installer_checks_executing_release_not_mutable_workspace(
+    tmp_path, monkeypatch, damage
+):
+    from src.engine.infrastructure import runtime_release_router as router
+
+    executing = Path(A.__file__).resolve().parents[3]
+    selected, workspace = tmp_path / "selected", tmp_path / "workspace"
+    names = (
+        "src/engine/automation/main_market_weakness_research.py",
+        "src/engine/scalping/market_weakness_research.py",
+        "src/engine/automation/main_market_weakness_research_notify.py",
+        "src/engine/risk/market_weakness_state.py",
+        "src/engine/risk/market_weakness_threshold_policy.py",
+        "src/engine/market_panic_breadth_collector.py",
+        "src/engine/scalping/micro_reversion/symbol_master.py",
+        "deploy/run_main_market_weakness_research_postclose.sh",
+    )
+    for name in names:
+        path = selected / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes((executing / name).read_bytes())
+        old = workspace / name
+        old.parent.mkdir(parents=True, exist_ok=True)
+        old.write_bytes((executing / name).read_bytes())
+    (workspace / names[0]).write_text("older workspace code")
+    changed = {"source": names[0], "wrapper": names[-1], "dependency": names[3]}
+    if damage:
+        (selected / changed[damage]).write_text("unreviewed code")
+    monkeypatch.setattr(router, "selected_release", lambda root: (selected, {}))
+    if damage:
+        with pytest.raises(ValueError, match="not_reviewed"):
+            A.selected_optional_code(workspace)
+    else:
+        assert A.selected_optional_code(workspace) == str(selected)
+
+
 def test_wrapper_routes_to_selected_immutable_root_without_main_start(tmp_path):
     import subprocess
 

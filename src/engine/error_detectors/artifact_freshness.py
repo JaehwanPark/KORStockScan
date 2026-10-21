@@ -2643,13 +2643,18 @@ def _optional_weakness_semantics(root, now):
             return result
         result['installed_calendar_valid'] = native.verify_installed_calendar(config)
         if not result['installed_calendar_valid']:
-            result['findings'].append('optional_research_calendar_unverified')
+            installed_code = config.get('installation_code_sha256')
+            result['findings'].append('optional_research_code_binding_unverified'
+                if installed_code and installed_code != native.code_hash()
+                else 'optional_research_calendar_unverified')
         attempt, completed, cumulative = (objects.get(k,{}) for k in ('attempt','completed','cumulative'))
         latest = attempt.get('latest_attempt', attempt)
         result.update(status='unobservable', latest_attempt=latest,
             last_completed_computation={k:completed.get(k) for k in (
                 'source_date','night_id','cumulative_generation','artifact_content_sha256')},
             source_date=latest.get('source_date') or completed.get('source_date'),
+            source_date_role=('latest_attempt_source' if latest.get('source_date')
+                              else 'last_completed_work_source'),
             source_scope=cumulative.get('source_scope'),
             pending_source_dates=cumulative.get('pending_source_dates'),
             invalidated_source_dates=cumulative.get('invalidated_source_dates'),
@@ -2807,6 +2812,13 @@ def _semantic_alert_candidates(name, semantics, source_date):
             observation_generation=semantics.get("observation_generation"),
             policy_hash=semantics.get("policy_file_sha256"),
             owner="holding_exit_sentinel" if name == "holding_profit_exit" else name,
+            **(dict(source_date_role=semantics.get('source_date_role'),
+                latest_attempt_source_date=(semantics.get('latest_attempt') or {}).get('source_date'),
+                last_completed_source_date=(semantics.get('last_completed_computation') or {}).get('source_date'),
+                research_through_date=(semantics.get('source_scope') or {}).get('through_date'),
+                research_source_date_count=(len(semantics['source_scope']['source_dates'])
+                    if isinstance((semantics.get('source_scope') or {}).get('source_dates'), list)
+                    else None)) if name == 'main_market_weakness_research' else {}),
             closure_test="native_complete_exact_date_scope_binding_and_original_reason_resolved")
             for reason in sorted(set(semantics.get("findings") or []))
             if reason != "economics_null"]

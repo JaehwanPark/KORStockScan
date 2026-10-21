@@ -4779,8 +4779,8 @@ def test_optional_research_native_receipts_calendar_scope_and_generation(tmp_pat
         p=base/name;p.parent.mkdir(parents=True,exist_ok=True)
         p.write_text(json.dumps(reports.seal(dict(**value,runtime_effect=False,allowed_runtime_apply=False))))
     scope={'through_date':'2026-10-15','source_dates':['2026-10-15']}
-    put('installation.json',dict(enabled=True,notify_enabled=True))
-    put('night_summary.json',dict(latest_attempt=dict(source_date='2026-10-15',status='deferred',reason='regular_postclose_or_eod_active')))
+    put('installation.json',dict(enabled=True,notify_enabled=True,installation_code_sha256=native.code_hash()))
+    put('night_summary.json',dict(latest_attempt=dict(status='deferred',reason='regular_postclose_or_eod_active')))
     put('last_completed_computation.json',dict(source_date='2026-10-14',cumulative_generation='g'))
     put('cumulative/current.json',dict(generation='g',source_scope=scope,source_cursor_states=[],pending_source_dates=[],invalidated_source_dates=[]))
     monkeypatch.setattr(native,'verify_installed_calendar',lambda c:True)
@@ -4794,6 +4794,18 @@ def test_optional_research_native_receipts_calendar_scope_and_generation(tmp_pat
     monkeypatch.setattr(native,'verify_installed_calendar',lambda c:False)
     result=detector._optional_weakness_semantics(tmp_path,now)
     assert result['findings']==['optional_research_calendar_unverified']
+    assert result['native_validated'] is False
+    alert=detector._semantic_alert_candidates('main_market_weakness_research',result,result['source_date'])[0]
+    assert alert['source_date']=='2026-10-14'
+    assert alert['source_date_role']=='last_completed_work_source'
+    assert alert['research_through_date']=='2026-10-15'
+    assert alert['research_source_date_count']==1
+    assert alert['latest_attempt_source_date'] is None
+    assert alert['last_completed_source_date']=='2026-10-14'
+    put('installation.json',dict(enabled=True,notify_enabled=True,installation_code_sha256='old-code'))
+    result=detector._optional_weakness_semantics(tmp_path,now)
+    assert result['findings']==['optional_research_code_binding_unverified']
+    assert result['installed_calendar_valid'] is False
     assert result['native_validated'] is False
 
 
