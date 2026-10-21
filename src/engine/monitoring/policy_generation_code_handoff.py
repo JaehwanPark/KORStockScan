@@ -273,6 +273,13 @@ REVIEWED_HISTORICAL_RESOLUTION_SUCCESSORS = {
 }
 
 
+# Exact revived-watch observation metadata successor; historical reports stay sealed.
+REVIEWED_FIXED_WAIT_SUCCESSORS = {'rising_missed': ('8c2725f4e329c95b79a74df8167bc5bbab80d6e08fe80fb6d7e4aaaa4d4c6e8d',
+                   '349dd5b7e1286c462ad418ed2b8332dd95020b95b19e164720ce311439ddc646'),
+ 'holding_vote': ('48b92485c831e215a1d7fe1ef8664113d68186e040a768087cbcb18ab0892ac3',
+                  '0065b34f2b56538b406ac2a2e78b2ee57fb76a88bcd3bf1e315a2d090bdb2733')}
+
+
 def _historical_fixture(contract, data, family, *, late_report=None):
     """Preserve a prior fixture without using it to certify the successor."""
     reference = contract.get('fixture_receipt')
@@ -379,7 +386,8 @@ def current_fixture_observation(observed, data):
     reader_match = ((reader is not None and actual_pair == reader)
                     or actual_pair == REVIEWED_DELAY_CLEANUP_SUCCESSORS.get(family)
                     or actual_pair == REVIEWED_HOLDING_REPUBLICATION_SUCCESSORS.get(family)
-                    or actual_pair == REVIEWED_HISTORICAL_RESOLUTION_SUCCESSORS.get(family))
+                    or actual_pair == REVIEWED_HISTORICAL_RESOLUTION_SUCCESSORS.get(family)
+                    or actual_pair == REVIEWED_FIXED_WAIT_SUCCESSORS.get(family))
     if reader_match:
         pair = actual_pair
     if not pair or actual_pair != pair:

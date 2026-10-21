@@ -12524,6 +12524,13 @@ def _log_entry_pipeline(stock, code, stage, **fields):
             **submit_attempt_fields(stock, code),
         }
     )
+    # A revived fixed watch deliberately has no inherited runtime source.
+    # Bind this observation to its new native admission without mutating stock.
+    if (stage == "main_fixed_watch_observation_wait" and fixed_watch_fields
+            and not merged_fields.get("source_signature")):
+        admission = fixed_watch_fields.get("watch_admission_id")
+        if isinstance(admission, str) and admission:
+            merged_fields["source_signature"] = "MAIN_FIXED_WATCH:" + admission
     if scout_attribution_fields:
         parent_trace_id = str(
             scout_attribution_fields.get("scout_ai_parent_decision_trace_id") or ""

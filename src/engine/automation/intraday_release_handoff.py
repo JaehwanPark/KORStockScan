@@ -3534,6 +3534,30 @@ REVIEWED_NATIVE_INVALIDATION_DEPENDENCY_VARIANTS = {
 }
 
 
+# Exact revived fixed-watch wait producer and current capability reader.
+REVIEWED_FIXED_WAIT_HASHES = {'src/engine/sniper_state_handlers.py': '02be17b70de8acfa2bc2750c25b2292117e4b5b6c1680a95b1d3e0e65b245d19',
+ 'src/engine/monitoring/policy_generation_code_handoff.py': 'a398aec3dba6e1f5ece0d53955565f49f9673423c9a215d9c394defa3b62ed9d'}
+REVIEWED_FIXED_WAIT_PAIRS = {'src/engine/sniper_state_handlers.py': (('885af7dd480a520e98502bcd6729586b4d21016de8254a4a7d9e299389f09ed4',
+                                          '02be17b70de8acfa2bc2750c25b2292117e4b5b6c1680a95b1d3e0e65b245d19'),
+                                         ('8a0c18d2c097b063a8349907f39e6057d43b7ad9ef173e5f6c4e1be48f8b21f9',
+                                          '02be17b70de8acfa2bc2750c25b2292117e4b5b6c1680a95b1d3e0e65b245d19')),
+ 'src/engine/monitoring/policy_generation_code_handoff.py': (('905dd6a05df9f19fac25292a3a1e7fe579281e4aeabd84d4965855f9fef928b1',
+                                                              'a398aec3dba6e1f5ece0d53955565f49f9673423c9a215d9c394defa3b62ed9d'),
+                                                             ('47db04eba70a27e3fbb5c4078e828be38920859efbf4224e3049582776ff6d5f',
+                                                              'a398aec3dba6e1f5ece0d53955565f49f9673423c9a215d9c394defa3b62ed9d'),
+                                                             ('78b3d4a55b89ccd784bc2120d7caf0cc47b65656ca75d4cb3bcd20e2edc6ac1a',
+                                                              'a398aec3dba6e1f5ece0d53955565f49f9673423c9a215d9c394defa3b62ed9d'))}
+REVIEWED_FIXED_WAIT_DEPENDENCY_VARIANTS = {
+    key: {**value,
+        'selector_path': 'src/engine/sniper_state_handlers.py',
+        'selector_sha256': REVIEWED_FIXED_WAIT_HASHES['src/engine/sniper_state_handlers.py'],
+        'dependencies': {**value['dependencies'], **REVIEWED_FIXED_WAIT_HASHES},
+        'contract_extensions': {origin: {name: REVIEWED_FIXED_WAIT_HASHES.get(os.path.normpath(name), digest)
+            for name, digest in paths.items()} for origin, paths in value['contract_extensions'].items()},
+    } for key, value in REVIEWED_NATIVE_INVALIDATION_DEPENDENCY_VARIANTS.items()
+}
+
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -3612,6 +3636,9 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     finalization_health_present = any((root / name).is_file()
         and hashlib.sha256(candidate_bytes(name)).hexdigest() == sha
         for name, sha in REVIEWED_FINALIZATION_HEALTH_HASHES.items())
+    fixed_wait_present = any((root / name).is_file()
+        and hashlib.sha256(candidate_bytes(name)).hexdigest() == sha
+        for name, sha in REVIEWED_FIXED_WAIT_HASHES.items())
     native_invalidation_present = any((root / name).is_file()
         and hashlib.sha256(candidate_bytes(name)).hexdigest() == sha
         for name, sha in REVIEWED_NATIVE_INVALIDATION_HASHES.items())
@@ -3623,7 +3650,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         dependencies = generations.get(trigger_sha, {})
         # New exact selectors precede their historical parent. The first match
         # selects one complete generation, never per-file SHA alternatives.
-        for variants in (REVIEWED_NATIVE_INVALIDATION_DEPENDENCY_VARIANTS,
+        for variants in (REVIEWED_FIXED_WAIT_DEPENDENCY_VARIANTS,
+                         REVIEWED_NATIVE_INVALIDATION_DEPENDENCY_VARIANTS,
                          REVIEWED_FINALIZATION_HEALTH_DEPENDENCY_VARIANTS,
                          REVIEWED_HISTORICAL_RESOLUTION_DEPENDENCY_VARIANTS,
                          REVIEWED_LOGICAL_PIPELINE_DEPENDENCY_VARIANTS,
@@ -3744,6 +3772,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
             dependencies = {**dependencies, **REVIEWED_FINALIZATION_HEALTH_HASHES}
         if native_invalidation_present:
             dependencies = {**dependencies, **REVIEWED_NATIVE_INVALIDATION_HASHES}
+        if fixed_wait_present:
+            dependencies = {**dependencies, **REVIEWED_FIXED_WAIT_HASHES}
         dependencies_by_trigger[trigger] = (trigger_sha, dependencies)
     for key, name in paths.items():
         after = candidate_bytes(name)
@@ -3760,7 +3790,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         if before == after:
             continue
         pair = (hashlib.sha256(before).hexdigest(), hashlib.sha256(after).hexdigest())
-        if (pair in REVIEWED_NATIVE_INVALIDATION_PAIRS.get(repository_name(name), ())
+        if (pair in REVIEWED_FIXED_WAIT_PAIRS.get(repository_name(name), ())
+                or pair in REVIEWED_NATIVE_INVALIDATION_PAIRS.get(repository_name(name), ())
                 or pair in REVIEWED_FINALIZATION_HEALTH_PAIRS.get(repository_name(name), ())
                 or pair in REVIEWED_HISTORICAL_RESOLUTION_PAIRS.get(repository_name(name), ())
                 or pair in REVIEWED_LOGICAL_PIPELINE_PAIRS.get(repository_name(name), ())
