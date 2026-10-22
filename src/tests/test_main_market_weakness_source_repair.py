@@ -291,6 +291,59 @@ def test_native_path_label_index_reuses_complete_partitions(tmp_path, monkeypatc
     db = A.label_index(root, cursor, data_root=data, stop_at=time.monotonic() + 5)
     db.close()
 
+
+@pytest.mark.parametrize('failure',['interrupt','corrupt'])
+def test_label_index_commits_verified_partitions_before_later_failure(tmp_path,monkeypatch,failure):
+    root=tmp_path/'research'
+    parts=[A.write_partition(root,[dict(row(identity=name,origin='confirmation_replay'),auxiliary_hash=None)])
+        for name in ('first','second')]
+    cursor=dict(source_date=DAY,generation='a'*64,partitions=parts)
+    original=A.projection_rows
+    reads=[]
+    def interrupted(selected):
+        reads.append(selected[0]['sha256'])
+        if selected[0]==parts[1]:
+            if failure=='interrupt':raise KeyboardInterrupt()
+            raise ValueError('projection_reference_changed')
+        yield from original(selected)
+    monkeypatch.setattr(A,'projection_rows',interrupted)
+    with pytest.raises(KeyboardInterrupt if failure=='interrupt' else ValueError):
+        A.label_index(root,cursor)
+    path=root/DAY/cursor['generation']/'label_bindings.sqlite'
+    with sqlite3.connect(path) as db:
+        assert db.execute('SELECT partition FROM loaded').fetchall()==[(parts[0]['sha256'],)]
+        assert db.execute('SELECT count(*) FROM labels').fetchone()[0]>0
+    reads.clear()
+    def resumed(selected):
+        reads.append(selected[0]['sha256'])
+        yield from original(selected)
+    monkeypatch.setattr(A,'projection_rows',resumed)
+    db=A.label_index(root,cursor)
+    assert reads==[parts[1]['sha256']]
+    assert db.execute('SELECT count(*) FROM loaded').fetchone()[0]==2
+    db.close()
+
+
+def test_label_index_stops_at_budget_and_resumes_without_rescanning(tmp_path,monkeypatch):
+    root=tmp_path/'research'
+    parts=[A.write_partition(root,[dict(row(identity=name,origin='confirmation_replay'),auxiliary_hash=None)])
+        for name in ('first','second')]
+    cursor=dict(source_date=DAY,generation='a'*64,partitions=parts)
+    clock=[0]
+    monkeypatch.setattr(A.time,'monotonic',lambda:clock[0])
+    original=A._index_label
+    def indexed(db,value):
+        original(db,value)
+        clock[0]=5
+    monkeypatch.setattr(A,'_index_label',indexed)
+    with pytest.raises(A.Deferred,match='label_projection_wall_budget'):
+        A.label_index(root,cursor,stop_at=4)
+    clock[0]=0
+    monkeypatch.setattr(A,'_index_label',original)
+    db=A.label_index(root,cursor,stop_at=4)
+    assert db.execute('SELECT count(*) FROM loaded').fetchone()[0]==2
+    db.close()
+
 @pytest.mark.parametrize("failure", ["crc", "changed", "header"])
 @pytest.mark.parametrize("compressed", [False, True])
 def test_native_label_dependency_failure_preserves_trace_population(

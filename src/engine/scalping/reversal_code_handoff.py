@@ -65,8 +65,6 @@ def validate(bundle,data_root,*,original_error):
     selection=N._read(Path(data_root)/'runtime/runtime_release_selection.json')
     if selection.get('git_commit')!=commit or selection.get('release_root')!=str(root):
         raise ValueError('active_policy_code_selection_changed')
-    if not path(data_root,day,commit,bundle['bundle_sha256']).exists():
-        raise original_error
     selected_root, selected_commit = root, commit
     review = None
     if root != Path(__file__).resolve().parents[3]:
@@ -75,6 +73,8 @@ def validate(bundle,data_root,*,original_error):
         if not handoff.predecessor_review_matches(review, day, root, commit, Path(__file__).resolve().parents[3]):
             raise ValueError('active_policy_code_reader_root_changed')
         root, commit = review['code_root'], review['code_commit']
+    # The authenticated review uses its own dated receipt. Requiring a second
+    # receipt for the unchanged selected code would prevent a midnight review.
     receipt_path=path(data_root,day,commit,bundle['bundle_sha256'])
     # Preserve the native reason for unregistered code and tomorrow's parent
     # transition. There is no generic historical-loader fallback.
@@ -231,10 +231,63 @@ def _postclose_origin_receipt(data_root,day,source_date,origin_root,origin_commi
                 and not (workspace/'restart.flag').exists() and not (workspace/'restart.flag').is_symlink()
                 and not (root/'runtime/operator_startup_hold.json').exists()
                 and not (root/'runtime/operator_startup_hold.json').is_symlink())
+    scope=selected.get('approval_scope')
+    transition_refs={}
+    if scope=='postclose_recovery_before_next_regular_start':
+        # The original cold caller used this label before the midnight bridge.
+        # Authenticate its native committed transaction, original consumption
+        # and original candidate P5; never rewrite that historical selector.
+        from src.engine.infrastructure import research_release_transition as T
+        backup=Path(selected.get('previous_selection_backup',''))
+        directory=backup.parent
+        if (not backup.is_absolute() or directory.parent!=root/'runtime/research_release_transition'
+                or directory.resolve()!=directory or backup.is_symlink()):
+            raise ValueError('active_policy_postclose_transition_path_invalid')
+        transition_path=directory/'transition.json'
+        transition,transition_raw,transition_identity=D._owned_metadata(transition_path)
+        if T._record(transition_path)!=transition:
+            raise ValueError('active_policy_postclose_transition_changed')
+        entries=transition.get('entries') or []
+        if (transition.get('state')!='verified' or transition.get('transition_id')!=directory.name
+                or len(entries)!=1 or transition.get('written')!=[str(root/'runtime/runtime_release_selection.json')]):
+            raise ValueError('active_policy_postclose_transition_invalid')
+        entry=entries[0];before,before_raw,before_identity=D._owned_metadata(backup)
+        after_path=directory/str(entry.get('after_snapshot',''))
+        if (entry.get('path')!=str(root/'runtime/runtime_release_selection.json')
+                or entry.get('before_snapshot')!=backup.name
+                or entry.get('before_sha256')!=D._digest(before_raw)
+                or selected.get('predecessor_selection_sha256')!=D._digest(before_raw)
+                or entry.get('after_sha256')!=D._digest(selected_raw)
+                or set(entry.get('accepted_sha256') or [])!={D._digest(before_raw),D._digest(selected_raw)}
+                or after_path.parent!=directory or after_path.name!='after-'+D._digest(selected_raw)+'.bytes'
+                or before.get('actual_pid_consumed') is not True
+                or before.get('git_commit')!=selected.get('previous_git_commit')
+                or before.get('release_root')!=selected.get('previous_release_root')):
+            raise ValueError('active_policy_postclose_transition_binding_invalid')
+        after,after_raw,after_identity=D._owned_metadata(after_path)
+        proof_path=Path(selected.get('candidate_p5_path',''))
+        if (not proof_path.is_absolute() or proof_path.resolve()!=proof_path
+                or proof_path.parent.parent!=root/'report/main_startup_validation'/source_date
+                or proof_path.name!='final.json'):
+            raise ValueError('active_policy_postclose_original_p5_path_invalid')
+        proof,proof_raw,proof_identity=D._owned_metadata(proof_path)
+        if (after_raw!=selected_raw or D._digest(proof_raw)!=selected.get('candidate_p5_sha256')
+                or proof.get('schema')!='main_policy_load_exit_validation_v1'
+                or proof.get('status')!='passed' or proof.get('findings')!=[]
+                or proof.get('target_date')!=source_date or proof.get('execution_release_root')!=str(origin_root)
+                or proof.get('execution_release_commit')!=origin_commit
+                or any(proof.get(k) is not True for k in ('child_terminated','load_check_passed','protected_sources_unchanged'))):
+            raise ValueError('active_policy_postclose_original_p5_invalid')
+        for p,raw,identity in ((transition_path,transition_raw,transition_identity),
+                (backup,before_raw,before_identity),(after_path,after_raw,after_identity),(proof_path,proof_raw,proof_identity)):
+            if D._owned_metadata(p)[1:]!=(raw,identity):
+                raise ValueError('active_policy_postclose_transition_changed')
+            transition_refs[str(p)]=D._digest(raw)
+        scope='after_postclose_deploy_for_next_regular_start'
     if (not stopped() or selected.get('git_commit')!=origin_commit
             or selected.get('release_root')!=str(origin_root)
             or selected.get('source_date')!=source_date or selected.get('approved_by')!='user'
-            or selected.get('approval_scope')!='after_postclose_deploy_for_next_regular_start'
+            or scope!='after_postclose_deploy_for_next_regular_start'
             or selected.get('actual_pid_consumed') is not False
             or next_day!=canonical or next_day<day):
         raise ValueError('active_policy_postclose_stopped_origin_invalid')
@@ -276,7 +329,7 @@ def _postclose_origin_receipt(data_root,day,source_date,origin_root,origin_commi
         refs[str(destination)]=D._digest(raw)
     if D._owned_metadata(root/'runtime/runtime_release_selection.json')[1]!=selected_raw or not stopped():
         raise ValueError('active_policy_postclose_origin_changed')
-    checked['source_hashes'].update(refs)
+    checked['source_hashes'].update(refs|transition_refs)
     checked['verification_basis']='verified_previous_day_postclose_native_code_ancestry'
     return checked
 

@@ -1039,31 +1039,36 @@ def label_index(root, cursor, *, data_root=None, stop_at=float("inf")):
         "CREATE TABLE IF NOT EXISTS labels(id TEXT PRIMARY KEY,row TEXT,conflict INTEGER)"
     )
     db.execute("CREATE TABLE IF NOT EXISTS loaded(partition TEXT PRIMARY KEY)")
-    for part in cursor["partitions"]:
-        if db.execute(
-            "SELECT 1 FROM loaded WHERE partition=?", (part["sha256"],)
-        ).fetchone():
-            continue
-        for row in projection_rows([part]):
-            _index_label(db, row)
-        db.execute("INSERT INTO loaded VALUES(?)", (part["sha256"],))
-    db.commit()
-    if data_root is not None:
-        try:
-            index_native_path_labels(data_root, root, cursor, db, stop_at=stop_at)
-        except (ValueError, EOFError, OSError, zlib.error) as exc:
-            db.close()
-            # A path-label dependency failure is not a malformed trace. Keep
-            # its cursor/population pending rather than silently skipping it.
-            raise Deferred(
-                "native_label_path_budget"
-                if str(exc) == "normalized_native_window_budget"
-                else "native_label_source_contract_invalid"
-            ) from exc
-        except BaseException:
-            db.close()
-            raise
-    return db
+    try:
+        for part in cursor["partitions"]:
+            if db.execute(
+                "SELECT 1 FROM loaded WHERE partition=?", (part["sha256"],)
+            ).fetchone():
+                continue
+            if time.monotonic() >= stop_at:
+                raise Deferred("label_projection_wall_budget")
+            # The immutable partition and its loaded marker commit together.
+            # Later budget/interrupt failures retain this verified progress.
+            with db:
+                for row in projection_rows([part]):
+                    if time.monotonic() >= stop_at:
+                        raise Deferred("label_projection_wall_budget")
+                    _index_label(db, row)
+                db.execute("INSERT INTO loaded VALUES(?)", (part["sha256"],))
+        if data_root is not None:
+            try:
+                index_native_path_labels(data_root, root, cursor, db, stop_at=stop_at)
+            except (ValueError, EOFError, OSError, zlib.error) as exc:
+                # A dependency failure preserves the pending population.
+                raise Deferred(
+                    "native_label_path_budget"
+                    if str(exc) == "normalized_native_window_budget"
+                    else "native_label_source_contract_invalid"
+                ) from exc
+        return db
+    except BaseException:
+        db.close()
+        raise
 
 
 def index_native_path_labels(data_root, root, cursor, db, *, stop_at):

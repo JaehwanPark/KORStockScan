@@ -1294,7 +1294,8 @@ assert_no_forbidden_attempts()
 
 
 @pytest.mark.parametrize('name', ['src/engine/scalping/reversal_code_handoff.py',
-    'src/engine/ai_engine_openai.py', 'src/engine/scalping/ai_decision_trace.py'])
+    'src/engine/ai_engine_openai.py', 'src/engine/scalping/ai_decision_trace.py',
+    'src/engine/scalping/continuous_reversal_policy_v6.py'])
 def test_main_preparation_uses_reviewed_stopped_origin_code(name):
     current=hashlib.sha256((ROOT/name).read_bytes()).hexdigest()
     pairs = set(C.REVIEWED_PREPARATION_HISTORY.get(name, ()))

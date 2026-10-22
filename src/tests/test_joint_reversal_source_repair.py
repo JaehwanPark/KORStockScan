@@ -598,7 +598,7 @@ def test_registration_exact_delta_native_publisher_and_dated_handoff(tmp_path,mo
     [(review,damage) for review in (False,True,'closed','prepared') for damage in
      (None,'code','source','pointer','date','authority','members','seal','selector','absent')]
     + [(review,damage) for review in (True,'closed','prepared') for damage in ('review_missing','review_day','review_origin','review_pid','review_race','review_consumed')])
-def test_active_code_handoff_is_exact_and_never_reselects_policy(tmp_path,monkeypatch,damage,predecessor_review):
+def test_active_code_handoff_is_exact_and_never_reselects_policy(tmp_path,monkeypatch,damage,predecessor_review,missing_origin=False):
     from pathlib import Path
     from src.engine.scalping import reversal_code_handoff as H, continuous_reversal_policy_v6 as V
     from src.engine.scalping import mechanistic_entry_runtime_policy as N,continuous_reversal_postclose as P
@@ -662,8 +662,9 @@ def test_active_code_handoff_is_exact_and_never_reselects_policy(tmp_path,monkey
         stack=contextlib.ExitStack();stack.callback(IH._PREDECESSOR_REVIEW.reset,context)
         receipt=P.seal(dict(receipt,origin_root=str(selected),origin_commit=old_commit,
             origin_selection_sha256=P.file_hash(selector),actual_pid_consumed=False))
-        N._atomic_write_json(H.path(data,day,old_commit,'bundle'),
-            P.seal(dict(receipt,release_root=str(selected),release_commit=old_commit)))
+        if not missing_origin:
+            N._atomic_write_json(H.path(data,day,old_commit,'bundle'),
+                P.seal(dict(receipt,release_root=str(selected),release_commit=old_commit)))
         if damage == 'review_origin': receipt=P.seal(dict(receipt,origin_commit='c'*40))
         if damage == 'review_consumed': receipt=P.seal(dict(receipt,actual_pid_consumed=True))
     if damage=='seal':receipt['policy_reselected']=True
@@ -681,6 +682,12 @@ def test_active_code_handoff_is_exact_and_never_reselects_policy(tmp_path,monkey
     finally:
         if predecessor_review:stack.close()
     assert frozen=={p:p.read_bytes() for p in frozen}
+
+
+@pytest.mark.parametrize('damage',[None,'review_missing','review_day','review_origin','review_pid','review_race','review_consumed','absent','source'])
+def test_midnight_prepared_review_uses_own_receipt_without_origin_day_receipt(tmp_path,monkeypatch,damage):
+    test_active_code_handoff_is_exact_and_never_reselects_policy(
+        tmp_path,monkeypatch,damage,'prepared',missing_origin=True)
 
 
 @pytest.mark.parametrize('postclose',[False,True])
@@ -742,8 +749,9 @@ def test_second_code_handoff_preserves_selector_provenance_without_freezing_tran
 @pytest.mark.parametrize('damage',[None,'source_date','main_live','session_live','restart','hold',
     'consumed','source_selection','next_date','eod_date','eod_status','eod_rows','failed_commit','failed_status',
     'failed_run','failed_exit','ancestry','changed'])
-def test_postclose_midnight_handoff_requires_stopped_exact_native_ancestry(tmp_path,monkeypatch,damage):
+def test_postclose_midnight_handoff_requires_stopped_exact_native_ancestry(tmp_path,monkeypatch,damage,legacy_damage=False):
     import json
+    from pathlib import Path
     from datetime import timedelta
     from src.engine.scalping import reversal_code_handoff as H,continuous_reversal_postclose as P
     from src.engine.automation import ordered_intraday_deploy as D
@@ -755,7 +763,36 @@ def test_postclose_midnight_handoff_requires_stopped_exact_native_ancestry(tmp_p
     if damage=='consumed':selected['actual_pid_consumed']=True
     if damage=='source_selection':selected['source_date']=day
     if damage=='next_date':selected['next_operating_date']='invalid'
-    selection.write_text(json.dumps(selected))
+    if legacy_damage is not False:
+        from src.engine.infrastructure import research_release_transition as T
+        prior=dict(actual_pid_consumed=True,git_commit='b'*40,release_root=str(tmp_path/'consumed'))
+        prior_raw=json.dumps(prior).encode();selection.write_bytes(prior_raw)
+        transaction=T.Transition(tmp_path,'cold-source')
+        proof_path=data/'report/main_startup_validation'/source/'original-p5/final.json'
+        proof_path.parent.mkdir(parents=True)
+        p5=dict(schema='main_policy_load_exit_validation_v1',status='passed',findings=[],target_date=source,
+            execution_release_root=str(origin),execution_release_commit='a'*40,
+            child_terminated=True,load_check_passed=True,protected_sources_unchanged=True)
+        proof_path.write_text(json.dumps(p5))
+        selected.update(approval_scope='postclose_recovery_before_next_regular_start',
+            previous_git_commit=prior['git_commit'],previous_release_root=prior['release_root'],
+            predecessor_selection_sha256=T.sha(prior_raw),
+            previous_selection_backup=str(transaction.directory/('before-'+T.sha(prior_raw)+'.bytes')),
+            candidate_p5_path=str(proof_path),candidate_p5_sha256=P.file_hash(proof_path))
+        if legacy_damage=='unknown_scope':selected['approval_scope']='unapproved_other_operation'
+        with transaction.owner():
+            raw=json.dumps(selected).encode();transaction.add(selection,raw)
+            transaction.execute([lambda:transaction.write(selection,raw)],verify=lambda:None)
+        if legacy_damage in {'p5_fail','p5_day','p5_root'}:
+            p5.update({'p5_fail':dict(status='failed'),'p5_day':dict(target_date=day),'p5_root':dict(execution_release_root='wrong')}[legacy_damage])
+            proof_path.write_text(json.dumps(p5))
+        if legacy_damage=='snapshot':
+            (transaction.directory/('after-'+T.sha(raw)+'.bytes')).write_bytes(b'{}')
+        if legacy_damage=='predecessor':Path(selected['previous_selection_backup']).write_bytes(b'{}')
+        if legacy_damage=='missing_transition':transaction.path.unlink()
+        if legacy_damage=='unsealed':transaction.path.write_text('{}')
+    else:
+        selection.write_text(json.dumps(selected))
     eod=data/'runtime/update_kospi_status'/('update_kospi_'+source+'.json');eod.parent.mkdir()
     eod_body=dict(schema_version=1,target_date=day if damage=='eod_date' else source,status='running' if damage=='eod_status' else 'completed_with_warnings',
         failed_steps=[],db_state=dict(latest_quote_date=source,rows_on_latest_date=0 if damage=='eod_rows' else 4))
@@ -780,8 +817,8 @@ def test_postclose_midnight_handoff_requires_stopped_exact_native_ancestry(tmp_p
     monkeypatch.setattr(D,'_owned_metadata',inspect)
     before=eod.read_bytes(),status.read_bytes()
     args=(data,day,day if damage=='source_date' else source,origin,'a'*40,'bundle','pointer','c'*40)
-    if damage:
-        with pytest.raises(ValueError,match='active_policy_postclose_'):H._postclose_origin_receipt(*args)
+    if damage or legacy_damage not in {None,False}:
+        with pytest.raises((ValueError,OSError),match='active_policy_postclose_|transition_record_invalid|No such file'):H._postclose_origin_receipt(*args)
         assert not H.path(data,day,'c'*40,'bundle').exists()
         return
     proof=H._postclose_origin_receipt(*args)
@@ -791,6 +828,13 @@ def test_postclose_midnight_handoff_requires_stopped_exact_native_ancestry(tmp_p
     assert proof['verification_basis']=='verified_previous_day_postclose_native_code_ancestry'
     assert all(P.file_hash(name)==sha for name,sha in proof['source_hashes'].items() if name!=str(data/'old.json'))
     assert eod.read_bytes()==before[0] and status.read_bytes()==before[1]
+
+
+@pytest.mark.parametrize('legacy_damage',[None,'unknown_scope','p5_fail','p5_day','p5_root',
+    'snapshot','predecessor','missing_transition','unsealed'])
+def test_midnight_legacy_cold_scope_requires_original_native_transaction_and_p5(tmp_path,monkeypatch,legacy_damage):
+    test_postclose_midnight_handoff_requires_stopped_exact_native_ancestry(
+        tmp_path,monkeypatch,None,legacy_damage=legacy_damage)
 
 
 @pytest.mark.parametrize('anchor,expected',[(10200,'TRUE'),(9900,'FALSE'),(None,'UNKNOWN')])

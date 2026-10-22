@@ -114,6 +114,19 @@ REVIEWED_PREPARATION_HISTORY['src/engine/scalping/reversal_code_handoff.py'].upd
 REVIEWED_PREPARATION_HISTORY['src/engine/scalping/reversal_code_handoff.py'].update({('6c5b8f3013e055ef54774c1e89be66fda93988aa5792e775bb82bac86636cbf0', 'b77b63fa5afe9b3dff59266cecce73f92880b5256b12c32343a70aeddba63aa9'), ('c5c6edd558c15bd1067e018d2fa84e4670cd213183baa376cf223e1376ba0238', 'b77b63fa5afe9b3dff59266cecce73f92880b5256b12c32343a70aeddba63aa9'), ('ab61f882f4c8bbaddc0576a5765f4f102e38fd824b44a25341ffc78d647741b5', 'b77b63fa5afe9b3dff59266cecce73f92880b5256b12c32343a70aeddba63aa9'), ('16776a22b99bff4054ba99914cd8f7c96e87f6ca9fb1ac041e6a8191723b929d', 'b77b63fa5afe9b3dff59266cecce73f92880b5256b12c32343a70aeddba63aa9')})
 
 
+REVIEWED_PREPARATION_HISTORY.setdefault('src/engine/scalping/continuous_reversal_policy_v6.py', set()).update({
+    ('b357d2491d064cf331e8951124fba237043798caacf8da11ed130fb394230d79', 'b2be4fe8fe3080bc8e7de9a42c76a8d00985c6ad257a8b1da052fa6a3a108bf2'),
+    ('eca7f2f2a46d2b4e8f1739e53e6c59d19fd70951c1e2fd786dd8c712201f2460', 'b2be4fe8fe3080bc8e7de9a42c76a8d00985c6ad257a8b1da052fa6a3a108bf2'),
+})
+
+REVIEWED_PREPARATION_HISTORY['src/engine/scalping/reversal_code_handoff.py'].update({
+    ('16776a22b99bff4054ba99914cd8f7c96e87f6ca9fb1ac041e6a8191723b929d', '54b9c0efc38700a0cb8722694cdf84b9df8aa478a28f529b2b618f5532559b5a'),
+    ('6c5b8f3013e055ef54774c1e89be66fda93988aa5792e775bb82bac86636cbf0', '54b9c0efc38700a0cb8722694cdf84b9df8aa478a28f529b2b618f5532559b5a'),
+    ('ab61f882f4c8bbaddc0576a5765f4f102e38fd824b44a25341ffc78d647741b5', '54b9c0efc38700a0cb8722694cdf84b9df8aa478a28f529b2b618f5532559b5a'),
+    ('b77b63fa5afe9b3dff59266cecce73f92880b5256b12c32343a70aeddba63aa9', '54b9c0efc38700a0cb8722694cdf84b9df8aa478a28f529b2b618f5532559b5a'),
+    ('c5c6edd558c15bd1067e018d2fa84e4670cd213183baa376cf223e1376ba0238', '54b9c0efc38700a0cb8722694cdf84b9df8aa478a28f529b2b618f5532559b5a'),
+})
+
 def reviewed_preparation_pair(relative, old, current):
     return (REVIEWED_PREPARATION_SOURCES.get(relative) == (old, current)
             or (old, current) in REVIEWED_PREPARATION_HISTORY.get(relative, ()))

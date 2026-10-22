@@ -2286,6 +2286,8 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(tmp_path,family,faul
     'src/engine/scalping/initial_quantity_monitor_projection.py',
     'src/engine/scalping/ai_action_outcome_calibration.py',
     'src/engine/scalping/continuous_reversal_operating_postclose.py',
+    'src/engine/scalping/continuous_reversal_policy_v6.py',
+    'src/engine/infrastructure/startup_validation_code_context.py',
 ])
 def test_native_selection_label_handoff_rejects_incomplete_generation(tmp_path,family,fault,dependency):
     test_entry_cost_handoff_keeps_exact_complete_generation(
