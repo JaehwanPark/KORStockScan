@@ -687,9 +687,24 @@ def _preserved_native_sources(proof):
         refs[str(index)]=_sha(index)
         if native_prepared:
             binding = native['prepared_intraday_handoff']
+            observation = native.get('stopped_preparation_observation')
+            if observation is not None:
+                if (observation.get('target_date') != day
+                        or observation.get('release_commit') != proof['selected_release_commit']
+                        or any(observation.get(k) is not False for k in
+                               ('runtime_effect','actual_pid_consumed','allowed_runtime_apply'))
+                        or not observation.get('source_hashes')
+                        or any(binding['sources'].get(name) != sha
+                               for name, sha in observation['source_hashes'].items())):
+                    raise ValueError('startup_stopped_preparation_observation_invalid')
+                _check_sources(observation['source_hashes'])
+
             path = data/'runtime/policy_bootstrap/intraday_handoff'/day/(proof['selected_release_commit']+'.json')
             handoff = _json(path)
-            expected_sources = {**handoff.get('frozen_files', {}), str(path): _sha(path)}
+            expected_sources = {**handoff.get('frozen_files', {}), str(path): _sha(path),
+                **((observation or {}).get('source_hashes') or {})}
+            if observation is not None and observation.get('original_first_launch_before') != handoff.get('first_launch_before'):
+                raise ValueError('startup_stopped_preparation_expiry_changed')
             selected = _json(data/'runtime/runtime_release_selection.json')
             active = data/'runtime/policy_bootstrap'/('runtime_policy_bootstrap_'+day+'.json')
             active_body = _json(active)
@@ -817,12 +832,21 @@ def bind_main_preparation(root, commit, data_root, intake):
         from src.engine.automation import intraday_release_handoff as H
         path, consumed = H._paths(day, original_commit)
         if not consumed.exists():
-            checked = H._verify_handoff(day, original_commit)
+            observation = native.get('stopped_preparation_observation')
+            if observation is not None:
+                with H.stopped_preparation_review(day) as current:
+                    if current != observation:
+                        raise ValueError('startup_stopped_preparation_proof_changed')
+                    checked = H._verify_handoff(day, original_commit)
+            else:
+                checked = H._verify_handoff(day, original_commit)
             if checked.get('status') != 'pass':
                 raise ValueError('startup_prepared_intraday_native_validation_failed')
             handoff = checked['handoff']
             native = dict(native, prepared_intraday_handoff=dict(path=str(path), sha256=_sha(path),
-                sources={**handoff['frozen_files'], str(path): _sha(path)}, full_native_validation=True))
+                sources={**handoff['frozen_files'], str(path): _sha(path),
+                    **((native.get('stopped_preparation_observation') or {}).get('source_hashes') or {})},
+                full_native_validation=True))
     if (native.get('status') != 'pass' or native.get('findings')
             or _native_main_basis(native) is None
             or native.get('target_date') != day or native.get('selected_release_commit') != original_commit

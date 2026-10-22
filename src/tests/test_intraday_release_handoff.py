@@ -2289,3 +2289,47 @@ def test_native_selection_label_handoff_rejects_incomplete_generation(tmp_path,f
 def test_prepared_validation_handoff_rejects_changed_context(tmp_path,family,fault):
     test_entry_cost_handoff_keeps_exact_complete_generation(tmp_path,family,fault,'current',
         'src/engine/infrastructure/startup_validation_code_context.py')
+
+@pytest.mark.parametrize('damage', [None, 'changed_source', 'consumed', 'origin'])
+def test_stopped_preparation_analysis_preserves_expired_launch_guard(fixture, monkeypatch, damage):
+    from types import SimpleNamespace
+    from src.engine.automation import ordered_intraday_deploy as D
+    from src.engine.infrastructure import runtime_release_router as R
+    data, previous, selected, prepare = fixture
+    assert prepare()['status'] == 'pass'
+    expired = NOW + timedelta(minutes=16)
+    monkeypatch.setattr(handoff, '_today', lambda *a: expired)
+    hp, cp = handoff._paths(DAY, NEW)
+    original = hp.read_bytes()
+    source = data/'original-stopped-proof.json';source.write_text('native original')
+    driver = SimpleNamespace(workspace=data.parent, previous=previous, previous_commit=OLD,
+        identity={'pid':1}, selection=source, hold=source)
+    origin = dict(failed_root=selected, failed_commit=NEW, selected={},
+        failed_path=source, prior_path=source, preparation_sources={})
+    def inspect():
+        if damage == 'origin': raise ValueError('unknown failed origin')
+        return origin
+    driver.inspect_stopped_origin = inspect
+    monkeypatch.setattr(D, 'StoppedDeploymentRecovery', lambda *a: driver)
+    monkeypatch.setattr(D, '_stopped_intraday_predecessor', lambda *a: dict(
+        frozen_files={str(source):handoff._sha(source)}))
+    monkeypatch.setattr(R, 'git', lambda *a:'c'*40)
+    monkeypatch.setattr(R, 'validate_release', lambda *a:None)
+    assert handoff.verify(DAY, NEW, now=expired)['findings'] == ['intraday_first_launch_window_expired']
+    if damage == 'consumed':cp.write_text('{}')
+    if damage in {'consumed','origin'}:
+        with pytest.raises(ValueError):
+            with handoff.stopped_preparation_review(DAY): pass
+    else:
+        with pytest.raises(ValueError) if damage else __import__('contextlib').nullcontext():
+            with handoff.stopped_preparation_review(DAY) as proof:
+                assert proof['original_first_launch_before'] == json.loads(original)['first_launch_before']
+                assert proof['actual_pid_consumed'] is False and proof['allowed_runtime_apply'] is False
+                assert handoff.verify(DAY, NEW, now=expired)['status'] == 'pass'
+                with pytest.raises(ValueError, match='not_launch_authority'):
+                    handoff.consume(DAY, pid=2, now=expired)
+                if damage:source.write_text('changed native generation')
+    assert hp.read_bytes() == original
+    if damage != 'consumed':
+        assert not cp.exists()
+        assert handoff.verify(DAY, NEW, now=expired)['findings'] == ['intraday_first_launch_window_expired']

@@ -412,6 +412,56 @@ def consumed_observation_scope(*, data_root=None):
 
 
 @contextmanager
+def stopped_preparation_review(day):
+    """Read sealed failed-preparation sources, without renewing launch expiry."""
+    from src.engine.automation import ordered_intraday_deploy as D
+    from src.engine.infrastructure import runtime_release_router as R
+    _today(day, None)
+    candidate = Path(__file__).resolve().parents[3]
+    driver = D.StoppedDeploymentRecovery(DATA_DIR.resolve().parent, candidate, day, D.CONFIRM)
+    origin = driver.inspect_stopped_origin()
+    root, commit = origin['failed_root'], origin['failed_commit']
+    if candidate == root:
+        raise ValueError('intraday_stopped_review_requires_clean_successor')
+    candidate_commit = R.git(candidate, 'rev-parse', 'HEAD')
+    R.validate_release(driver.workspace, dict(schema='runtime_release_selection_v1',
+        release_root=str(candidate), git_commit=candidate_commit))
+    if origin['selected'].get('native_predecessor_path'):
+        native = _native_predecessor(day, commit, driver.previous, driver.previous_commit,
+            driver.identity, origin['selected']['native_predecessor_path'],
+            origin['selected']['native_predecessor_sha256'])
+    else:
+        native = D._stopped_intraday_predecessor(day, driver.previous, driver.previous_commit,
+            driver.identity, origin['failed_path'])
+    paths = [driver.selection, driver.hold, origin['failed_path'], origin['prior_path']]
+    sources = {**native['frozen_files'], **origin['preparation_sources'],
+               **{str(path): _sha(path) for path in paths}}
+    handoff_path, consumed = _paths(day, commit)
+    if consumed.exists() or consumed.is_symlink():
+        raise ValueError('intraday_stopped_review_consumed_selection')
+    body = _read(handoff_path)
+    sources.update(body['frozen_files'])
+    sources[str(handoff_path)] = _sha(handoff_path)
+    proof = dict(target_date=day, release_commit=commit, source_hashes=sources,
+        original_first_launch_before=body['first_launch_before'],
+        runtime_effect=False, actual_pid_consumed=False, allowed_runtime_apply=False)
+    review = dict(day=day, root=root, commit=commit, code_root=candidate,
+        code_commit=candidate_commit, identity=driver.identity, prepared_observation=proof)
+    token = _PREDECESSOR_REVIEW.set(review)
+    try:
+        checked = _verify_handoff(day, commit)
+        if checked['status'] != 'pass':
+            raise ValueError('intraday_stopped_review_source_invalid')
+        yield proof
+        driver.inspect_stopped_origin()
+        if (any(_sha(path) != sha for path, sha in sources.items())
+                or consumed.exists() or consumed.is_symlink()):
+            raise ValueError('intraday_stopped_review_generation_changed')
+    finally:
+        _PREDECESSOR_REVIEW.reset(token)
+
+
+@contextmanager
 def closed_predecessor_review(day):
     """A clean candidate revalidates the closed origin without claiming a PID."""
     from src.engine.infrastructure import runtime_release_router as router
@@ -500,7 +550,9 @@ def verify_entry_consumer_code(day, *, family, policy_sha, expected, paths, actu
         if (not review or review['day'] != day or review['root'] != root
                 or review['commit'] != commit or review['code_root'] != Path(__file__).resolve().parents[3]
                 or (closed_consumption_observation(day) != review['closed_observation']
-                    if review.get('closed_observation') else _identity(review['identity']['pid']) != review['identity'])):
+                    if review.get('closed_observation') else
+                    any(_sha(p) != sha for p, sha in review['prepared_observation']['source_hashes'].items())
+                    if review.get('prepared_observation') else _identity(review['identity']['pid']) != review['identity'])):
             raise ValueError('entry_consumer_release_mismatch')
         code_root, code_commit = review['code_root'], review['code_commit']
     manifest = _read(bootstrap.manifest_path(day))
@@ -4619,7 +4671,7 @@ REVIEWED_ENTRY_COST_DEPENDENCY_VARIANTS = {
 # report; effective auxiliary registry research remains report-only.
 REVIEWED_ENTRY_COST_PRE_PRESTART_HASHES = REVIEWED_ENTRY_COST_HASHES
 REVIEWED_ENTRY_COST_PRE_PRESTART_VARIANTS = REVIEWED_ENTRY_COST_DEPENDENCY_VARIANTS
-REVIEWED_PRESTART_INTEGRATION_HASHES = {'src/engine/automation/ordered_intraday_deploy.py': 'a457eeaf5a1572368751126986eed24a215282dbf79449d5779241fd2fea737d', 'src/engine/automation/main_market_weakness_research.py': 'e78122825224eee72bb3301fd2df7c22230645c5b88103fd32009a186316909b'}
+REVIEWED_PRESTART_INTEGRATION_HASHES = {'src/engine/automation/ordered_intraday_deploy.py': 'd56d407f1515ee8a8bfd307f469b175b794f490120aec2b2fe2f98165d5488af', 'src/engine/automation/main_market_weakness_research.py': 'e78122825224eee72bb3301fd2df7c22230645c5b88103fd32009a186316909b', 'src/engine/automation/main_startup_validation.py': '7382a1c8f757cc99f836e0a754ffff5f7aa04432cd058b41d292e6b10e8da304', 'src/engine/infrastructure/startup_validation_code_context.py': '05fcf283be9c125f9262277eaf0ff2ef5f26b174e034e01113c8ebdec426a4a8'}
 REVIEWED_ENTRY_COST_HASHES = {**REVIEWED_ENTRY_COST_HASHES, **REVIEWED_PRESTART_INTEGRATION_HASHES}
 REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
     name: REVIEWED_ENTRY_COST_PAIRS.get(name, ()) + tuple((old, current) for old in sorted(
@@ -5643,7 +5695,17 @@ def _verify_handoff(day, commit, *, now=None, historical_observer=False):
                     or consumed.get("release_root") != str(root)):
                 raise ValueError("intraday_consumption_invalid")
         elif current > deadline:
-            raise ValueError("intraday_first_launch_window_expired")
+            review = _PREDECESSOR_REVIEW.get() or {}
+            observation = review.get('prepared_observation') or {}
+            if (review.get('day') != day or review.get('root') != root
+                    or review.get('commit') != commit
+                    or observation.get('original_first_launch_before') != payload['first_launch_before']
+                    or observation.get('runtime_effect') is not False
+                    or observation.get('actual_pid_consumed') is not False
+                    or observation.get('allowed_runtime_apply') is not False
+                    or not observation.get('source_hashes')
+                    or any(_sha(path) != sha for path, sha in observation['source_hashes'].items())):
+                raise ValueError("intraday_first_launch_window_expired")
     except (OSError, ValueError, KeyError, TypeError, subprocess.CalledProcessError) as exc:
         findings.append(str(exc))
     return {"status": "pass" if not findings else "fail", "target_date": day,
@@ -5761,6 +5823,8 @@ def verify_predecessor_consumption(day, *, pid):
 
 
 def consume(day, *, pid, now=None):
+    if (_PREDECESSOR_REVIEW.get() or {}).get('prepared_observation') is not None:
+        raise ValueError('intraday_preparation_review_not_launch_authority')
     _, commit = _selection()
     path, consumed_path = _paths(day, commit)
     if not path.exists():
