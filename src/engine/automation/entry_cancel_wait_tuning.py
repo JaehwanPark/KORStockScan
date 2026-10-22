@@ -773,14 +773,145 @@ def _reconciliation_dates(state):
     return days
 
 
-def _source_binding(projection, registry_contract):
+def _terminal_filled_cancel_inventory(registry):
+    """Only original, fully filled Main orders can explain a local cancel veto."""
+    from src.trading.order.owner_custody_registry import broker_account_key,OwnerRegistryError
+    try:account=broker_account_key(require_explicit=True)
+    except OwnerRegistryError:return {}
+    inventory={}
+    for row in registry:
+        if (row.get('account_key')!=account
+                or row.get('event')!='ORDER_TERMINAL' or row.get('state')!='ORDER_TERMINAL'
+                or row.get('side')!='BUY' or row.get('action')!='NEW'
+                or row.get('owner_type')!='main_scalping'
+                or type(row.get('quantity')) is not int or row['quantity']<=0
+                or type(row.get('filled_qty')) is not int or row['filled_qty']!=row['quantity']
+                or row.get('position_id')!=row.get('owner_id')):
+            continue
+        owner=str(row.get('owner_id') or '')
+        if not owner.startswith('main_scalping:'):continue
+        key=(row.get('order_date'),row.get('symbol'),owner.removeprefix('main_scalping:'),row.get('broker_order_no'))
+        inventory.setdefault(key,row)
+    return inventory
+
+
+def _cancel_event_clock(value):
+    stamp=datetime.fromisoformat(value)
+    return stamp.replace(tzinfo=KST) if stamp.tzinfo is None else stamp.astimezone(KST)
+
+
+def _partition_terminal_cancel_diagnostics(events, registry):
+    """Retain execution inputs; account for proven guard-only pairs by identity.
+
+    Full original rows remain in the sealed native execution partitions. Do
+    not carry a repeated frozen BUY seed into every later diagnostic attempt.
+    """
+    from src.engine.pipeline_event_summary import execution_projection_identity
+    inventory=_terminal_filled_cancel_inventory(registry)
+    kept=[];pending={};groups={}
+    for sequence,event in enumerate(events):
+        fields=event.get('fields') or {};stage=event.get('stage')
+        key=(event.get('emitted_date'),event.get('stock_code'),str(event.get('record_id') or ''),str(fields.get('orig_ord_no') or ''))
+        terminal=inventory.get(key)
+        if stage not in {'entry_order_cancel_requested','entry_order_cancel_failed'} or terminal is None:
+            kept.append((sequence,event));continue
+        try:
+            clock=_cancel_event_clock(event['emitted_at'])
+            eligible=(clock.date().isoformat()==key[0]
+                and _cancel_event_clock(terminal['observed_at_kst'])<clock
+                and event.get('execution_source_event_sha256')==execution_projection_identity(event))
+        except (KeyError,TypeError,ValueError):eligible=False
+        if not eligible:
+            kept.append((sequence,event));continue
+        if stage=='entry_order_cancel_requested':
+            if key in pending:kept.append(pending[key])
+            pending[key]=(sequence,event);continue
+        requested_record=pending.pop(key,None)
+        requested=requested_record[1] if requested_record is not None else None
+        failure_fields={k:v for k,v in fields.items() if k not in {'cancel_response','cancel_message'}}
+        if (requested is None or fields.get('cancel_response')!='failed'
+                or fields.get('cancel_message')!='owner_registry_cancel_original_not_open'
+                or requested.get('fields')!=failure_fields
+                or _cancel_event_clock(requested['emitted_at'])>clock):
+            if requested is not None:kept.append(requested_record)
+            kept.append((sequence,event));continue
+        for row in (requested,event):
+            group=groups.setdefault((*key,row['stage']),dict(source_date=key[0],stock_code=key[1],
+                record_id=key[2],order_no=key[3],stage=row['stage'],
+                disposition='terminal_filled_local_cancel_guard',
+                terminal_event_hash=terminal['event_hash'],terminal_intent_id=terminal['intent_id'],
+                first_event_at=row['emitted_at'],last_event_at=row['emitted_at'],
+                event_sha256s=[],execution_sha256s=[]))
+            group['last_event_at']=row['emitted_at']
+            group['event_sha256s'].append(_digest(row))
+            group['execution_sha256s'].append(row['execution_source_event_sha256'])
+    kept.extend(pending.values());diagnostics={}
+    for key,group in sorted(groups.items()):
+        for name in ('event_sha256s','execution_sha256s'):group[name].sort()
+        diagnostics.setdefault(key[0],[]).append(group)
+    return [row for _,row in sorted(kept,key=lambda item:item[0])],diagnostics
+
+
+def _validate_terminal_cancel_diagnostics(groups, day, *, registry=None):
+    import re
+    from collections import Counter
+    counts=Counter();identities=set();originals=set()
+    inventory=_terminal_filled_cancel_inventory(registry) if registry is not None else None
+    for group in groups:
+        key=(day,group['stock_code'],group['record_id'],group['order_no'])
+        stage=group['stage'];refs=group['event_sha256s'];hashes=group['execution_sha256s']
+        if (group['source_date']!=day or group.get('disposition')!='terminal_filled_local_cancel_guard'
+                or stage not in {'entry_order_cancel_requested','entry_order_cancel_failed'}
+                or not refs or len(refs)!=len(hashes) or len(set(refs))!=len(refs) or len(set(hashes))!=len(hashes)
+                or any(not re.fullmatch('[0-9a-f]{64}',str(sha)) for sha in [*refs,*hashes,group['terminal_event_hash']])
+                or originals.intersection(refs) or identities.intersection(hashes)
+                or _cancel_event_clock(group['first_event_at']).date().isoformat()!=day
+                or _cancel_event_clock(group['last_event_at']).date().isoformat()!=day
+                or _cancel_event_clock(group['first_event_at'])>_cancel_event_clock(group['last_event_at'])):
+            raise ValueError('cancel_wait_terminal_diagnostic_contract_invalid')
+        if inventory is not None:
+            terminal=inventory.get(key) or {}
+            if (terminal.get('event_hash')!=group['terminal_event_hash']
+                    or terminal.get('intent_id')!=group['terminal_intent_id']
+                    or _cancel_event_clock(terminal['observed_at_kst'])>=_cancel_event_clock(group['first_event_at'])):
+                raise ValueError('cancel_wait_terminal_diagnostic_source_changed')
+        counts[(*key,stage)]+=len(refs);originals.update(refs);identities.update(hashes)
+    for key in {key[:-1] for key in counts}:
+        if counts[(*key,'entry_order_cancel_requested')]!=counts[(*key,'entry_order_cancel_failed')]:
+            raise ValueError('cancel_wait_terminal_diagnostic_pair_incomplete')
+    return len(originals)
+
+
+def _diagnostic_projection_digest(payload):
+    return _digest({day:row['source_binding']['terminal_cancel_diagnostics']
+        for day,row in payload['economic_state']['submission_reconciliation']['by_date'].items()
+        if (row.get('source_binding') or {}).get('terminal_cancel_diagnostics')})
+
+
+def _verify_diagnostic_projection_receipt(payload, data_root, *, report_sha=None):
+    """Reuse the existing native publisher receipt, never a self-resealed report."""
+    path=Path(data_root)/'report/entry_cancel_wait_tuning'/f"entry_cancel_wait_tuning_{payload['date']}.reuse-contract.json"
+    receipt,_=_bounded_semantic_json(path)
+    if (receipt.get('report_proof_sha256')!=payload.get('proof_sha256')
+            or receipt.get('as_of')!=payload.get('generated_at')
+            or receipt.get('terminal_cancel_diagnostics_sha256')!=_diagnostic_projection_digest(payload)
+            or report_sha is not None and receipt.get('artifact_sha256')!=report_sha):
+        raise ValueError('cancel_wait_terminal_diagnostic_publication_changed')
+
+
+def _source_binding(projection, registry_contract, *, diagnostics=None):
     census = projection.get('producer_census') or {}
-    return dict(status=projection.get('status'),
+    result=dict(status=projection.get('status'),
                 projection_sha256=_digest(projection),
                 producer_manifest_sha256=census.get('manifest_sha256'),
                 retained_event_count=projection.get('retained_event_count'),
                 native_census_projection=census.get('native_census_projection'),
                 registry_tail_hash=registry_contract.get('tail_hash'))
+    if diagnostics:
+        _validate_terminal_cancel_diagnostics(diagnostics,diagnostics[0]['source_date'])
+        result['terminal_cancel_diagnostics']=diagnostics
+        result['retained_event_count']-=sum(len(g['event_sha256s']) for g in diagnostics)
+    return result
 
 
 def _logical_projection_sources(projection):
@@ -947,27 +1078,46 @@ def _previous_state(target_date):
             if not refresh_floor <= source_day <= day:
                 raise ValueError('cancel_wait_predecessor_source_date_outside_scope')
             try:
-                original,contract=entry._bounded_execution_projection(source_day,stages=CANCEL_WAIT_SUMMARY_STAGES | {'order_leg_sent'},
-                    families=('dynamic_entry_price_resolver','entry_price_execution_quality'))
                 retained=[e for e in state.get('source_events',[]) if e.get('emitted_date')==source_day]
-                expected={_digest(e) for e in retained}
                 prior_row=((state.get('submission_reconciliation') or {}).get('by_date') or {}).get(source_day) or {}
-                if not expected and prior_row.get('excluded_source_event_sha256s'):
-                    expected=set(prior_row['excluded_source_event_sha256s'])
-                if contract.get('status')!='ready' or {_digest(e) for e in original}!=expected:
-                    # A prior failed projection used to erase both events and
-                    # their excluded hashes. The original dated native receipt
-                    # can recover that loss; a known nonempty/verified-empty
-                    # predecessor disagreement must still fail closed.
-                    recovered[source_day] = _recover_lost_original(source_day, state,
-                        original, contract, registry, registry_contract, path, predecessor_sha, payload)
-                elif source_day in recovered:
-                    _validate_recovery_receipt(source_day, recovered[source_day], original,
-                        read_object=_bounded_semantic_json, report_dir=REPORT_DIR)
-                    if (_digest(_verified_original_census(contract, original)) != recovered[source_day]['logical_source_receipts_sha256']
-                        or contract['producer_census'].get('manifest_sha256') != recovered[source_day]['producer_manifest_sha256']):
-                        raise ValueError('cancel_wait_original_native_source_changed:' + source_day)
-                bindings[source_day] = _source_binding(contract, registry_contract)
+                prior_binding=prior_row.get('source_binding') or {}
+                prior_diagnostics=prior_binding.get('terminal_cancel_diagnostics') or []
+                if prior_diagnostics:
+                    # The cold producer already conserved the full native census.
+                    # Reuse that exact generation; never scan yesterday's large
+                    # diagnostic partitions again merely to rebuild the ledger.
+                    from src.engine.pipeline_event_summary import producer_summary_paths
+                    _verify_diagnostic_projection_receipt(payload,DATA_DIR,report_sha=predecessor_sha)
+                    manifest_path=producer_summary_paths(DATA_DIR/'pipeline_event_summaries',source_day)[1]
+                    manifest,_=_bounded_semantic_json(manifest_path)
+                    _validate_terminal_cancel_diagnostics(prior_diagnostics,source_day,registry=registry)
+                    if (prior_binding.get('producer_manifest_sha256')!=_digest(manifest)
+                            or not _sealed_census_matches(DATA_DIR,source_day,retained,manifest,prior_binding)):
+                        raise ValueError('cancel_wait_terminal_diagnostic_source_changed')
+                    original=retained;bindings[source_day]=prior_binding
+                else:
+                    original,contract=entry._bounded_execution_projection(source_day,stages=CANCEL_WAIT_SUMMARY_STAGES | {'order_leg_sent'},
+                        families=('dynamic_entry_price_resolver','entry_price_execution_quality'))
+                    expected={_digest(e) for e in retained}
+                    if not expected and prior_row.get('excluded_source_event_sha256s'):
+                        expected=set(prior_row['excluded_source_event_sha256s'])
+                    if contract.get('status')!='ready' or {_digest(e) for e in original}!=expected:
+                        # A prior failed projection used to erase both events and
+                        # their excluded hashes. The original dated native receipt
+                        # can recover that loss; a known nonempty/verified-empty
+                        # predecessor disagreement must still fail closed.
+                        recovered[source_day] = _recover_lost_original(source_day, state,
+                            original, contract, registry, registry_contract, path, predecessor_sha, payload)
+                    elif source_day in recovered:
+                        _validate_recovery_receipt(source_day, recovered[source_day], original,
+                            read_object=_bounded_semantic_json, report_dir=REPORT_DIR)
+                        if (_digest(_verified_original_census(contract, original)) != recovered[source_day]['logical_source_receipts_sha256']
+                            or contract['producer_census'].get('manifest_sha256') != recovered[source_day]['producer_manifest_sha256']):
+                            raise ValueError('cancel_wait_original_native_source_changed:' + source_day)
+                    original,diagnostics=(_partition_terminal_cancel_diagnostics(original,registry)
+                        if source_day not in recovered else (original,{}))
+                    bindings[source_day] = _source_binding(contract, registry_contract,
+                        diagnostics=diagnostics.get(source_day))
                 reconstructed,unknown=_parents(source_day,original,registry)
                 if unknown:
                     rebuilt_counts.pop(source_day, None)
@@ -985,7 +1135,8 @@ def _previous_state(target_date):
                 rebuilt_events.extend(original)
             except (OSError, ValueError, TypeError, KeyError, SyntaxError) as exc:
                 retained=[e for e in state.get('source_events',[]) if e.get('emitted_date')==source_day]
-                refs=sorted({_digest(e) for e in retained})
+                refs=sorted({_digest(e) for e in retained}
+                    | {sha for group in ((state.get('submission_reconciliation') or {}).get('by_date',{}).get(source_day,{}).get('source_binding') or {}).get('terminal_cancel_diagnostics',[]) for sha in group['event_sha256s']})
                 if not refs:
                     refs=(((state.get('submission_reconciliation') or {}).get('by_date') or {}).get(source_day) or {}).get('excluded_source_event_sha256s') or []
                 quarantined[source_day]=dict(reason=str(exc), excluded_source_event_sha256s=refs,
@@ -1086,7 +1237,8 @@ def _hydrate_missing_history(target_date, predecessor, registry, source):
             original, contract = entry._bounded_execution_projection(day,
                 stages=CANCEL_WAIT_SUMMARY_STAGES | {'order_leg_sent'},
                 families=('dynamic_entry_price_resolver', 'entry_price_execution_quality'))
-            bindings[day] = _source_binding(contract, source['registry'])
+            original,diagnostics=_partition_terminal_cancel_diagnostics(original,registry)
+            bindings[day] = _source_binding(contract, source['registry'],diagnostics=diagnostics.get(day))
             if contract.get('status') != 'ready':
                 continue
             reconstructed, unknown = _parents(day, original, registry)
@@ -1099,7 +1251,7 @@ def _hydrate_missing_history(target_date, predecessor, registry, source):
 
 
 def _reconcile_history(target_date, events, registry, parents, outcomes, source,
-                       predecessor, current_details):
+                       predecessor, current_details, *, diagnostics=None):
     """Separate observed custody from the completeness of historical sources."""
     from src.engine.automation.source_quality_clean_baseline import policy_refresh_start_date
     from src.utils.market_day import is_krx_trading_day
@@ -1112,7 +1264,7 @@ def _reconcile_history(target_date, events, registry, parents, outcomes, source,
     bindings.update({day: row.get('source_binding', {}) for day, row in
                      (predecessor.get('submission_reconciliation') or {}).get('by_date', {}).items()
                      if day not in bindings})
-    bindings[target_date] = _source_binding(source['projection'], source['registry'])
+    bindings[target_date] = _source_binding(source['projection'], source['registry'],diagnostics=diagnostics)
     by_date = {}
     for day in sorted(days):
         if day > target_date or day < floor:
@@ -1330,6 +1482,7 @@ def build_report(target_date: str, *, artifact_as_of: str | None = None) -> dict
             excluded_from_economic_history=True,structural_gap_eta=None)
     _hydrate_missing_history(target_date, predecessor, registry, source)
     outcomes=list({_digest(r):r for r in predecessor.get('actual_outcomes',[])+outcomes}.values())
+    events,diagnostics=_partition_terminal_cancel_diagnostics(events,registry)
     events=list({_digest(r):r for r in chain(predecessor.get('source_events',[]),events)}.values())
     counts=dict(predecessor.get('source_counts') or {})
     parents=[p for p in predecessor.get('parents',[]) if p['source_date']!=target_date]
@@ -1390,7 +1543,7 @@ def build_report(target_date: str, *, artifact_as_of: str | None = None) -> dict
                             'cancel_pending' if cancel_pending else
                             'partial_open' if filled_qty>0 else 'open'))
     ledger, history = _reconcile_history(target_date, events, registry, parents,
-        outcomes, source, predecessor, parent_details)
+        outcomes, source, predecessor, parent_details,diagnostics=diagnostics.get(target_date))
     daily_zero = (counts.get(target_date) == 0 and not unclassified
                   and source['projection'].get('status') == 'ready'
                   and source['registry'].get('status') == 'verified'
@@ -1601,7 +1754,7 @@ def _validate_recovery_receipt(day, receipt, events, *, read_object=None, report
     return path
 
 
-def _projected_census_matches(data_root, day, events, manifest, projection):
+def _projected_census_matches(data_root, day, events, manifest, projection, diagnostics=()):
     """Consume the producer's sealed inline census while its source is unchanged.
 
     This same-owner local receipt is not authentication against a writer that
@@ -1651,6 +1804,10 @@ def _projected_census_matches(data_root, day, events, manifest, projection):
             or any(stage not in stages or not re.fullmatch('[0-9a-f]{64}',str(v)) for stage,v in hashes.items())):
         raise ValueError('cancel_wait_census_projection_counts_invalid')
     observed=Counter();observed_hash=Counter()
+    _validate_terminal_cancel_diagnostics(diagnostics,day)
+    for group in diagnostics:
+        stage=group['stage'];observed[stage]+=len(group['execution_sha256s'])
+        observed_hash[stage]=(observed_hash[stage]+sum(int(sha,16) for sha in group['execution_sha256s']))%IDENTITY_MODULUS
     for event in events:
         stage=event.get('stage');sha=event.get('execution_source_event_sha256')
         if stage not in stages or event.get('emitted_date')!=day or sha!=execution_projection_identity(event):
@@ -1665,8 +1822,11 @@ def _sealed_census_matches(data_root, day, events, manifest, binding=None):
     from src.engine.pipeline_event_summary import CANCEL_WAIT_SUMMARY_STAGES
     from src.engine.scalping.entry_split_order_plan import _execution_projection_census, _canonical_sha256
     projected=_projected_census_matches(data_root,day,events,manifest,
-        (binding or {}).get('native_census_projection'))
+        (binding or {}).get('native_census_projection'),
+        (binding or {}).get('terminal_cancel_diagnostics') or ())
     if projected is not None:return projected
+    if (binding or {}).get('terminal_cancel_diagnostics'):
+        return False
     stages = CANCEL_WAIT_SUMMARY_STAGES | {'order_leg_sent'}
     if any(e.get('stage') not in stages or e.get('emitted_date') != day for e in events):
         return False
@@ -1710,6 +1870,8 @@ def _candidate_evidence_valid(payload):
 def _reconciliation_metadata_generation(data_root, by_date, recovered_sources=None):
     from src.engine.pipeline_event_summary import producer_summary_paths
     paths = [Path(data_root)/'runtime/order_owner_registry.jsonl']
+    if any((row.get('source_binding') or {}).get('terminal_cancel_diagnostics') for row in by_date.values()):
+        paths.append(Path(data_root)/'report/entry_cancel_wait_tuning'/f'entry_cancel_wait_tuning_{max(by_date)}.reuse-contract.json')
     for day, row in sorted(by_date.items()):
         if row['coverage_verified']:
             logical, manifest = producer_summary_paths(Path(data_root)/'pipeline_event_summaries',day)
@@ -1795,6 +1957,7 @@ def validated_reconciliation_view(payload, policy=None, *, data_root=None, read_
             findings.append('cancel_wait_history_source_binding_missing')
         missing, unknown = [], set()
         for d, row in by_date.items():
+            _validate_terminal_cancel_diagnostics((row.get('source_binding') or {}).get('terminal_cancel_diagnostics') or [],d)
             keys = row['unclassified_identities']
             rejected_ids=row.get('rejected_without_order_intent_ids')
             if rejected_ids is not None and (not isinstance(rejected_ids,list)
@@ -1951,6 +2114,8 @@ def validated_reconciliation_view(payload, policy=None, *, data_root=None, read_
                 findings.append('cancel_wait_economic_population_or_current_custody_invalid')
         cache_key = None
         if data_root is not None:
+            if any((row.get('source_binding') or {}).get('terminal_cancel_diagnostics') for row in by_date.values()):
+                _verify_diagnostic_projection_receipt(payload,data_root)
             generation = _reconciliation_metadata_generation(data_root,by_date,recovered_sources)
             projected_sources=set()
             for d,row in by_date.items():
@@ -2025,6 +2190,8 @@ def validated_reconciliation_view(payload, policy=None, *, data_root=None, read_
             inventory={key:row for key,row in states.items() if row.get('owner_type')=='main_scalping'
                 and row.get('side')=='BUY' and row.get('action')=='NEW'}
             for source_day, record in by_date.items():
+                _validate_terminal_cancel_diagnostics(
+                    (record.get('source_binding') or {}).get('terminal_cancel_diagnostics') or [],source_day,registry=ancestor)
                 if 'excluded_reprice_order_sources' in record:
                     joined={key for parent in state['parents'] if parent['source_date']==source_day
                             for key in parent['children']}
@@ -2235,6 +2402,12 @@ def write_report(target_date: str, *, effective_date=None, publication_date=None
     json_path, md_path = report_paths(target_date)
     json_path.parent.mkdir(parents=True, exist_ok=True)
     _atomic_json(json_path,payload)
+    if target_date >= EXECUTABLE_EVIDENCE_DATE:
+        _atomic_json(json_path.with_suffix('.reuse-contract.json'),dict(
+            artifact_sha256=hashlib.sha256(json_path.read_bytes()).hexdigest(),
+            report_proof_sha256=payload['proof_sha256'],
+            terminal_cancel_diagnostics_sha256=_diagnostic_projection_digest(payload),
+            preflight_fingerprint=payload['preflight_fingerprint'],as_of=payload['generated_at']))
     from src.engine.monitoring.policy_generation_validation import (
         NATIVE_REPORT_LIMIT, publish_native_report_projection)
     if json_path.stat().st_size>NATIVE_REPORT_LIMIT:
@@ -2242,8 +2415,6 @@ def write_report(target_date: str, *, effective_date=None, publication_date=None
     if target_date >= EXECUTABLE_EVIDENCE_DATE:
         from src.utils.market_day import next_krx_trading_date as _next_trading_date
         policy,path=prepare_policy(payload,effective_date or _next_trading_date(date.fromisoformat(publication_date or target_date)).isoformat(),publication_date=publication_date)
-        _atomic_json(json_path.with_suffix('.reuse-contract.json'),dict(artifact_sha256=hashlib.sha256(json_path.read_bytes()).hexdigest(),
-            preflight_fingerprint=payload['preflight_fingerprint'],as_of=payload['generated_at']))
     lines = [
         f"# Entry Cancel Wait Tuning {target_date}",
         "",
