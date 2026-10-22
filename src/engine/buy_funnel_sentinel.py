@@ -106,6 +106,7 @@ BROKER_SUBMIT_FAILURE_STAGES = {
 BLOCKER_STAGE_PREFIXES = ("blocked_",)
 BLOCKER_STAGES = {
     "machine_submit_lineage_rejected",
+    "main_entry_order_route_invalid",
     "latency_block",
     "entry_armed_expired",
     "entry_armed_expired_after_wait",
@@ -123,7 +124,9 @@ BLOCKER_STAGES = {
     *BROKER_SUBMIT_FAILURE_STAGES,
 }
 DEFAULT_WINDOWS = (5, 10, 30)
-SESSION_START = time(9, 0)
+SESSION_START = time(8, 0)
+PREMARKET_SENTINEL_START = time(8, 5)
+PREMARKET_SENTINEL_END = time(8, 50)
 SENTINEL_START = time(9, 5)
 SENTINEL_END = time(15, 20)
 NXT_SENTINEL_START = time(16, 0)
@@ -4804,7 +4807,10 @@ def _classify(
     submitted_unique = int(unique.get("order_bundle_submitted", 0) or 0)
     latest = _parse_iso_datetime(_safe_str(current.get("latest_event_at")))
     stale_sec = int((as_of - latest).total_seconds()) if latest else None
-    if _safe_str(scope_key).startswith("NXT|"):
+    if _safe_str(scope_key).startswith("PREMARKET_KRX_LIKE|"):
+        before_sentinel_hours = as_of.time() < PREMARKET_SENTINEL_START
+        during_sentinel_hours = PREMARKET_SENTINEL_START <= as_of.time() < PREMARKET_SENTINEL_END
+    elif _safe_str(scope_key).startswith("NXT|"):
         before_sentinel_hours = as_of.time() < NXT_SENTINEL_START
         during_sentinel_hours = NXT_SENTINEL_START <= as_of.time() <= NXT_SENTINEL_END
     else:

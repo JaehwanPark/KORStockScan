@@ -142,11 +142,11 @@ REVIEWED_PREPARATION_HISTORY.setdefault('src/engine/scalping/reversal_auxiliary_
 
 # Reviewed9a8 -> sentinel/972 source-contract integration; no policy changes.
 REVIEWED_PREPARATION_HISTORY.setdefault('src/engine/buy_funnel_sentinel.py', set()).update({('4918513346f28c8908b0fe18085663ef662ba2dc03349b4b7822ff1656b908d1',
-  '173cc88ba7cf28bfdccec1dc53404b2b3506ca5f34527c0a064f2576e10aef6f'),
+  '40b489fff0e1b82edbf36b734424ca7826dbc2c4c8a3b27ee9069c9381e7df2a'),
  ('6c41ee5823caa738bdc40c6da07e8b5fe4714976a9efc7668e90dac33a325993',
-  '173cc88ba7cf28bfdccec1dc53404b2b3506ca5f34527c0a064f2576e10aef6f'),
+  '40b489fff0e1b82edbf36b734424ca7826dbc2c4c8a3b27ee9069c9381e7df2a'),
  ('b1836d21a079e7164d3c04629b1bb83e5f9475dda917c34b97802c2e2e3a95b7',
-  '173cc88ba7cf28bfdccec1dc53404b2b3506ca5f34527c0a064f2576e10aef6f')})
+  '40b489fff0e1b82edbf36b734424ca7826dbc2c4c8a3b27ee9069c9381e7df2a')})
 REVIEWED_PREPARATION_HISTORY.setdefault('src/engine/holding_exit_sentinel.py', set()).update({('a02066a6f6538f7b4f855c5cc93ed3b5b4e661f4516c6191cd4859542cc5afdb',
   '7ae845b51d16bf425337e4758d1f83047f1f4e1c3479d39875523f0e2748012a')})
 REVIEWED_PREPARATION_HISTORY.setdefault('src/engine/monitoring/submission_bottleneck_monitor.py', set()).update({('00e5a75bdbf7fa812145212820094baa7e04638d5a9c18d4e8011b3b7165abae',
@@ -158,13 +158,13 @@ REVIEWED_PREPARATION_HISTORY.setdefault('src/engine/monitoring/submission_bottle
  ('9c51124b5c07b8ae9039e2e70d1f36da0e3b542136dd24d2ff66ccab642b4ccb',
   'a5a8b7be30b63d0e7990a5761a60a6e0225a563272b15a24c8ccf9fc013f21d8')})
 REVIEWED_PREPARATION_HISTORY.setdefault('src/engine/monitoring/sentinel_summary_contract.py', set()).update({('06fb351581ad704aae6374589f6b4db288c802dc030e3dcde036ac217c5b8a80',
-  'f2e03fcc1b20d1b9e172fe268ef5de64a9137c0d73696a945f9dde6271e21403'),
+  '182f6372e025989b47825e6b9a54b6450e837dd6be772740298d567a965015eb'),
  ('15a789219cfaca8ec81f611b01a1d15456f64c40201e26ef8bb320f607dc8a3c',
-  'f2e03fcc1b20d1b9e172fe268ef5de64a9137c0d73696a945f9dde6271e21403'),
+  '182f6372e025989b47825e6b9a54b6450e837dd6be772740298d567a965015eb'),
  ('28e0a5f8a32283c0f9503e1bae045ac2f9129c8bb00a291d3da40c22a9e9d565',
-  'f2e03fcc1b20d1b9e172fe268ef5de64a9137c0d73696a945f9dde6271e21403'),
+  '182f6372e025989b47825e6b9a54b6450e837dd6be772740298d567a965015eb'),
  ('c4c20df27d61239aa45d0f2447c5cda85edc2bcb4fff508230cedf14f28a2117',
-  'f2e03fcc1b20d1b9e172fe268ef5de64a9137c0d73696a945f9dde6271e21403')})
+  '182f6372e025989b47825e6b9a54b6450e837dd6be772740298d567a965015eb')})
 REVIEWED_PREPARATION_HISTORY.setdefault('src/engine/kiwoom_sniper_v2.py', set()).update({('f0289f079fc3f193efe02a0ff3ee7542da5dc3b1689292277372ba526bc4eba7',
   '02ecf7b4a55042fbcd2a7b4f59bf8602bed6020730f0a8bb326b41d5d6418866'),
  ('f88f16a8747ba64edc7594e5936dcf6d7e636fd07d852932635204c44384d4a8',

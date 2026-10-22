@@ -2167,3 +2167,19 @@ External documentation synchronization remains user-run:
 ```bash
 PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTHONPATH=. .venv/bin/python -m src.engine.sync_github_project_calendar
 ```
+
+### Premarket submission route and native policy proof repair 2026-10-23
+
+08:40 기준 운영 선택9a8e59bfc/PID1134876/start35426396·기계/보조128scope 소비 영수증과 자연 NXT 판정을 확인했다. 정규장은 아직 미도래이며 정규장 SOR/전환 hard guard는 회귀와 실제 실행 수용을 구분한다. 현재 PID 누적 원시ready 상시1,119/비상시2,102→선택25/6→claim17/4다. claim21은 기계trace20+준비 오류 종료1로 대사됐다. ENTER_NOW17의 rawPASS12/CAUTION5, 실행 유효PASS10→budget10→경로 불일치5/latency3/유동성2→broker0이다. legacy ai_confirmed13에는 CAUTION3이 포함되므로 승인 분모로 쓰지 않는다. age/continuity 미증명9건은 전달 실패로 단정하지 않았다.
+
+최초 생산 결함은 명시 NXT를 가진 target의 async candle/context가 broker_route를 전달하지 않고 전역 SOR 기본값을 소비하는 것이다. 동기 비상시/retry의 같은 누락도 기존 caller에서 수리했다. 제출 route 일치·stale/계좌/수량/가격/주문 guard와 사용자 전역 기본값은 유지한다. 공식 upstream953e5dbf의 현재 revision·spec/core/packaged order/Postman을 다시 확인했으며 실 API/provider/주문은0이다.
+
+최초 보고 결함은 원053800/aims-b24242710f5c04266657의 native main_entry_order_route_invalid 종료를 Sentinel stage/terminal 목록이 누락해 pending으로 남기는 것이다. 원10개 event의 동일 입력은 기존 소비자pending→후보final_guard_blocked, 접수false·conflict[]다. 같은 call/부모/record/revision/시각·원 미접수 proof 없는 입력은 계속 미결이다. 별도 09시 고정 집계가 프리마켓을 전부 제외하던 결함도 기존 Sentinel에서 scope별 시작 유예(프리08:05/정규09:05)로 분리했다. 거래 시간/주문 guard는 바꾸지 않았다.
+
+현재 정책 native 재검증은 holding_vote_strict_handoff_not_complete 및 stop code_changed로 FAIL이었다. managed release259개가 기존256개보다 많으면 과거 원천 코드 대조 전체를 건너뛰는 기존 postclose_summary_handoff reader가 원인이다. 새 native stage는 기존 v3 영수증에 stage_code_root를 기록하고 해당 immutable origin을 직접 대조한다. 원 v3는 selected포함 최대256개로 계속 대조하며 전체 생략만 제거한다. 명시 pin의 다른 코드/외부 경로/null/symlink/누락은 다른 후보로 우회하지 않는다. 실제 원 정책/strict/PREOPEN/PID를 그대로 둔 격리 reader의 마지막 native 소비는 PASS(23.227초/기존 stage code 조회1824회), 보호5 SHA 불변이다. summary 원천9a8 및 stop 원천46102de14의 정확한 hash를 확인했다. 이는 운영 health/PID 재수용이 아니다.
+
+어제 결속8건의 기존 7건 수리/원 trace 미기록1건은 보존한다. 오늘 마지막 current cohort08:35:13의 machine/trace8/8·join gap0·issues{}와 분리했다. 새 원 미수집을 과거 PASS로 채우지 않았다. 운영08:38:13 artifact_freshness는 warning, observer는not_eligible다. 보유 policy_binding_gap·postclose_handoff_generation_invalid·수량 economic_source_gap·늦은 finalization 복구·tmp 보존 용량 경고는 별도로 유지한다.
+
+리뷰→보완→재리뷰: 원 계약7FAIL/프리 집계2FAIL/원천코드4FAIL 재현 보존 후 진입/원천1892·stage/bootstrap/holding/stop241·health508=2641 PASS, compile/diff-check PASS다. source baseline9a8 대비 non-test3파일+43/-21, test4파일+73/-17, doc증거 별도다. 순증은 native origin 보존과 market/terminal negative coverage이며 새 module/entrypoint/worker/cron/producer0이다. 교체·제거: 명시 route 누락·09시 전량 제외와 legacy 전체 대조 생략은removed/consolidated; unresolved 요청의 사용자 SOR 기본값·hard route guard·origin 없는 원 v3의 제한 대조는 각 현재 consumer 때문에retained다. 기존 cache/terminal validator/monitor를 재사용했다.
+
+현재 범위는 격리 코드 수리다. 새 배포/재기동/운영 artifact 덮어쓰기·정책/threshold/provider/수량/cap/guard 변경0이며 배포용 native 인계·독립 inventory/P5와 실제 정규장 자연 수용은 OPEN이다. 원 checklist는 native SHA91d9874a로 보존했다. 동일 MainEntrySourceTerminalRepair1022와 DirectFamilyPreopenPolicyHandoff에서 후속 검증한다. [상세·원 경보·단계표](/home/ubuntu/KORStockScan/tmp/submission-session-audit-20261023/report.md), [원 입력](/home/ubuntu/KORStockScan/tmp/submission-session-audit-20261023/053800-original-events.json), [현재 native 실패](/home/ubuntu/KORStockScan/tmp/submission-session-audit-20261023/current-native-pid-verification-router-env.json), [후보 격리 마지막 소비](/home/ubuntu/KORStockScan/tmp/submission-session-audit-20261023/candidate-native-pid-consumer-replay.json).

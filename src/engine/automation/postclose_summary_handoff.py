@@ -1839,7 +1839,7 @@ def _historical_stage_code_matches(report_dir, day, stage, value, *, legacy_main
                     **({'legacy_main_machine': True} if legacy else {})) == value.get('stage_code_sha256')
                    for legacy in options)
     origin = value.get('stage_code_root')
-    if origin is not None:
+    if 'stage_code_root' in value:
         return isinstance(origin, str) and matches(Path(origin))
     if matches(selected):
         return True
@@ -1961,13 +1961,12 @@ def run_stage(stage, day, *, report_dir, project, publication=None, effective=No
         now = lambda: datetime.now(ZoneInfo('Asia/Seoul')).isoformat()
         value = dict(schema=STAGE_SCHEMA, stage_id=stage, source_date=day, target_date=day,
             publication_date=publication, effective_date=effective, run_id=uuid.uuid4().hex,
-            stage_code_sha256=code, recovery_mode=recovery, status='pending', exit_code=None, pid=os.getpid(),
+            stage_code_sha256=code, stage_code_root=str(project.resolve()),
+            recovery_mode=recovery, status='pending', exit_code=None, pid=os.getpid(),
             process_start_ticks=Path('/proc/self/stat').read_text().split()[21], started_at=now(),
             heartbeat_at=now(), prerequisite_receipts={}, sources={}, retryable=True,
             policy_disposition='incumbent_carry', computation_executed=execute,
             checkpoint=str(report_dir / 'ai_decision_action_outcome_calibration') if stage == 'main_machine_policy' else None)
-        if Path(project).resolve().parent.name == 'KORStockScan-runtime-releases':
-            value['stage_code_root'] = str(Path(project).resolve())
         value.update(regeneration_scope=os.environ.get('POSTCLOSE_REGENERATION_SCOPE','normal'),
                      regeneration_id=os.environ.get('POSTCLOSE_REGENERATION_ID'))
         if stage == 'summary_handoff':
