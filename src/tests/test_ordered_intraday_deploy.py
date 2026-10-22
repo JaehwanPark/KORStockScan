@@ -148,7 +148,7 @@ def _assert_detector_lock_held(workspace):
             fcntl.flock(other, fcntl.LOCK_EX | fcntl.LOCK_NB)
 
 
-@pytest.mark.parametrize('chain',[False,True])
+@pytest.mark.parametrize('chain',[False,True,'two'])
 @pytest.mark.parametrize('damage', [None, 'proof_pid', 'proof_basis', 'consumed', 'handoff', 'policy', 'preopen', 'manifest','parent_hash','parent_path','parent_proof','depth'])
 def test_stopped_intraday_recovery_requires_original_consumption_and_every_frozen_byte(tmp_path, monkeypatch, damage,chain):
     if not chain and damage in ('parent_hash','parent_path','parent_proof','depth'):return
@@ -189,9 +189,16 @@ def test_stopped_intraday_recovery_requires_original_consumption_and_every_froze
         if damage=='parent_hash':parent['failed_transition_sha256']='0'*64
         if damage=='parent_path':parent['failed_transition_path']=str(tmp_path/'foreign.json')
         if damage=='parent_proof':parent['intraday_predecessor_proof_sha256']='0'*64
-        if damage=='depth':depth=1
+        if damage=='depth':depth=2
         failed_path=tmp_path/('c'*40)/'status.json';failed_path.parent.mkdir()
-        failed_path.write_bytes(D._json_bytes(dict(failed_hold_adoption=parent)))
+        failed_path.write_bytes(D._json_bytes(dict(failed_hold_adoption=parent,predecessor_identity=identity,
+            previous_commit=commit,candidate_commit='c'*40)))
+        if chain=='two':
+            parent=dict(failed_transition_path=str(failed_path),failed_selected_commit='c'*40,
+                failed_transition_sha256=D.H._sha(failed_path),intraday_predecessor_proof_sha256=D.H._sha(proof_path),
+                transfer_status='transferred_exact_owned_hold')
+            failed_path=tmp_path/('d'*40)/'status.json';failed_path.parent.mkdir()
+            failed_path.write_bytes(D._json_bytes(dict(failed_hold_adoption=parent)))
     monkeypatch.setattr(D.H,'_paths',lambda *a:(handoff_path,consumed_path))
     monkeypatch.setattr(D.H,'_preopen_path',lambda *a:preopen)
     monkeypatch.setattr(D.H.bootstrap,'manifest_path',lambda *a:manifest)
@@ -1530,5 +1537,43 @@ def test_stopped_lock_recovery_requires_all_native_preparations(stopped_recovery
         d.preflight();assert all(d.frozen[str(p)]==D.H._sha(p) for p in logs)
         if damage=='changed_after_preflight':
             last.write_bytes(last.read_bytes()+b' ')
+            with pytest.raises(ValueError,match='generation_changed'):d.acquire_hold()
+    assert original==(path.read_bytes(),d.hold.read_bytes())
+
+
+@pytest.mark.parametrize('damage',[None,'whitespace','conflict','date','root','commit','status','finding','missing','changed_after_preflight'])
+def test_stopped_prestart_failure_is_bound_to_original_native_p5(stopped_recovery,damage):
+    d,path,_=stopped_recovery;failed=D.H._read(path)
+    intake=dict(status='pass',findings=[],target_date=d.day,selected_release_commit=failed['candidate_commit'],
+        verification_code_commit=failed['candidate_commit'],verification_code_root=failed['candidate_root'])
+    result=dict(schema='main_policy_load_exit_validation_v1',run_id='1'*32,status='failed',failure_phase='intake',
+        target_date=d.day,findings=['ValueError:startup_main_code_pair_unreviewed:src/engine/scalping/reversal_code_handoff.py'],
+        runtime_effect=False,actual_pid_consumed=False,allowed_runtime_apply=False,native_preparation_checks=dict(intake=intake))
+    failed.update(failed_phase='prepared',error=repr(result),
+        sentinel_source_window=dict(schema='sentinel_source_window_preparation_v1',target_date=d.day,runtime_effect=False),
+        sentinel_summary=dict(status='ok',runtime_effect=False))
+    native=d.workspace/'data/report/main_startup_validation'/d.day/result['run_id']/'final.json';native.parent.mkdir(parents=True)
+    native.write_bytes(D._json_bytes(result))
+    if damage in ('date','root','commit','status','finding'):
+        if damage=='date':result['target_date']='2000-01-01'
+        elif damage=='root':intake['verification_code_root']='foreign'
+        elif damage=='commit':intake['verification_code_commit']='d'*40
+        elif damage=='status':result['status']='passed'
+        else:result['findings']=['unknown']
+        failed['error']=repr(result);native.write_bytes(D._json_bytes(result))
+    elif damage=='whitespace':native.write_bytes(native.read_bytes()+b' ') # same semantics remains exact native bytes frozen
+    if damage=='conflict':
+        native.write_bytes(D._json_bytes(dict(result,status='passed')))
+    path.write_bytes(D._json_bytes(failed))
+    for module in ('intraday_release_handoff','runtime_policy_bootstrap','auxiliary_reader_readiness'):
+        path.with_name('selected-'+module+'.log').write_bytes(D._json_bytes(dict(status='pass',target_date=d.day,actual_pid_consumed=False,findings=[])))
+    if damage=='missing':native.unlink()
+    original=path.read_bytes(),d.hold.read_bytes()
+    if damage in ('conflict','date','root','commit','status','finding','missing'):
+        with pytest.raises((OSError,ValueError)):d.preflight()
+    else:
+        d.preflight();assert d.frozen[str(native)]==D.H._sha(native)
+        if damage=='changed_after_preflight':
+            native.write_bytes(native.read_bytes()+b' ')
             with pytest.raises(ValueError,match='generation_changed'):d.acquire_hold()
     assert original==(path.read_bytes(),d.hold.read_bytes())

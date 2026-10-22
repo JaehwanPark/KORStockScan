@@ -1278,3 +1278,14 @@ with H.consumed_observation_scope(data_root=H.DATA_DIR):
 assert_no_forbidden_attempts()
 ''')
     assert result.returncode==0,result.stderr
+
+
+def test_main_preparation_uses_reviewed_stopped_origin_code():
+    name='src/engine/scalping/reversal_code_handoff.py'
+    current=hashlib.sha256((ROOT/name).read_bytes()).hexdigest()
+    for old,new in C.REVIEWED_PREPARATION_HISTORY[name]:
+        C._pairs({name:old},{name:new})
+        if new==current:
+            with pytest.raises(ValueError,match='unreviewed'):
+                C._pairs({name:old},{name:'0'*64})
+    assert any(new==current for old,new in C.REVIEWED_PREPARATION_HISTORY[name])

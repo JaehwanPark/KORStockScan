@@ -351,12 +351,41 @@ def sentinel_preparation_lock(driver):
 
 
 def stopped_preparation_failure_sources(failed, failed_path):
-    """Authenticate the completed native preparation before a legacy lock error."""
+    """Authenticate native preparation and an exact retained prestart failure."""
     phase_error = failed.get('failed_phase'), failed.get('error')
-    if (failed.get('phase') != 'failed' or failed.get('status') != 'fail'
-            or phase_error not in {
-                ('selected', '[Errno 11] Resource temporarily unavailable'),
-                ('prepared', 'tuple indices must be integers or slices, not str')}):
+    if failed.get('phase') != 'failed' or failed.get('status') != 'fail':
+        return {}
+    sources = {}
+    known = phase_error in {
+        ('selected', '[Errno 11] Resource temporarily unavailable'),
+        ('prepared', 'tuple indices must be integers or slices, not str')}
+    if not known and phase_error[0] == 'prepared':
+        # Legacy embedding stored repr(result) rather than a short error. Bind
+        # that immutable failure to its actual native final; never infer PASS.
+        error = phase_error[1]
+        if not isinstance(error, str) or len(error) > 1024*1024 or not error.startswith("{'schema': 'main_policy_load_exit_validation_v1'"):
+            return {}
+        value = ast.literal_eval(error)
+        run = value.get('run_id', '')
+        if not isinstance(run, str) or re.fullmatch('[0-9a-f]{32}', run) is None:
+            raise ValueError('deployment_prestart_failure_identity_invalid')
+        path = Path(failed_path).parents[4]/'report/main_startup_validation'/failed['target_date']/run/'final.json'
+        native, raw, _ = _owned_metadata(path)
+        intake = native.get('native_preparation_checks', {}).get('intake', {})
+        if (native != value or native.get('schema') != 'main_policy_load_exit_validation_v1'
+                or native.get('status') != 'failed' or native.get('failure_phase') != 'intake'
+                or native.get('target_date') != failed.get('target_date')
+                or native.get('findings') != ['ValueError:startup_main_code_pair_unreviewed:src/engine/scalping/reversal_code_handoff.py']
+                or any(native.get(key) is not False for key in ('runtime_effect','actual_pid_consumed','allowed_runtime_apply'))
+                or intake.get('status') != 'pass' or intake.get('findings') != []
+                or intake.get('target_date') != failed.get('target_date')
+                or intake.get('selected_release_commit') != failed.get('candidate_commit')
+                or intake.get('verification_code_commit') != failed.get('candidate_commit')
+                or intake.get('verification_code_root') != failed.get('candidate_root')):
+            raise ValueError('deployment_prestart_failure_binding_invalid')
+        sources[str(path)] = _digest(raw)
+        known = True
+    if not known:
         return {}
     if phase_error[0] == 'prepared':
         window = failed.get('sentinel_source_window') or {}
@@ -366,7 +395,6 @@ def stopped_preparation_failure_sources(failed, failed_path):
                 or window.get('runtime_effect') is not False or summary.get('status') != 'ok'
                 or summary.get('runtime_effect') is not False):
             raise ValueError('deployment_prepared_stage_proof_invalid')
-    sources = {}
     for module in ('intraday_release_handoff', 'runtime_policy_bootstrap', 'auxiliary_reader_readiness'):
         path = Path(failed_path).with_name('selected-' + module + '.log')
         value, raw, _ = _owned_metadata(path)
@@ -1049,13 +1077,15 @@ class Deployment:
 
 def _stopped_intraday_predecessor(day, previous, previous_commit, identity, failed_path, *, _depth=0):
     """Recheck the genuine same-day consumption, without inventing a native PID."""
+    if _depth > 2:
+        raise ValueError('deployment_stopped_predecessor_ancestry_invalid')
     proof_path = Path(failed_path).with_name('preflight-intraday_release_handoff.log')
     if not proof_path.exists():
         failed, failed_raw, _ = _owned_metadata(failed_path)
         parent = failed.get('failed_hold_adoption') or {}
         origin = Path(parent.get('failed_transition_path') or '')
         expected = Path(failed_path).parent.parent/(parent.get('failed_selected_commit') or '')/'status.json'
-        if (_depth != 0 or origin != expected or origin == Path(failed_path)
+        if (_depth >= 2 or origin != expected or origin == Path(failed_path)
                 or not parent.get('intraday_predecessor_proof_sha256')
                 or parent.get('transfer_status') != 'transferred_exact_owned_hold'):
             raise ValueError('deployment_stopped_predecessor_ancestry_invalid')

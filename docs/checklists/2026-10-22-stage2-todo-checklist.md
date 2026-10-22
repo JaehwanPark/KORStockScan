@@ -53,6 +53,7 @@
   - 코드 검증과 배포·정확 PID 소비·자연 생성은 별도다. 현 Main75e0/PID1485693 및 정책 유지; 배포·재기동·실 API/provider/주문·threshold/수량/cap/guard 변경 권한 없음. 향후 승인된 배포에는 기존 native 정책 인계와 PID/observer/원 failing check 검증을 적용한다.
 
 - [ ] `[DirectFamilyPreopenPolicyHandoff] direct family 날짜별 정책·bootstrap 장전 소비 확인` (`Due: 2026-10-22`, `Slot: PREOPEN`, `TimeWindow: 07:35~08:05`, `Track: RuntimeStability`)
+  - 15:49 8644의 P5는 원/active hash를 통과한 뒤 별도 Main preparation exact-code 목록 누락을 검출했다. 원 final/status/hold를 유지하고 기존 source-pair owner·정확한 legacy failure/report 결속·원 consumption까지 두 단계 bounded ancestry를 보완한다. 다음 후보는 선택 전 실제 candidate P5와 선택 후 P5를 모두 통과해야 기동한다.
   - 15:28 복구의 P5가 원 prepared/현재 active manifest hash 동일시를 거부했고 운영 호출의 tuple 반환 오해도 별도 보존했다. 두 원 세대의 독립 검증·정확한 prepared 실패 분류·한 단계 original consumed proof 재검증으로 보완한다. unknown/changed/깊은 ancestry는 거부하며 원 hold/정책/실패를 유지한다. 다음 후보의 회귀·native 인계·P5→새 PID/observer/full health를 확인한다.
   - 정지 복구 P5의 미소비 prepared-intraday 해석을 별도 native 근거로 보완했다. 원 prepared 전체 bootstrap·현재 Handoff·frozen source를 격리 검증하며 actual_pid=false와 원 기한을 유지한다. context201·인계102 회귀 PASS. 새 후보 준비→native3종 인계→실제 P5→start/attest 순서로 수용하며 원3dd 실패·hold·정책은 보존한다.
   - 15:00 3dd 전환은 정상 drain/native epoch closed·3종 준비 후 정기 Sentinel 잠금 경쟁으로 selected/EAGAIN 실패했다. 원 hold/status를 보존하고 기존 owner의 pre-drain 생산자 조정 및 원 native 로그/hash를 검증하는 정지 복구를 수리한다. 정책·안전·cron·원 실패는 유지하며265회귀 PASS; 정확한 후속 PID/observer/full health는 별도 확인한다. [같은 통합 리뷰](../audits/postclose-root-cause-recovery-review-2026-10-19.md#native-selection-and-weakness-research-integration-2026-10-22).
