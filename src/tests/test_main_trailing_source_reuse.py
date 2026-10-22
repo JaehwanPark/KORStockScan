@@ -271,7 +271,7 @@ def test_frozen_inventory_delegates_large_future_journals_to_native_cohort_intak
 
 
 @pytest.mark.parametrize('route', ['canonical', 'routed', 'child_link', 'foreign_mount',
-                                  'wrong_date', 'changed_seal'])
+                                  'wrong_date', 'changed_seal', 'in_progress', 'missing_manifest'])
 def test_native_cursor_issuer_accepts_only_the_bound_data_mount(tmp_path, route):
     data, origin, holding, _ = approved(tmp_path)
     source = data/'ai_decision_trace'/f'ai_decision_trace_{DAY}.jsonl'
@@ -304,15 +304,22 @@ def test_native_cursor_issuer_accepts_only_the_bound_data_mount(tmp_path, route)
     cursor = dict(schema='main_market_weakness_research_v1:cursor', source_date=DAY,
         source_descriptor=descriptor, generation=generation,
         manifest_path=str(routed/'source_manifest.json'), terminal_path=str(routed/'terminal.json'))
+    if route in {'in_progress','missing_manifest'}:
+        cursor.pop('manifest_path'); cursor.pop('terminal_path')
+        cursor['status']='in_progress' if route=='in_progress' else 'completed'
     write(directory.parent/'cursor.json', cursor)
     # The original SHA publication follows this native identity observation.
     original = origin.read_bytes(); origin.write_bytes(original)
     before = holding.read_bytes()
-    if route in {'canonical', 'routed'}:
+    if route == 'in_progress':
+        catalog = reuse.collect_proofs(data, origin)
+        assert str(source) not in catalog['proofs']
+        assert catalog['unproved_bytes'] > 0
+    elif route in {'canonical', 'routed'}:
         catalog = reuse.collect_proofs(data, origin)
         assert catalog['proofs'][str(source)]['kind'] == 'prior_native_identity_and_original_hash_epoch'
         assert catalog['proofs'][str(source)]['issuer_path'] == str(directory/'source_manifest.json')
     else:
-        with pytest.raises((ValueError, OSError)):
+        with pytest.raises((ValueError, OSError, KeyError)):
             reuse.collect_proofs(data, origin)
     assert origin.read_bytes() == original and holding.read_bytes() == before

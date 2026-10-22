@@ -187,6 +187,11 @@ def collect_proofs(data_root, original_manifest_path):
                 or cursor.get('source_date')!=day or descriptor.get('source_date')!=day
                 or cursor.get('generation')!=digest(descriptor)):
             raise ValueError('trailing_reuse_identity_cursor_invalid')
+        if cursor.get('status') == 'in_progress':
+            # The native writer publishes terminal references only on commit.
+            # This optional issuer proves no bytes yet; the unproved intake
+            # bound and other immutable native proofs remain mandatory.
+            continue
         proof_path = _cursor_issuer_path(root, day, cursor['generation'],
             cursor['manifest_path'], 'source_manifest.json')
         terminal_path = _cursor_issuer_path(root, day, cursor['generation'],

@@ -61,6 +61,8 @@ Quantity monitor historical exclusions require an explicit record-ID acknowledge
 
 ## Closed-session trailing regeneration
 
+An in-progress native weakness cursor is an optional issuer without terminal byte proof. Ignore that uncommitted issuer only; retain the same unproved-byte limit and all original/current source checks. Completed cursors still require exact sealed manifest/terminal/date/source binding.
+
 Approved frozen replay may resolve the original native research-cost index through its immutable `index_generations/<physical-sha>.json` and original receipt bodies. Validate the live index contract and every original dependency; keep current actual/official costs mandatory and preserve historical nulls. This uses the existing replay context and native declared-research reader, without changing active cost/policy files. Current regular consumers remain bound to the current index.
 
 Provider-lineage observation uses the existing native trace index. New entry projections retain exact PID/attempt/request/response fields; issued projections use only verified original offset/size/SHA reads. Projection plus raw intake remains bounded to the existing8MiB. Missing/stale/incomplete/changed index or unidentified clock/source gaps never certify complete coverage; unindexed sources retain the bounded raw reader. Local deadline/unsent cancellation terminals pass through the existing trace annotation without provider retry, order permission or budget changes. See the [same owning review](audits/postclose-root-cause-recovery-review-2026-10-19.md#exact-lineage-eight-and-frozen-cost-reader-repair-2026-10-22).
