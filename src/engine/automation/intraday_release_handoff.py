@@ -4584,6 +4584,30 @@ REVIEWED_ENTRY_COST_DEPENDENCY_VARIANTS = {
 }
 
 
+# Pre-adjudication rejection uses the existing source-invalid capture and
+# downstream primary provenance. Keep the actually consumed fc51 generation.
+REVIEWED_ENTRY_COST_PRE_PREASSESSMENT_HASHES = {
+    **REVIEWED_ENTRY_COST_HASHES,
+    'src/engine/scalping/ai_decision_trace.py': REVIEWED_ROLE_LATENCY_HASHES[
+        'src/engine/scalping/ai_decision_trace.py'],
+}
+REVIEWED_ENTRY_COST_PRE_PREASSESSMENT_VARIANTS = REVIEWED_ENTRY_COST_DEPENDENCY_VARIANTS
+REVIEWED_PREASSESSMENT_HASHES = {'src/engine/ai_engine_openai.py': '808000bc7fd3782583a00ecce63e0a5e5704f6e6694e7c3311537aae72579b25', 'src/engine/scalping/ai_decision_trace.py': 'ad480ce1fb75ce2ec9217e4623e5de31dfd83e9ff62520934ab0317da60e973b', 'src/engine/infrastructure/startup_validation_code_context.py': 'c5522698e91f80219d3f4ce53b8f7f8d3e173b39f137deef1d2dba1982c7b69b'}
+REVIEWED_ENTRY_COST_HASHES = {**REVIEWED_ENTRY_COST_HASHES, **REVIEWED_PREASSESSMENT_HASHES}
+REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
+    name: REVIEWED_ENTRY_COST_PAIRS.get(name, ()) + tuple((old, current) for old in sorted(
+        {pair[0] for pair in REVIEWED_ENTRY_COST_PAIRS.get(name, ())}
+        | {REVIEWED_ENTRY_COST_PRE_PREASSESSMENT_HASHES[name]}))
+    for name, current in REVIEWED_PREASSESSMENT_HASHES.items()}}
+REVIEWED_ENTRY_COST_DEPENDENCY_VARIANTS = {
+    (key[0], REVIEWED_PREASSESSMENT_HASHES.get(key[0], key[1])): {
+        **value, 'dependencies': {**value['dependencies'], **REVIEWED_PREASSESSMENT_HASHES},
+        'contract_extensions': {origin: {name: REVIEWED_PREASSESSMENT_HASHES.get(os.path.normpath(name), sha)
+            for name, sha in paths.items()} for origin, paths in value['contract_extensions'].items()},
+    } for key, value in REVIEWED_ENTRY_COST_PRE_PREASSESSMENT_VARIANTS.items()
+}
+
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -4735,7 +4759,11 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     signed_surge_present = all((root / name).is_file()
         and hashlib.sha256(candidate_bytes(name)).hexdigest() == sha
         for name, sha in REVIEWED_SIGNED_SURGE_HASHES.items())
-    entry_cost_hashes = (REVIEWED_ENTRY_COST_HASHES if signed_surge_present
+    preassessment_present = any((root / name).is_file()
+        and hashlib.sha256(candidate_bytes(name)).hexdigest() == sha
+        for name, sha in REVIEWED_PREASSESSMENT_HASHES.items())
+    entry_cost_hashes = (REVIEWED_ENTRY_COST_HASHES if preassessment_present
+        else REVIEWED_ENTRY_COST_PRE_PREASSESSMENT_HASHES if signed_surge_present
         else REVIEWED_ENTRY_COST_PRE_SIGNED_SURGE_HASHES if expiry_health_present
         else REVIEWED_ENTRY_COST_PRE_EXPIRY_HEALTH_HASHES if first_turn_present
         else REVIEWED_ENTRY_COST_PRE_FIRST_TURN_HASHES if prepared_start_present
@@ -4745,7 +4773,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         else REVIEWED_ENTRY_COST_PRE_PREPARED_VALIDATION_HASHES if coordination_present
         else REVIEWED_ENTRY_COST_PRE_COORDINATION_HASHES if native_label_present
         else REVIEWED_ENTRY_COST_PRE_NATIVE_LABEL_HASHES)
-    entry_cost_variants = (REVIEWED_ENTRY_COST_DEPENDENCY_VARIANTS if signed_surge_present
+    entry_cost_variants = (REVIEWED_ENTRY_COST_DEPENDENCY_VARIANTS if preassessment_present
+        else REVIEWED_ENTRY_COST_PRE_PREASSESSMENT_VARIANTS if signed_surge_present
         else REVIEWED_ENTRY_COST_PRE_SIGNED_SURGE_VARIANTS if expiry_health_present
         else REVIEWED_ENTRY_COST_PRE_EXPIRY_HEALTH_VARIANTS if first_turn_present
         else REVIEWED_ENTRY_COST_PRE_FIRST_TURN_VARIANTS if prepared_start_present

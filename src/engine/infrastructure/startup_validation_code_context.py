@@ -80,11 +80,19 @@ REVIEWED_PREPARATION_HISTORY = {
     },
     # Startup log consolidation only; fixed compact model selection is unchanged.
     'src/engine/ai_engine_openai.py': {
+        # Source-invalid provenance from the consumed fc51 adapter, no promotion.
+        ('3463333df619b52d896ea02779647fa48adf6ae29a45713de80cf31c213806c7',
+         '808000bc7fd3782583a00ecce63e0a5e5704f6e6694e7c3311537aae72579b25'),
         ('194f9dcd748a0c94fe49c12618c3c5eb9f3d81b07de494f0b59ddc349aa43584',
          '703bc5e36bf23a02caf78a3fa8f9251e202979048e4ed1cd64aafed57e732d07'),
         # Issued role-latency successor, already bound by the active handoff.
         ('194f9dcd748a0c94fe49c12618c3c5eb9f3d81b07de494f0b59ddc349aa43584',
          'bdcf09bf1f19e4cb649c01105c7aa363b04bddcb8749793a8f701cc06cc8d185'),
+    },
+    'src/engine/scalping/ai_decision_trace.py': {
+        # Preserve raw failed input without an unperformed quote outcome label.
+        ('dfbb14a03971bcfa1f8a0b4c1f3b712d45e7da7fa7259cac125db7f5bb8747a0',
+         'ad480ce1fb75ce2ec9217e4623e5de31dfd83e9ff62520934ab0317da60e973b'),
     },
     'src/engine/scalping/reversal_auxiliary_next_session.py': {
         ('c32689f592a5f6558d3404bd9b5495330aefc45715feddf8e579c171d74901c1',

@@ -9831,6 +9831,7 @@ class GPTSniperEngine:
 
         machine_first_context = None
         machine_hot_payload = None
+        machine_exact = None
         machine_feature_packet = None
         machine_tick_window = []
         machine_capture = {}
@@ -10051,12 +10052,12 @@ class GPTSniperEngine:
                                     deadline_epoch=entry_budget.epoch, deadline_perf=entry_budget.perf,
                                     observer_pid=os.getpid(), observer_start_ticks=_PROCESS_START_TICKS)
                         else:
+                            machine_exact['evaluation_role'] = 'main_live'
                             claim=reversal_signal_claim or claim_snapshot(symbol,_explicit_item_venue(item),machine_exact['session_bucket'],
                                 now=snapshot_now,item=item,family_sha256=reversal_family['family_sha256'],live_clock=True)
                             snapshot=validate_claim_with_receipt(claim,reversal_family['family_sha256'],now=snapshot_now,
                                 evaluation_attempt_id=machine_exact['evaluation_attempt_id'],
                                 machine_bundle_sha256=entry_setup_live_policy['machine_bundle_sha256'],live_clock=True) if claim else None
-                            machine_exact['evaluation_role'] = 'main_live'
                             if claim and claim.get('observer_snapshot_sha256'):
                                 machine_exact['parent_observation_snapshot_sha256'] = claim['observer_snapshot_sha256']
                                 machine_exact['observation_subset_changed'] = claim.get('observation_subset_changed', False)
@@ -10348,6 +10349,46 @@ class GPTSniperEngine:
                         source_gap_kind = "feature_tick_selection_gap"
                     else:
                         source_gap_kind = "trusted_tape_source_insufficient"
+                rejected_fields = {}
+                if not machine_only and not machine_capture and isinstance(machine_exact, dict):
+                    # Native validation can reject before an adjudication exists.
+                    # Capture that exact source-invalid attempt through the same
+                    # producer as preflight; never invent ENTER_NOW or a provider
+                    # request, or replace an already captured machine decision.
+                    from src.engine.scalping.ai_decision_trace import capture_machine_observation
+                    from src.engine.scalping.ai_market_snapshot import classify_ai_input_blocker
+                    rejected_fields = capture_machine_observation(
+                        exact_payload={**machine_exact, 'evaluation_role': 'main_live'},
+                        setup_evidence={
+                            'source_quality_status': 'blocked',
+                            'source_quality_blockers': [str(exc) or 'unclassified'],
+                            'machine_contract_error': str(exc),
+                            'continuous_reversal_rejected_claim_receipt': getattr(
+                                exc, 'reversal_source_receipt', None),
+                        },
+                        assessment={'schema': 'mechanistic_entry_source_invalid_v1',
+                            'action': 'source_invalid', 'reason': str(exc)},
+                        bundle_sha256=entry_setup_live_policy['machine_bundle_sha256'],
+                        metadata={**(dict(metadata_extra or {}) if isinstance(metadata_extra, dict) else {}),
+                            **machine_input_fields,
+                            'ai_component_sha256': entry_setup_live_policy.get('auxiliary_policy_sha256')},
+                    )
+                    rejected_fields.update(
+                        machine_source_invalid_receipt=True,
+                        entry_mechanistic_action='source_invalid',
+                        entry_mechanistic_policy_decision='source_invalid',
+                        entry_mechanistic_policy_version=(
+                            entry_setup_live_policy.get('mechanistic_threshold_policy') or {}).get('version'),
+                        machine_decision_before_provider=True,
+                        entry_source_invalid_schema='machine_source_invalid_decomposition_v1',
+                        entry_source_invalid_stage='machine_pre_adjudication',
+                        entry_source_invalid_primary_blocker=str(exc) or 'unclassified',
+                        entry_source_invalid_primary_category=classify_ai_input_blocker(str(exc)),
+                        entry_source_invalid_primary_basis='producer_pre_adjudication_exception',
+                        entry_ai_screen_status='not_requested_machine_source_invalid',
+                        entry_ai_screen_required=False,
+                        entry_ai_screen_pass=False,
+                    )
                 return self._annotate_analysis_result(
                     _merge_runtime_fields(
                         {
@@ -10362,6 +10403,7 @@ class GPTSniperEngine:
                             "machine_feature_tick_window": machine_tick_window,
                             "continuous_reversal_rejected_claim_receipt": getattr(
                                 exc, "reversal_source_receipt", None),
+                            **rejected_fields,
                         }
                     ),
                     prompt_type=prompt_type,

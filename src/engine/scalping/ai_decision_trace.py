@@ -1305,7 +1305,11 @@ def capture_machine_observation(
         )
     )
     from src.engine.scalping.entry_machine_source_recovery import quote_label_reference
-    quote_label = quote_label_reference(exact_payload, assessment)
+    # A pre-adjudication rejection retains raw quote provenance, but never
+    # claims that an unperformed calculation supplied an outcome label.
+    quote_label = (None if assessment.get('schema') == 'mechanistic_entry_source_invalid_v1'
+                   and str(assessment.get('action', '')).upper() == 'SOURCE_INVALID'
+                   else quote_label_reference(exact_payload, assessment))
     if quote_label is not None:
         if quote_label['decision_epoch'] > now.timestamp():
             raise ValueError('quote_recovery_label_capture_clock_before_evaluation')

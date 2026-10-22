@@ -8996,7 +8996,9 @@ def test_received_reversal_validator_exception_preserves_raw_response_and_waits_
 
 @pytest.mark.parametrize('failure_stage', ['frozen_validator', 'post_validation',
     'duplicate_reservation', 'legacy_reservation', 'invalid_outbox_transition', 'corrupt_outbox',
-    'outbox_io_failure', 'corrupt_legacy_journal', 'invalid_legacy_shape'])
+    'outbox_io_failure', 'corrupt_legacy_journal', 'invalid_legacy_shape',
+    'pre_adjudication_rejection', 'pre_adjudication_capture_io_failure',
+    'pre_exact_rejection', 'probe_pre_adjudication_rejection', 'post_capture_rejection'])
 def test_full_analyze_target_received_reversal_exception_keeps_raw_and_execution_separate(tmp_path, monkeypatch, failure_stage):
     """Exercise real request, receipt, validator exception, fallback and trace."""
     import copy
@@ -9034,6 +9036,8 @@ def test_full_analyze_target_received_reversal_exception_keeps_raw_and_execution
         primary_decision_owner='mechanistic_entry_adjudicator', ai_role='auxiliary_risk_screen_pass_veto_no_promotion',
         mechanistic_threshold_policy=MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1, machine_bundle_sha256='b'*64,
         continuous_reversal=dict(schema=native.SCHEMA, family_sha256='f'*64, machine_cells={}, auxiliary_cells={}))
+    if failure_stage == 'post_capture_rejection':
+        live['auxiliary_soft_policy'] = {'schema': 'auxiliary_soft_policy_v2'}
     monkeypatch.setattr(openai_module, 'resolve_live_prompt_policy', lambda **kw: copy.deepcopy(live))
     monkeypatch.setattr(openai_module, 'TRADING_RULES', replace(openai_module.TRADING_RULES,
         OPENAI_ANALYZE_TARGET_PROMPT_VERSION=DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION))
@@ -9049,6 +9053,32 @@ def test_full_analyze_target_received_reversal_exception_keeps_raw_and_execution
         contradicting_fact_ids=[], confidence=70)
     original = copy.deepcopy(response)
     engine = _build_engine()
+    pre_rejected = failure_stage.startswith(('pre_', 'probe_pre_'))
+    probe_rejected = failure_stage == 'probe_pre_adjudication_rejection'
+    if probe_rejected:
+        from src.engine.scalping.entry_setup_scalping_rollout import SHA_ENV
+        monkeypatch.setenv(SHA_ENV, 'b'*64)
+    rejected_receipt = {'schema': 'continuous_reversal_source_receipt_v4',
+        'error': 'reversal_signal_path_changed', 'process_pid': os.getpid()}
+    def reject_native(*args, **kwargs):
+        error = ValueError('reversal_signal_path_changed')
+        error.reversal_source_receipt = copy.deepcopy(rejected_receipt)
+        raise error
+    if pre_rejected:
+        monkeypatch.setattr(diagnostics,
+            'observe_snapshot' if probe_rejected else 'validate_claim_with_receipt', reject_native)
+    if failure_stage == 'pre_exact_rejection':
+        def reject_format(*args, **kwargs):
+            raise ValueError('controlled_exact_payload_failure')
+        monkeypatch.setattr(engine, '_format_entry_screen_hot_data', reject_format)
+    if failure_stage == 'pre_adjudication_capture_io_failure':
+        from src.engine.scalping import ai_decision_trace as trace_owner
+        append = trace_owner._append_jsonl
+        def fail_payload_write(path, body):
+            if body.get('schema') == 'mechanistic_entry_observation_v1':
+                raise OSError('controlled_payload_write_failure')
+            return append(path, body)
+        monkeypatch.setattr(trace_owner, '_append_jsonl', fail_payload_write)
     # Existing failure chains must neither grow nor be discharged by a local
     # response-contract exception. Near-threshold state exposes accidental
     # provider disablement as well as an incorrect success reset.
@@ -9116,12 +9146,75 @@ def test_full_analyze_target_received_reversal_exception_keeps_raw_and_execution
     engine.client = SimpleNamespace(responses=SimpleNamespace(create=create))
     result = engine.analyze_target('test', _sample_ws_data(), _sample_ticks(), _sample_candles(),
         strategy='SCALPING', prompt_profile='watching', candle_context=_allowed_entry_candle_context(),
+        machine_only=probe_rejected,
         reversal_signal_claim={'snapshot': snapshot, 'token': 'controlled-native-test'},
         metadata_extra=dict(evaluation_attempt_id='controlled-evaluation',
+            scanner_promotion_id='controlled-promotion', stock_code='289220',
+            effective_venue='KRX', session_bucket='KRX_REGULAR',
             async_request_id='controlled-generation:request', async_producer_pid=os.getpid(),
             async_producer_start_ticks=Path('/proc/self/stat').read_text().rsplit(')',1)[1].split()[19],
             async_origin_deadline_epoch=snapshot[0]['epoch']+5, async_order_venue='SOR',
             scanner_generation_id='controlled-generation'))
+    if pre_rejected or failure_stage == 'post_capture_rejection':
+        assert calls == [] and result['provider_called'] is False
+        assert result['action'] == 'DROP'
+        assert result['reason'] == 'mechanistic_input_contract_invalid'
+        assert result['machine_evaluation_status'] == 'assessment_contract_invalid'
+        assert engine.consecutive_failures == failure_before and not engine.ai_disabled
+        assert (stable_circuit(entry_circuit), stable_circuit(common_circuit)) == circuit_before
+        assert (engine.current_api_key_index, engine.current_key) == key_before and not rotations
+        from src.engine.scalping import ai_decision_trace as trace_owner
+        from src.tests.test_ai_decision_trace import _rows
+        payload_path = trace_owner._payload_path(trace_owner._date_text(trace_owner._now()))
+        observations = _rows(payload_path) if payload_path.exists() else []
+        if failure_stage == 'post_capture_rejection':
+            assert result['machine_contract_error'] == 'auxiliary_soft_policy_invalid_before_provider'
+            assert len(observations) == 1
+            assert result['entry_mechanistic_action'] == 'ENTER_NOW'
+            assert observations[0]['source']['assessment']['action'] == 'ENTER_NOW'
+            assert observations[0]['machine_observation_sha256'] == result['machine_observation_sha256']
+            assert result['machine_source_invalid_receipt'] is False
+            return
+        if probe_rejected or failure_stage == 'pre_exact_rejection':
+            assert observations == []
+            assert not result.get('machine_observation_sha256')
+            assert not result.get('machine_source_invalid_receipt')
+            assert result.get('entry_mechanistic_action') != 'ENTER_NOW'
+            return
+        assert result['machine_contract_error'] == 'reversal_signal_path_changed'
+        assert result['continuous_reversal_rejected_claim_receipt'] == rejected_receipt
+        assert result['machine_source_invalid_receipt'] is True
+        assert result['entry_mechanistic_action'] == 'source_invalid'
+        assert result['entry_ai_screen_status'] == 'not_requested_machine_source_invalid'
+        assert result['entry_ai_screen_required'] is False and result['entry_ai_screen_pass'] is False
+        assert result['evaluation_role'] == 'main_live'
+        assert result['evaluation_attempt_id'] == 'controlled-evaluation'
+        if failure_stage == 'pre_adjudication_capture_io_failure':
+            assert observations == []
+            assert result['machine_capture_status'] == 'write_failed'
+            assert not result.get('machine_observation_sha256')
+        else:
+            assert len(observations) == 1
+            observation = observations[0]
+            assert observation['machine_observation_sha256'] == result['machine_observation_sha256']
+            assert observation['evaluation_role'] == 'main_live'
+            assert observation['runtime_consumption']['pid'] == os.getpid()
+            assert observation['source']['assessment']['schema'] == 'mechanistic_entry_source_invalid_v1'
+            assert observation['source']['assessment']['reason'] == 'reversal_signal_path_changed'
+            assert observation['provider_called'] is False and observation['broker_order_forbidden'] is True
+            assert observation['actual_order_submitted'] is False
+        from src.engine import sniper_state_handlers as handlers, buy_funnel_sentinel as sentinel
+        from datetime import datetime
+        fields = handlers._machine_primary_entry_provenance_fields(result)
+        funnel = sentinel._machine_primary_entry_funnel([sentinel.PipelineEvent(
+            datetime.now(), 'ENTRY_PIPELINE', 'ai_confirmed', 'fixture', '289220', '1', fields)])
+        assert funnel['evaluation_count'] == 1 and funnel['evaluation_identity_missing_event_count'] == 0
+        row = funnel['evaluation_ledger'][0]
+        assert row['final_state'] == 'machine_source_invalid'
+        assert row['source_invalid_decomposition']['primary_blocker'] == 'reversal_signal_path_changed'
+        assert row['source_invalid_decomposition']['primary_basis'] == 'producer_pre_adjudication_exception'
+        assert row['conflict_reasons'] == []
+        return
     if custody_failure:
         transmitted = failure_stage == 'invalid_outbox_transition'
         assert len(calls) == int(transmitted), result
