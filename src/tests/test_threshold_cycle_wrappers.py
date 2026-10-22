@@ -211,6 +211,26 @@ printf 'continued\\n'
     assert script.count("  compact_entry_split_report_storage\n  publish_entry_split_verification\n") == 2
 
 
+def _bind_native_verifier_failure(project, monkeypatch, day, status, metrics):
+    import json, hashlib
+    from src.engine import verify_threshold_cycle_postclose_chain as verifier
+    monkeypatch.setattr(verifier, 'OUTPUT_DIR', project/'data/report/threshold_cycle_postclose_verification')
+    report=dict(status='fail', date=day, run_id=status['run_id'], code_commit=status['code_commit'],
+        verification_scope='preterminal', issues=['original_native_stage_missing'],
+        failure_summary=dict(issues=['original_native_stage_missing']))
+    monkeypatch.setattr(verifier,'build_threshold_cycle_postclose_verification',lambda *a,**k:report)
+    monkeypatch.setattr(verifier,'_render',lambda row:'native failure')
+    code=verifier.main(['--date',day,'--allow-pending-done-marker','--require-summary-handoff'])
+    assert code == 1
+    canonical=verifier.OUTPUT_DIR/f'threshold_cycle_postclose_verification_{day}.json'
+    failed=json.loads(canonical.read_text());attempt=Path(failed['verification_attempt']['path'])
+    status.update(exit_code=code,verifier_failure_receipt=dict(canonical_artifact=str(canonical),
+        verification_attempt=failed['verification_attempt'],first_failure_receipt=failed['first_failure_receipt'],
+        failure_summary=failed['failure_summary'],verification_attempt_sha256=hashlib.sha256(attempt.read_bytes()).hexdigest()))
+    metrics[-1].update(producer_module='src.engine.verify_threshold_cycle_postclose_chain',exit_code=code)
+    return attempt
+
+
 def _native_final_resume_fixture(tmp_path):
     import json, hashlib
     script = _text('deploy/run_threshold_cycle_postclose.sh')
@@ -352,11 +372,11 @@ def test_final_resume_checklist_failure_requires_repaired_quantity_source(tmp_pa
 
 
 @pytest.mark.parametrize('defect', [None, 'partial', 'reuse', 'wrong_commit', 'missing_command', 'changed_source'])
-def test_final_resume_accepts_only_complete_normal_native_run(tmp_path, defect):
+def test_final_resume_accepts_only_complete_normal_native_run(tmp_path, monkeypatch, defect):
     import json
     n, day, path, status, log, metrics, prior = _native_final_resume_fixture(tmp_path)
-    status.update(scoped_resume=None, regeneration_scope='normal', reused_steps_receipt=None, exit_code=2)
-    metrics[-1].update(producer_module='src.engine.verify_threshold_cycle_postclose_chain', exit_code=2)
+    status.update(scoped_resume=None, regeneration_scope='normal', reused_steps_receipt=None)
+    _bind_native_verifier_failure(tmp_path, monkeypatch, day, status, metrics)
     if defect == 'partial': status['regeneration_scope'] = 'all_except_eod'
     if defect == 'reuse': status['reused_steps_receipt'] = {'unverified': True}
     if defect == 'wrong_commit': metrics[0]['code_commit'] = 'b' * 40
@@ -407,7 +427,7 @@ def test_direct_postclose_loads_native_custody_profile_without_shell_evaluation(
     assert not (tmp_path / 'unexpected').exists()
 
 
-def test_strict_resume_retains_native_ancestry_without_relabelling_commands(tmp_path):
+def test_strict_resume_retains_native_ancestry_without_relabelling_commands(tmp_path, monkeypatch):
     import json, hashlib
     n, day, path, status, log, metrics, prior = _native_final_resume_fixture(tmp_path)
     origin = status['run_id']; commit = status['code_commit']
@@ -415,14 +435,15 @@ def test_strict_resume_retains_native_ancestry_without_relabelling_commands(tmp_
         origin_run_id=origin, origin_code_commit=commit, completed_command_receipts=metrics[:-1],
         runtime_effect=False, allowed_runtime_apply=False, prior_scoped_resume=status['scoped_resume'])
     parent_path = tmp_path / 'parent.json'; parent_path.write_text(json.dumps(parent))
-    status.update(run_id='next-native-run', code_commit='b'*40, exit_code=2,
+    status.update(run_id='next-native-run', code_commit='b'*40, exit_code=1,
         scoped_resume=dict(path=str(parent_path),sha256=hashlib.sha256(parent_path.read_bytes()).hexdigest(),
             origin_run_id=origin,resume_from='final_handoff'))
-    path.write_text(json.dumps(status));log.write_text('[PERF] '+json.dumps(dict(
-        run_id=status['run_id'],phase='command',producer_module='src.engine.verify_threshold_cycle_postclose_chain',exit_code=2))+'\n')
+    metrics=[dict(run_id=status['run_id'],phase='command')]
+    _bind_native_verifier_failure(tmp_path,monkeypatch,day,status,metrics)
+    path.write_text(json.dumps(status));log.write_text('[PERF] '+json.dumps(metrics[0])+'\n')
     proof = n['final_handoff_resume'](tmp_path,day)
     assert proof['completed_command_receipts'] == []
-    assert proof['inherited_command_receipts'] == metrics[:-1]
+    assert proof['inherited_command_receipts'] == parent['completed_command_receipts']
     assert {m['run_id'] for m in proof['inherited_command_receipts']} == {origin}
     prior.write_text('{}')
     with pytest.raises(ValueError,match='final_resume_ancestry_changed'):
@@ -950,3 +971,113 @@ def test_busy_preopen_preserves_exact_current_producer_status(tmp_path):
             env={**os.environ,'PROJECT_DIR':str(tmp_path),'VENV_PY':'/must-not-execute'},capture_output=True,text=True,timeout=10)
     assert result.returncode==0 and '[SKIP]' in result.stdout
     assert status.read_bytes()==before
+
+
+@pytest.mark.parametrize('damage',[None,'missing','wrong_run','wrong_date','wrong_commit','wrong_scope','wrong_invocation','changed_sha','unbound_exit2'])
+def test_final_resume_consumes_actual_full_verifier_failure(tmp_path,monkeypatch,damage):
+    import json,hashlib
+    n,day,path,status,log,metrics,_=_native_final_resume_fixture(tmp_path)
+    status.update(scoped_resume=None,regeneration_scope='normal',reused_steps_receipt=None)
+    attempt=_bind_native_verifier_failure(tmp_path,monkeypatch,day,status,metrics)
+    row=json.loads(attempt.read_text())
+    if damage=='wrong_run':row['run_id']='unrelated'
+    if damage=='wrong_date':row['date']='2026-10-12'
+    if damage=='wrong_commit':row['code_commit']='b'*40
+    if damage=='wrong_scope':row['verification_scope']='main_terminal'
+    if damage=='wrong_invocation':row['verification_attempt']['invocation']['require_summary_handoff']=False
+    if damage in {'wrong_run','wrong_date','wrong_commit','wrong_scope','wrong_invocation'}:
+        attempt.write_text(json.dumps(row));status['verifier_failure_receipt']['verification_attempt_sha256']=hashlib.sha256(attempt.read_bytes()).hexdigest()
+    if damage=='changed_sha':attempt.write_text(json.dumps(row)+' ')
+    if damage=='missing':attempt.unlink()
+    if damage=='unbound_exit2':metrics[-1]['exit_code']=2
+    path.write_text(json.dumps(status));before=path.read_bytes()
+    log.write_text(''.join('[PERF] '+json.dumps(m)+'\n' for m in metrics))
+    if damage:
+        with pytest.raises((ValueError,FileNotFoundError)):n['final_handoff_resume'](tmp_path,day)
+    else:assert n['final_handoff_resume'](tmp_path,day)['origin_run_id']==status['run_id']
+    assert path.read_bytes()==before
+
+
+@pytest.mark.parametrize('damage',[None,'changed_origin','selector','live_main','started_run','wrong_early_command','wrong_receipt'])
+def test_final_resume_recovers_only_authenticated_legacy_prestart_clobber(tmp_path,monkeypatch,damage):
+    import json,hashlib
+    from datetime import datetime
+    from src.engine.scalping import reversal_code_handoff as H,mechanistic_entry_runtime_policy as N
+    from src.engine.infrastructure import runtime_release_router as R
+    from src.engine.automation import ordered_intraday_deploy as D
+    n,day,path,status,log,metrics,_=_native_final_resume_fixture(tmp_path)
+    status.update(scoped_resume=None,regeneration_scope='normal',reused_steps_receipt=None,
+        started_at=day+'T23:00:00+09:00',finished_at=day+'T23:30:00+09:00')
+    _bind_native_verifier_failure(tmp_path,monkeypatch,day,status,metrics)
+    pointer=N.root(tmp_path/'data')/'current.json';pointer.parent.mkdir(parents=True,exist_ok=True);pointer.write_text(json.dumps(dict(bundle_sha256='c'*64)))
+    selector=tmp_path/'data/runtime/runtime_release_selection.json';selector.write_text('{}')
+    today=datetime.now(H.P.KST).date().isoformat();candidate='b'*40
+    handoff=H.path(tmp_path/'data',today,candidate,'c'*64);handoff.parent.mkdir(parents=True)
+    frozen=handoff.with_suffix('')/'postclose_origin'/path.name;frozen.parent.mkdir(parents=True);frozen.write_text(json.dumps(status))
+    receipt=dict(release_root=str(tmp_path/'candidate'),release_commit=candidate,origin_root=str(tmp_path),
+        origin_commit=status['code_commit'],origin_selection_sha256=hashlib.sha256(selector.read_bytes()).hexdigest(),
+        actual_pid_consumed=False,source_hashes={str(frozen):hashlib.sha256(frozen.read_bytes()).hexdigest()})
+    handoff.write_text(json.dumps(receipt))
+    early=dict(status,run_id='clobbered-prestart',reason='command_failed',finished_at=day+'T23:31:00+09:00')
+    early_metrics=[dict(run_id=early['run_id'],phase='command',producer_module='src.engine.scalping.entry_split_monitor_projection',
+        exit_code=0,measurement_complete=True,target_date=day,code_commit=status['code_commit'])]
+    if damage=='changed_origin':frozen.write_text(json.dumps(status)+' ')
+    if damage=='selector':selector.write_text('{"changed":true}')
+    if damage=='started_run':early['started_at']=day+'T23:30:59+09:00'
+    if damage=='wrong_early_command':early_metrics[0]['producer_module']='src.engine.runtime_approval_summary'
+    if damage=='wrong_receipt':early['verifier_failure_receipt']={}
+    monkeypatch.setattr(R,'selected_release',lambda w:(tmp_path,status['code_commit']))
+    monkeypatch.setattr(R,'validate_release',lambda *a:None)
+    monkeypatch.setattr(H,'_validated_origin_receipt',lambda *a:receipt)
+    monkeypatch.setattr(D,'_main_pids',lambda:[123] if damage=='live_main' else [])
+    monkeypatch.setattr(D,'_session_absent',lambda:True)
+    path.write_text(json.dumps(early));before=path.read_bytes()
+    log.write_text(''.join('[PERF] '+json.dumps(m)+'\n' for m in metrics+early_metrics))
+    if damage:
+        with pytest.raises(ValueError,match='final_resume_'):n['final_handoff_resume'](tmp_path,day,handoff)
+    else:
+        proof=n['final_handoff_resume'](tmp_path,day,handoff)
+        assert proof['origin_run_id']==status['run_id']
+        assert proof['input_failure_binding']==dict(run_id=early['run_id'],sha256=hashlib.sha256(before).hexdigest())
+        assert proof['completed_command_receipts']==metrics[:-1]
+    assert path.read_bytes()==before
+
+
+@pytest.mark.parametrize('prior_state',['failed','succeeded','running'])
+def test_early_wrapper_failure_preserves_previous_producer_bytes(tmp_path,prior_state):
+    import os,json,subprocess,sys,hashlib
+    body=_text('deploy/run_threshold_cycle_postclose.sh').split('write_postclose_status() {',1)[1].split("<<'PY'\n",1)[1].split('\nPY\n}',1)[0]
+    path=tmp_path/'status.json';raw=json.dumps(dict(run_id='preceding',status=prior_state,started_at='original'),indent=3).encode();path.write_bytes(raw)
+    workflow=tmp_path/'workflow.sh';workflow.write_text('reviewed workflow')
+    env={k:v for k,v in os.environ.items() if not k.startswith('POSTCLOSE_')}
+    env.update(POSTCLOSE_RUN_ID='early',POSTCLOSE_CODE_COMMIT='a'*40,POSTCLOSE_WORKFLOW_ROOT=str(tmp_path),
+        POSTCLOSE_WORKFLOW_COMMIT='b'*40,POSTCLOSE_WORKFLOW_SCRIPT=str(workflow))
+    args=[sys.executable,'-',str(path),'2026-10-22','failed','command_failed','1','1','']+['true']*7
+    result=subprocess.run(args,input=body,text=True,capture_output=True,env=env)
+    assert result.returncode==0,result.stderr
+    assert path.read_bytes()==raw
+    early=json.loads((tmp_path/'attempts/2026-10-22/early.early-attempt.json').read_text())
+    assert early['run_id']=='early' and early['attempt_phase']=='before_running'
+    assert early['previous_terminal']['sha256']==hashlib.sha256(raw).hexdigest()
+    assert Path(early['previous_terminal']['path']).read_bytes()==raw
+    assert early['code_commit']=='a'*40 and early['workflow_source']['commit']=='b'*40
+    assert early['workflow_source']['sha256']==hashlib.sha256(workflow.read_bytes()).hexdigest()
+
+
+@pytest.mark.parametrize('changed',[False,True])
+def test_legacy_resume_writer_cas_uses_input_failure_without_relabelling_origin(tmp_path,changed):
+    import os,json,subprocess,sys,hashlib
+    body=_text('deploy/run_threshold_cycle_postclose.sh').split('write_postclose_status() {',1)[1].split("<<'PY'\n",1)[1].split('\nPY\n}',1)[0]
+    path=tmp_path/'status.json';path.write_text(json.dumps(dict(run_id='prestart',status='failed')))
+    proof=tmp_path/'proof.json';proof.write_text(json.dumps(dict(schema='postclose_final_handoff_resume_v1',
+        source_date='2026-10-22',origin_run_id='actual-native-origin',origin_status_sha256='a'*64,
+        input_failure_binding=dict(run_id='prestart',sha256=hashlib.sha256(path.read_bytes()).hexdigest()))))
+    if changed:path.write_text(path.read_text()+' ')
+    before=path.read_bytes();env={k:v for k,v in os.environ.items() if not k.startswith('POSTCLOSE_')}
+    env.update(POSTCLOSE_RUN_ID='new-run',POSTCLOSE_CODE_COMMIT='b'*40,POSTCLOSE_FINAL_HANDOFF_RESUME_RECEIPT=str(proof))
+    result=subprocess.run([sys.executable,'-',str(path),'2026-10-22','running','started','0','0','']+['true']*7,input=body,text=True,capture_output=True,env=env)
+    if changed:assert result.returncode!=0 and path.read_bytes()==before
+    else:
+        assert result.returncode==0,result.stderr
+        row=json.loads(path.read_text());assert row['run_id']=='new-run'
+        assert row['scoped_resume']['origin_run_id']=='actual-native-origin'

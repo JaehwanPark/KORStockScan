@@ -145,12 +145,14 @@ done <<< "$native_custody_assignments"
 TARGET_DATE="${1:-$(TZ=Asia/Seoul date +%F)}"
 RESUME_INITIAL_QUANTITY=false
 RESUME_FINAL_HANDOFF=false
+FINAL_HANDOFF_ORIGIN_CODE_HANDOFF=""
 unset POSTCLOSE_INITIAL_QUANTITY_RESUME_RECEIPT
 unset POSTCLOSE_FINAL_HANDOFF_RESUME_RECEIPT
 if [[ "${2:-}" == "--resume-from-initial-quantity" && "$#" -eq 2 ]]; then
   RESUME_INITIAL_QUANTITY=true
-elif [[ "${2:-}" == "--resume-from-final-handoff" && "$#" -eq 2 ]]; then
+elif [[ "${2:-}" == "--resume-from-final-handoff" && ( "$#" -eq 2 || ( "$#" -eq 4 && "${3:-}" == "--origin-code-handoff" ) ) ]]; then
   RESUME_FINAL_HANDOFF=true
+  FINAL_HANDOFF_ORIGIN_CODE_HANDOFF="${4:-}"
 elif [[ "$#" -gt 1 ]]; then
   echo "Unsupported postclose recovery boundary" >&2
   exit 2
@@ -321,7 +323,10 @@ cd "$PROJECT_DIR"
 
 POSTCLOSE_RUN_ID="$("$VENV_PY" -c 'import uuid; print(uuid.uuid4().hex)')"
 POSTCLOSE_CODE_COMMIT="$(git -C "$PROJECT_DIR" rev-parse HEAD)"
-export POSTCLOSE_RUN_ID POSTCLOSE_CODE_COMMIT
+POSTCLOSE_WORKFLOW_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+POSTCLOSE_WORKFLOW_COMMIT="$(git -C "$POSTCLOSE_WORKFLOW_ROOT" rev-parse HEAD)"
+POSTCLOSE_WORKFLOW_SCRIPT="$(readlink -f "${BASH_SOURCE[0]}")"
+export POSTCLOSE_RUN_ID POSTCLOSE_CODE_COMMIT POSTCLOSE_WORKFLOW_ROOT POSTCLOSE_WORKFLOW_COMMIT POSTCLOSE_WORKFLOW_SCRIPT
 write_postclose_status() {
   local status="$1"
   local reason="${2:-}"
@@ -335,6 +340,7 @@ write_postclose_status() {
     "$RUN_RISING_MISSED_CLASSIFIER_PRIOR" <<'PY'
 import json
 import os
+import hashlib
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -361,6 +367,19 @@ if path.exists():
         payload = json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         payload = {}
+new_run=os.environ.get('POSTCLOSE_RUN_ID')
+if status=='failed' and new_run and payload.get('run_id') and payload['run_id']!=new_run:
+    # No running record was published for this invocation. Preserve the
+    # preceding producer terminal; an admission/proof error is a new attempt.
+    raw=path.read_bytes(); digest=hashlib.sha256(raw).hexdigest()
+    directory=path.parent/'attempts'/target_date;directory.mkdir(parents=True,exist_ok=True)
+    snapshot=directory/(str(payload['run_id'])+'.before-early-'+digest+'.json')
+    if not snapshot.exists():
+        with snapshot.open('xb') as out:out.write(raw)
+    elif snapshot.read_bytes()!=raw:raise ValueError('early_attempt_snapshot_changed')
+    previous=dict(path=str(snapshot),sha256=digest,run_id=payload['run_id'])
+    path=directory/(new_run+'.early-attempt.json')
+    payload=dict(previous_terminal=previous,attempt_phase='before_running')
 reuse_binding = None
 scoped_resume = None
 proof_name = (os.environ.get("POSTCLOSE_INITIAL_QUANTITY_RESUME_RECEIPT")
@@ -371,8 +390,9 @@ if status == "running" and proof_name:
     proof_bytes = proof_path.read_bytes(); proof = json.loads(proof_bytes)
     assert proof["schema"] in {"postclose_initial_quantity_resume_v1", "postclose_final_handoff_resume_v1"}
     assert proof["source_date"] == target_date and payload.get("status") == "failed"
-    assert proof["origin_run_id"] == payload.get("run_id")
-    assert proof["origin_status_sha256"] == hashlib.sha256(path.read_bytes()).hexdigest()
+    input_failure=proof.get('input_failure_binding') or dict(run_id=proof['origin_run_id'],sha256=proof['origin_status_sha256'])
+    assert input_failure['run_id'] == payload.get("run_id")
+    assert input_failure['sha256'] == hashlib.sha256(path.read_bytes()).hexdigest()
     scoped_resume = {"path": str(proof_path.resolve()), "sha256": hashlib.sha256(proof_bytes).hexdigest(),
                      "origin_run_id": proof["origin_run_id"],
                      "resume_from": "final_handoff" if proof["schema"] == "postclose_final_handoff_resume_v1" else "initial_quantity"}
@@ -441,6 +461,13 @@ payload.update(
             ),
         },
         "runtime_effect": False,
+        "workflow_source": {
+            "root": os.environ.get('POSTCLOSE_WORKFLOW_ROOT'),
+            "commit": os.environ.get('POSTCLOSE_WORKFLOW_COMMIT'),
+            "script": os.environ.get('POSTCLOSE_WORKFLOW_SCRIPT'),
+            "sha256": hashlib.sha256(Path(os.environ['POSTCLOSE_WORKFLOW_SCRIPT']).read_bytes()).hexdigest()
+                if os.environ.get('POSTCLOSE_WORKFLOW_SCRIPT') else None,
+        },
         "updated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
     }
 )
@@ -464,9 +491,11 @@ if status == "failed" and failure_artifact:
     except Exception:
         artifact_fresh = False
     if isinstance(verifier, dict) and artifact_fresh:
+        attempt=Path(verifier['verification_attempt']['path'])
         payload["verifier_failure_receipt"] = {
             "canonical_artifact": str(artifact_path),
             "verification_attempt": verifier.get("verification_attempt"),
+            "verification_attempt_sha256": hashlib.sha256(attempt.read_bytes()).hexdigest(),
             "first_failure_receipt": verifier.get("first_failure_receipt"),
             "failure_summary": verifier.get("failure_summary"),
         }
@@ -944,7 +973,7 @@ if [[ "$RESUME_FINAL_HANDOFF" == "true" ]]; then
   [[ "$POSTCLOSE_RECOVERY_REUSE_MODE" == "true" ]] || exit 2
   compact_entry_split_report_storage
   publish_entry_split_verification
-  POSTCLOSE_FINAL_HANDOFF_RESUME_RECEIPT="$("$VENV_PY" - "$PROJECT_DIR" "$TARGET_DATE" <<'PY_FINAL_RESUME'
+  POSTCLOSE_FINAL_HANDOFF_RESUME_RECEIPT="$("$VENV_PY" - "$PROJECT_DIR" "$TARGET_DATE" "$FINAL_HANDOFF_ORIGIN_CODE_HANDOFF" <<'PY_FINAL_RESUME'
 import hashlib, json, re, sys
 from pathlib import Path
 from src.engine.automation.postclose_summary_handoff import (
@@ -953,10 +982,49 @@ from src.engine.scalping.initial_quantity_policy import (
     committed_refresh_stage_path, refresh_quantity_stage_terminal_valid)
 from src.engine.log_archive_service import verified_postclose_exit_snapshot_manifest
 
-def final_handoff_resume(project, day):
+def final_handoff_resume(project, day, origin_code_handoff=None):
     report = (project / 'data').resolve() / 'report'
     status_path = report / 'threshold_cycle_postclose_status' / f'threshold_cycle_postclose_{day}.status.json'
     raw = status_path.read_bytes(); status = json.loads(raw)
+    input_failure_binding=None;origin_sources={}
+    if origin_code_handoff:
+        from datetime import datetime
+        from src.engine.scalping import reversal_code_handoff as H,mechanistic_entry_runtime_policy as N
+        from src.engine.infrastructure import runtime_release_router as R
+        from src.engine.automation import ordered_intraday_deploy as D
+        if D._main_pids() or not D._session_absent():raise ValueError('final_resume_main_not_absent')
+        data=report.parent;workspace=data.parent;handoff_path=Path(origin_code_handoff).resolve(strict=True)
+        receipt,receipt_raw=R._startup_receipt(handoff_path)
+        root=Path(receipt['release_root']);commit=receipt['release_commit'];today=datetime.now(H.P.KST).date().isoformat()
+        selected,selected_commit=R.selected_release(workspace)
+        R.validate_release(workspace,dict(schema='runtime_release_selection_v1',workspace=str(workspace),release_root=str(root),git_commit=commit))
+        pointer=N.root(data)/'current.json';pointer_raw=pointer.read_bytes();bundle=json.loads(pointer_raw)['bundle_sha256']
+        selection_raw=(data/'runtime/runtime_release_selection.json').read_bytes()
+        if (handoff_path!=H.path(data,today,commit,bundle) or selected!=project.resolve()
+                or receipt.get('origin_root')!=str(selected) or receipt.get('origin_commit')!=selected_commit
+                or receipt.get('origin_selection_sha256')!=hashlib.sha256(selection_raw).hexdigest()
+                or receipt.get('actual_pid_consumed') is not False):
+            raise ValueError('final_resume_origin_handoff_binding_invalid')
+        checked=H._validated_origin_receipt(data,today,root,commit,bundle,hashlib.sha256(pointer_raw).hexdigest())
+        if checked is None:raise ValueError('final_resume_origin_handoff_missing')
+        original_path=handoff_path.with_suffix('')/'postclose_origin'/status_path.name
+        original_raw=original_path.read_bytes();original=json.loads(original_raw)
+        if (receipt['source_hashes'].get(str(original_path))!=hashlib.sha256(original_raw).hexdigest()
+                or original.get('target_date')!=day or original.get('status')!='failed'
+                or original.get('code_commit')!=selected_commit or status.get('code_commit')!=selected_commit
+                or status.get('status')!='failed' or status.get('reason')!='command_failed'
+                or status.get('exit_code')!=1 or original.get('started_at')!=status.get('started_at')
+                or original.get('verifier_failure_receipt')!=status.get('verifier_failure_receipt')
+                or datetime.fromisoformat(original['finished_at'])>datetime.fromisoformat(status['finished_at'])):
+            raise ValueError('final_resume_prestart_failure_binding_invalid')
+        input_failure_binding=dict(run_id=status['run_id'],sha256=hashlib.sha256(raw).hexdigest())
+        preserved=status_path.parent/'attempts'/day/(status['run_id']+'.prestart-'+input_failure_binding['sha256']+'.json')
+        preserved.parent.mkdir(parents=True,exist_ok=True)
+        if not preserved.exists():
+            with preserved.open('xb') as out:out.write(raw)
+        elif preserved.read_bytes()!=raw:raise ValueError('final_resume_prestart_snapshot_changed')
+        origin_sources=dict(origin_code_handoff=handoff_path,origin_failure=original_path,input_failure=preserved)
+        status=original;raw=original_raw
     if (status.get('target_date') != day or status.get('status') != 'failed'
             or status.get('reason') not in {'command_failed', 'verify_threshold_cycle_postclose_chain_failed', 'verify_threshold_cycle_postclose_chain_final_failed'}
             or status.get('exit_code') not in {1, 2}):
@@ -966,6 +1034,12 @@ def final_handoff_resume(project, day):
         handle.seek(max(0, log.stat().st_size - 16 * 1024 * 1024))
         lines = handle.read().decode(errors='replace').splitlines()
     metrics = [json.loads(line[7:]) for line in lines if line.startswith('[PERF] ')]
+    if input_failure_binding:
+        early=[m for m in metrics if m.get('run_id')==input_failure_binding['run_id']]
+        if (not early or any(m.get('phase')!='command' or m.get('producer_module')!='src.engine.scalping.entry_split_monitor_projection'
+                or m.get('exit_code')!=0 or m.get('measurement_complete') is not True
+                or m.get('target_date')!=day or m.get('code_commit')!=status['code_commit'] for m in early)):
+            raise ValueError('final_resume_prestart_commands_invalid')
     metrics = [m for m in metrics if m.get('run_id') == status['run_id'] and m.get('phase') == 'command']
     failed_command = metrics[-1] if metrics else {}
     recovered_producer = (failed_command.get('producer_module') == 'src.engine.automation.postclose_summary_handoff'
@@ -1010,10 +1084,30 @@ def final_handoff_resume(project, day):
                 if recovered_snapshot is not None: raise ValueError('final_resume_snapshot_attempt_ambiguous')
                 recovered_snapshot = dict(path=str(attempt.resolve()), sha256=hashlib.sha256(encoded).hexdigest())
         recovered_producer = recovered_snapshot is not None
-    if (not recovered_producer and (failed_command.get('producer_module'), failed_command.get('exit_code')) not in {
+    native_verifier_failed=False
+    if (failed_command.get('producer_module'),failed_command.get('exit_code'))==('src.engine.verify_threshold_cycle_postclose_chain',1):
+        bound=status.get('verifier_failure_receipt') or {};ref=bound.get('verification_attempt') or {}
+        attempt=Path(ref.get('path',''));expected_parent=report/'threshold_cycle_postclose_verification/attempts'/day
+        if (ref.get('immutable') is not True or attempt.resolve().parent!=expected_parent.resolve()
+                or not re.fullmatch('[0-9a-f]{32}\\.json',attempt.name)):
+            raise ValueError('final_resume_verifier_failure_path_invalid')
+        from src.engine.infrastructure.runtime_release_router import _startup_receipt
+        failed,encoded=_startup_receipt(attempt)
+        invocation=ref.get('invocation') or {};scope=failed.get('verification_scope')
+        if (failed.get('status')!='fail' or failed.get('date')!=day or failed.get('run_id')!=status['run_id']
+                or failed.get('code_commit')!=status['code_commit'] or failed.get('verification_attempt')!=ref
+                or scope not in {'preterminal','main_precommit'} or not failed.get('issues')
+                or invocation.get('require_summary_handoff') is not True
+                or invocation.get('require_done_marker')!=(scope=='main_precommit')
+                or bound.get('first_failure_receipt')!=failed.get('first_failure_receipt')
+                or bound.get('failure_summary')!=failed.get('failure_summary')
+                or bound.get('verification_attempt_sha256',hashlib.sha256(encoded).hexdigest())!=hashlib.sha256(encoded).hexdigest()):
+            raise ValueError('final_resume_verifier_failure_binding_invalid')
+        native_verifier_failed=True;origin_sources['failed_verifier']=attempt
+    if (not recovered_producer and not native_verifier_failed and (failed_command.get('producer_module'), failed_command.get('exit_code')) not in {
             ('src.engine.automation.tuning_performance_control_tower', 1),
             ('src.engine.build_next_stage2_checklist', 1),
-            ('src.engine.verify_threshold_cycle_postclose_chain', 2)}):
+            }):
         raise ValueError('final_resume_failed_command_not_handoff')
     completed = [m for m in metrics if m.get('exit_code') == 0
         and m.get('measurement_complete') is True and m.get('target_date') == day
@@ -1082,14 +1176,15 @@ def final_handoff_resume(project, day):
         recovered_snapshot_attempt=recovered_snapshot,
         origin_run_id=status['run_id'], origin_code_commit=status['code_commit'],
         origin_status_sha256=hashlib.sha256(raw).hexdigest(), prior_scoped_resume=prior,
+        input_failure_binding=input_failure_binding,
         completed_command_receipts=completed,
         inherited_command_receipts=inherited,
         sources=_stage_sources({'initial_quantity':quantity, 'exit_snapshot':snapshot,
-            'custody_environment':report.parent/'config/native_owner_custody.env'}),
+            'custody_environment':report.parent/'config/native_owner_custody.env',**origin_sources}),
         runtime_effect=False, allowed_runtime_apply=False)
 
 if __name__ == '__main__':
-    project=Path(sys.argv[1]); day=sys.argv[2]; proof=final_handoff_resume(project, day)
+    project=Path(sys.argv[1]); day=sys.argv[2]; proof=final_handoff_resume(project, day,sys.argv[3] or None)
     path=project/'data/report/threshold_cycle_postclose_status/attempts'/day/(proof['origin_run_id']+'.final-handoff-resume.json')
     _stage_write(path, proof); print(path)
 PY_FINAL_RESUME
