@@ -2203,8 +2203,9 @@ def test_postclose_recovery_handoff_keeps_complete_reviewed_generation(tmp_path,
 
 @pytest.mark.parametrize('family',['main_stop','holding_vote','pre_submit_delay'])
 @pytest.mark.parametrize('fault',[None,'missing','dirty','committed_change','parent_mix'])
-@pytest.mark.parametrize('generation',['current','consumed_pre_startup','consumed_pre_shutdown'])
-def test_entry_cost_handoff_keeps_exact_complete_generation(tmp_path,family,fault,generation):
+@pytest.mark.parametrize('generation',['current','consumed_pre_startup','consumed_pre_shutdown','consumed_pre_native_label'])
+def test_entry_cost_handoff_keeps_exact_complete_generation(tmp_path,family,fault,generation,
+        dependency='src/engine/monitoring/entry_attempt_identity.py'):
     import hashlib,os,subprocess
     from src.engine.scalping import main_stop_policy as stop, holding_vote_experiment as vote
     from src.engine.scalping.pre_submit_delay_initial_policy import CONTRACT_PATHS
@@ -2214,15 +2215,17 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(tmp_path,family,faul
     subprocess.run(['git','-C',str(root),'checkout','-q','75e0fbbf7'],check=True)
     hashes=({'current':handoff.REVIEWED_ENTRY_COST_HASHES,
         'consumed_pre_startup':handoff.REVIEWED_ENTRY_COST_PRE_STARTUP_HASHES,
-        'consumed_pre_shutdown':handoff.REVIEWED_ENTRY_COST_PRE_SHUTDOWN_HASHES}[generation])
+        'consumed_pre_shutdown':handoff.REVIEWED_ENTRY_COST_PRE_SHUTDOWN_HASHES,
+        'consumed_pre_native_label':handoff.REVIEWED_ENTRY_COST_PRE_NATIVE_LABEL_HASHES}[generation])
     for name in hashes:
         content=((canonical/name).read_bytes() if generation=='current' else
             subprocess.check_output(['git','-C',str(canonical),'show',
-                ('90bf2d11f' if generation=='consumed_pre_startup' else '70fc572f8')+':'+name]))
+                {'consumed_pre_startup':'90bf2d11f','consumed_pre_shutdown':'70fc572f8',
+                 'consumed_pre_native_label':'b1519a2d4'}[generation]+':'+name]))
         (root/name).write_bytes(content)
     name='src/engine/automation/intraday_release_handoff.py'
     (root/name).write_bytes((canonical/name).read_bytes())
-    source='src/engine/monitoring/entry_attempt_identity.py'
+    source=dependency
     path=root/source
     if fault=='missing':path.unlink()
     elif fault=='parent_mix':path.write_bytes(subprocess.check_output(['git','-C',str(root),'show','75e0fbbf7:'+source]))
@@ -2239,3 +2242,16 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(tmp_path,family,faul
     if fault:
         with pytest.raises(ValueError):handoff._verify_entry_code_delta(root,commit,origin,paths,expected)
     else:handoff._verify_entry_code_delta(root,commit,origin,paths,expected)
+
+
+@pytest.mark.parametrize('family',['main_stop','holding_vote','pre_submit_delay'])
+@pytest.mark.parametrize('fault',['missing','dirty','committed_change','parent_mix'])
+@pytest.mark.parametrize('dependency',[
+    'src/engine/sniper_state_handlers.py',
+    'src/engine/monitoring/runtime_performance.py',
+    'src/engine/scalping/continuous_reversal_source.py',
+    'src/engine/automation/main_market_weakness_research.py',
+])
+def test_native_selection_label_handoff_rejects_incomplete_generation(tmp_path,family,fault,dependency):
+    test_entry_cost_handoff_keeps_exact_complete_generation(
+        tmp_path,family,fault,'current',dependency)

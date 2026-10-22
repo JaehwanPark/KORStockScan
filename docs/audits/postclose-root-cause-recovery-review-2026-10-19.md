@@ -1957,3 +1957,11 @@ Replacement/removal: inline 선택 판정은 공통 helper로 **consolidated**; 
 선택 릴리스의 native `preserve_checklist`로 원 strict-bound SHA5d44c3e5b68855253bd1052229c1f6dad84e0d1eed476ea508d06bf111052747 snapshot을 재검증했다. 수정은 격리 후보의 기존 audit/checklist에 기록한다. 운영 selector/정책/수동 제외/프로세스와 canonical 선행 문서는 보존한다. 코드 검증과 배포·현재 PID 소비·새 자연 기록·경제성은 별도이며, 향후 배포에는 기존 native active-policy/code handoff와 ordered transition의 현재 소비 검증이 필요하다.
 
 최종 범위는 baseline b1519a2d4 대비 non-test source2파일 +131/-17(net+114), tests1파일 +190/-0, docs2파일 +19/-0다. 새 production 함수2개는 기존 관측 owner 내부이며 module/worker/CLI/주문 entrypoint 추가0이다. 고유 회귀258개(255+3), compile/diff/print-only parser와 단일 현행 owner·문서 prefix 보존을 검증했다. 단일 ready scope의 오프라인1000회 평균 관측 비용은 원11.43µs→후보14.29µs였으며 운영 처리량 증명으로 사용하지 않는다. 최종 commit·파일 SHA·검증 로그는 기존 증거 폴더의 verification.json에 보존한다.
+
+### Native selection and weakness research integration 2026-10-22
+
+사용자는 `4b0fe5b48`의 통합 배포·재기동을 명시 승인했다. 실제 incumbent `b1519a2d4`/PID2370075/start28632016을 기준으로 `4b0fe5b48`과 약세 경로 라벨 수리 `190ac05f1`을 격리 작업본에서 통합했다. 원 canonical 문서·작업과 정책·PREOPEN·strict/controller 원본을 보존한다. [전후 증거](../../tmp/native-selection-weakness-deployment-20261022/).
+
+첫 native pre-drain 검사는 delay/stop/holding 모두 `entry_consumer_operator_market_generation_mixed:src/engine/sniper_state_handlers.py`로 거부했다. Main은 종료하지 않았다. 기존 인계 owner의 exact dependency generation에 검토된 handler/기존 성능 관측/장후 라벨 owner/normalized reader/기존 capability reader를 함께 결속하고, 이미 소비한 b1519와 이전 세대는 독립 보존한다. 새 handler에 맞는 rising-missed/holding capability는 원 보고서와 독립 새 network-denied fixture를 각각 검증한다. 파일 누락·dirty·커밋 변조·부모 혼합은 계속 거부한다. 정책 값·원천/가격/주문/hard guard 및 보조 연구 판정은 변경하지 않는다. 약세 연구 수리는 장중 기록을 추가하지 않으며 `4b0fe5b48`의 별도 승인된 기존 진단 owner 개선과 구분한다.
+
+Replacement/removal: 기존 code-generation 선택 분기는 보존된 incumbent와 exact 통합 generation 선택으로 **consolidated**다. 원 capability successor/정책 검증과 과거 reader는 발행된 receipt·보고서의 실제 소비자가 있어 **retained**다. 새 wrapper/module/producer/worker/CLI/schedule은0이며 중복 deferred removal은0이다. 추가 소스는 기존 두 owner의 정확한 소스 결속과 과거 영수증 소비에 한정한다. 기준 f41a9d652 대비 source2파일 +94/-5, tests2파일 +24/-5이며, 문서는 기존 audit/checklist만 갱신한다. native parity·4종 인계·격리 P5 및 회귀 통과 뒤 후보 자신의 ordered driver를 사용하며 실제 successor PID·현재 observer·첫 full health·약세 optional installer code/calendar 결속은 별도 최종 수용으로 기록한다. 장후 누적 currentness와 알림 적격/자동 매매 조정 승인은 구분하며 Telegram 시험 발송이나 정책 선택을 실행하지 않는다.

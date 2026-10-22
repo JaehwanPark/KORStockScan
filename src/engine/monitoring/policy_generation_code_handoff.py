@@ -353,6 +353,22 @@ REVIEWED_SHUTDOWN_CONSUMED_SUCCESSORS = {'auxiliary': ('581c21738b7a098e1900fcec
  'rising_missed': ('92427c4782da75ebe71bee3dde8923fa19e04e14c26e14b8a80d2a831fd2296c',
                    '45d8e54cc7dc029c9c5e20d888e00cc9997ea7e7d2c2ddaaa2b3d8a2983d3a59')}
 
+# Exact native selection diagnostics; the prior report generations stay sealed.
+REVIEWED_NATIVE_SELECTION_SUCCESSORS = {
+    'rising_missed': ('8c2725f4e329c95b79a74df8167bc5bbab80d6e08fe80fb6d7e4aaaa4d4c6e8d',
+                      'b1fb8b69fb938893d36c8b16192bbd0cd5e414f169b8304374d781cc54248ab5'),
+    'holding_vote': ('48b92485c831e215a1d7fe1ef8664113d68186e040a768087cbcb18ab0892ac3',
+                     '5a0c5cfb039defc00eac4d057638b7b7ac2f394b86f6a030fd08a76b84d814ee'),
+}
+REVIEWED_NATIVE_SELECTION_SOURCE_SUCCESSORS = {
+    family: (REVIEWED_SHUTDOWN_SOURCE_SUCCESSORS[family][0], pair[1])
+    for family, pair in REVIEWED_NATIVE_SELECTION_SUCCESSORS.items()
+}
+REVIEWED_NATIVE_SELECTION_CONSUMED_SUCCESSORS = {
+    family: (REVIEWED_SHUTDOWN_SUCCESSORS[family][1], pair[1])
+    for family, pair in REVIEWED_NATIVE_SELECTION_SUCCESSORS.items()
+}
+
 def _historical_fixture(contract, data, family, *, late_report=None):
     """Preserve a prior fixture without using it to certify the successor."""
     reference = contract.get('fixture_receipt')
@@ -483,7 +499,10 @@ def current_fixture_observation(observed, data):
                     or actual_pair == REVIEWED_ENTRY_COST_SOURCE_SUCCESSORS.get(family)
                     or actual_pair == REVIEWED_SHUTDOWN_SUCCESSORS.get(family)
                     or actual_pair == REVIEWED_SHUTDOWN_SOURCE_SUCCESSORS.get(family)
-                    or actual_pair == REVIEWED_SHUTDOWN_CONSUMED_SUCCESSORS.get(family))
+                    or actual_pair == REVIEWED_SHUTDOWN_CONSUMED_SUCCESSORS.get(family)
+                    or actual_pair == REVIEWED_NATIVE_SELECTION_SUCCESSORS.get(family)
+                    or actual_pair == REVIEWED_NATIVE_SELECTION_SOURCE_SUCCESSORS.get(family)
+                    or actual_pair == REVIEWED_NATIVE_SELECTION_CONSUMED_SUCCESSORS.get(family))
     if reader_match:
         pair = actual_pair
     if not pair or actual_pair != pair:
@@ -522,7 +541,10 @@ def current_fixture_observation(observed, data):
                                REVIEWED_BUY_IDENTITY_SUCCESSORS, REVIEWED_QUANTITY_CAPTURE_SUCCESSORS,
                                REVIEWED_ENTRY_COST_SUCCESSORS, REVIEWED_ENTRY_COST_SOURCE_SUCCESSORS,
                                REVIEWED_SHUTDOWN_SUCCESSORS, REVIEWED_SHUTDOWN_SOURCE_SUCCESSORS,
-                               REVIEWED_SHUTDOWN_CONSUMED_SUCCESSORS)) else None)
+                               REVIEWED_SHUTDOWN_CONSUMED_SUCCESSORS,
+                               REVIEWED_NATIVE_SELECTION_SUCCESSORS,
+                               REVIEWED_NATIVE_SELECTION_SOURCE_SUCCESSORS,
+                               REVIEWED_NATIVE_SELECTION_CONSUMED_SUCCESSORS)) else None)
         historical_fixture = _historical_fixture(contract, data, family, late_report=late_report)
         if (integrated_match or readonly_match or cleanup_match or custody_match or reader_match or frozen_match) and historical_fixture is None:
             raise ValueError('successor_integrated_historical_fixture_required')

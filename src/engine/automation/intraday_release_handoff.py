@@ -4383,6 +4383,67 @@ REVIEWED_ENTRY_COST_DEPENDENCY_VARIANTS = {
 }
 
 
+# Bind the reviewed selection observer and offline native-label owner together.
+# Preserve the consumed b1519 generation for predecessor and historical readers.
+REVIEWED_ENTRY_COST_PRE_NATIVE_LABEL_HASHES = REVIEWED_ENTRY_COST_HASHES
+REVIEWED_ENTRY_COST_PRE_NATIVE_LABEL_VARIANTS = REVIEWED_ENTRY_COST_DEPENDENCY_VARIANTS
+REVIEWED_ENTRY_COST_NATIVE_LABEL_HASHES = {'src/engine/automation/main_market_weakness_research.py': 'c7fc0eacb9ec937d28c507a4b7586d1d71425a3719a08c1d8ada65e0404071f9',
+ 'src/engine/monitoring/policy_generation_code_handoff.py': 'b65c616d024460c825d73472311ddf995282069cd58dfdec9241447d4285d841',
+ 'src/engine/monitoring/runtime_performance.py': '3414c2eee58fc8c5547b11ad6786f1775b20d4cfb6e9b0ce78ed16e17a34e5d4',
+ 'src/engine/scalping/continuous_reversal_source.py': '0c8e4d4a0ab08c2bb54e115d8071fa5f2b732e99414043b75e2d51b9da914ba0',
+ 'src/engine/sniper_state_handlers.py': '2e69e440301dbc3bf4ec7020abc29b4a37b0dfd5dd624480378c7eab491c45d9'}
+REVIEWED_ENTRY_COST_HASHES = {**REVIEWED_ENTRY_COST_HASHES, **REVIEWED_ENTRY_COST_NATIVE_LABEL_HASHES}
+REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{'src/engine/automation/main_market_weakness_research.py': (('375f13bd830a42de09cb9fae28879ab69459f76013e47dd4365207d28d976309',
+                                                             'c7fc0eacb9ec937d28c507a4b7586d1d71425a3719a08c1d8ada65e0404071f9'),),
+ 'src/engine/monitoring/policy_generation_code_handoff.py': (('858f6f949015f1c27d0185a0183df7a331f7fda971830408a5cdf53d16b39b5a',
+                                                              '4c23315cdd2585bab300b493aae73e8204ab5aa38279b70196b6c34a8779421b'),
+                                                             ('47db04eba70a27e3fbb5c4078e828be38920859efbf4224e3049582776ff6d5f',
+                                                              '4c23315cdd2585bab300b493aae73e8204ab5aa38279b70196b6c34a8779421b'),
+                                                             ('858f6f949015f1c27d0185a0183df7a331f7fda971830408a5cdf53d16b39b5a',
+                                                              '64c1d33b10b5e3999f12825dbcb850ad7520c7c117d8542e6da6e127234192dc'),
+                                                             ('47db04eba70a27e3fbb5c4078e828be38920859efbf4224e3049582776ff6d5f',
+                                                              '64c1d33b10b5e3999f12825dbcb850ad7520c7c117d8542e6da6e127234192dc'),
+                                                             ('4c23315cdd2585bab300b493aae73e8204ab5aa38279b70196b6c34a8779421b',
+                                                              '64c1d33b10b5e3999f12825dbcb850ad7520c7c117d8542e6da6e127234192dc'),
+                                                             ('47db04eba70a27e3fbb5c4078e828be38920859efbf4224e3049582776ff6d5f',
+                                                              'b65c616d024460c825d73472311ddf995282069cd58dfdec9241447d4285d841'),
+                                                             ('4c23315cdd2585bab300b493aae73e8204ab5aa38279b70196b6c34a8779421b',
+                                                              'b65c616d024460c825d73472311ddf995282069cd58dfdec9241447d4285d841'),
+                                                             ('64c1d33b10b5e3999f12825dbcb850ad7520c7c117d8542e6da6e127234192dc',
+                                                              'b65c616d024460c825d73472311ddf995282069cd58dfdec9241447d4285d841'),
+                                                             ('858f6f949015f1c27d0185a0183df7a331f7fda971830408a5cdf53d16b39b5a',
+                                                              'b65c616d024460c825d73472311ddf995282069cd58dfdec9241447d4285d841')),
+ 'src/engine/monitoring/runtime_performance.py': (('626ae4d2db569edce63082aab86965872b57f0ec9daacca767ec4e83f84e36be',
+                                                   '3414c2eee58fc8c5547b11ad6786f1775b20d4cfb6e9b0ce78ed16e17a34e5d4'),),
+ 'src/engine/scalping/continuous_reversal_source.py': (('fb3d91a378457c244a805a49183572f74f3c4541cb3efdca4aa9f3c1a52df082',
+                                                        '0c8e4d4a0ab08c2bb54e115d8071fa5f2b732e99414043b75e2d51b9da914ba0'),),
+ 'src/engine/sniper_state_handlers.py': (('eaca4d2d23d2764c42e3f7cc2f73d04db0b29bb8115cabac4f10cf48e89d57aa',
+                                          'bd2c589431b0f507b2bbbba31cfc700a22dcab07b914313dc101add2cc9c9686'),
+                                         ('8a0c18d2c097b063a8349907f39e6057d43b7ad9ef173e5f6c4e1be48f8b21f9',
+                                          'bd2c589431b0f507b2bbbba31cfc700a22dcab07b914313dc101add2cc9c9686'),
+                                         ('eaca4d2d23d2764c42e3f7cc2f73d04db0b29bb8115cabac4f10cf48e89d57aa',
+                                          'edfd4af04194182dff2a3ced3952dbfc5dc989d85906409c0172fabadb381419'),
+                                         ('8a0c18d2c097b063a8349907f39e6057d43b7ad9ef173e5f6c4e1be48f8b21f9',
+                                          'edfd4af04194182dff2a3ced3952dbfc5dc989d85906409c0172fabadb381419'),
+                                         ('bd2c589431b0f507b2bbbba31cfc700a22dcab07b914313dc101add2cc9c9686',
+                                          'edfd4af04194182dff2a3ced3952dbfc5dc989d85906409c0172fabadb381419'),
+                                         ('8a0c18d2c097b063a8349907f39e6057d43b7ad9ef173e5f6c4e1be48f8b21f9',
+                                          '2e69e440301dbc3bf4ec7020abc29b4a37b0dfd5dd624480378c7eab491c45d9'),
+                                         ('bd2c589431b0f507b2bbbba31cfc700a22dcab07b914313dc101add2cc9c9686',
+                                          '2e69e440301dbc3bf4ec7020abc29b4a37b0dfd5dd624480378c7eab491c45d9'),
+                                         ('eaca4d2d23d2764c42e3f7cc2f73d04db0b29bb8115cabac4f10cf48e89d57aa',
+                                          '2e69e440301dbc3bf4ec7020abc29b4a37b0dfd5dd624480378c7eab491c45d9'),
+                                         ('edfd4af04194182dff2a3ced3952dbfc5dc989d85906409c0172fabadb381419',
+                                          '2e69e440301dbc3bf4ec7020abc29b4a37b0dfd5dd624480378c7eab491c45d9'))}}
+REVIEWED_ENTRY_COST_DEPENDENCY_VARIANTS = {
+    (key[0], REVIEWED_ENTRY_COST_HASHES.get(key[0], key[1])): {**value,
+        'dependencies': {**value['dependencies'], **REVIEWED_ENTRY_COST_HASHES},
+        'contract_extensions': {origin: {name: REVIEWED_ENTRY_COST_HASHES.get(os.path.normpath(name), sha)
+            for name, sha in paths.items()} for origin, paths in value['contract_extensions'].items()},
+    } for key, value in REVIEWED_ENTRY_COST_PRE_NATIVE_LABEL_VARIANTS.items()
+}
+
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -4507,9 +4568,15 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     post_sell_source_present = any((root / name).is_file()
         and hashlib.sha256(candidate_bytes(name)).hexdigest() == sha
         for name, sha in REVIEWED_POST_SELL_SOURCE_HASHES.items())
-    entry_cost_variants = (REVIEWED_ENTRY_COST_DEPENDENCY_VARIANTS
+    native_label_present = any((root / name).is_file()
+        and hashlib.sha256(candidate_bytes(name)).hexdigest() == sha
+        for name, sha in REVIEWED_ENTRY_COST_NATIVE_LABEL_HASHES.items())
+    entry_cost_hashes = (REVIEWED_ENTRY_COST_HASHES if native_label_present
+                         else REVIEWED_ENTRY_COST_PRE_NATIVE_LABEL_HASHES)
+    entry_cost_variants = (REVIEWED_ENTRY_COST_DEPENDENCY_VARIANTS if native_label_present
+        else REVIEWED_ENTRY_COST_PRE_NATIVE_LABEL_VARIANTS
         if any((root / name).is_file() and hashlib.sha256(candidate_bytes(name)).hexdigest() == sha
-            for name, sha in REVIEWED_ENTRY_COST_HASHES.items()
+            for name, sha in REVIEWED_ENTRY_COST_PRE_NATIVE_LABEL_HASHES.items()
             if REVIEWED_ENTRY_COST_PRE_SHUTDOWN_HASHES.get(name) != sha)
         else REVIEWED_ENTRY_COST_PRE_SHUTDOWN_VARIANTS
         if any((root / name).is_file() and hashlib.sha256(candidate_bytes(name)).hexdigest() == sha
@@ -4712,7 +4779,7 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
             if variant is None:
                 raise ValueError('entry_consumer_entry_cost_generation_mixed:' + trigger)
             dependencies = {**dependencies, **variant['dependencies']}
-            extensions = {name: REVIEWED_ENTRY_COST_HASHES.get(repository_name(name), sha)
+            extensions = {name: entry_cost_hashes.get(repository_name(name), sha)
                           for name, sha in extensions.items()}
         dependencies_by_trigger[trigger] = (trigger_sha, dependencies)
     for key, name in paths.items():
