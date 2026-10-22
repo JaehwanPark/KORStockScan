@@ -1081,3 +1081,9 @@ def test_legacy_resume_writer_cas_uses_input_failure_without_relabelling_origin(
         assert result.returncode==0,result.stderr
         row=json.loads(path.read_text());assert row['run_id']=='new-run'
         assert row['scoped_resume']['origin_run_id']=='actual-native-origin'
+
+
+def test_workflow_provenance_uses_immutable_owner_after_snapshot_unlink():
+    script=_text('deploy/run_threshold_cycle_postclose.sh')
+    assert 'POSTCLOSE_WORKFLOW_SCRIPT="$SCRIPT_DIR/run_threshold_cycle_postclose.sh"' in script
+    assert script.index('cleanup_wrapper_snapshot\nwrapper_snapshot=""') < script.index('POSTCLOSE_WORKFLOW_SCRIPT=')
