@@ -621,6 +621,8 @@ def verify_prepared(target_date: str, *, require_today: bool = False,
         "selected_release_commit": commit if handoff_basis and not findings else receipt.get("selected_release_commit"),
         "preserved_preopen_commit": receipt.get("selected_release_commit") if handoff_basis else None,
         "handoff_basis": handoff_basis,
+        "native_predecessor_consumption": (checked if handoff_basis ==
+            'native_consumed_preopen_preserved_generation' and not findings else None),
         "actual_pid_consumed": False,
         "runtime_effect": False,
         "validation_scope": ("intraday_preserved_historical_generation" if handoff_basis and not findings

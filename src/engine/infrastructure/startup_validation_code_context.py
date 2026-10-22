@@ -575,6 +575,17 @@ def _native_main_basis(native):
         return None
     if native.get('validation_scope') == 'current_full_contract':
         return 'same_invocation_selected_native_full_verification'
+    consumed = native.get('native_predecessor_consumption') or {}
+    if (native.get('validation_scope') == 'intraday_preserved_historical_generation'
+            and native.get('handoff_basis') == 'native_consumed_preopen_preserved_generation'
+            and consumed.get('schema') == 'intraday_pid_consumption_verification_v1'
+            and consumed.get('status') == 'pass' and consumed.get('findings') == []
+            and consumed.get('basis') == 'native_preopen'
+            and consumed.get('actual_pid_consumed') is True
+            and consumed.get('target_date') == native.get('target_date')
+            and consumed.get('selected_release_commit') == native.get('preserved_preopen_commit')
+            and _hex(consumed.get('manifest_sha256'))):
+        return 'same_invocation_selected_consumed_preopen_native_validation'
     if (native.get('validation_scope') == 'intraday_preserved_historical_generation'
             and native.get('handoff_basis') in {'intraday_preserved_preopen_generation',
                 'intraday_preserved_preopen_generation_current_postclose_resealed'}
@@ -594,7 +605,9 @@ def _preserved_native_sources(proof):
     records=closure.get('preserved_generations')
     if not records:
         return {}
-    if native.get('validation_scope')=='current_full_contract':
+    native_consumed = (_native_main_basis(native) ==
+        'same_invocation_selected_consumed_preopen_native_validation')
+    if native.get('validation_scope')=='current_full_contract' or native_consumed:
         if not isinstance(records,dict) or len(records)!=1:
             raise ValueError('startup_prepared_native_scope_invalid')
         data=Path(proof['policy_path']).parents[3];day=proof['target_date']
@@ -639,6 +652,26 @@ def _preserved_native_sources(proof):
                 or manifest.get('selected_release_sha')!=proof['selected_release_commit']):
             raise ValueError('startup_prepared_full_bootstrap_unbound')
         refs[str(index)]=_sha(index)
+        if native_consumed:
+            consumed=native['native_predecessor_consumption']
+            selection=data/'runtime/runtime_release_selection.json';selected=_json(selection)
+            actor=selected.get('actual_pid_receipt') or {}
+            identity=dict(pid=actor.get('pid'),start_ticks=str(actor.get('start_ticks')),
+                          cwd=actor.get('process_cwd'))
+            if (selected.get('schema')!='runtime_release_selection_v1'
+                    or selected.get('actual_pid_consumed') is not True
+                    or selected.get('release_root')!=proof['selected_release_root']
+                    or selected.get('git_commit')!=proof['selected_release_commit']
+                    or consumed.get('release_root')!=proof['selected_release_root']
+                    or consumed.get('pid_identity')!=identity
+                    or type(identity['pid']) is not int or identity['pid']<=0
+                    or identity['cwd']!=str(Path(proof['selected_release_root'])/'src')):
+                raise ValueError('startup_native_consumption_identity_invalid')
+            active=data/'runtime/policy_bootstrap'/('runtime_policy_bootstrap_'+day+'.json')
+            env=active.with_suffix('.env')
+            if _json(active).get('manifest_sha256')!=consumed['manifest_sha256']:
+                raise ValueError('startup_native_consumption_bootstrap_changed')
+            refs.update({str(p):_sha(p) for p in (selection,active,env)})
         return refs
     if (native.get('validation_scope')!='intraday_preserved_historical_generation'
             or _native_main_basis(native)!='same_invocation_selected_intraday_native_validation'

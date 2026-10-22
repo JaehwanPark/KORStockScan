@@ -1112,11 +1112,11 @@ assert_no_forbidden_attempts()
 @pytest.mark.parametrize('fault', [None,'missing','scope','date','release','full','source',
     'bootstrap','activation','source_date','native_pid','prepared_manifest','index','authority',
     'extra_generation','schema'])
-@pytest.mark.parametrize('consumed_ancestry', [False, True])
+@pytest.mark.parametrize('consumed_ancestry', [False, True, 'native'])
 def test_isolated_prepared_native_closure_keeps_full_bootstrap_and_exact_sources(request_fixture,monkeypatch,fault,consumed_ancestry):
     f=request_fixture;main=_main_fixture(f,monkeypatch);proof=main['proof'];request=f['request']
     data=Path(request['data_root']);commit=f['original_commit'];native=proof['native_verification']
-    prepared_commit='a'*40 if consumed_ancestry else commit
+    prepared_commit='a'*40 if consumed_ancestry is True else commit
     closure=proof['closure'];closure['manifests']={};proof['historical_semantic_code_sources']={}
     directory=data/'runtime/policy_bootstrap/prepared'/DAY/'original';directory.mkdir(parents=True)
     prepared=directory/'readiness.json'
@@ -1142,7 +1142,7 @@ def test_isolated_prepared_native_closure_keeps_full_bootstrap_and_exact_sources
             sha256=receipt['manifest_file_sha256'],write=False,full_native_verification=True,
             result=dict(status='pass',findings=[],target_date=DAY,manifest_sha256='b'*64)))
     closure['preserved_generations']={sha:record}
-    if consumed_ancestry:
+    if consumed_ancestry is True:
         native.update(validation_scope='intraday_preserved_historical_generation',
             handoff_basis='intraday_preserved_preopen_generation_current_postclose_resealed',
             preserved_preopen_commit=prepared_commit)
@@ -1163,6 +1163,30 @@ def test_isolated_prepared_native_closure_keeps_full_bootstrap_and_exact_sources
             target_date=DAY,selected_release_commit=commit,handoff_path=str(path),consumed_path=str(consumed),
             manifest_sha256='d'*64,prepared_manifest_sha256='b'*64,full_bootstrap=record['full_bootstrap'],
             sources={**handoff['frozen_files'],str(path):live_sha,str(consumed):C._sha(consumed)})
+    if consumed_ancestry == 'native':
+        request['manifest']['selected_release_sha']=commit
+        identity=dict(pid=123,start_ticks='456',cwd=str(f['selected']/'src'))
+        native.update(validation_scope='intraday_preserved_historical_generation',
+            handoff_basis='native_consumed_preopen_preserved_generation',preserved_preopen_commit=commit,
+            native_predecessor_consumption=dict(schema='intraday_pid_consumption_verification_v1',
+                status='pass',findings=[],basis='native_preopen',actual_pid_consumed=True,
+                target_date=DAY,selected_release_commit=commit,release_root=str(f['selected']),
+                pid_identity=identity,manifest_sha256='d'*64))
+        proof['delegation_basis']=C._native_main_basis(native)
+        selection=data/'runtime/runtime_release_selection.json'
+        selection.parent.mkdir(parents=True,exist_ok=True)
+        original_selection=json.loads(selection.read_text())
+        selection.write_text(json.dumps(dict(original_selection,
+            actual_pid_consumed=True,release_root=str(f['selected']),git_commit=commit,
+            actual_pid_receipt=dict(pid=123,start_ticks='456',process_cwd=identity['cwd']))))
+        for consumer in request['candidate_code_handoffs'].values():
+            consumer['source_hashes'][str(selection)]=C._sha(selection)
+            if str(selection) in consumer['origin']['sources']:
+                consumer['origin']['sources'][str(selection)]=C._sha(selection)
+        active=data/'runtime/policy_bootstrap'/('runtime_policy_bootstrap_'+DAY+'.json')
+        active.parent.mkdir(parents=True,exist_ok=True)
+        active.write_text(json.dumps(dict(manifest_sha256='d'*64)))
+        active.with_suffix('.env').write_text('native environment fixture')
     proof['source_hashes'].update(C._preserved_native_sources(proof));request['source_hashes'].update(proof['source_hashes'])
     if fault=='missing':closure['preserved_generations']={}
     elif fault=='scope':native['validation_scope']='current_full_contract' if consumed_ancestry else 'intraday_preserved_historical_generation'
