@@ -1,5 +1,6 @@
 import copy
 from fractions import Fraction
+from pathlib import Path
 
 import pytest
 from src.engine.scalping import reversal_cumulative_catalog as Q
@@ -434,6 +435,88 @@ def test_cli_override_rejected_before_mutable_seed_and_consumed_uses_current(tmp
     monkeypatch.setattr(O,'active',lambda *a:current)
     monkeypatch.setattr(O,'machine_report',lambda data,day,pub,parent,**kw:seen.append(parent) or dict(status='fixture_current'))
     assert P.main(argv)==0 and seen==[current]
+
+
+def _midnight_report_parent(monkeypatch, tmp_path):
+    from datetime import datetime
+    from types import SimpleNamespace
+    from src.engine.scalping import continuous_reversal_operating_postclose as O
+    from src.engine.scalping import continuous_reversal_policy_v6 as V
+    from src.engine.scalping import mechanistic_entry_runtime_policy as N
+    from src.engine.infrastructure import runtime_release_router as router
+    selector=tmp_path/'runtime/runtime_release_selection.json'
+    selector.parent.mkdir()
+    selector.write_bytes(b'original-selected-release')
+    origin=tmp_path/'immutable-release'
+    monkeypatch.setattr(O,'datetime',SimpleNamespace(now=lambda tz:datetime(2026,10,23,1,tzinfo=tz)),raising=False)
+    monkeypatch.setattr(router,'selected_release',lambda workspace:(origin,'reviewed-commit'))
+    def runtime(**kwargs):
+        raise ValueError('v6_contract_code_changed:reversal_code_handoff.py')
+    monkeypatch.setattr(N,'load_effective',runtime)
+    monkeypatch.setattr(R,'load_offline_parent',lambda *a:pytest.fail('unrelated registration parent'))
+    return O,V,N,selector,origin
+
+
+def test_midnight_reports_share_original_attested_parent_without_runtime_relaxation(monkeypatch,tmp_path):
+    from src.engine.scalping import ai_action_outcome_calibration as calibration
+    from src.engine.scalping import strategy_owner_replay
+    O,V,N,selector,origin=_midnight_report_parent(monkeypatch,tmp_path)
+    parent=dict(bundle_sha256='original-policy',target_date='2026-10-22',
+        continuous_reversal=dict(schema=V.SCHEMA),machine_policy=dict(original=True))
+    calls=[]
+    def attest(data,day,**kwargs):
+        calls.append((day,kwargs))
+        return parent
+    monkeypatch.setattr(V,'_attested_activation_parent',attest)
+    monkeypatch.setattr(strategy_owner_replay,'entry_operating_model_identity',lambda:'reviewed-model')
+    assert O.active(tmp_path,'2026-10-22') is parent
+    fingerprint=calibration._main_mechanistic_input_fingerprint(tmp_path,'2026-10-22')
+    assert len(fingerprint)==64
+    original_read=Path.read_bytes
+    monkeypatch.setattr(Path,'read_bytes',lambda path:original_read(path)+(
+        b'\n' if path.name=='continuous_reversal_operating_postclose.py' else b''))
+    assert calibration._main_mechanistic_input_fingerprint(tmp_path,'2026-10-22')!=fingerprint
+    assert calls==[('2026-10-22',dict(origin_root=origin,origin_commit='reviewed-commit'))]*3
+    assert selector.read_bytes()==b'original-selected-release'
+    with pytest.raises(ValueError,match='v6_contract_code_changed'):
+        N.load_effective(data_root=tmp_path,target_date='2026-10-23')
+
+
+def test_same_day_report_cannot_borrow_yesterdays_attestation(monkeypatch,tmp_path):
+    O,V,N,selector,origin=_midnight_report_parent(monkeypatch,tmp_path)
+    monkeypatch.setattr(V,'_attested_activation_parent',lambda *a,**kw:pytest.fail('dated runtime check bypassed'))
+    with pytest.raises(ValueError,match='v6_contract_code_changed'):
+        O.load_report_parent(tmp_path,'2026-10-23')
+
+
+@pytest.mark.parametrize('reason',['continuous_reversal_current_hash_invalid',
+    'active_policy_code_handoff_source_changed:source.json'])
+def test_report_parent_never_reclassifies_source_corruption(monkeypatch,tmp_path,reason):
+    O,V,N,selector,origin=_midnight_report_parent(monkeypatch,tmp_path)
+    def broken(**kwargs):raise ValueError(reason)
+    monkeypatch.setattr(N,'load_effective',broken)
+    monkeypatch.setattr(V,'_attested_activation_parent',lambda *a,**kw:pytest.fail('source corruption bypassed'))
+    with pytest.raises(ValueError,match=reason):O.load_report_parent(tmp_path,'2026-10-22')
+
+
+@pytest.mark.parametrize('error',[FileNotFoundError('missing original handoff'),
+    ValueError('v6_historical_parent_source_changed:source.json'),
+    ValueError('v6_historical_parent_code_changed')])
+def test_midnight_parent_proof_failure_never_falls_back_to_registration(monkeypatch,tmp_path,error):
+    O,V,N,selector,origin=_midnight_report_parent(monkeypatch,tmp_path)
+    def broken(*args,**kwargs):raise error
+    monkeypatch.setattr(V,'_attested_activation_parent',broken)
+    with pytest.raises(type(error),match=str(error)):O.active(tmp_path,'2026-10-22')
+
+
+def test_midnight_parent_rejects_selector_transition_during_validation(monkeypatch,tmp_path):
+    O,V,N,selector,origin=_midnight_report_parent(monkeypatch,tmp_path)
+    def race(*args,**kwargs):
+        selector.write_bytes(b'successor')
+        return dict(target_date='2026-10-22')
+    monkeypatch.setattr(V,'_attested_activation_parent',race)
+    with pytest.raises(ValueError,match='postclose_report_parent_selection_changed'):
+        O.active(tmp_path,'2026-10-22')
 
 
 def test_auxiliary_carry_uses_one_snapshot_under_existing_publisher_lock(tmp_path,monkeypatch):

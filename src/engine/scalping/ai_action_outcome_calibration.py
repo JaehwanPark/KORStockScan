@@ -319,7 +319,8 @@ def _main_mechanistic_input_fingerprint(
     data_root: Path, target_date: str, incumbent_date: str | None = None
 ) -> str:
     """Cheap retry fingerprint; large immutable JSONL inputs are never reread."""
-    from src.engine.scalping.mechanistic_entry_runtime_policy import digest, load_effective
+    from src.engine.scalping.mechanistic_entry_runtime_policy import digest
+    from src.engine.scalping.continuous_reversal_operating_postclose import load_report_parent
 
     def generation(path: Path) -> dict[str, Any]:
         # Compact finalization rewrites its small sealed projection even when
@@ -368,7 +369,7 @@ def _main_mechanistic_input_fingerprint(
     refresh_policy = data_root / "source_quality/clean_baseline_policy.json"
     if refresh_policy.is_file():
         candidates.add(refresh_policy)
-    incumbent = load_effective(data_root=data_root, target_date=incumbent_date or target_date)
+    incumbent = load_report_parent(data_root, incumbent_date or target_date)
     from src.engine.scalping.strategy_owner_replay import entry_operating_model_identity
     code_paths = [
         Path(__file__),
@@ -379,6 +380,7 @@ def _main_mechanistic_input_fingerprint(
         Path(__file__).with_name("compact_auxiliary_paired_replay.py"),
         Path(__file__).with_name("strategy_owner_replay.py"),
         Path(__file__).with_name("entry_split_order_plan.py"),
+        Path(__file__).with_name("continuous_reversal_operating_postclose.py"),
     ]
     body = {
         "contract_version": MAIN_MECHANISTIC_EVALUATION_CONTRACT_VERSION,
@@ -10224,9 +10226,9 @@ def build_main_mechanistic_report(
         report_root / PAIRED_SUBDIR,
         target_date=target_date, all_supported_cohorts=True,
     )
-    from src.engine.scalping.mechanistic_entry_runtime_policy import load_effective
+    from src.engine.scalping.continuous_reversal_operating_postclose import load_report_parent
 
-    incumbent = load_effective(data_root=data_root, target_date=incumbent_date or target_date)
+    incumbent = load_report_parent(data_root, incumbent_date or target_date)
     parent = (incumbent or {}).get("machine_policy") or MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1
     # The compact materialization contains only the provider-screened subset.
     # Main-machine tuning also needs BLOCK/RECHECK outcomes, so reuse the
@@ -10513,9 +10515,9 @@ def build_report(
         source_contract=mechanistic_source_contract,
     )
     hierarchy_parent = json.loads(json.dumps(MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1))
-    from src.engine.scalping.mechanistic_entry_runtime_policy import load_effective
+    from src.engine.scalping.continuous_reversal_operating_postclose import load_report_parent
 
-    incumbent = load_effective(data_root=data_root, target_date=target_date)
+    incumbent = load_report_parent(data_root, target_date)
     if incumbent is not None:
         hierarchy_parent = json.loads(json.dumps(incumbent["machine_policy"]))
     machine_observations, machine_capture_census = load_machine_observation_rows(
