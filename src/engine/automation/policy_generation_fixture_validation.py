@@ -20,7 +20,7 @@ def _assert_committed(family):
     paths = [*validation.plan_identity(family),
              *('src/engine/'+name for name in generation.COMPONENTS[family]),
              *('src/engine/'+name for name in generation.COMMON_CODE_COMPONENTS)]
-    status = subprocess.check_output(['git','status','--porcelain','--',*paths],
+    status = subprocess.check_output(['git','status','--porcelain','--',*dict.fromkeys(paths)],
                                      cwd=validation.ROOT,text=True)
     if status.strip():
         raise ValueError('fixture_publication_requires_committed_sources')

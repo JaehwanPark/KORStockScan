@@ -305,6 +305,18 @@ REVIEWED_QUANTITY_CAPTURE_SUCCESSORS = {
 }
 
 
+# Exact integrated source/receipt/cost and validation-owner successor.
+# Original report/fixture and independent current fixture remain mandatory.
+REVIEWED_ENTRY_COST_SUCCESSORS = {'auxiliary': ('4de7ce95386f5c05863e8e3fb56899c71ef16da99bdf75cd0e3aa426a150eeac',
+               '581c21738b7a098e1900fcec2063e257b7f8ab71cce046ef4a8eb0b6fe41e8bd'),
+ 'entry_cancel_wait': ('47eb1ef2e45d3c48e663f6b3df505bc95da07fc6bcd168394441840af4764fff',
+                       '88275729dd03ed1f0de7bb562a85fab49e1212447da4a268fb3cd9e175389313'),
+ 'holding_vote': ('48b92485c831e215a1d7fe1ef8664113d68186e040a768087cbcb18ab0892ac3',
+                  '6890da33a6cad5b8e34280b9c39ccb6d478d81d1ad1c52aea222a296486502de'),
+ 'rising_missed': ('8c2725f4e329c95b79a74df8167bc5bbab80d6e08fe80fb6d7e4aaaa4d4c6e8d',
+                   'b6d966e440e92d57a8874814c3fcc2dfe9c0eab54603d8c9c6f2e93734b240f7')}
+
+
 def _historical_fixture(contract, data, family, *, late_report=None):
     """Preserve a prior fixture without using it to certify the successor."""
     reference = contract.get('fixture_receipt')
@@ -415,7 +427,8 @@ def current_fixture_observation(observed, data):
                     or actual_pair == REVIEWED_FIXED_WAIT_SUCCESSORS.get(family)
                     or actual_pair == REVIEWED_ENTRY_RECEIPT_SUCCESSORS.get(family)
                     or actual_pair == REVIEWED_BUY_IDENTITY_SUCCESSORS.get(family)
-                    or actual_pair == REVIEWED_QUANTITY_CAPTURE_SUCCESSORS.get(family))
+                    or actual_pair == REVIEWED_QUANTITY_CAPTURE_SUCCESSORS.get(family)
+                    or actual_pair == REVIEWED_ENTRY_COST_SUCCESSORS.get(family))
     if reader_match:
         pair = actual_pair
     if not pair or actual_pair != pair:
@@ -451,7 +464,8 @@ def current_fixture_observation(observed, data):
         late_report = ((path, report_sha) if any(actual_pair == successors.get(family)
             for successors in (REVIEWED_HISTORICAL_RESOLUTION_SUCCESSORS,
                                REVIEWED_FIXED_WAIT_SUCCESSORS, REVIEWED_ENTRY_RECEIPT_SUCCESSORS,
-                               REVIEWED_BUY_IDENTITY_SUCCESSORS, REVIEWED_QUANTITY_CAPTURE_SUCCESSORS)) else None)
+                               REVIEWED_BUY_IDENTITY_SUCCESSORS, REVIEWED_QUANTITY_CAPTURE_SUCCESSORS,
+                               REVIEWED_ENTRY_COST_SUCCESSORS)) else None)
         historical_fixture = _historical_fixture(contract, data, family, late_report=late_report)
         if (integrated_match or readonly_match or cleanup_match or custody_match or reader_match or frozen_match) and historical_fixture is None:
             raise ValueError('successor_integrated_historical_fixture_required')
