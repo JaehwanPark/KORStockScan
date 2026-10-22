@@ -1549,13 +1549,16 @@ def test_stopped_lock_recovery_requires_all_native_preparations(stopped_recovery
 
 
 @pytest.mark.parametrize('damage',[None,'whitespace','conflict','date','root','commit','status','finding','missing','changed_after_preflight'])
-def test_stopped_prestart_failure_is_bound_to_original_native_p5(stopped_recovery,damage):
+@pytest.mark.parametrize('short_reference', [False, True])
+def test_stopped_prestart_failure_is_bound_to_original_native_p5(stopped_recovery,damage,short_reference):
     d,path,_=stopped_recovery;failed=D.H._read(path)
     intake=dict(status='pass',findings=[],target_date=d.day,selected_release_commit=failed['candidate_commit'],
         verification_code_commit=failed['candidate_commit'],verification_code_root=failed['candidate_root'])
     result=dict(schema='main_policy_load_exit_validation_v1',run_id='1'*32,status='failed',failure_phase='intake',
         target_date=d.day,findings=['ValueError:startup_main_code_pair_unreviewed:src/engine/scalping/reversal_code_handoff.py'],
         runtime_effect=False,actual_pid_consumed=False,allowed_runtime_apply=False,native_preparation_checks=dict(intake=intake))
+    if short_reference:
+        result['findings'] = ['ValueError:prepared_code_intraday_custody_invalid']
     failed.update(failed_phase='prepared',error=repr(result),
         sentinel_source_window=dict(schema='sentinel_source_window_preparation_v1',target_date=d.day,runtime_effect=False),
         sentinel_summary=dict(status='ok',runtime_effect=False))
@@ -1571,6 +1574,8 @@ def test_stopped_prestart_failure_is_bound_to_original_native_p5(stopped_recover
     elif damage=='whitespace':native.write_bytes(native.read_bytes()+b' ') # same semantics remains exact native bytes frozen
     if damage=='conflict':
         native.write_bytes(D._json_bytes(dict(result,status='passed')))
+    if short_reference:
+        failed['error'] = 'selected_p5_failed:' + str(native)
     path.write_bytes(D._json_bytes(failed))
     for module in ('intraday_release_handoff','runtime_policy_bootstrap','auxiliary_reader_readiness'):
         path.with_name('selected-'+module+'.log').write_bytes(D._json_bytes(dict(status='pass',target_date=d.day,actual_pid_consumed=False,findings=[])))

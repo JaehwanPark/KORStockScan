@@ -361,22 +361,38 @@ def stopped_preparation_failure_sources(failed, failed_path):
         ('prepared', 'tuple indices must be integers or slices, not str'),
         ('prepared', 'deployment_selection_changed')}
     if not known and phase_error[0] == 'prepared':
-        # Legacy embedding stored repr(result) rather than a short error. Bind
-        # that immutable failure to its actual native final; never infer PASS.
+        # A short native P5 reference retains the original failed report. It
+        # authorizes only stopped recovery after the missing prepared-code
+        # handoffs have been repaired, never launch or a replacement verdict.
         error = phase_error[1]
-        if not isinstance(error, str) or len(error) > 1024*1024 or not error.startswith("{'schema': 'main_policy_load_exit_validation_v1'"):
+        if not isinstance(error, str) or len(error) > 1024*1024:
             return {}
-        value = ast.literal_eval(error)
-        run = value.get('run_id', '')
-        if not isinstance(run, str) or re.fullmatch('[0-9a-f]{32}', run) is None:
-            raise ValueError('deployment_prestart_failure_identity_invalid')
-        path = Path(failed_path).parents[4]/'report/main_startup_validation'/failed['target_date']/run/'final.json'
-        native, raw, _ = _owned_metadata(path)
+        base = Path(failed_path).parents[4]/'report/main_startup_validation'/failed['target_date']
+        short = error.startswith('selected_p5_failed:')
+        if short:
+            path = Path(error.removeprefix('selected_p5_failed:'))
+            if (path.parent.parent != base or path.name != 'final.json'
+                    or re.fullmatch('[0-9a-f]{32}', path.parent.name) is None):
+                raise ValueError('deployment_prestart_failure_identity_invalid')
+            native, raw, _ = _owned_metadata(path)
+            value = native
+            finding = 'ValueError:prepared_code_intraday_custody_invalid'
+        else:
+            if not error.startswith("{'schema': 'main_policy_load_exit_validation_v1'"):
+                return {}
+            value = ast.literal_eval(error)
+            run = value.get('run_id', '')
+            if not isinstance(run, str) or re.fullmatch('[0-9a-f]{32}', run) is None:
+                raise ValueError('deployment_prestart_failure_identity_invalid')
+            path = base/run/'final.json'
+            native, raw, _ = _owned_metadata(path)
+            finding = 'ValueError:startup_main_code_pair_unreviewed:src/engine/scalping/reversal_code_handoff.py'
         intake = native.get('native_preparation_checks', {}).get('intake', {})
         if (native != value or native.get('schema') != 'main_policy_load_exit_validation_v1'
                 or native.get('status') != 'failed' or native.get('failure_phase') != 'intake'
                 or native.get('target_date') != failed.get('target_date')
-                or native.get('findings') != ['ValueError:startup_main_code_pair_unreviewed:src/engine/scalping/reversal_code_handoff.py']
+                or native.get('findings') != [finding]
+                or native.get('run_id') != path.parent.name
                 or any(native.get(key) is not False for key in ('runtime_effect','actual_pid_consumed','allowed_runtime_apply'))
                 or intake.get('status') != 'pass' or intake.get('findings') != []
                 or intake.get('target_date') != failed.get('target_date')

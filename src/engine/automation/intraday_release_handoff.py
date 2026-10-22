@@ -4615,6 +4615,26 @@ REVIEWED_ENTRY_COST_DEPENDENCY_VARIANTS = {
 }
 
 
+# Prepared-stage repair: native P5 failures keep their immutable original
+# report; effective auxiliary registry research remains report-only.
+REVIEWED_ENTRY_COST_PRE_PRESTART_HASHES = REVIEWED_ENTRY_COST_HASHES
+REVIEWED_ENTRY_COST_PRE_PRESTART_VARIANTS = REVIEWED_ENTRY_COST_DEPENDENCY_VARIANTS
+REVIEWED_PRESTART_INTEGRATION_HASHES = {'src/engine/automation/ordered_intraday_deploy.py': 'a457eeaf5a1572368751126986eed24a215282dbf79449d5779241fd2fea737d', 'src/engine/automation/main_market_weakness_research.py': 'e78122825224eee72bb3301fd2df7c22230645c5b88103fd32009a186316909b'}
+REVIEWED_ENTRY_COST_HASHES = {**REVIEWED_ENTRY_COST_HASHES, **REVIEWED_PRESTART_INTEGRATION_HASHES}
+REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
+    name: REVIEWED_ENTRY_COST_PAIRS.get(name, ()) + tuple((old, current) for old in sorted(
+        {pair[0] for pair in REVIEWED_ENTRY_COST_PAIRS.get(name, ())}
+        | {REVIEWED_ENTRY_COST_PRE_PRESTART_HASHES[name]}))
+    for name, current in REVIEWED_PRESTART_INTEGRATION_HASHES.items()}}
+REVIEWED_ENTRY_COST_DEPENDENCY_VARIANTS = {
+    (key[0], REVIEWED_PRESTART_INTEGRATION_HASHES.get(key[0], key[1])): {
+        **value, 'dependencies': {**value['dependencies'], **REVIEWED_PRESTART_INTEGRATION_HASHES},
+        'contract_extensions': {origin: {name: REVIEWED_PRESTART_INTEGRATION_HASHES.get(os.path.normpath(name), sha)
+            for name, sha in paths.items()} for origin, paths in value['contract_extensions'].items()},
+    } for key, value in REVIEWED_ENTRY_COST_PRE_PRESTART_VARIANTS.items()
+}
+
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -4766,10 +4786,14 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     signed_surge_present = all((root / name).is_file()
         and hashlib.sha256(candidate_bytes(name)).hexdigest() == sha
         for name, sha in REVIEWED_SIGNED_SURGE_HASHES.items())
+    prestart_integration_present = any((root / name).is_file()
+        and hashlib.sha256(candidate_bytes(name)).hexdigest() == sha
+        for name, sha in REVIEWED_PRESTART_INTEGRATION_HASHES.items())
     preassessment_present = any((root / name).is_file()
         and hashlib.sha256(candidate_bytes(name)).hexdigest() == sha
         for name, sha in REVIEWED_PREASSESSMENT_HASHES.items())
-    entry_cost_hashes = (REVIEWED_ENTRY_COST_HASHES if preassessment_present
+    entry_cost_hashes = (REVIEWED_ENTRY_COST_HASHES if prestart_integration_present
+        else REVIEWED_ENTRY_COST_PRE_PRESTART_HASHES if preassessment_present
         else REVIEWED_ENTRY_COST_PRE_PREASSESSMENT_HASHES if signed_surge_present
         else REVIEWED_ENTRY_COST_PRE_SIGNED_SURGE_HASHES if expiry_health_present
         else REVIEWED_ENTRY_COST_PRE_EXPIRY_HEALTH_HASHES if first_turn_present
@@ -4780,7 +4804,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         else REVIEWED_ENTRY_COST_PRE_PREPARED_VALIDATION_HASHES if coordination_present
         else REVIEWED_ENTRY_COST_PRE_COORDINATION_HASHES if native_label_present
         else REVIEWED_ENTRY_COST_PRE_NATIVE_LABEL_HASHES)
-    entry_cost_variants = (REVIEWED_ENTRY_COST_DEPENDENCY_VARIANTS if preassessment_present
+    entry_cost_variants = (REVIEWED_ENTRY_COST_DEPENDENCY_VARIANTS if prestart_integration_present
+        else REVIEWED_ENTRY_COST_PRE_PRESTART_VARIANTS if preassessment_present
         else REVIEWED_ENTRY_COST_PRE_PREASSESSMENT_VARIANTS if signed_surge_present
         else REVIEWED_ENTRY_COST_PRE_SIGNED_SURGE_VARIANTS if expiry_health_present
         else REVIEWED_ENTRY_COST_PRE_EXPIRY_HEALTH_VARIANTS if first_turn_present

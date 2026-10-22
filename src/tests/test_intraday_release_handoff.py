@@ -2203,7 +2203,7 @@ def test_postclose_recovery_handoff_keeps_complete_reviewed_generation(tmp_path,
 
 @pytest.mark.parametrize('family',['main_stop','holding_vote','pre_submit_delay'])
 @pytest.mark.parametrize('fault',[None,'missing','dirty','committed_change','parent_mix'])
-@pytest.mark.parametrize('generation',['current','consumed_pre_startup','consumed_pre_shutdown','consumed_pre_native_label','consumed_pre_coordination','consumed_pre_prepared_validation','consumed_pre_prepared_repair','consumed_pre_main_preparation','consumed_pre_prepared_start','consumed_pre_first_turn','consumed_pre_expiry_health','consumed_pre_signed_surge','consumed_pre_preassessment'])
+@pytest.mark.parametrize('generation',['current','consumed_pre_startup','consumed_pre_shutdown','consumed_pre_native_label','consumed_pre_coordination','consumed_pre_prepared_validation','consumed_pre_prepared_repair','consumed_pre_main_preparation','consumed_pre_prepared_start','consumed_pre_first_turn','consumed_pre_expiry_health','consumed_pre_signed_surge','consumed_pre_preassessment','consumed_pre_prestart'])
 def test_entry_cost_handoff_keeps_exact_complete_generation(tmp_path,family,fault,generation,
         dependency='src/engine/monitoring/entry_attempt_identity.py'):
     import hashlib,os,subprocess
@@ -2225,12 +2225,13 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(tmp_path,family,faul
         'consumed_pre_first_turn':handoff.REVIEWED_ENTRY_COST_PRE_FIRST_TURN_HASHES,
         'consumed_pre_expiry_health':handoff.REVIEWED_ENTRY_COST_PRE_EXPIRY_HEALTH_HASHES,
         'consumed_pre_signed_surge':handoff.REVIEWED_ENTRY_COST_PRE_SIGNED_SURGE_HASHES,
-        'consumed_pre_preassessment':handoff.REVIEWED_ENTRY_COST_PRE_PREASSESSMENT_HASHES}[generation])
+        'consumed_pre_preassessment':handoff.REVIEWED_ENTRY_COST_PRE_PREASSESSMENT_HASHES,
+        'consumed_pre_prestart':handoff.REVIEWED_ENTRY_COST_PRE_PRESTART_HASHES}[generation])
     for name in hashes:
         content=((canonical/name).read_bytes() if generation=='current' else
             subprocess.check_output(['git','-C',str(canonical),'show',
                 {'consumed_pre_startup':'90bf2d11f','consumed_pre_shutdown':'70fc572f8',
-                 'consumed_pre_native_label':'b1519a2d4','consumed_pre_coordination':'3dd9f1bf5','consumed_pre_prepared_validation':'bf330ae92','consumed_pre_prepared_repair':'81f43b8ba','consumed_pre_main_preparation':'8644e15fc','consumed_pre_prepared_start':'3b951f1f1','consumed_pre_first_turn':'e9ee2c8ea','consumed_pre_expiry_health':'9476e9ecd','consumed_pre_signed_surge':'bf26ddf0e','consumed_pre_preassessment':'fc51a179b'}[generation]+':'+name]))
+                 'consumed_pre_native_label':'b1519a2d4','consumed_pre_coordination':'3dd9f1bf5','consumed_pre_prepared_validation':'bf330ae92','consumed_pre_prepared_repair':'81f43b8ba','consumed_pre_main_preparation':'8644e15fc','consumed_pre_prepared_start':'3b951f1f1','consumed_pre_first_turn':'e9ee2c8ea','consumed_pre_expiry_health':'9476e9ecd','consumed_pre_signed_surge':'bf26ddf0e','consumed_pre_preassessment':'fc51a179b','consumed_pre_prestart':'64ec63a87'}[generation]+':'+name]))
         (root/name).write_bytes(content)
     name='src/engine/automation/intraday_release_handoff.py'
     (root/name).write_bytes((canonical/name).read_bytes())
