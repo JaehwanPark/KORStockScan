@@ -15,9 +15,13 @@ from src.engine.scalping.pre_submit_delay_initial_policy import digest
 from src.tests.test_main_trailing_source_assembler import fixture, DAY, TARGET, write
 
 
-def approved(tmp_path, *, cost=False):
+def approved(tmp_path, *, cost=False, indexed=False):
     data = tmp_path/'data'
     fixture(data)
+    if indexed:
+        from src.engine.automation import main_trailing_source_store as store
+        path=data/'ai_decision_trace'/('ai_decision_trace_'+DAY+'.jsonl')
+        assert store.build_step(data,path)['complete']
     if cost in ('official','invalid_official'):
         from src.tests.test_broker_cost_source import broker_fixture
         from src.tests.test_broker_cost_allocation import position
@@ -107,6 +111,29 @@ def test_frozen_unchanged_invalid_cost_source_retains_its_original_gap(tmp_path)
     result=research.run(manifest,input_root=manifest.parent,output_root=tmp_path/'new-report',dry_run=False)
     assert result['initial_policy']==original['initial_policy']
     assert result['assembly_census']==original['assembly_census']
+    assert holding.read_bytes()==before
+
+
+@pytest.mark.parametrize('damage',[None,'receipt','physical'])
+def test_native_compression_metadata_is_not_an_added_research_input(tmp_path,damage):
+    from src.engine.compress_db_backfilled_files import _gzip_file
+    data,origin,holding,original=approved(tmp_path,indexed=True)
+    raw=data/'ai_decision_trace'/('ai_decision_trace_'+DAY+'.jsonl')
+    assert _gzip_file(raw,dry_run=False)[0]
+    receipt=Path(str(raw)+'.gz.archive_receipt.json');physical=Path(str(raw)+'.gz')
+    assert receipt.is_file() and not raw.exists()
+    if damage=='receipt':receipt.write_text('{}')
+    elif damage=='physical':physical.write_bytes(physical.read_bytes()+b'corrupt')
+    before=holding.read_bytes()
+    def validate():
+        manifest=reuse.prepare(data,origin,tmp_path/'reused')
+        return research.run(manifest,input_root=manifest.parent,output_root=tmp_path/'new-report',dry_run=False)
+    if damage:
+        with pytest.raises((ValueError,OSError,KeyError,reuse.InputPending)):validate()
+    else:
+        result=validate()
+        assert result['initial_policy']==original['initial_policy']
+        assert result['assembly_census']==original['assembly_census']
     assert holding.read_bytes()==before
 
 

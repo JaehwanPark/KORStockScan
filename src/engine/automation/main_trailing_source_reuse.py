@@ -571,6 +571,13 @@ def verify_frozen_inventory(manifest, assembly_root):
     new.update((name,old[name]) for name in frozen_costs)
     for name,generation in old.items():
         candidate=new.get(name)
+        if candidate is None and name.endswith('.jsonl.gz.archive_receipt.json'):
+            from .main_trailing_source_store import NAMESPACES
+            logical=Path(name.removesuffix('.gz.archive_receipt.json'))
+            if (logical.parent.name in NAMESPACES and str(logical) in old
+                    and source_generation_matches(root,source_date,logical,old[str(logical)])
+                    and source_generation_matches(root,source_date,name,generation)):
+                continue  # Preserve exact issued metadata; it is not a new raw input.
         is_vote=Path(name).parent==root/'runtime/holding_path_votes'
         if is_vote and generation.get('schema')!=VOTE_INVENTORY_SCHEMA and (candidate is None or candidate.get('schema')==VOTE_INVENTORY_SCHEMA):
             try:

@@ -95,7 +95,8 @@ def input_inventory(root,days,master_path,parent_path,*,cost_data_root=None,incl
         namespaces=['ai_decision_trace','ai_decision_payloads','pipeline_events',
             'ai_decision_prompts','ai_decision_requests']
         for namespace,stem in ((name,name) for name in namespaces):
-            paths.update((Path(root)/namespace).glob(stem+'_'+day+'.jsonl*'))
+            paths.update(p for p in (Path(root)/namespace).glob(stem+'_'+day+'.jsonl*')
+                if p.name in {stem+'_'+day+'.jsonl',stem+'_'+day+'.jsonl.gz'})
         from src.engine.lifecycle.snapshot_archive import logical_path, identity_available
         for path in (Path(root)/'report/monitor_snapshots').glob('trade_review_'+day+'*.json*'):
             if (path.name.endswith(('.json', '.json.gz')) and not path.name.endswith('.archive_receipt.json')
