@@ -39,9 +39,9 @@ def approved(tmp_path, *, cost=False):
     return data, origin, holding, result
 
 
-@pytest.mark.parametrize('cost_revision', [False, True])
+@pytest.mark.parametrize('cost_revision', [False, True, 'added'])
 def test_approved_normalized_input_replays_and_verifies_with_original_gaps(tmp_path, cost_revision):
-    data, origin, holding, original = approved(tmp_path, cost=cost_revision)
+    data, origin, holding, original = approved(tmp_path, cost=cost_revision is True)
     if cost_revision:
         from src.engine.lifecycle.broker_cost_allocation import persist_research_costs
         from src.engine.lifecycle.broker_cost_reconciliation import source_generation
@@ -74,13 +74,13 @@ def test_approved_normalized_input_replays_and_verifies_with_original_gaps(tmp_p
 
 
 @pytest.mark.parametrize('damage', ['missing_history', 'changed_history', 'linked_history',
-    'changed_old_receipt', 'invalid_current_index'])
+    'changed_old_receipt', 'invalid_current_index', 'new_invalid_index'])
 def test_frozen_cost_revision_never_admits_missing_changed_or_unbound_bytes(tmp_path, damage):
     from src.engine.lifecycle import broker_cost_allocation as costs
-    data, origin, _, _ = approved(tmp_path, cost=True)
+    data, origin, _, _ = approved(tmp_path, cost=damage != 'new_invalid_index')
     index = data/'runtime/initial_quantity_research_costs'/DAY/'index.json'
-    old = json.loads(index.read_bytes())
-    history = index.parent/'index_generations'/(hashlib.sha256(index.read_bytes()).hexdigest()+'.json')
+    old = json.loads(index.read_bytes()) if index.exists() else None
+    history = index.parent/'index_generations'/(hashlib.sha256(index.read_bytes()).hexdigest()+'.json') if index.exists() else None
     costs.persist_research_costs(data, DAY, {'1': dict(record_id='1',
         schema='initial_quantity_broker_total_allocated_cost_v1',
         status='research_cost_invalid', reason='later_cost_generation')}, [])
@@ -88,7 +88,7 @@ def test_frozen_cost_revision_never_admits_missing_changed_or_unbound_bytes(tmp_
     elif damage == 'changed_history': history.write_text('{}')
     elif damage == 'linked_history':
         target = tmp_path/'alias.json';history.rename(target);history.symlink_to(target)
-    elif damage == 'invalid_current_index': index.write_text('{}')
+    elif damage in {'invalid_current_index', 'new_invalid_index'}: index.write_text('{}')
     else: (index.parent/'generations'/(old['receipts']['1']+'.json')).write_text('{}')
     with pytest.raises((ValueError, KeyError, OSError, reuse.InputPending)):
         manifest = reuse.prepare(data, origin, tmp_path/'reused')

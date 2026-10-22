@@ -464,10 +464,15 @@ def verify_frozen_inventory(manifest, assembly_root):
     current_costs=set(); frozen_costs=set()
     for day in manifest['consumed_dates']:
         index=cost_root/'runtime/initial_quantity_research_costs'/day/'index.json'
+        current_costs.update(str(p.resolve()) for p in cost_inventory(cost_root,[day]))
         if str(index) not in old:
+            if index.exists():
+                # Original absence is also a frozen scope. Validate a later
+                # native publisher, but do not import its new research cohort.
+                from src.engine.lifecycle.holding_window_generation import byte_generation
+                frozen_index(cost_root,index,byte_generation(index))
             continue
         body=frozen_index(cost_root,index,old[str(index)])
-        current_costs.update(str(p.resolve()) for p in cost_inventory(cost_root,[day]))
         frozen_costs.add(str(index))
         frozen_costs.update(str(index.parent/'generations'/(sha+'.json')) for sha in body['receipts'].values())
         frozen_costs.update(str(cost_source_path(cost_root,d)) for d in body['source_dates'])
