@@ -921,7 +921,7 @@ def test_sync_consumes_terminal_initial_probe_without_submitting_residual(tmp_pa
     row = dict(owner_type='main_scalping', owner_id='main_scalping:101', position_id='main_scalping:101',
         symbol=SYMBOL, order_date=now.date().isoformat(), side='BUY', action='NEW', state='ORDER_TERMINAL',
         quantity=1, filled_qty=1, fill_amount=10000, execution_no='12544', broker_order_no='0013982',
-        event_hash='a'*64, account_key='fixture', route='SOR',
+        event_hash='a'*64, account_key='fixture', route='SOR', fill_observed_at_kst=now.isoformat(),
         client_intent_id='main_scalping:101:101:ENTRY_BUY:entry_split_probe_0:1:nonce')
     source=dict(schema='entry_probe_submit_source_v1', source_date=now.date().isoformat(),
         owner_id='main_scalping:101', record_id='101', position_cycle_id='101', stock_code=SYMBOL,
@@ -950,7 +950,7 @@ def test_sync_consumes_terminal_initial_probe_without_submitting_residual(tmp_pa
     monkeypatch.setattr(sync,'evaluate_main_bot_control_exclusion',lambda _:SimpleNamespace(excluded=fault=='manual'))
     monkeypatch.setattr(sync,'log_error',lambda *a:None)
     record=SimpleNamespace(id=101,strategy='SCALPING',status='BUY_ORDERED',buy_qty=2,
-        buy_price=9999 if fault=='price' else 10000,buy_time=now,sell_time=None,sell_price=0)
+        buy_price=-1 if fault=='price' else 9900,buy_time=None,sell_time=None,sell_price=0)
     target=dict(id=101,code=SYMBOL,status='BUY_ORDERED',pending_entry_orders=[dict(ord_no='0013982')])
     registry=SimpleNamespace(position_intents=lambda **_:deepcopy(rows))
     before=probe.PROBE_RUNTIME_STATE_PATH.read_bytes()
@@ -960,7 +960,8 @@ def test_sync_consumes_terminal_initial_probe_without_submitting_residual(tmp_pa
         assert probe.PROBE_RUNTIME_STATE_PATH.read_bytes()==before
         return
     assert result['quantity']==1 and record.buy_qty==1 and record.status=='HOLDING'
-    restored=dict(id=101,code=SYMBOL,buy_qty=1,buy_price=10000,buy_time=now)
+    assert record.buy_time==now.replace(tzinfo=None) and record.buy_price==10000
+    restored=dict(id=101,code=SYMBOL,buy_qty=1,buy_price=10000,buy_time=record.buy_time)
     assert vote.restore_buy_fill_receipt(restored,receipts.DATA_DIR)=='restored'
     assert len(vote.buy_fill_legs_from_runtime(restored))==1
     state=probe._load_probe_runtime_state(now.date().isoformat())['bundles']['probe-101']

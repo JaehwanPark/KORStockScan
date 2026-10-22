@@ -1039,12 +1039,16 @@ def _restore_registered_entry_buy(record, target, code, quantity, registry):
     target_id = getattr(record, "id", None)
     owner = f"main_scalping:{target_id}"
     today = datetime.now(receipts._KST).date()
+    buy_time = getattr(record, "buy_time", None)
+    unconsumed_initial = (quantity == 1 and old_qty > 1 and buy_time is None
+        and str(getattr(record, "status", "")).upper() == "BUY_ORDERED")
     if (type(quantity) is not int or quantity < 1 or old_qty < 1
             or quantity > 1 and old_qty not in {1, quantity}
             or type(target_id) is not int or target_id <= 0
             or str(getattr(record, "strategy", "")).upper() != "SCALPING"
             or str(getattr(record, "status", "")).upper() not in {"HOLDING", "BUY_ORDERED", "SELL_ORDERED"}
-            or getattr(record, "buy_time", None) is None or record.buy_time.date() != today
+            or (buy_time is None and not unconsumed_initial)
+            or (buy_time is not None and buy_time.date() != today)
             or getattr(record, "sell_time", None) or _to_float(getattr(record, "sell_price", 0)) != 0
             or evaluate_main_bot_control_exclusion(code).excluded
             or receipts._sell_pending_submit_path(target_id).exists()
@@ -1131,12 +1135,21 @@ def _restore_registered_entry_buy(record, target, code, quantity, registry):
         elif bundle.get("requested_qty") != quantity or bundle.get("phase") not in {
                 "residual_submitting", "residual_submitted", "complete"}:
             return None
+        if unconsumed_initial:
+            try:
+                observed = datetime.fromisoformat(first["fill_observed_at_kst"])
+                if observed.tzinfo is None or observed.astimezone(receipts._KST).date() != today:
+                    return None
+                buy_time = observed.astimezone(receipts._KST).replace(tzinfo=None)
+            except (KeyError, ValueError, TypeError):
+                return None
         expected_price = first["fill_amount"] if old_qty == 1 else amount/quantity
-        if (not isclose(_to_float(record.buy_price), expected_price, abs_tol=0.0001)
+        if ((not unconsumed_initial and not isclose(_to_float(record.buy_price), expected_price, abs_tol=0.0001))
+                or unconsumed_initial and not 0 < _to_float(record.buy_price) < float("inf")
                 or old_qty == quantity and not probe_only and (bundle.get("phase") != "complete"
                     or bundle.get("registered_entry_recovery") != evidence)):
             return None
-        recovered = dict(id=target_id, code=code, buy_time=record.buy_time,
+        recovered = dict(id=target_id, code=code, buy_time=buy_time,
             buy_qty=quantity, buy_price=amount/quantity, entry_filled_qty=quantity,
             _entry_receipt_filled_by_order_no={n:1 for n in by_order},
             _entry_receipt_executions_by_order_no={n:{r["execution_no"]:dict(
@@ -1152,7 +1165,7 @@ def _restore_registered_entry_buy(record, target, code, quantity, registry):
                 previous, previous_sha = bounded_object(path, vote._BUY_FILL_RECEIPT_MAX_BYTES)
                 prior = dict(id=target_id, code=code, buy_time=previous.get("buy_time"),
                     buy_qty=previous.get("buy_qty"), buy_price=previous.get("buy_price"))
-                valid_times = {vote._buy_fill_receipt_time(record.buy_time)}
+                valid_times = {vote._buy_fill_receipt_time(buy_time)}
                 for row in filled:
                     if row.get("fill_observed_at_kst"):
                         at = datetime.fromisoformat(row["fill_observed_at_kst"])
@@ -1169,7 +1182,7 @@ def _restore_registered_entry_buy(record, target, code, quantity, registry):
                             abs_tol=0.0001)):
                     return None
             # Persist the same exact native legs before committing DB quantity.
-            restored = dict(id=target_id, code=code, buy_time=record.buy_time,
+            restored = dict(id=target_id, code=code, buy_time=buy_time,
                 buy_qty=quantity, buy_price=amount/quantity)
             if (previous_sha is None or vote.restore_buy_fill_receipt(restored, receipts.DATA_DIR) != "restored"
                     or vote.buy_fill_identity_from_runtime(restored) != identity):
@@ -1193,6 +1206,7 @@ def _restore_registered_entry_buy(record, target, code, quantity, registry):
                 entry_split_probe_scale_in_forbidden=True,
                 entry_split_probe_residual_expand_forbidden=True, probe_expand_forbidden=True)
                 if probe_only else {}))
+        record.buy_time = buy_time
         record.buy_qty = quantity
         record.buy_price = amount / quantity
         record.initial_buy_qty = quantity
