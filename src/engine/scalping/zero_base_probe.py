@@ -1087,6 +1087,11 @@ def run_zero_base_probe(
             )
         try:
             for calculation_index in range(2):
+                if observation_context is not None:
+                    # Retain this caller's issued reference even when native
+                    # invalidation returns before the engine's success projection.
+                    result['native_observation'] = {k: deepcopy(v) for k, v in observation_context.items()
+                                                    if k != 'snapshot'}
                 machine = ai_engine.analyze_target(
                     candidate.get("name") or code, ws_data, ticks, candles,
                     strategy="SCALPING", prompt_profile="watching", machine_only=True,

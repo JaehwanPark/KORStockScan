@@ -620,7 +620,7 @@ def _auxiliary_cost_receipt_valid(row):
 
 
 def _observer_lifecycle_diagnostic(row, receipt):
-    """Prove an exact native hold breach; a removed ready alone proves nothing."""
+    """Prove an exact native invalidation; a removed ready alone proves nothing."""
     try:
         from src.engine.scalping.continuous_reversal import good_quote
         from src.engine.scalping.reversal_extended_catalog import cell_key
@@ -670,7 +670,7 @@ def _observer_lifecycle_diagnostic(row, receipt):
                 or selection['native_epoch'] != root['native_epoch']
                 or not 0 <= at-selection['native_last_received_epoch'] <= 3
                 or selection['native_sequence'] < latest[2]
-                or not root['epoch'] <= life['first_eligible_seen'] <= life['last_eligible_seen'] < ended <= at <= trace_at
+                or not root['epoch'] <= life['first_eligible_seen'] <= life['last_eligible_seen'] <= ended <= at <= trace_at
                 or not at < receipt['original_deadline_epoch'] == life['original_deadline'] == root['epoch']+5
                 or trace_at-at > 5 or latest[0] != ended or not good_quote(latest)
                 or latest[1] != root['native_epoch'] or latest[2] <= root['native_sequence'] or latest[9] != root['source_item']
@@ -679,12 +679,37 @@ def _observer_lifecycle_diagnostic(row, receipt):
                 or life['epoch'] != root['epoch'] or life['continuous_ingress'] is not True
                 or life['claimed'] is not False or life['selector_claimed'] is not False
                 or life['terminal'] not in {'invalidated_before_claim','replaced_before_claim'}
-                or life['terminal_reason'] != 'first_price_hold_breached' or life['ready_membership_present'] is not False
-                or not branches or set(branches) != set(floors) or set(branches) != set(life['branch_survival'])
-                or any(life['branch_survival'][bid] is not False or signal['decision_phase'] != 'FIRST_PRICE_HOLD'
-                    or type(floors[bid]) not in (int,float) or not math.isfinite(floors[bid])
-                    or not 0 < latest[3] < floors[bid] == signal['signal_proof']['price']
-                    for bid,signal in branches.items())):
+                or life['ready_membership_present'] is not False
+                or not branches or set(branches) != set(life['branch_survival'])
+                or any(life['branch_survival'][bid] is not False for bid in branches)):
+            return None
+        if life['terminal_reason'] == 'first_price_hold_breached':
+            if (not life['first_eligible_seen'] < ended or set(branches) != set(floors)
+                    or any(signal['decision_phase'] != 'FIRST_PRICE_HOLD'
+                        or type(floors[bid]) not in (int,float) or not math.isfinite(floors[bid])
+                        or not 0 < latest[3] < floors[bid] == signal['signal_proof']['price']
+                        for bid, signal in branches.items())):
+                return None
+            diagnostic = 'reversal_first_price_hold_invalidated'
+        elif life['terminal_reason'] == 'first_turn_invalidated':
+            # Native callbacks in one batch may share a receive timestamp.
+            # The terminal's advancing sequence, continuous ingress and exact
+            # original FIRST anchors prove order without inventing a clock gap.
+            if (floors or not life['first_eligible_seen'] < ended
+                    or type(root['confirmation_price']) not in (int, float)
+                    or set(life['branch_membership']) != set(branches)
+                    or any(signal['decision_phase'] != 'FIRST_UPTICK'
+                        or life['branch_membership'][bid] != root['event_id']
+                        or any(type(signal.get(k)) is not int for k in ('native_epoch', 'native_sequence'))
+                        or any(signal.get(k) != root[k] for k in ('event_id', 'signal_id', 'epoch',
+                            'native_epoch', 'native_sequence', 'source_item'))
+                        or type(signal.get('confirmation_price')) not in (int, float)
+                        or not math.isfinite(signal['confirmation_price'])
+                        or not 0 < latest[3] < signal['confirmation_price'] == root['confirmation_price']
+                        for bid, signal in branches.items())):
+                return None
+            diagnostic = 'reversal_first_signal_invalidated'
+        else:
             return None
         for pid_key, start_key in (('async_producer_pid','async_producer_start_ticks'),
                                    ('process_pid','process_start_ticks'), ('pid','process_start_ticks')):
@@ -698,8 +723,37 @@ def _observer_lifecycle_diagnostic(row, receipt):
                     return None
                 try: reference = json.loads(reference)
                 except ValueError: reference = ast.literal_eval(reference)
-            if (str(fields['zero_base_producer_pid']) != actor[0]
-                    or [str(reference.get(k)) for k in ('observer_pid','observer_start_ticks')] != actor
+            if str(fields['zero_base_producer_pid']) != actor[0]:
+                return None
+            if reference == {}:
+                # Issued rejected probes lost the redundant observer reference.
+                # Their original same-lock native selection is already retained;
+                # prove its exact root/actor/deadline, never fill the old record.
+                original = fields['native_observation_receipt']
+                if isinstance(original, str):
+                    if len(original) > 65536:
+                        return None
+                    try: original = json.loads(original)
+                    except ValueError: original = ast.literal_eval(original)
+                if (original['schema'] != 'native_observation_selection_v1'
+                        or original['evaluation_role'] != 'probe_observation' or original['reason'] != 'ready'
+                        or original['runtime_effect'] is not False
+                        or [str(original.get(k)) for k in ('process_pid','process_start_ticks')] != actor
+                        or original['family_sha256'] != family or original['scope_execution_hash'] != root['registry_generation']
+                        or original['selected_scope'] != scope[5] or original['item'] != root['source_item']
+                        or original['venue'] != root['venue'] or original['native_event_id'] != root['event_id']
+                        or original['signal_id'] != root['signal_id']
+                        or type(original['selected_ready_count']) is not int or original['selected_ready_count'] < 1
+                        or type(original['raw_ready_count']) is not int
+                        or original['raw_ready_count'] < original['selected_ready_count']
+                        or any(type(original.get(k)) is not int or original[k] != root[k]
+                               for k in ('native_epoch','native_sequence'))
+                        or not root['epoch'] <= original['observed_epoch'] <= ended
+                        or original['native_deadline_epoch'] != receipt['original_deadline_epoch']
+                        or any(original['selected_branch_truth'].get(bid) != 'TRUE' for bid in branches)
+                        or original['native_source_current'] is not True or original['native_quote_current'] is not True):
+                    return None
+            elif ([str(reference.get(k)) for k in ('observer_pid','observer_start_ticks')] != actor
                     or reference['family_sha256'] != family
                     or reference['deadline_epoch'] != receipt['original_deadline_epoch']):
                 return None
@@ -710,7 +764,7 @@ def _observer_lifecycle_diagnostic(row, receipt):
                 or not root['native_sequence'] < current['native_sequence'] <= selection['native_sequence']
                 or not root['epoch'] < current['epoch'] <= at):
             return None
-        return 'reversal_first_price_hold_invalidated'
+        return diagnostic
     except (KeyError, TypeError, ValueError, SyntaxError, IndexError, AttributeError, OverflowError):
         return None
 
@@ -4068,6 +4122,7 @@ def observation_health_projection(result):
          'entry_machine_input_deadline_expired'))
     allowed_diagnostics.update(stage + ':reversal_first_price_hold_invalidated'
                                for stage in ('machine_probe', 'machine_trace'))
+    allowed_diagnostics.add('machine_probe:reversal_first_signal_invalidated')
     pending = obj(gap.get('native_pending_observations'))
     pending_n = obj(gap.get('observed')).get('probe_observation_incomplete', 0)
     valid_pending = (pending.get('schema') == 'submission_monitor_native_pending_census_v1'
