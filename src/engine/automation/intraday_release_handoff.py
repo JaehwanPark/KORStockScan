@@ -555,8 +555,28 @@ def verify_entry_consumer_code(day, *, family, policy_sha, expected, paths, actu
     if validation is not None:
         return validation
     if (DATA_DIR/'runtime/policy_bootstrap/code_handoffs'/day).exists():
-        from src.engine.automation.prepared_policy_code_handoff import verify as verify_prepared_code
-        prepared = verify_prepared_code(DATA_DIR, day, family=family, policy_sha=policy_sha,
+        from src.engine.automation import prepared_policy_code_handoff as prepared_code
+        review = _PREDECESSOR_REVIEW.get()
+        if review is not None:
+            root, commit = _selection(require_selected_cwd=False)
+            candidate = Path(__file__).resolve().parents[3]
+            if not predecessor_review_matches(review,day,root,commit,candidate):
+                raise ValueError('entry_consumer_prepared_predecessor_unbound')
+            origin = prepared_code.resolve_prepared_code_origin(DATA_DIR,day,family=family,policy_sha=policy_sha,
+                expected=expected,paths=paths,selected_root=root,selected_commit=commit)
+            candidate_actual = prepared_code._digest({key:_sha(candidate/name) for key,name in paths.items()})
+            if candidate_actual != actual:
+                raise ValueError('entry_consumer_prepared_candidate_code_changed')
+            changed = _verify_entry_code_delta(candidate,review['code_commit'],origin['origin_commit'],paths,expected)
+            if (not predecessor_review_matches(review,day,root,commit,candidate)
+                    or any(_sha(name)!=digest for name,digest in origin['sources'].items())):
+                raise ValueError('entry_consumer_prepared_predecessor_changed')
+            return dict(status='verified_intraday_consumer_repair',
+                verification_basis='verified_prepared_predecessor_consumer_repair',target_date=day,
+                policy_sha256=policy_sha,origin_commit=origin['origin_commit'],release_commit=review['code_commit'],
+                code_contract_sha256=expected,runtime_code_contract_sha256=actual,
+                changed_consumer_paths=changed,policy_effect='unchanged',actual_pid_consumed=False)
+        prepared = prepared_code.verify(DATA_DIR, day, family=family, policy_sha=policy_sha,
                                         expected=expected, paths=paths, actual=actual)
         if prepared is not None:
             return prepared

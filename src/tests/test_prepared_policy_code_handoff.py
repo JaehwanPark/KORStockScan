@@ -76,6 +76,46 @@ def test_future_and_target_day_proof_preserves_policy_without_pid(prepared):
     assert pp.read_bytes()==before
 
 
+@pytest.mark.parametrize('prepared',['pre_submit_delay','holding_vote','main_stop'],indirect=True)
+@pytest.mark.parametrize('fault',[None,'review','source','actual','unreviewed','selection_race'])
+def test_prepared_predecessor_and_candidate_keep_separate_native_code_identities(prepared,monkeypatch,fault):
+    data,root,args,actual,receipt,pp=prepared
+    candidate=root.parent/'candidate';(candidate/'src/engine/automation').mkdir(parents=True)
+    own=candidate/'src/engine/automation/intraday_release_handoff.py';own.write_text('# fixture owner\n')
+    source=candidate/'consumer.py';source.write_text('reviewed successor code\n')
+    selector=data/'runtime/runtime_release_selection.json';selector.parent.mkdir(exist_ok=True);selector.write_text('{"selected":"original"}')
+    monkeypatch.setattr(H,'__file__',str(own));monkeypatch.setattr(H,'DATA_DIR',data)
+    monkeypatch.setattr(H,'_selection',lambda **kw:(root,COMMIT))
+    monkeypatch.setattr(H,'predecessor_review_matches',lambda *a:fault!='review')
+    review=dict(code_root=candidate,code_commit='c'*40)
+    native_delta=H._verify_entry_code_delta
+    def delta(code_root,*rest):
+        if code_root==candidate and fault=='unreviewed':raise ValueError('unreviewed_candidate')
+        return native_delta(code_root,*rest)
+    monkeypatch.setattr(H,'_verify_entry_code_delta',delta)
+    original_resolve=C.resolve_prepared_code_origin
+    def resolve(*a,**kw):
+        value=original_resolve(*a,**kw)
+        if fault=='selection_race':selector.write_text('{"selected":"foreign"}')
+        return value
+    monkeypatch.setattr(C,'resolve_prepared_code_origin',resolve)
+    if fault=='source':(data/'policy.json').write_text('{"changed":true}')
+    new_actual=C._digest({'consumer.py':C._sha(source)})
+    if fault=='actual':new_actual='d'*64
+    token=H._PREDECESSOR_REVIEW.set(review)
+    try:
+        if fault:
+            with pytest.raises(ValueError):H.verify_entry_consumer_code(DAY,**args,actual=new_actual)
+        else:
+            before=pp.read_bytes()
+            proof=H.verify_entry_consumer_code(DAY,**args,actual=new_actual)
+            assert proof['verification_basis']=='verified_prepared_predecessor_consumer_repair'
+            assert proof['release_commit']=='c'*40 and proof['origin_commit']==ORIGIN
+            assert proof['actual_pid_consumed'] is False and pp.read_bytes()==before
+            assert C.verify(data,DAY,**args,actual=actual)['release_commit']==COMMIT
+    finally:H._PREDECESSOR_REVIEW.reset(token)
+
+
 @pytest.mark.parametrize('fault',['runtime','policy','expected','source','receipt','origin','symlink'])
 def test_invalid_binding_never_uses_prepared_code_authority(prepared,fault):
     data,root,args,actual,receipt,pp=prepared
