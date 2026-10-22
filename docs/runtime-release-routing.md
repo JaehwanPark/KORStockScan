@@ -527,3 +527,10 @@ parents are checked once per pass and again at the boundary; aliases retain the
 original identity reader. A mount, inode, size, clock, permission, source or
 request generation change remains invalid. This bounds redundant metadata work
 without changing the child timeout, kernel isolation or native policy checks.
+
+
+### Integrated entry source, receipt and quantity cost handoff
+
+`REVIEWED_ENTRY_COST_DEPENDENCY_VARIANTS` binds the complete reviewed postclose predecessor and exact original-to-integrated source pairs. Each changed entry/receipt/cost member requires the entire generation; missing, dirty or mixed dependencies still fail before drain. Use fresh native parity and capability fixtures, revalidate the code-specific initial-quantity prepared stage with the existing publisher, and preserve every original policy, PREOPEN, strict/checklist and failed attempt.
+
+The existing native inventory recovery may consume a terminal initial one-share probe whose original DB still contains the requested bundle quantity and no fill clock. It requires exact owned same-day journal census, sealed original plan/account/route, positive native fill amount and original aware fill clock, and no residual submission or SELL custody. The original requested bundle and unsent remainder stay recorded as residual_not_submitted with expansion forbidden; aggregate account values never create cost, clock or ownership. The authorized ordered driver and ordinary bootstrap remain the only transition owners. Verify actual successor PID consumption, current Sentinel/observer and the original failing inventory check after startup. Historical source exclusions remain separate from present code/currentness and economics.
