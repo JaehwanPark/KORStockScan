@@ -5328,3 +5328,89 @@ def test_native_feature_gap_false_branch_with_missing_features_is_verified(tmp_p
     assert not census['source_coverage_proven'] and not census['machine_admission_proven']
     assert gap['probe_route_assessed_counts'] == gap['probe_route_source_covered_counts'] == {}
     assert json.dumps(row, sort_keys=True) == before
+
+
+@pytest.mark.parametrize("tamper", [None, "missing_reason", "unknown_reason", "accepted", "raised", "parent", "schema", "call", "record", "before", "other_call", "missing_record", "conflicting_finish", "duplicate"])
+def test_call_local_terminal_reason_reaches_monitor_without_inventing_old_outcomes(tamper):
+    from dataclasses import replace
+    fields = dict(entry_submit_attempt_id="call-one", entry_submit_attempt_schema="call_local_submit_attempt_v1",
+        entry_submit_attempt_authority="observation_only", entry_submit_attempt_parent_promotion_id="parent-1",
+        entry_submit_attempt_broker_accepted=False, entry_submit_attempt_return_outcome="returned_false",
+        entry_submit_attempt_terminal_schema="call_local_terminal_v1",
+        entry_submit_attempt_terminal_reason="entry_split_probe_first_deferred",
+        submit_call_outcome="returned_false", submit_call_return_outcome="returned_false", submit_call_broker_accepted=False)
+    if tamper == "missing_reason": fields.pop("entry_submit_attempt_terminal_reason")
+    if tamper == "unknown_reason": fields["entry_submit_attempt_terminal_reason"] = "unknown_guard"
+    if tamper == "accepted": fields["entry_submit_attempt_broker_accepted"] = True
+    if tamper == "raised": fields["submit_call_return_outcome"] = "raised"
+    if tamper == "parent": fields["entry_submit_attempt_parent_promotion_id"] = "parent-foreign"
+    if tamper == "schema": fields["entry_submit_attempt_terminal_schema"] = "unverified"
+    if tamper == "call": fields["entry_submit_attempt_id"] = "call-foreign"
+    decision = event(1, entry_submit_attempt_id="call-one")
+    terminal = event(1, stage="entry_submit_attempt_finished", when=START + timedelta(seconds=1), **fields)
+    if tamper == "missing_record": terminal = replace(terminal, record_id="")
+    if tamper == "record": terminal = replace(terminal, record_id="foreign-record")
+    if tamper == "before": terminal = replace(terminal, emitted_at=START - timedelta(seconds=1))
+    # Exercise the actual source cache parser, not only the classification helper.
+    cached = sentinel._payload_to_cache_row(dict(event_type="pipeline_event", emitted_at=terminal.emitted_at.isoformat(),
+        pipeline=terminal.pipeline, stage=terminal.stage, stock_name=terminal.stock_name,
+        stock_code=terminal.stock_code, record_id=terminal.record_id, fields=terminal.fields))
+    terminal = replace(terminal, fields=cached["fields"])
+    rows = [decision, terminal]
+    if tamper == "other_call": rows.append(event(1, stage="latency_pass", entry_submit_attempt_id="unresolved-call"))
+    if tamper in {"conflicting_finish", "duplicate"}:
+        duplicate = replace(terminal, fields=dict(terminal.fields))
+        if tamper == "conflicting_finish": duplicate.fields['entry_submit_attempt_terminal_schema'] = 'unknown'
+        rows.append(duplicate)
+    valid = tamper in {None, "duplicate"}
+    row = monitor.snapshot(rows, START + timedelta(seconds=2))["rows"][0]
+    assert row["final_guard_blocked"] is valid
+    assert row["broker_acceptance_observed"] is False
+    if valid:
+        assert row["final_state"] == "final_guard_blocked"
+        assert row["final_guard_evidence"][0]["reason"] == "entry_split_probe_first_deferred"
+    else:
+        assert row["final_state"] not in {"final_guard_blocked", "broker_rejected", "submit_pipeline_reached"}
+
+
+def test_submit_return_site_to_native_logger_cache_and_monitor(monkeypatch):
+    from src.engine import sniper_state_handlers as handlers
+    from src.engine.monitoring.entry_attempt_identity import bind_submit_attempt_machine_lineage, observe_submit_attempt
+    stock = {'id': 1, 'code': '005930', 'name': 'fixture', 'strategy': 'SCALPING', 'scanner_promotion_id': 'parent-1'}
+    receipt = dict(event(1).fields, entry_ai_screen_pass=True)
+    events = []
+    def emit(*args, **kwargs):
+        payload = dict(event_type='pipeline_event', emitted_at=(START + timedelta(seconds=len(events))).isoformat(),
+            pipeline=args[0], stage=args[3], stock_name=args[1], stock_code=args[2], record_id=kwargs['record_id'], fields=kwargs['fields'])
+        cached = sentinel._payload_to_cache_row(payload)
+        events.append(sentinel._event_from_cache_row(cached))
+    monkeypatch.setattr(handlers, 'emit_pipeline_event', emit)
+    for name in ('_remember_scanner_terminal_block', 'observe_candidate_transition_safe',
+                 '_maybe_register_rising_missed_nxt_downstream_block_sampler'):
+        monkeypatch.setattr(handlers, name, lambda *a, **kw: None)
+    @observe_submit_attempt(on_finish=handlers._observe_entry_submit_finished)
+    def run(stock, code):
+        assert bind_submit_attempt_machine_lineage(stock, code, receipt)
+        handlers._log_entry_pipeline(stock, code, 'latency_pass')
+        handlers._set_async_terminal(stock, 'entry_split_probe_first_deferred')
+        return False
+    assert run(stock, stock['code']) is False
+    assert [e.stage for e in events] == ['latency_pass', 'entry_submit_attempt_finished']
+    row = monitor.snapshot(events, START + timedelta(seconds=3))['rows'][0]
+    assert row['final_state'] == 'final_guard_blocked'
+    assert row['final_guard_evidence'][0]['reason'] == 'entry_split_probe_first_deferred'
+    assert row['broker_acceptance_observed'] is False
+    assert '_async_consumption_guard' not in stock
+
+
+def test_nonterminal_machine_rows_do_not_read_new_terminal_payload():
+    class NonterminalFields(dict):
+        def get(self, key, default=None):
+            if key == 'entry_submit_attempt_terminal_reason':
+                pytest.fail('nonterminal payload decoded for unrelated submit completion')
+            return super().get(key, default)
+    from dataclasses import replace
+    decision = event(1)
+    decision = replace(decision, fields=NonterminalFields(decision.fields))
+    result = sentinel._machine_primary_entry_funnel([decision])
+    assert result['evaluation_ledger'][0]['final_state'] == 'pending'

@@ -4146,8 +4146,9 @@ def test_machine_pass_keeps_recent_exit_reentry_guard():
 @pytest.mark.parametrize("ready", [False, True])
 @pytest.mark.parametrize("identity_mode", ["snapshot", "caller", "generated"])
 @pytest.mark.parametrize("final_refresh", [False, True])
+@pytest.mark.parametrize("budget_scope", ["none", "direct", "parent"])
 def test_machine_initial_policy_assesses_before_provider_cache_and_lock(
-    monkeypatch, ready, identity_mode, final_refresh
+    monkeypatch, ready, identity_mode, final_refresh, budget_scope
 ):
     from src.engine.scalping import mechanistic_entry_runtime_policy as initial_policy
     from src.engine.scalping.entry_setup_evidence import (
@@ -4252,10 +4253,50 @@ def test_machine_initial_policy_assesses_before_provider_cache_and_lock(
     ws_data = _sample_ws_data()
     ws_data["scanner_promotion_id"] = "SCANPROM-005930-machine"
     ws_data["evaluation_attempt_id"] = "caller-attempt" if identity_mode == "caller" else "-"
+    import time
+    from contextlib import nullcontext
+    from src.utils import kiwoom_utils
+    from src.engine.scalping.entry_deadline import EntryDeadline
+    parent_budget = EntryDeadline.create(caller_epoch=time.time() + 3) if budget_scope == "parent" else None
+    caller_budget = EntryDeadline.create(caller_epoch=time.time() + 5) if budget_scope != "none" else None
+    from src.engine import sniper_state_handlers as handlers
+    from src.engine.scalping.avg_down_replay_capture import GLOBALS
+    for name in GLOBALS:
+        monkeypatch.setattr(handlers, name, set() if name == 'ALERTED_STOCKS' else {})
+    monkeypatch.setattr(handlers, '_is_any_simulated_position', lambda *a: False)
+    monkeypatch.setattr(handlers, '_log_entry_pipeline', lambda *a, **kw: {'structured_append_succeeded': True})
+    capacity_reads = []
+    owner_observations = []
+    def capacity(code, price, held, **kwargs):
+        capacity_reads.append(kwargs)
+        return {'kt00011_error': 'fixture_capacity_gap', 'cash_orderable_qty_cap': None}
+    monkeypatch.setattr(handlers, '_resolve_scalp_cash_budget_context', capacity)
     observed = []
     attempt_ids = []
     def observer(**kwargs):
+        budget = kiwoom_utils._ENTRY_SOURCE_BUDGET.get()
+        if caller_budget is None:
+            assert budget is None
+        else:
+            assert budget is not None
+            assert budget.epoch <= caller_budget.epoch
+            assert budget.perf <= caller_budget.perf
+            if parent_budget is not None:
+                assert budget.epoch <= parent_budget.epoch
+                assert budget.perf <= parent_budget.perf
+            assert budget.remaining() > 0
+
         observed.append(kwargs['assessment']['action'])
+        economic = handlers._observe_entry_economics_before_ai(
+            {'id': 1, 'code': '005930', 'strategy': 'SCALPING', 'buy_qty': 0}, '005930',
+            kwargs.get('observation_ws_data', ws_data),
+            **{k: kwargs[k] for k in ('exact_payload', 'assessment', 'capture', 'bundle_sha256')})
+        owner_observations.append(economic)
+        assert economic['entry_economic_source_blocker'] == 'exact_broker_capacity_missing', economic
+        assert capacity_reads[-1]['source_only'] is True
+        assert capacity_reads[-1]['reuse_only'] is (not ready or budget is None)
+        assert capacity_reads[-1]['preparation_deadline_epoch'] == (budget.epoch if budget else None)
+        assert capacity_reads[-1]['correlation_id'] == kwargs['capture']['evaluation_attempt_id']
         if final_refresh:
             assert kwargs['observation_ws_data']['final_refresh_marker'] is True
             assert kwargs['exact_payload']['current']['price'] == kwargs['observation_ws_data']['curr']
@@ -4294,19 +4335,19 @@ def test_machine_initial_policy_assesses_before_provider_cache_and_lock(
     if final_refresh:
         from src.engine.scalping import entry_candle_context as candle_module
         monkeypatch.setattr(candle_module, 'revalidate_entry_candle_snapshot', lambda c, w, **kw: c)
-    result = engine.analyze_target(
-        "test",
-        ws_data,
-        _sample_ticks(),
-        _sample_candles(),
-        strategy="SCALPING",
-        prompt_profile="watching",
-        candle_context=context,
-        entry_economics_observer=observer,
-        **({'entry_input_refresher': refresh} if final_refresh else {}),
-    )
+    with kiwoom_utils.entry_source_budget(parent_budget) if parent_budget is not None else nullcontext():
+        result = engine.analyze_target(
+            "test", ws_data, _sample_ticks(), _sample_candles(),
+            strategy="SCALPING", prompt_profile="watching", candle_context=context,
+            entry_economics_observer=observer,
+            **({'entry_input_refresher': refresh} if final_refresh else {}),
+            **({'entry_input_deadline_epoch': caller_budget.epoch,
+                'entry_input_deadline_perf': caller_budget.perf} if caller_budget is not None else {}),
+        )
+        assert kiwoom_utils._ENTRY_SOURCE_BUDGET.get() is parent_budget
+    assert kiwoom_utils._ENTRY_SOURCE_BUDGET.get() is None
     assert observed == ['ENTER_NOW' if ready else 'RECHECK']
-    assert result['entry_economic_source_status'] == 'recorded_source_only'
+    assert result['entry_economic_source_status'] == 'recorded_source_only', owner_observations
     if final_refresh and identity_mode == 'snapshot':
         assert result['ai_input_preflight_source_clock_snapshot_id'] == 'aims-final-machine'
         assert result['ai_input_preflight_source_clock_captured_at'] == '2026-09-22T16:12:46+09:00'

@@ -925,6 +925,8 @@ def test_live_submit_guard_and_logger_share_call_id_without_order_io(monkeypatch
         for _, fields in emitted
     )
     assert emitted[1][1]["submit_call_outcome"] == "returned_false"
+    assert emitted[1][1]["entry_submit_attempt_terminal_schema"] == "call_local_terminal_v1"
+    assert emitted[1][1]["entry_submit_attempt_terminal_reason"] == "entry_submit_identity_reconciliation_blocked"
     assert all(fields["evaluation_attempt_id"] == "eval-P" for _, fields in emitted)
     from src.engine import observation_source_quality_audit as audit
 
@@ -1304,3 +1306,29 @@ def test_producer_cache_funnel_preserves_submit_and_guard_terminal(terminal,dama
         if terminal=='pre_submit_liquidity_guard_block':
             assert sentinel._submit_drought_axis_for_event(cached[1])=='UPSTREAM_GATE'
             assert ledger[0]['broker_acceptance_observed'] is False
+
+
+def test_submit_terminal_reason_is_call_local_not_stock_or_prior_call(monkeypatch):
+    from src.engine import sniper_state_handlers as sh
+    from src.engine.monitoring.entry_attempt_identity import observe_submit_attempt, submit_attempt_fields
+    stock = {"id": 1, "code": "005930"}
+    observed = []
+    monkeypatch.setattr(sh, "_log_entry_pipeline", lambda *a, **kw: observed.append(submit_attempt_fields(a[0], a[1])))
+    @observe_submit_attempt(on_finish=sh._observe_entry_submit_finished)
+    def run(stock, code, reason=None, nested=False):
+        sh._set_async_terminal(dict(stock), "foreign_stock")
+        assert "entry_submit_attempt_terminal_reason" not in submit_attempt_fields(stock, code)
+        if reason:
+            sh._set_async_terminal(stock, reason)
+            sh._set_async_terminal(stock, "later_diagnostic")
+        if nested:
+            run(stock, code)
+            assert submit_attempt_fields(stock, code)["entry_submit_attempt_terminal_reason"] == reason
+        return False
+    assert run(stock, "005930", "blocked_pause", nested=True) is False
+    assert observed[-1]["entry_submit_attempt_terminal_reason"] == "blocked_pause"
+    assert run(stock, "005930") is False
+    assert observed[-1]["entry_submit_attempt_terminal_reason"] == "entry_path_returned_without_terminal_evidence"
+    assert observed[-1]["entry_submit_attempt_id"] != observed[-2]["entry_submit_attempt_id"]
+    assert stock == {"id": 1, "code": "005930"}
+    assert submit_attempt_fields(stock, "005930") == {}

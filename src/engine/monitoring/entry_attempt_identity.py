@@ -44,6 +44,7 @@ def observe_submit_attempt(function=None, *, on_finish=None):
         try:
             identity = {
                 "record_id": str(stock.get("id") or ""),
+                "stock_identity": id(stock),
                 "code": str(code),
                 "attempt_id": uuid4().hex,
                 "promotion_id": _promotion_id(stock),
@@ -254,6 +255,17 @@ def mark_submit_attempt_broker_accepted(stock, code):
     return True
 
 
+def record_submit_attempt_terminal(stock, reason):
+    """Keep the first direct return-site reason on this invocation only."""
+    value = _ATTEMPT.get()
+    if (not isinstance(value, dict) or value.get("stock_identity") != id(stock)
+            or value.get("record_id") != str(stock.get("id") or "")):
+        return False
+    if not value.get("terminal_reason") and isinstance(reason, str) and reason.strip():
+        _ATTEMPT.set({**value, "terminal_reason": reason.strip()})
+    return True
+
+
 def submit_attempt_fields(stock, code):
     value = _ATTEMPT.get()
     if (
@@ -282,6 +294,9 @@ def submit_attempt_fields(stock, code):
         ),
         **value.get("machine_lineage", {}),
     }
+    if value.get("terminal_reason"):
+        fields["entry_submit_attempt_terminal_schema"] = "call_local_terminal_v1"
+        fields["entry_submit_attempt_terminal_reason"] = value["terminal_reason"]
     if value.get("promotion_id"):
         fields["entry_submit_attempt_parent_promotion_id"] = value["promotion_id"]
     if value.get("watch_identity", ("",))[0] == "MAIN_FIXED_WATCH":

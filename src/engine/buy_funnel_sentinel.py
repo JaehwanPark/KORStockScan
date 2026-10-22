@@ -3544,10 +3544,51 @@ def _machine_primary_entry_funnel(events: list[PipelineEvent]) -> dict[str, Any]
         ]
         if invalid_broker_failure_rows:
             conflict_reasons.append("broker_failure_contract_invalid")
+        def call_local_guard_terminal(row):
+            # Nonterminal CompactFields may hold a large lazy replay capsule.
+            # Do not request absent completion fields and decode that payload.
+            if row.stage != "entry_submit_attempt_finished":
+                return False
+            fields = row.fields
+            call = _safe_str(fields.get("entry_submit_attempt_id"))
+            reason = _safe_str(fields.get("entry_submit_attempt_terminal_reason"))
+            guard_reasons = (BLOCKER_STAGES - BROKER_SUBMIT_FAILURE_STAGES
+                - AI_TERMINAL_ATTRIBUTION_STAGES - {"blocked_ai_score"}) | {
+                "entry_split_probe_first_deferred", "pre_submit_delay_pending",
+                "pre_submit_delay_due_recheck_blocked", "pre_submit_delay_intent_invalid",
+                "pre_submit_delay_observation_unavailable", "initial_quantity_sequential_plan_block",
+            }
+            # A local return is not a broker receipt. Only an exact known
+            # return-site guard can close the single observed invocation.
+            if (not call or reason not in guard_reasons
+                    or fields.get("entry_submit_attempt_schema") != "call_local_submit_attempt_v1"
+                    or fields.get("entry_submit_attempt_authority") != "observation_only"
+                    or fields.get("entry_submit_attempt_terminal_schema") != "call_local_terminal_v1"
+                    or _safe_str(row.record_id).strip().lower() in {"", "0", "none", "null"}
+                    or _safe_str(fields.get("entry_submit_attempt_parent_promotion_id")) != identity_parts[0]
+                    or any(_safe_str(fields.get(k)).lower() != "false" for k in (
+                        "entry_submit_attempt_broker_accepted", "submit_call_broker_accepted"))
+                    or any(fields.get(k) != "returned_false" for k in (
+                        "entry_submit_attempt_return_outcome", "submit_call_return_outcome", "submit_call_outcome"))):
+                return False
+            calls = {_safe_str(r.fields.get("entry_submit_attempt_id")) for r in rows
+                     if r.fields.get("entry_submit_attempt_id")}
+            finishes = [r for r in rows if r.stage == "entry_submit_attempt_finished"]
+            return (calls == {call}
+                and all(r.record_id == row.record_id
+                    and all(_safe_str(r.fields.get(k)) == _safe_str(fields.get(k)) for k in (
+                        "entry_submit_attempt_terminal_reason", "entry_submit_attempt_terminal_schema",
+                        "entry_submit_attempt_schema", "entry_submit_attempt_authority",
+                        "entry_submit_attempt_parent_promotion_id", "entry_submit_attempt_return_outcome",
+                        "submit_call_outcome", "submit_call_return_outcome",
+                        "entry_submit_attempt_broker_accepted", "submit_call_broker_accepted")) for r in finishes)
+                and any(r.stage != "entry_submit_attempt_finished" and r.emitted_at <= row.emitted_at
+                    and r.record_id == row.record_id and r.fields.get("entry_submit_attempt_id") == call for r in rows))
+
         final_guard_block_rows = [
             row
             for row in rows
-            if row.stage
+            if call_local_guard_terminal(row) or row.stage
             in (BLOCKER_STAGES - BROKER_SUBMIT_FAILURE_STAGES
                 - AI_TERMINAL_ATTRIBUTION_STAGES - {"blocked_ai_score"})
             or (
@@ -3700,7 +3741,7 @@ def _machine_primary_entry_funnel(events: list[PipelineEvent]) -> dict[str, Any]
                 "stage": event.stage, "observed_at": event.emitted_at.isoformat(),
                 "submit_attempt_id": _safe_str(event.fields.get("entry_submit_attempt_id")),
                 "reason": _safe_str(_field_first(event.fields, (
-                    "weak_context_guard_reason", "weak_pullback_entry_block_reason",
+                    "entry_submit_attempt_terminal_reason", "weak_context_guard_reason", "weak_pullback_entry_block_reason",
                     "reason", "order_bundle_failure_mode"))),
             } for event in final_guard_block_rows[:3]],
             "broker_rejected": bool(broker_rejected_rows),

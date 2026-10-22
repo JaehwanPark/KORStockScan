@@ -62,6 +62,7 @@ from src.engine.monitoring.entry_attempt_identity import (
     submit_attempt_lineage_rejection,
     mark_submit_attempt_broker_accepted,
     observe_submit_attempt,
+    record_submit_attempt_terminal,
     submit_attempt_fields,
     submit_attempt_machine_lineage,
 )
@@ -61462,6 +61463,7 @@ def _record_async_disposition(result, disposition, reason, **facts):
 
 def _set_async_terminal(stock, reason, **facts):
     """Direct return-site facts, never the last arbitrary diagnostic message."""
+    record_submit_attempt_terminal(stock, reason)
     guard = stock.get('_async_consumption_guard') if isinstance(stock, dict) else None
     if isinstance(guard, dict):
         guard.setdefault('reason', str(reason))
@@ -65953,6 +65955,7 @@ def _observe_entry_submit_finished(stock, code, outcome):
         async_entry_submit_attempt_id=attempt_fields.get('entry_submit_attempt_id'),
         async_entry_broker_accepted=bool(attempt_fields.get('entry_submit_attempt_broker_accepted')),
         async_entry_submit_outcome=outcome)
+    attempt_fields = submit_attempt_fields(stock, code)
     delayed = stock.pop("_pre_submit_delay_due", None) if isinstance(stock, dict) else None
     zero_intent = stock.pop("_pre_submit_delay_zero_intent", None) if isinstance(stock, dict) else None
     delay_intent = delayed if isinstance(delayed, dict) else zero_intent
@@ -65968,7 +65971,7 @@ def _observe_entry_submit_finished(stock, code, outcome):
             committed_at_epoch=delay_intent["committed_at_epoch"],
             submit_finished_at_epoch=time.time(),
             original_machine_observation_sha256=delay_intent.get("machine_observation_sha256"),
-            terminal_reason=str((stock.get('_async_consumption_guard') or {}).get('reason')
+            terminal_reason=str(attempt_fields.get('entry_submit_attempt_terminal_reason')
                                 or ('submit_call_returned_true' if outcome is True else
                                     'submit_call_returned_false' if outcome is False else outcome)),
             submit_call_outcome=outcome,

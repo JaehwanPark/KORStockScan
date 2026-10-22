@@ -23,6 +23,7 @@ import re
 import hashlib
 import queue
 import uuid
+from contextlib import nullcontext
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
@@ -10216,11 +10217,23 @@ class GPTSniperEngine:
                     }
                 if machine_assessment["action"] in {"ENTER_NOW", "BLOCK", "RECHECK"} and callable(entry_economics_observer):
                     try:
-                        economic_source_fields = timed_entry_call('entry_economics', entry_economics_observer,
-                            exact_payload=machine_exact, assessment=machine_assessment,
-                            capture=machine_capture, bundle_sha256=entry_setup_live_policy["machine_bundle_sha256"],
-                            **({"observation_ws_data": ws_data} if callable(entry_input_refresher) else {}),
-                        ) or {}
+                        from src.utils import kiwoom_utils
+                        parent_budget = kiwoom_utils._ENTRY_SOURCE_BUDGET.get()
+                        observer_budget = entry_budget or parent_budget
+                        if entry_budget is not None and parent_budget is not None:
+                            observer_budget = EntryDeadline(
+                                min(entry_budget.epoch, parent_budget.epoch),
+                                min(entry_budget.perf, parent_budget.perf),
+                            )
+                        # Direct and async evaluations share the original deadline.
+                        # A missing deadline retains cache-only account observation.
+                        with (kiwoom_utils.entry_source_budget(observer_budget)
+                              if observer_budget is not None else nullcontext()):
+                            economic_source_fields = timed_entry_call('entry_economics', entry_economics_observer,
+                                exact_payload=machine_exact, assessment=machine_assessment,
+                                capture=machine_capture, bundle_sha256=entry_setup_live_policy["machine_bundle_sha256"],
+                                **({"observation_ws_data": ws_data} if callable(entry_input_refresher) else {}),
+                            ) or {}
                     except Exception as exc:
                         # Instrumentation can never alter machine/AI/order authority.
                         economic_source_fields = {"entry_economic_source_status": "source_gap",
