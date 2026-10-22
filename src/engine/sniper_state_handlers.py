@@ -63002,6 +63002,10 @@ def _handle_watching_strategy_branch(
                                 not opening_rotation_handoff_defers_baseline
                                 and strength_baseline_would_block
                             ):
+                                if source_quality_block_reason:
+                                    from src.engine.monitoring.runtime_performance import record_native_preclaim_guard
+                                    record_native_preclaim_guard(stock=stock, code=code, ws_data=ws_data,
+                                        reason=source_quality_block_reason, now=time.time())
                                 return False
                             if (
                                 opening_rotation_handoff_defers_baseline

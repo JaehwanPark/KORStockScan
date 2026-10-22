@@ -33,6 +33,8 @@ def native(monkeypatch):
     monkeypatch.setattr(R, '_SELECTED_EVICTED', dict(claimed=0, expired_before_claim=0, unobservable=0))
     monkeypatch.setattr(R, '_LIFECYCLE_APPEND_DROPPED', 0)
     monkeypatch.setattr(R, '_LIFECYCLE_SINK', None)
+    monkeypatch.setattr(R, '_MAIN_PHASE', dict(name='not_observed',code=None,epoch=None,perf=None))
+    monkeypatch.setattr(R, '_COVERAGE', {kind:dict(ready=0,claimed=0) for kind in ('fixed_watch','other')})
     monkeypatch.setattr(R.time, 'time', lambda: T+1)
     band = C.cell_key('123456', 'REGULAR', 100)
     scope = ('123456', 'SOR', '123456_AL', 'REGULAR', '2026-10-12', band)
@@ -63,6 +65,194 @@ def test_raw_first_can_be_ineligible_without_ever_being_a_delivery_miss(native):
     assert row['first_eligible_seen'] is None
     assert native[2].ready == before
     assert R.snapshot()['native_signal_lifecycle']['count'] == 1
+
+
+@pytest.mark.parametrize('damage,reason', [
+    ('band', 'price_band_not_selected'),
+    ('parent', 'carried_backend_not_selected'),
+    ('generation', 'scope_generation_mismatch'),
+    ('branch', 'selected_branch_missing'),
+    ('missing_cell', 'selection_contract_unobservable'),
+    (None, 'selected'),
+])
+def test_raw_ready_selection_keeps_exact_nonselection_evidence(native, damage, reason):
+    backend, scope, state, event = native
+    if damage == 'band':
+        other = scope[:-1] + ('other_non_fixed|REGULAR|GE_100000',)
+        backend._STATES = {other: state}
+    elif damage == 'parent':
+        backend.R = SimpleNamespace(_LOCK=threading.RLock(), _STATES={scope[:-1]: state},
+                                   _GENERATION='scope')
+        backend._STATES = {}
+    elif damage == 'generation':
+        state.generation = 'older-scope'
+    elif damage == 'branch':
+        event['branch_signals'] = {'unselected': {'decision_phase': 'FIRST_UPTICK'}}
+    elif damage == 'missing_cell':
+        backend._FAMILY['machine_cells'] = {}
+    before = deepcopy(state.ready)
+    R.record_native_ready(backend, *scope[:4], T)
+    report = R.snapshot()['native_ready_selection']
+    assert report['retained_ready_count'] == 1
+    receipt = report['recent'][0]
+    assert receipt['signal_id'] == event['signal_id']
+    assert receipt['native_epoch'] == 1 and receipt['native_sequence'] == 0
+    assert receipt['selections'][0]['reason'] == reason
+    assert receipt['selections'][0]['family_sha256'] == 'family'
+    assert receipt['selections'][0]['expected_scope'] == scope[-1]
+    assert state.ready == before and not backend._CLAIMS
+    assert R.snapshot()['selected_native_coverage']['count'] == int(damage is None)
+    # Published views cannot mutate the next diagnostic snapshot.
+    receipt['selections'][0]['reason'] = 'tampered'
+    assert R.snapshot()['native_ready_selection']['recent'][0]['selections'][0]['reason'] == reason
+
+
+def test_same_tick_raw_scopes_do_not_hide_the_selected_scope(native):
+    backend, scope, state, event = native
+    other = scope[:-1] + ('other_non_fixed|REGULAR|GE_100000',)
+    backend._STATES = {other: deepcopy(state), scope: state}
+    R.record_native_ready(backend, *scope[:4], T)
+    view = R.snapshot()['native_ready_selection']
+    assert view['retained_ready_count'] == 1
+    assert {r['reason'] for r in view['recent'][0]['selections']} == {
+        'price_band_not_selected', 'selected'}
+    assert R.snapshot()['selected_native_coverage']['count'] == 1
+
+
+def _preclaim_guard_source(native):
+    _, scope, _, event = native
+    return dict(
+        stock=dict(id=42, watch_origin='MAIN_FIXED_WATCH', watch_admission_id='admission',
+                   watch_generation_id='watch-generation', market_session_bucket='krx_regular'),
+        code=scope[0],
+        ws_data=dict(last_realtime_type_item={'0B':scope[2]},
+            realtime_type_snapshots_by_route={'_AL|krx_nxt_integrated': {'0B':dict(
+                item=scope[2],market_route='krx_nxt_integrated',transport_epoch=event['native_epoch'],
+                route_sequence=event['native_sequence'], observed_epoch=event['epoch'])}}),
+        reason='extreme_sell_dominant', now=T+.1)
+
+
+def test_main_preclaim_guard_survives_later_native_invalidation(native):
+    row = observe(native)
+    R.acknowledge_native_watch_visit(dict(code=native[1][0]), None, now=T+.05)
+    before = deepcopy(native[2].ready)
+    assert R.record_native_preclaim_guard(**_preclaim_guard_source(native)) == 1
+    native[2].legacy.turn = {'event_id':'new-low'}
+    observe(native, T+.4)
+    assert row['terminal'] == 'invalidated_before_claim'
+    assert row['main_preclaim_guard']['reason'] == 'extreme_sell_dominant'
+    assert row['main_preclaim_guard']['source_sequence'] == 0
+    assert row['main_preclaim_guard']['observed_epoch'] == T+.1
+    assert row['claimed'] is False and native[2].ready == before
+
+
+@pytest.mark.parametrize('damage', ['origin','item','epoch','sequence','future','before_signal',
+    'deadline','market','no_visit','terminal','claimed','missing_market','missing_routes','bad_item_map',
+    'route_conflict','nonreason','ambiguous_tape','changed_bundle','unknown_reason'])
+def test_preclaim_guard_cannot_join_another_source_or_unvisited_signal(native, damage):
+    row = observe(native)
+    args = _preclaim_guard_source(native)
+    R.acknowledge_native_watch_visit(dict(code=native[1][0]), None, now=T+.05)
+    tape = args['ws_data']['realtime_type_snapshots_by_route']['_AL|krx_nxt_integrated']['0B']
+    if damage == 'origin': args['stock']['watch_origin'] = 'SCANNER'
+    elif damage == 'item': tape['item'] = 'other_AL'
+    elif damage == 'epoch': tape['transport_epoch'] = 2
+    elif damage == 'sequence': tape['route_sequence'] = -1
+    elif damage == 'future': tape['observed_epoch'] = T+.2
+    elif damage == 'before_signal': tape['observed_epoch'] = T-.1
+    elif damage == 'deadline': args['now'] = T+6
+    elif damage == 'market': args['stock']['market_session_bucket'] = 'nxt_aftermarket'
+    elif damage == 'no_visit': row['main_queue_first_visit'] = None
+    elif damage == 'terminal': row['terminal'] = 'invalidated_before_claim'
+    elif damage == 'claimed': row['claimed'] = True
+    elif damage == 'missing_market': args['stock'].pop('market_session_bucket')
+    elif damage == 'missing_routes': args['ws_data']['realtime_type_snapshots_by_route'] = []
+    elif damage == 'bad_item_map': args['ws_data']['last_realtime_type_item'] = []
+    elif damage == 'route_conflict': tape['market_route'] = 'krx_only'
+    elif damage == 'nonreason': args['reason'] = {}
+    elif damage == 'ambiguous_tape': args['ws_data']['realtime_type_snapshots_by_route']['other'] = {'0B':deepcopy(tape)}
+    elif damage == 'changed_bundle': row['bundle_sha256'] = 'other-bundle'
+    elif damage == 'unknown_reason': args['reason'] = 'unknown_guard'
+    assert R.record_native_preclaim_guard(**args) == 0
+    assert 'main_preclaim_guard' not in row
+
+
+def test_guard_evidence_does_not_prevent_a_later_valid_native_claim(native):
+    row = observe(native)
+    R.acknowledge_native_watch_visit(dict(code=native[1][0]), None, now=T+.05)
+    assert R.record_native_preclaim_guard(**_preclaim_guard_source(native)) == 1
+    claim = dict(snapshot=[native[3], {}], generation='scope')
+    R.record_selected_native_claim(claim, family_sha256='family', now=T+.2)
+    assert row['claimed'] and row['terminal'] == 'claimed'
+    assert row['main_preclaim_guard']['reason'] == 'extreme_sell_dominant'
+
+
+def test_signal_arriving_during_main_visit_retains_its_real_guard(native, monkeypatch):
+    row = observe(native)
+    monkeypatch.setattr(R, '_MAIN_PHASE', dict(name='target_visit',code=native[1][0],epoch=T-.1))
+    assert row.get('main_queue_first_visit') is None
+    assert R.record_native_preclaim_guard(**_preclaim_guard_source(native)) == 1
+    assert row['main_preclaim_guard']['main_visit_basis'] == 'current_target_phase'
+    assert row['claim_attempt'] is None and row['claimed'] is False
+
+
+def test_raw_selection_recent_limit_is_explicit_and_keeps_original_counter(native):
+    backend, scope, state, event = native
+    for i in range(40):
+        event['signal_id'] = f'signal-{i}'
+        R.record_native_ready(backend, *scope[:4], T)
+    report = R.snapshot()['native_ready_selection']
+    assert report['retained_ready_count'] == 40 and len(report['recent']) == 32
+    assert report['recent_truncated'] is True
+    assert report['recent'][0]['signal_id'] == 'signal-8'
+    assert not any(r['claimed'] for r in state.ready)
+
+
+def test_actual_main_guard_reaches_native_lifecycle_writer(native, monkeypatch, tmp_path):
+    from dataclasses import replace
+    from src.engine import sniper_state_handlers as H
+    from src.tests.test_sniper_scale_in import _DummyDB
+    from src.utils.constants import TRADING_RULES
+    from src.utils import pipeline_event_logger as E
+    monkeypatch.setattr(R.time, 'time', lambda:T+.1)
+    row = observe(native)
+    args = _preclaim_guard_source(native)
+    R.acknowledge_native_watch_visit(dict(code=args['code']), None, now=T+.05)
+    for name in ('COOLDOWNS','HIGHEST_PRICES','LAST_AI_CALL_TIMES','LAST_LOG_TIMES'):
+        monkeypatch.setattr(H, name, {})
+    monkeypatch.setattr(H, 'ALERTED_STOCKS', set())
+    monkeypatch.setattr(H, 'ACTIVE_TARGETS', [])
+    monkeypatch.setattr(H, 'DB', _DummyDB())
+    monkeypatch.setattr(H, 'TRADING_RULES', replace(TRADING_RULES,
+        SCALP_PRE_AI_SOFT_GATE_ENABLED=True, SCALP_PRE_AI_SOURCE_QUALITY_BLOCK_ENABLED=True))
+    monkeypatch.setattr(H, 'evaluate_scalping_strength_momentum', lambda *_: dict(
+        enabled=True,allowed=False,reason='insufficient_history'))
+    monkeypatch.setattr(H, 'arm_big_bite_if_triggered', lambda **_: (False,{}))
+    monkeypatch.setattr(H, 'confirm_big_bite_follow_through', lambda **_: (True,{}))
+    monkeypatch.setattr(H, 'build_tick_data_from_ws', lambda *_: {})
+    stages=[]
+    monkeypatch.setattr(H, '_log_entry_pipeline', lambda stock,code,stage,**fields: stages.append((stage,fields)))
+    stock=dict(args['stock'],name='fixed',strategy='SCALPING',position_tag='SCANNER',prob=.9,rt_ai_prob=.9)
+    ws=dict(args['ws_data'],curr=100,v_pw=121.,ask_tot=50000,bid_tot=50000,open=99,fluctuation=1.,
+            last_ws_update_ts=T,orderbook={'asks':[{'price':101}],'bids':[{'price':100}]})
+    H.handle_watching_state(stock=stock,code=args['code'],ws_data=ws,admin_id=1,
+        now_ts=T+.1,now_dt=datetime.fromtimestamp(T+.1,K.KST),
+        radar=SimpleNamespace(get_smart_target_price=lambda price,**_: (price,0.)),
+        ai_engine=SimpleNamespace(analyze_target=lambda *_a,**_kw:pytest.fail('guard must stop AI')))
+    assert dict(stages)['blocked_strength_momentum']['gate_action'] == 'source_quality_block'
+    assert row['main_preclaim_guard']['reason'] == 'insufficient_history'
+    native[2].legacy.turn={'event_id':'new-low'}
+    observe(native,T+.4)
+    monkeypatch.setattr(E,'DATA_DIR',tmp_path)
+    monkeypatch.setattr(E,'log_info',lambda *_:None)
+    R.set_lifecycle_sink(lambda fn,record: (fn(record),{'status':'queued'})[1])
+    R.flush_lifecycle()
+    records=[json.loads(line) for path in (tmp_path/'pipeline_events').glob('*.jsonl')
+             for line in path.read_text().splitlines()]
+    capsule=json.loads(records[-1]['fields']['native_signal_lifecycle'])
+    assert capsule['terminal']=='invalidated_before_claim'
+    assert capsule['main_preclaim_guard']['reason']=='insufficient_history'
+    assert capsule['claimed'] is False and not native[2].ready[0]['claimed']
 
 
 def test_later_first_invalidation_preserves_valid_interval_and_main_visit(native):

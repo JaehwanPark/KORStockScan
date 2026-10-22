@@ -43,6 +43,7 @@
 ## 실행 항목
 
 - [ ] `[MainEntrySourceTerminalRepair1022] 사전 계좌자료 생산과 제출 종료 사유 전달 수리·실제 소비 확인` (`Due: 2026-10-22`, `Slot: IMPLEMENTATION`, `TimeWindow: 09:00~23:59`, `Track: RuntimeStability`)
+  - 후속 native 선택 경계 수리: 원시 ready의 가격대/backend/정책 세대/branch 비선택 근거를 기존 성능 기록에 보존하고, 실제 Main pre-AI 가드를 동일 item/epoch/sequence의 선택 신호 수명에 연결했다. 원 배포의 실제 Main 경로에서 사유 누락을 재현했고 고정 후보 회귀255+기존 가드3 PASS다. 원 native 무효화와 가드 관측을 함께 보존하며 정책·진입·주문 권한은 변경하지 않았다. [원인·리뷰·잔여 수용](../audits/postclose-root-cause-recovery-review-2026-10-19.md#main-native-selection-boundary-repair-2026-10-22). 코드 후보 검증이며 현재 PID 반영·새 자연 기록은 미완료다.
   - 12:53 후속 승인 예외: 현재 원생산 health의 unmet=[]인 정확한 정상 가드/표본 대기만 report SHA/run/PID/window에 결속해 운영 예외로 처리한다. 원 partial/UNKNOWN/null은 유지하며 새 결손·변경 세대·불명 사건은 계속 탐지한다. 과거 실패를 복구 완료로 통보하지 않는다. 기존 source/capability/무손실 archive/종료 probe drain과 통합해 재검증·ordered 배포 후 실제 full health의 경고/실패0을 확인한다. [기존 통합 리뷰](../audits/postclose-root-cause-recovery-review-2026-10-19.md#integrated-entry-receipt-and-quantity-deployment-2026-10-22).
   - 12:12 통합70fc572f8/PID2146251·동일 정책 소비 PASS. 사전 deadline/terminal 수리와 초기 ENTRY_BUY receipt를 함께 반영했고, startup pending 대사 및 missing-order 초기화 방어를 보완했다. 원49445는 native 경로에서1주/198900/원09:19:24.621630으로 실제 복구됐다. 새 pre-AI/terminal 자연 생성 수용은 계속 확인한다. [통합 결과](../audits/postclose-root-cause-recovery-review-2026-10-19.md#integrated-entry-receipt-and-quantity-deployment-2026-10-22).
   - Source: [원 경보 대사와 수리 검토](../audits/postclose-root-cause-recovery-review-2026-10-19.md#main-entry-source-terminal-repair-2026-10-22).
