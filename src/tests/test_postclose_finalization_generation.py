@@ -512,6 +512,8 @@ def test_completed_rebind_requires_unchanged_sources_and_both_native_generations
     elif damage == 'new_attempt':final.write_text(final.read_text()+f'[START] postclose_finalization target_date={DAY} recovery=true\n')
     elif damage == 'cleanup':(tmp_path/'logs/log_rotation_cleanup_cron.log').write_text('[FAIL]\n')
     elif damage == 'handoff':
+        strict = json.loads((report/'threshold_cycle_postclose_verification'/f'threshold_cycle_postclose_verification_{DAY}.json').read_bytes())
+        Path(strict['checklist_handoff']['path']).write_text('advanced operating checklist\n')
         monkeypatch.setattr(handoff,'historical_checklist_for_observer',lambda *a: (_ for _ in ()).throw(ValueError('invalid_live_handoff')))
     elif damage == 'current_summary':
         (report/'runtime_approval_summary'/f'runtime_approval_summary_{DAY}.json').write_text('{}')
@@ -529,8 +531,51 @@ def test_completed_rebind_requires_unchanged_sources_and_both_native_generations
         assert receipt['generation']==capture_finalization_generation(tmp_path,DAY)
         assert receipt['cleanup_finished_at']=='2026-09-29T07:03:00+09:00'
         assert calls and calls[-1]['generation_only'] is True
-        assert calls[-1]['checklist_snapshot'].read_text()=='# Next day\n'
+        assert calls[-1]['checklist_snapshot'] is None
     assert all(p.read_bytes()==raw for p,raw in originals.items())
+
+
+@pytest.mark.parametrize('damage', [None, 'summary', 'checklist', 'controller', 'preflight_failure'])
+def test_completed_rebind_before_new_pid_uses_exact_current_checklist(tmp_path, monkeypatch, damage):
+    from src.engine.automation import intraday_release_handoff as handoff
+    from src.engine.automation import postclose_done_controller as controller
+    final, _, _ = _completed_rebind_fixture(tmp_path, monkeypatch)
+    monkeypatch.setattr(handoff, 'historical_checklist_for_observer',
+        lambda *a: (_ for _ in ()).throw(ValueError('no_consumed_pid')))
+    report = tmp_path/'data/report'
+    if damage == 'summary':
+        (report/'runtime_approval_summary'/f'runtime_approval_summary_{DAY}.json').write_text('{}')
+    elif damage == 'checklist':
+        strict = json.loads((report/'threshold_cycle_postclose_verification'/f'threshold_cycle_postclose_verification_{DAY}.json').read_bytes())
+        Path(strict['checklist_handoff']['path']).write_text('changed')
+    elif damage == 'controller':
+        monkeypatch.setattr(controller, 'done_terminal_receipt_issues', lambda *a, **k: ['invalid'])
+    elif damage == 'preflight_failure':
+        with final.open('a') as out:
+            out.write('Traceback: preflight failed before native START\n'
+                      f'[FAIL] postclose_finalization target_date={DAY} reason=detector_resume_prefix_invalid\n')
+    if damage not in {None, 'preflight_failure'}:
+        with pytest.raises((FinalizationGenerationError, ValueError)):
+            capture_detector_retry_prefix(tmp_path, DAY, rebind_completed=True)
+    else:
+        result = capture_detector_retry_prefix(tmp_path, DAY, rebind_completed=True)
+        receipt = json.loads(Path(result['receipt_path']).read_bytes())
+        assert receipt['generation'] == capture_finalization_generation(tmp_path, DAY)
+        assert Path(receipt['originals']['finalization_log']['path']).read_bytes() == final.read_bytes()
+
+
+def test_completed_rebind_uses_consumed_proof_only_after_checklist_changes(tmp_path, monkeypatch):
+    from src.engine.automation import intraday_release_handoff as handoff
+    _, _, calls = _completed_rebind_fixture(tmp_path, monkeypatch)
+    strict = json.loads((tmp_path/'data/report/threshold_cycle_postclose_verification'/
+                         f'threshold_cycle_postclose_verification_{DAY}.json').read_bytes())
+    checklist = Path(strict['checklist_handoff']['path'])
+    saved = tmp_path/'consumed.md'
+    saved.write_bytes(checklist.read_bytes())
+    checklist.write_text('advanced operating checklist\n')
+    monkeypatch.setattr(handoff, 'historical_checklist_for_observer', lambda *a: {'path': str(saved)})
+    capture_detector_retry_prefix(tmp_path, DAY, rebind_completed=True)
+    assert calls[-1]['checklist_snapshot'] == saved
 
 
 def test_completed_rebind_failed_detector_retry_preserves_original_success(tmp_path, monkeypatch):

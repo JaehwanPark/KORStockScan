@@ -79,14 +79,24 @@ def capture_finalization_generation(project: Path, target_date: str, *, consumed
     if consumed_checklist:
         from src.engine.automation.intraday_release_handoff import historical_checklist_for_observer
         from src.engine.automation.postclose_done_controller import done_terminal_receipt_issues
-        proof = historical_checklist_for_observer(project, target_date)
-        snapshot = Path(proof['path'])
+        snapshot = None
+        try:
+            generation = _capture_finalization_generation(project, target_date)
+        except FinalizationGenerationError as exc:
+            if str(exc) != 'strict_checklist_generation_stale':
+                raise
+            proof = historical_checklist_for_observer(project, target_date)
+            snapshot = Path(proof['path'])
+            generation = _capture_finalization_generation(project, target_date, checklist_snapshot=snapshot)
         controller = Path(project)/'data/report/postclose_done_controller'/f'postclose_done_controller_{target_date}.json'
         issues = done_terminal_receipt_issues(controller, target_date, started_after_ns=0,
                                              generation_only=True, checklist_snapshot=snapshot)
         if issues:
             raise FinalizationGenerationError('rebind_current_controller_invalid:'+','.join(issues))
-        return _capture_finalization_generation(project, target_date, checklist_snapshot=snapshot)
+        current = _capture_finalization_generation(project, target_date, checklist_snapshot=snapshot)
+        if current != generation:
+            raise FinalizationGenerationError('rebind_current_generation_changed')
+        return current
     return _capture_finalization_generation(project, target_date)
 
 
@@ -364,6 +374,16 @@ def _completed_prefix_controller(project, target_date, lines, detector_raw):
     """Authenticate the sealed predecessor; only summary/checklist may advance."""
     done = f'[DONE] postclose_finalization target_date={target_date} '
     final = f'[DONE] postclose_final_detector target_date={target_date} '
+    # The caller selects the last native START. A completed attempt ends at
+    # its paired terminals; later diagnostics before another START belong to
+    # a preflight which never entered the producer/detector sequence. Keep
+    # those bytes in the immutable anchor without interpreting them as part
+    # of the already completed attempt. No error-string whitelist is needed.
+    terminals = [i for i in range(len(lines) - 1)
+                 if lines[i].startswith(done) and lines[i + 1].startswith(final)]
+    if len(terminals) != 1 or any(line.startswith('[START] ') for line in lines[terminals[0] + 2:]):
+        raise FinalizationGenerationError('rebind_completed_native_prefix_required')
+    lines = lines[:terminals[0] + 2]
     if len(lines) < 3 or not lines[-2].startswith(done) or not lines[-1].startswith(final):
         raise FinalizationGenerationError('rebind_completed_native_prefix_required')
     fields = dict(re.findall(r'(\w+)=([^ ]+)', lines[-2]))
