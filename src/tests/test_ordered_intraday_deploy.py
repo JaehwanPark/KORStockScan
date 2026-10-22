@@ -1503,6 +1503,37 @@ def test_first_transition_rechecks_closed_proof_after_process_exit(tmp_path, mar
     with pytest.raises(ValueError): D.verify_collector_shutdown(pin)
 
 
+@pytest.mark.parametrize('damage', [None, 'stale_frame', 'missing_frame', 'pid', 'start',
+    'source_contract', 'heartbeat', 'unresolved', 'missing_closed', 'changed_after_pin'])
+def test_owned_closed_collector_uses_native_actor_without_legacy_ws_frame(tmp_path, market_closed_collector, damage):
+    identity, payload, receipt, selection, frame, heartbeat, persist = market_closed_collector
+    snapshot = payload['collector_snapshot']
+    snapshot.update(process_pid=identity['pid'], process_start_ticks=identity['start_ticks'])
+    if damage in ('stale_frame', 'missing_frame'):
+        frame['shared_transport_producer']['process']['pid'] = 999
+        frame['generated_at_epoch'] = 1
+    if damage == 'pid': snapshot['process_pid'] += 1
+    if damage == 'start': snapshot['process_start_ticks'] = '457'
+    if damage == 'source_contract': snapshot['source_contract'] = 'unverified'
+    if damage == 'heartbeat': heartbeat['ai_circuit']['pid'] = 999
+    if damage == 'unresolved': heartbeat['threads']['sniper_engine']['unresolved_scalping_count'] = 1
+    persist()
+    if damage == 'missing_frame': (tmp_path/'data/runtime/kiwoom_ws_snapshot/latest.json').unlink()
+    if damage == 'missing_closed': receipt.unlink()
+    if damage in ('pid', 'start', 'source_contract', 'heartbeat', 'unresolved', 'missing_closed'):
+        with pytest.raises((ValueError, FileNotFoundError)): D.pin_collector_shutdown(tmp_path, identity)
+    else:
+        before = receipt.read_bytes()
+        pin = D.pin_collector_shutdown(tmp_path, identity)
+        assert D.verify_collector_shutdown(pin)['status'] == 'verified'
+        if damage == 'changed_after_pin':
+            receipt.write_bytes(before + b' ')
+            with pytest.raises(ValueError): D.verify_collector_shutdown(pin)
+        else: assert receipt.read_bytes() == before
+    assert not (tmp_path/'restart.flag').exists()
+    assert not (tmp_path/'data/runtime/operator_startup_hold.json').exists()
+
+
 @pytest.mark.parametrize('failure',[None,'prepare'])
 def test_execute_reserves_sentinel_before_drain_releases_before_start(tmp_path,failure):
     (tmp_path/'data').mkdir()

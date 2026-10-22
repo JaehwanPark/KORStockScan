@@ -514,12 +514,8 @@ def _pin_market_closed_collector(workspace, identity, path, payload, raw):
     """
     from src.engine.error_detectors.process_health import _is_expected_thread_terminal
     selected, _ = R._startup_receipt(workspace/'data/runtime/runtime_release_selection.json')
-    frame_path = workspace/'data/runtime/kiwoom_ws_snapshot/latest.json'
-    frame, frame_raw = R._startup_receipt(frame_path)
     heartbeat, _ = R._startup_receipt(workspace/'tmp/error_detector_heartbeat.json')
     receipt = selected.get('actual_pid_receipt') or {}
-    producer = frame.get('shared_transport_producer') or {}
-    process = producer.get('process') or {}
     terminal = (heartbeat.get('threads') or {}).get('sniper_engine') or {}
     circuit = heartbeat.get('ai_circuit') or {}
     snapshot = payload['collector_snapshot']
@@ -527,39 +523,49 @@ def _pin_market_closed_collector(workspace, identity, path, payload, raw):
     recorded = datetime.fromisoformat(str(receipt.get('recorded_at_kst') or ''))
     closed = datetime.fromisoformat(str(payload.get('generated_at') or ''))
     ended = datetime.fromisoformat(str(terminal.get('last_beat') or ''))
-    frame_at = frame.get('generated_at_epoch')
     epoch = snapshot.get('sequence_epoch')
     if (any(value.tzinfo is None for value in (recorded, closed, ended))
-            or type(frame_at) not in (int, float)
-            or not recorded.timestamp() <= frame_at <= closed.timestamp() <= now.timestamp()
+            or not recorded <= closed <= now
             or not recorded <= ended <= closed
             or any(value.astimezone(H.KST).date() != now.date() for value in (recorded, closed, ended))
             or selected.get('actual_pid_consumed') is not True
             or receipt.get('pid') != identity['pid'] or receipt.get('start_ticks') != identity['start_ticks']
             or receipt.get('process_cwd') != identity['cwd']
-            or producer.get('schema') != 'shared_ws_transport_producer_v1'
-            or process != dict(pid=identity['pid'], start_ticks=int(identity['start_ticks']),
-                               boot_id=Path('/proc/sys/kernel/random/boot_id').read_text().strip())
-            or producer.get('source_root') != selected.get('release_root')
-            or identity['cwd'] != str(Path(producer.get('source_root') or '')/'src')
-            or producer.get('source_commit') != selected.get('git_commit')
+            or identity['cwd'] != str(Path(selected.get('release_root') or '')/'src')
             or type(epoch) is not int or epoch <= 0
-            or (producer.get('completed_bar_integrity') or {}).get('observer_epoch') != epoch
             or (heartbeat.get('main_loop') or {}).get('pid') != identity['pid']
             or circuit.get('pid') != identity['pid'] or circuit.get('process_start_ticks') != identity['start_ticks']
             or terminal.get('alive') is not False
             or type(terminal.get('unresolved_scalping_count')) is not int
             or terminal['unresolved_scalping_count'] != 0 or terminal.get('unresolved_scalping_codes') != ''
-            or not _is_expected_thread_terminal('sniper_engine', terminal, now_ts=now.timestamp())
-            or ('process_pid' in snapshot or 'process_start_ticks' in snapshot) and (
-                snapshot.get('process_pid') != identity['pid']
-                or snapshot.get('process_start_ticks') != identity['start_ticks'])):
+            or not _is_expected_thread_terminal('sniper_engine', terminal, now_ts=now.timestamp())):
         raise ValueError('deployment_market_closed_collector_unproven')
     pin = dict(path=str(path), sha256=_digest(raw), pid=identity['pid'],
         start_ticks=identity['start_ticks'], sequence_epoch=epoch,
         enqueued_count=snapshot['enqueued_count'], basis='native_market_close',
-        actor_source=dict(path=str(frame_path), sha256=_digest(frame_raw)),
         terminal=terminal)
+    if 'process_pid' in snapshot or 'process_start_ticks' in snapshot:
+        if (snapshot.get('process_pid') != identity['pid']
+                or snapshot.get('process_start_ticks') != identity['start_ticks']
+                or snapshot.get('source_contract') != 'main_market_source_v1'):
+            raise ValueError('deployment_market_closed_collector_unproven')
+    else:
+        # Legacy receipts alone need the historical WS actor. A modern closed
+        # collector may have stopped before this actor ever published a frame.
+        frame_path = workspace/'data/runtime/kiwoom_ws_snapshot/latest.json'
+        frame, frame_raw = R._startup_receipt(frame_path)
+        producer = frame.get('shared_transport_producer') or {}
+        frame_at = frame.get('generated_at_epoch')
+        if (type(frame_at) not in (int, float)
+                or not recorded.timestamp() <= frame_at <= closed.timestamp()
+                or producer.get('schema') != 'shared_ws_transport_producer_v1'
+                or producer.get('process') != dict(pid=identity['pid'], start_ticks=int(identity['start_ticks']),
+                    boot_id=Path('/proc/sys/kernel/random/boot_id').read_text().strip())
+                or producer.get('source_root') != selected.get('release_root')
+                or producer.get('source_commit') != selected.get('git_commit')
+                or (producer.get('completed_bar_integrity') or {}).get('observer_epoch') != epoch):
+            raise ValueError('deployment_market_closed_collector_unproven')
+        pin['actor_source'] = dict(path=str(frame_path), sha256=_digest(frame_raw))
     # Require durable full native closure BEFORE publishing a restart flag.
     pin['closed_receipts'] = verify_collector_shutdown(pin)['receipts']
     return pin
@@ -574,9 +580,12 @@ def verify_collector_shutdown(pin):
     epochs = snapshot.get('reconciled_sequence_epochs') or []
     market_closed = pin.get('basis') == 'native_market_close'
     if market_closed:
-        actor = pin['actor_source']
+        actor = pin.get('actor_source')
         if (_digest(raw) != pin['sha256']
-                or _digest(R._startup_receipt(Path(actor['path']))[1]) != actor['sha256']):
+                or actor is not None and _digest(R._startup_receipt(Path(actor['path']))[1]) != actor['sha256']
+                or actor is None and (snapshot.get('process_pid') != pin['pid']
+                    or snapshot.get('process_start_ticks') != pin['start_ticks']
+                    or snapshot.get('source_contract') != 'main_market_source_v1')):
             raise ValueError('deployment_market_closed_collector_changed')
     if (not market_closed and (snapshot.get('process_pid') != pin['pid']
             or snapshot.get('process_start_ticks') != pin['start_ticks'])
