@@ -327,15 +327,56 @@ def _source_database_epoch(workspace, day):
         yield
 
 
+@contextmanager
+def sentinel_preparation_lock(driver):
+    """Reserve the existing producer before drain and release before startup."""
+    if getattr(driver, '_sentinel_preparation_owned', False) is True:
+        yield
+        return
+    path = Path(driver.workspace)/'tmp/run_buy_funnel_sentinel.lock'
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open('a') as lock:
+        def acquire():
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                return False
+            return True
+        _wait(acquire, 60, 'deployment_sentinel_preparation_owner_busy')
+        driver._sentinel_preparation_owned = True
+        try:
+            yield
+        finally:
+            driver._sentinel_preparation_owned = False
+
+
+def selected_preparation_lock_failure(failed, failed_path):
+    """Authenticate the completed native preparation before a legacy lock error."""
+    if (failed.get('failed_phase') != 'selected' or failed.get('phase') != 'failed'
+            or failed.get('status') != 'fail'
+            or failed.get('error') != '[Errno 11] Resource temporarily unavailable'):
+        return {}
+    sources = {}
+    for module in ('intraday_release_handoff', 'runtime_policy_bootstrap', 'auxiliary_reader_readiness'):
+        path = Path(failed_path).with_name('selected-' + module + '.log')
+        value, raw, _ = _owned_metadata(path)
+        if (value.get('status') != 'pass' or value.get('target_date') != failed.get('target_date')
+                or value.get('findings') or value.get('actual_pid_consumed') is True):
+            raise ValueError('deployment_selected_preparation_proof_invalid')
+        sources[str(path)] = _digest(raw)
+    return sources
+
+
 def execute(driver):
     """Order is deliberate: no selection or shared document write before drain."""
     try:
         driver.preflight()
         with _source_database_epoch(driver.workspace, driver.day):
-            driver.acquire_hold()
-            driver.drain()
-            driver.publish()
-            driver.prepare()
+            with sentinel_preparation_lock(driver):
+                driver.acquire_hold()
+                driver.drain()
+                driver.publish()
+                driver.prepare()
             driver.start()
             return driver.attest()
     except BaseException as exc:
@@ -929,13 +970,10 @@ class Deployment:
                       '--verify', '--target-date', self.day)
         self.run_json(self.candidate, 'src.engine.automation.auxiliary_reader_readiness',
                       '--target-date', self.day)
-        from src.engine.monitoring.sentinel_source_window import prepare
-        source_window = prepare(self.workspace / 'data')
-        # Finish native summary migration while the startup hold still owns
-        # Main. First health must not discover an unprepared summary cursor.
-        from src.engine import buy_funnel_sentinel as buy
-        with (self.workspace / 'tmp/run_buy_funnel_sentinel.lock').open('a') as lock:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        with sentinel_preparation_lock(self):
+            from src.engine.monitoring.sentinel_source_window import prepare
+            source_window = prepare(self.workspace / 'data')
+            from src.engine import buy_funnel_sentinel as buy
             from src.engine.monitoring.sentinel_summary_contract import check_pending_migration
             check_pending_migration(self.workspace / 'data', self.day)
             _, summary = buy.load_pipeline_event_summaries(self.day)
@@ -1061,6 +1099,7 @@ class StoppedDeploymentRecovery(Deployment):
         prior_path = failed_path.with_name('selection-before.json')
         prior, prior_raw, prior_sig = _owned_metadata(prior_path)
         identity = failed.get('predecessor_identity') or {}
+        preparation_sources = selected_preparation_lock_failure(failed, failed_path)
         if (selected.get('deployment_transition') != str(failed_path)
                 or selected.get('actual_pid_consumed') is not False
                 or selected.get('approval_scope') != 'ordered_intraday_deploy_and_restart'
@@ -1070,9 +1109,9 @@ class StoppedDeploymentRecovery(Deployment):
                 or failed.get('candidate_commit') != failed_commit
                 or failed.get('candidate_root') != str(failed_root)
                 or failed.get('phase') != 'failed' or failed.get('status') != 'fail'
-                or (failed.get('failed_phase'), failed.get('error')) not in {
+                or ((failed.get('failed_phase'), failed.get('error')) not in {
                     ('selected', 'deployment_validation_failed:src.engine.automation.intraday_release_handoff'),
-                    ('starting', 'deployment_pid_attestation_timeout')}
+                    ('starting', 'deployment_pid_attestation_timeout')} and not preparation_sources)
                 or failed.get('policy_effect') != 'unchanged'
                 or hold != dict(schema='ordered_deployment_startup_hold_v1', authority=CONFIRM,
                     transition=str(failed_path), target_date=self.day,
@@ -1126,7 +1165,7 @@ class StoppedDeploymentRecovery(Deployment):
         self.directory = self.workspace / 'data/runtime/release_transitions' / self.day / self.commit
         self.directory.mkdir(parents=True, exist_ok=False)
         self.old = prior
-        self.frozen = dict(native['frozen_files'])
+        self.frozen = {**native['frozen_files'], **preparation_sources}
         self.frozen.update((checks['delay'].get('prepared_code_origin') or {}).get('sources', {}))
         self.frozen.pop(str(self.selection), None)
         active = checks['active']

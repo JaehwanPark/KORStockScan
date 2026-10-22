@@ -2203,7 +2203,7 @@ def test_postclose_recovery_handoff_keeps_complete_reviewed_generation(tmp_path,
 
 @pytest.mark.parametrize('family',['main_stop','holding_vote','pre_submit_delay'])
 @pytest.mark.parametrize('fault',[None,'missing','dirty','committed_change','parent_mix'])
-@pytest.mark.parametrize('generation',['current','consumed_pre_startup','consumed_pre_shutdown','consumed_pre_native_label'])
+@pytest.mark.parametrize('generation',['current','consumed_pre_startup','consumed_pre_shutdown','consumed_pre_native_label','consumed_pre_coordination'])
 def test_entry_cost_handoff_keeps_exact_complete_generation(tmp_path,family,fault,generation,
         dependency='src/engine/monitoring/entry_attempt_identity.py'):
     import hashlib,os,subprocess
@@ -2216,12 +2216,13 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(tmp_path,family,faul
     hashes=({'current':handoff.REVIEWED_ENTRY_COST_HASHES,
         'consumed_pre_startup':handoff.REVIEWED_ENTRY_COST_PRE_STARTUP_HASHES,
         'consumed_pre_shutdown':handoff.REVIEWED_ENTRY_COST_PRE_SHUTDOWN_HASHES,
-        'consumed_pre_native_label':handoff.REVIEWED_ENTRY_COST_PRE_NATIVE_LABEL_HASHES}[generation])
+        'consumed_pre_native_label':handoff.REVIEWED_ENTRY_COST_PRE_NATIVE_LABEL_HASHES,
+        'consumed_pre_coordination':handoff.REVIEWED_ENTRY_COST_PRE_COORDINATION_HASHES}[generation])
     for name in hashes:
         content=((canonical/name).read_bytes() if generation=='current' else
             subprocess.check_output(['git','-C',str(canonical),'show',
                 {'consumed_pre_startup':'90bf2d11f','consumed_pre_shutdown':'70fc572f8',
-                 'consumed_pre_native_label':'b1519a2d4'}[generation]+':'+name]))
+                 'consumed_pre_native_label':'b1519a2d4','consumed_pre_coordination':'3dd9f1bf5'}[generation]+':'+name]))
         (root/name).write_bytes(content)
     name='src/engine/automation/intraday_release_handoff.py'
     (root/name).write_bytes((canonical/name).read_bytes())
@@ -2251,6 +2252,8 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(tmp_path,family,faul
     'src/engine/monitoring/runtime_performance.py',
     'src/engine/scalping/continuous_reversal_source.py',
     'src/engine/automation/main_market_weakness_research.py',
+    'src/engine/automation/ordered_intraday_deploy.py',
+    'src/engine/scalping/reversal_code_handoff.py',
 ])
 def test_native_selection_label_handoff_rejects_incomplete_generation(tmp_path,family,fault,dependency):
     test_entry_cost_handoff_keeps_exact_complete_generation(

@@ -4444,6 +4444,29 @@ REVIEWED_ENTRY_COST_DEPENDENCY_VARIANTS = {
 }
 
 
+# Coordinate the native producer before drain; keep the issued selection generation.
+REVIEWED_ENTRY_COST_PRE_COORDINATION_HASHES = REVIEWED_ENTRY_COST_HASHES
+REVIEWED_ENTRY_COST_PRE_COORDINATION_VARIANTS = REVIEWED_ENTRY_COST_DEPENDENCY_VARIANTS
+REVIEWED_COORDINATION_HASHES = {'src/engine/automation/ordered_intraday_deploy.py': '404b870046364da476c4df9abb0007312123ea4b4331459f67da6d3c53e183e6',
+ 'src/engine/scalping/reversal_code_handoff.py': 'ab61f882f4c8bbaddc0576a5765f4f102e38fd824b44a25341ffc78d647741b5'}
+REVIEWED_ENTRY_COST_HASHES = {**REVIEWED_ENTRY_COST_HASHES, **REVIEWED_COORDINATION_HASHES}
+REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{'src/engine/automation/ordered_intraday_deploy.py': (('92d30c0ec38266d9fe1cc7abd144c71b7d0227b88fb42d4beb384096bbeb31ab',
+                                                       'a6cdc6bebdf22f47a6736d0b7201fd988ad69ffacfe81ee5b40d77bbae5218ed'),
+                                                      ('92d30c0ec38266d9fe1cc7abd144c71b7d0227b88fb42d4beb384096bbeb31ab',
+                                                       '404b870046364da476c4df9abb0007312123ea4b4331459f67da6d3c53e183e6'),
+                                                      ('a6cdc6bebdf22f47a6736d0b7201fd988ad69ffacfe81ee5b40d77bbae5218ed',
+                                                       '404b870046364da476c4df9abb0007312123ea4b4331459f67da6d3c53e183e6')),
+ 'src/engine/scalping/reversal_code_handoff.py': (('16776a22b99bff4054ba99914cd8f7c96e87f6ca9fb1ac041e6a8191723b929d',
+                                                   'ab61f882f4c8bbaddc0576a5765f4f102e38fd824b44a25341ffc78d647741b5'),)}}
+REVIEWED_ENTRY_COST_DEPENDENCY_VARIANTS = {
+    (key[0], REVIEWED_ENTRY_COST_HASHES.get(key[0], key[1])): {**value,
+        'dependencies': {**value['dependencies'], **REVIEWED_ENTRY_COST_HASHES},
+        'contract_extensions': {origin: {name: REVIEWED_ENTRY_COST_HASHES.get(os.path.normpath(name), sha)
+            for name, sha in paths.items()} for origin, paths in value['contract_extensions'].items()},
+    } for key, value in REVIEWED_ENTRY_COST_PRE_COORDINATION_VARIANTS.items()
+}
+
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -4571,9 +4594,14 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     native_label_present = any((root / name).is_file()
         and hashlib.sha256(candidate_bytes(name)).hexdigest() == sha
         for name, sha in REVIEWED_ENTRY_COST_NATIVE_LABEL_HASHES.items())
-    entry_cost_hashes = (REVIEWED_ENTRY_COST_HASHES if native_label_present
-                         else REVIEWED_ENTRY_COST_PRE_NATIVE_LABEL_HASHES)
-    entry_cost_variants = (REVIEWED_ENTRY_COST_DEPENDENCY_VARIANTS if native_label_present
+    coordination_present = any((root / name).is_file()
+        and hashlib.sha256(candidate_bytes(name)).hexdigest() == sha
+        for name, sha in REVIEWED_COORDINATION_HASHES.items())
+    entry_cost_hashes = (REVIEWED_ENTRY_COST_HASHES if coordination_present
+        else REVIEWED_ENTRY_COST_PRE_COORDINATION_HASHES if native_label_present
+        else REVIEWED_ENTRY_COST_PRE_NATIVE_LABEL_HASHES)
+    entry_cost_variants = (REVIEWED_ENTRY_COST_DEPENDENCY_VARIANTS if coordination_present
+        else REVIEWED_ENTRY_COST_PRE_COORDINATION_VARIANTS if native_label_present
         else REVIEWED_ENTRY_COST_PRE_NATIVE_LABEL_VARIANTS
         if any((root / name).is_file() and hashlib.sha256(candidate_bytes(name)).hexdigest() == sha
             for name, sha in REVIEWED_ENTRY_COST_PRE_NATIVE_LABEL_HASHES.items()

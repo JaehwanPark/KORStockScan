@@ -1457,3 +1457,52 @@ def test_first_transition_rechecks_closed_proof_after_process_exit(tmp_path, mar
     else: value['changed_generation'] = True
     path.write_text(json.dumps(value))
     with pytest.raises(ValueError): D.verify_collector_shutdown(pin)
+
+
+@pytest.mark.parametrize('failure',[None,'prepare'])
+def test_execute_reserves_sentinel_before_drain_releases_before_start(tmp_path,failure):
+    (tmp_path/'data').mkdir()
+    calls=[]
+    class Driver:
+        workspace=tmp_path;day='2026-10-12'
+        def __getattr__(self,name):
+            def step(*args):
+                calls.append(name)
+                if name in ('drain','publish','prepare','start','attest'):
+                    with (tmp_path/'tmp/run_buy_funnel_sentinel.lock').open('a') as lock:
+                        if name in ('drain','publish','prepare'):
+                            with pytest.raises(BlockingIOError):fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+                        else:fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+                if name==failure:raise ValueError(name)
+                return {'status':'pass'}
+            return step
+    if failure:
+        with pytest.raises(ValueError,match=failure):D.execute(Driver())
+        assert 'start' not in calls
+    else:assert D.execute(Driver())=={'status':'pass'}
+    with (tmp_path/'tmp/run_buy_funnel_sentinel.lock').open('a') as lock:
+        fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+
+
+@pytest.mark.parametrize('damage',[None,'missing','status','date','pid','changed_after_preflight'])
+def test_stopped_lock_recovery_requires_all_native_preparations(stopped_recovery,damage):
+    d,path,_=stopped_recovery;value=D.H._read(path)
+    value['error']='[Errno 11] Resource temporarily unavailable';path.write_bytes(D._json_bytes(value))
+    logs=[]
+    for module in ('intraday_release_handoff','runtime_policy_bootstrap','auxiliary_reader_readiness'):
+        p=path.with_name('selected-'+module+'.log');logs.append(p)
+        p.write_bytes(D._json_bytes(dict(status='pass',target_date=d.day,actual_pid_consumed=False,findings=[])))
+    last=logs[-1]
+    if damage=='missing':last.unlink()
+    elif damage in ('status','date','pid'):
+        body=D.H._read(last);body[{'status':'status','date':'target_date','pid':'actual_pid_consumed'}[damage]]={
+            'status':'fail','date':'2020-01-01','pid':True}[damage];last.write_bytes(D._json_bytes(body))
+    original=path.read_bytes(),d.hold.read_bytes()
+    if damage in ('missing','status','date','pid'):
+        with pytest.raises((OSError,ValueError)):d.preflight()
+    else:
+        d.preflight();assert all(d.frozen[str(p)]==D.H._sha(p) for p in logs)
+        if damage=='changed_after_preflight':
+            last.write_bytes(last.read_bytes()+b' ')
+            with pytest.raises(ValueError,match='generation_changed'):d.acquire_hold()
+    assert original==(path.read_bytes(),d.hold.read_bytes())

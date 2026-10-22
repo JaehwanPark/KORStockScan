@@ -172,6 +172,7 @@ def _stopped_origin_receipt(data_root, day, origin_root, origin_commit, bundle_s
     prior, prior_raw, _ = D._owned_metadata(prior_path)
     hold, hold_raw, _ = D._owned_metadata(Path(data_root)/'runtime/operator_startup_hold.json')
     identity = failed.get('predecessor_identity')
+    preparation_sources = D.selected_preparation_lock_failure(failed, failed_path)
     expected_hold = dict(schema='ordered_deployment_startup_hold_v1',authority=D.CONFIRM,
         transition=str(failed_path),target_date=day,candidate_commit=origin_commit,old_pid_identity=identity)
     if (selected.get('actual_pid_consumed') is not False
@@ -183,7 +184,8 @@ def _stopped_origin_receipt(data_root, day, origin_root, origin_commit, bundle_s
             or failed.get('phase') != 'failed' or failed.get('status') != 'fail'
             or failed.get('failed_phase') != 'selected' or failed.get('target_date') != day
             or failed.get('candidate_commit') != origin_commit or failed.get('candidate_root') != str(origin_root)
-            or failed.get('error') != 'deployment_validation_failed:src.engine.automation.intraday_release_handoff'
+            or (failed.get('error') != 'deployment_validation_failed:src.engine.automation.intraday_release_handoff'
+                and not preparation_sources)
             or failed.get('policy_effect') != 'unchanged'
             or failed.get('original_selection_sha256') != D._digest(prior_raw)
             or prior.get('actual_pid_consumed') is not True
@@ -204,6 +206,9 @@ def _stopped_origin_receipt(data_root, day, origin_root, origin_commit, bundle_s
             or failed_path.read_bytes() != failed_raw or prior_path.read_bytes() != prior_raw
             or D._main_pids() or not D._session_absent()):
         raise ValueError('active_policy_stopped_origin_changed')
+    if any(D.H._sha(path) != sha for path, sha in preparation_sources.items()):
+        raise ValueError('active_policy_stopped_preparation_changed')
+    checked['source_hashes'].update(preparation_sources)
     checked['source_hashes'].update(proof['frozen_files'])
     checked['source_hashes'].update({str(failed_path):D._digest(failed_raw),str(prior_path):D._digest(prior_raw)})
     checked['verification_basis'] = 'verified_stopped_transition_original_native_code_ancestry'
