@@ -4182,6 +4182,76 @@ REVIEWED_POSTCLOSE_RECOVERY_DEPENDENCY_VARIANTS = {
 }
 
 
+# Reviewed 10/22 entry source/receipt and quantity-cost integration. Each new
+# member requires the complete predecessor plus the exact integrated sources.
+# Review: postclose-root-cause-recovery-review-2026-10-19.md.
+REVIEWED_ENTRY_COST_HASHES = {'src/engine/ai_engine_openai.py': '3463333df619b52d896ea02779647fa48adf6ae29a45713de80cf31c213806c7',
+ 'src/engine/automation/main_trailing_source_store.py': '9605fcdc48f11e3c92a1ddaa7846a2f5d725e6d9518d658095235e3c435fb520',
+ 'src/engine/buy_funnel_sentinel.py': 'b1836d21a079e7164d3c04629b1bb83e5f9475dda917c34b97802c2e2e3a95b7',
+ 'src/engine/lifecycle/broker_cost_allocation.py': '404a1fb1f49683eba1e0443b74758cda11fd8b62452e49f229808b7e5769afae',
+ 'src/engine/lifecycle/main_stop_research_cost.py': '8f88c3c701971f909d275b4dde629173c7aed0e966698237a355114349c08ad8',
+ 'src/engine/monitoring/entry_attempt_identity.py': 'a80693ad2bdc2c8e9aef234fbbeff8d65d05d81ac7b8310d89019069ec28ca90',
+ 'src/engine/scalping/initial_quantity_monitor_projection.py': 'ef78c5ae7aa9dd7eab7e7ce3575329943713750fc70b248f6e992766511fd114',
+ 'src/engine/scalping/initial_quantity_source_cache.py': 'd891c6da643136f14a28c17f0747e0123c17535777e924e68a381d219b2265eb',
+ 'src/engine/sniper_execution_receipts.py': 'f7210ea376fcd04d19e1592d72d0bc4a8261b799422e6161e511a338052eebb1',
+ 'src/engine/sniper_state_handlers.py': 'bd2c589431b0f507b2bbbba31cfc700a22dcab07b914313dc101add2cc9c9686',
+ 'src/engine/sniper_sync.py': '9f22c842083acfaf4164d96587b52c393057c67a437369627a59fc12ad532485',
+ 'src/engine/sniper_trade_review_report.py': '3f08c6ad233609367839f48a9bdea3493fc09188c14077d8a19043f9c0b56390'}
+REVIEWED_ENTRY_COST_PAIRS = {'src/engine/ai_engine_openai.py': (('4a70967c006a6dba29d06ba8409d346b782d7e2fe09656e1fbfc9807f17cc162',
+                                     '3463333df619b52d896ea02779647fa48adf6ae29a45713de80cf31c213806c7'),
+                                    ('bdcf09bf1f19e4cb649c01105c7aa363b04bddcb8749793a8f701cc06cc8d185',
+                                     '3463333df619b52d896ea02779647fa48adf6ae29a45713de80cf31c213806c7')),
+ 'src/engine/automation/main_trailing_source_store.py': (('e9f596c589348c1090c54eb971ede6497f20d2ccb1a0fb45340b05797fd1e2b8',
+                                                          '9605fcdc48f11e3c92a1ddaa7846a2f5d725e6d9518d658095235e3c435fb520'),
+                                                         ('aca2d7dda4c8eda53f6634a73b133090e73c511cc62973584f31633245edd850',
+                                                          '9605fcdc48f11e3c92a1ddaa7846a2f5d725e6d9518d658095235e3c435fb520')),
+ 'src/engine/buy_funnel_sentinel.py': (('4918513346f28c8908b0fe18085663ef662ba2dc03349b4b7822ff1656b908d1',
+                                        'b1836d21a079e7164d3c04629b1bb83e5f9475dda917c34b97802c2e2e3a95b7'),
+                                       ('6c41ee5823caa738bdc40c6da07e8b5fe4714976a9efc7668e90dac33a325993',
+                                        'b1836d21a079e7164d3c04629b1bb83e5f9475dda917c34b97802c2e2e3a95b7')),
+ 'src/engine/lifecycle/broker_cost_allocation.py': (('e392d3e79ad63fe1502a7921aca590ce93c3134d9d3e4d488d42775dd20cf349',
+                                                     '404a1fb1f49683eba1e0443b74758cda11fd8b62452e49f229808b7e5769afae'),),
+ 'src/engine/lifecycle/main_stop_research_cost.py': (('998f989d19979464bde492b14bd651d1bb7ff26abdfd6c5eaa454c2ebf994694',
+                                                      '8f88c3c701971f909d275b4dde629173c7aed0e966698237a355114349c08ad8'),),
+ 'src/engine/monitoring/entry_attempt_identity.py': (('5bd57a8d235e360ba5a9ea953256164722c267931e7d8caf55816c3a819b7d63',
+                                                      'a80693ad2bdc2c8e9aef234fbbeff8d65d05d81ac7b8310d89019069ec28ca90'),
+                                                     ('a18c0b96de81dcb17f6717703f5e5ebc46c29a579e7e85f257c5d6f0251d7f5e',
+                                                      'a80693ad2bdc2c8e9aef234fbbeff8d65d05d81ac7b8310d89019069ec28ca90')),
+ 'src/engine/scalping/initial_quantity_monitor_projection.py': (('81a69a5f6a4d512ab7578b196fcddcf08d56ceb791ee8d2d1d3a9bdfdb926327',
+                                                                 'ef78c5ae7aa9dd7eab7e7ce3575329943713750fc70b248f6e992766511fd114'),
+                                                                ('252ca991d7729e4b86393831ca2b6c7345a4a255d0e9c8d5d39c1bbf77a13947',
+                                                                 'ef78c5ae7aa9dd7eab7e7ce3575329943713750fc70b248f6e992766511fd114')),
+ 'src/engine/scalping/initial_quantity_source_cache.py': (('5e2724f3532cd7a8f467d7fbf04cd562444f9de7e46fcea5e83180e4bc68fa53',
+                                                           'd891c6da643136f14a28c17f0747e0123c17535777e924e68a381d219b2265eb'),
+                                                          ('77a7b57d5f752c760332fc6fd46a4fb121d4c0042ceb464a689fae1dc23c5704',
+                                                           'd891c6da643136f14a28c17f0747e0123c17535777e924e68a381d219b2265eb')),
+ 'src/engine/sniper_execution_receipts.py': (('e015955435a78f9558999c6347b49c10beb7bf48582fc6b28cc102a2ee4807e1',
+                                              'f7210ea376fcd04d19e1592d72d0bc4a8261b799422e6161e511a338052eebb1'),
+                                             ('20d1f9b5403440f10571199bd33e1ba103aa611512e6b7d5151fbe07acd94620',
+                                              'f7210ea376fcd04d19e1592d72d0bc4a8261b799422e6161e511a338052eebb1')),
+ 'src/engine/sniper_state_handlers.py': (('eaca4d2d23d2764c42e3f7cc2f73d04db0b29bb8115cabac4f10cf48e89d57aa',
+                                          'bd2c589431b0f507b2bbbba31cfc700a22dcab07b914313dc101add2cc9c9686'),
+                                         ('8a0c18d2c097b063a8349907f39e6057d43b7ad9ef173e5f6c4e1be48f8b21f9',
+                                          'bd2c589431b0f507b2bbbba31cfc700a22dcab07b914313dc101add2cc9c9686')),
+ 'src/engine/sniper_sync.py': (('2a2cdc2f144bbe2abd7649b4c4b9f4a6ff50ae751ab3e978699c2da49a06199d',
+                                '9f22c842083acfaf4164d96587b52c393057c67a437369627a59fc12ad532485'),
+                               ('baed080aaa9dd6708f1999ed4a811a758df2bb683449a773e5418303affd4f34',
+                                '9f22c842083acfaf4164d96587b52c393057c67a437369627a59fc12ad532485')),
+ 'src/engine/sniper_trade_review_report.py': (('65c57137cffbc8e02f349ef16964e9fe2f6d27ce30573b37a9d6bbd502c5023b',
+                                               '3f08c6ad233609367839f48a9bdea3493fc09188c14077d8a19043f9c0b56390'),
+                                              ('afbd53084fbf25dfa6f91c865d74b0327b02a38d9b3b3d7957c7a60a78874a1b',
+                                               '3f08c6ad233609367839f48a9bdea3493fc09188c14077d8a19043f9c0b56390'))}
+REVIEWED_ENTRY_COST_DEPENDENCY_VARIANTS = {
+    key: {**value,
+        'selector_path': 'src/engine/sniper_sync.py',
+        'selector_sha256': REVIEWED_ENTRY_COST_HASHES['src/engine/sniper_sync.py'],
+        'dependencies': {**value['dependencies'], **REVIEWED_ENTRY_COST_HASHES},
+        'contract_extensions': {origin: {name: REVIEWED_ENTRY_COST_HASHES.get(os.path.normpath(name), sha)
+            for name, sha in paths.items()} for origin, paths in value['contract_extensions'].items()},
+    } for key, value in REVIEWED_POSTCLOSE_RECOVERY_DEPENDENCY_VARIANTS.items()
+}
+
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -4306,6 +4376,9 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     post_sell_source_present = any((root / name).is_file()
         and hashlib.sha256(candidate_bytes(name)).hexdigest() == sha
         for name, sha in REVIEWED_POST_SELL_SOURCE_HASHES.items())
+    entry_cost_present = any((root / name).is_file()
+        and hashlib.sha256(candidate_bytes(name)).hexdigest() == sha
+        for name, sha in REVIEWED_ENTRY_COST_HASHES.items())
     contract_names = {repository_name(name) for name in paths.values()}
     for trigger, generations in REVIEWED_HOLDING_RESEARCH_DEPENDENCIES.items():
         if trigger not in contract_names:
@@ -4314,7 +4387,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         dependencies = generations.get(trigger_sha, {})
         # New exact selectors precede their historical parent. The first match
         # selects one complete generation, never per-file SHA alternatives.
-        for variants in (REVIEWED_POSTCLOSE_RECOVERY_DEPENDENCY_VARIANTS,
+        for variants in (REVIEWED_ENTRY_COST_DEPENDENCY_VARIANTS,
+                         REVIEWED_POSTCLOSE_RECOVERY_DEPENDENCY_VARIANTS,
                          REVIEWED_P5_ANCESTRY_DEPENDENCY_VARIANTS,
                          REVIEWED_OPERATOR_MARKET_DEPENDENCY_VARIANTS,
                          REVIEWED_POST_SELL_SOURCE_DEPENDENCY_VARIANTS,
@@ -4492,6 +4566,13 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
             if postclose_recovery_present:
                 extensions = {name: REVIEWED_POSTCLOSE_RECOVERY_HASHES.get(repository_name(name), sha)
                               for name, sha in extensions.items()}
+        if entry_cost_present:
+            variant = REVIEWED_ENTRY_COST_DEPENDENCY_VARIANTS.get((trigger, trigger_sha))
+            if variant is None:
+                raise ValueError('entry_consumer_entry_cost_generation_mixed:' + trigger)
+            dependencies = {**dependencies, **variant['dependencies']}
+            extensions = {name: REVIEWED_ENTRY_COST_HASHES.get(repository_name(name), sha)
+                          for name, sha in extensions.items()}
         dependencies_by_trigger[trigger] = (trigger_sha, dependencies)
     for key, name in paths.items():
         after = candidate_bytes(name)
@@ -4566,7 +4647,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
                 or pair == REVIEWED_AUXILIARY_HISTORY_SOURCES.get(name)):
             changed.append(name)
             continue
-        if (pair in REVIEWED_POSTCLOSE_RECOVERY_PAIRS.get(repository_name(name), ())
+        if (pair in REVIEWED_ENTRY_COST_PAIRS.get(repository_name(name), ())
+                or pair in REVIEWED_POSTCLOSE_RECOVERY_PAIRS.get(repository_name(name), ())
                 or pair in REVIEWED_SOURCE_INTEGRATION_PAIRS.get(repository_name(name), ())
                 or pair in REVIEWED_SOURCE_READER_PAIRS.get(repository_name(name), ())
                 or pair in REVIEWED_FROZEN_INPUT_PAIRS.get(repository_name(name), ())

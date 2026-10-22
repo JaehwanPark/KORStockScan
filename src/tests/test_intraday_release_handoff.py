@@ -2198,3 +2198,34 @@ def test_postclose_recovery_handoff_keeps_complete_reviewed_generation(tmp_path,
         'src/engine/automation/postclose_finalization_generation.py')
     test_source_reader_handoff_preserves_issued_policy_and_exact_dependencies(
         tmp_path,family,fault,paths,'postclose_recovery')
+
+
+@pytest.mark.parametrize('family',['main_stop','holding_vote','pre_submit_delay'])
+@pytest.mark.parametrize('fault',[None,'missing','dirty','committed_change','parent_mix'])
+def test_entry_cost_handoff_keeps_exact_complete_generation(tmp_path,family,fault):
+    import hashlib,os,subprocess
+    from src.engine.scalping import main_stop_policy as stop, holding_vote_experiment as vote
+    from src.engine.scalping.pre_submit_delay_initial_policy import CONTRACT_PATHS
+    canonical=Path(handoff.__file__).resolve().parents[3]
+    root=tmp_path/'candidate';root.mkdir()
+    subprocess.run(['git','clone','-q','--shared','--no-checkout',str(canonical),str(root)],check=True)
+    subprocess.run(['git','-C',str(root),'checkout','-q','75e0fbbf7'],check=True)
+    for name in (*handoff.REVIEWED_ENTRY_COST_HASHES,'src/engine/automation/intraday_release_handoff.py'):
+        (root/name).write_bytes((canonical/name).read_bytes())
+    source='src/engine/monitoring/entry_attempt_identity.py'
+    path=root/source
+    if fault=='missing':path.unlink()
+    elif fault=='parent_mix':path.write_bytes(subprocess.check_output(['git','-C',str(root),'show','75e0fbbf7:'+source]))
+    elif fault=='committed_change':path.write_bytes(path.read_bytes()+b'\nUNREVIEWED=True\n')
+    subprocess.run(['git','-C',str(root),'add','src'],check=True)
+    subprocess.run(['git','-C',str(root),'commit','-qm','integrated source fixture'],check=True)
+    commit=subprocess.check_output(['git','-C',str(root),'rev-parse','HEAD'],text=True).strip()
+    if fault=='dirty':path.write_bytes(path.read_bytes()+b'\nUNREVIEWED=True\n')
+    origin='75e0fbbf79d8842ceed159ea73166f8872b4e93e'
+    paths=({n:n for n in CONTRACT_PATHS} if family=='pre_submit_delay' else
+        {n:'src/engine/'+n for n in (stop.implementation_paths() if family=='main_stop' else vote._code_paths())})
+    expected=stop.digest({k:hashlib.sha256(subprocess.check_output(
+        ['git','-C',str(root),'show',origin+':'+os.path.normpath(n)])).hexdigest() for k,n in paths.items()})
+    if fault:
+        with pytest.raises(ValueError):handoff._verify_entry_code_delta(root,commit,origin,paths,expected)
+    else:handoff._verify_entry_code_delta(root,commit,origin,paths,expected)

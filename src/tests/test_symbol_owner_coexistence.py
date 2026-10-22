@@ -906,3 +906,66 @@ def test_allocation_gap_never_becomes_phantom_sell_cancel(monkeypatch):
 def test_initial_registry_receipt_survives_native_consumer_and_late_rest_staging(tmp_path, monkeypatch):
     test_registered_entry_fill_reaches_native_ledger_before_rest_staging(
         tmp_path, monkeypatch, None, 'ENTRY_BUY', native=True)
+
+
+@pytest.mark.parametrize('fault', [None, 'open', 'owner', 'date', 'extra', 'amount',
+    'account', 'source', 'parent', 'bundle', 'residual', 'manual', 'price', 'sell'])
+def test_sync_consumes_terminal_initial_probe_without_submitting_residual(tmp_path, monkeypatch, fault):
+    from types import SimpleNamespace
+    from copy import deepcopy
+    from src.engine import sniper_sync as sync, sniper_execution_receipts as receipts
+    from src.engine.scalping import entry_split_order_plan as probe
+    from src.engine.scalping.strategy_owner_components import digest
+    from src.engine.ai import holding_exit_vote as vote
+    now = datetime.now(receipts._KST)
+    row = dict(owner_type='main_scalping', owner_id='main_scalping:101', position_id='main_scalping:101',
+        symbol=SYMBOL, order_date=now.date().isoformat(), side='BUY', action='NEW', state='ORDER_TERMINAL',
+        quantity=1, filled_qty=1, fill_amount=10000, execution_no='12544', broker_order_no='0013982',
+        event_hash='a'*64, account_key='fixture', route='SOR',
+        client_intent_id='main_scalping:101:101:ENTRY_BUY:entry_split_probe_0:1:nonce')
+    source=dict(schema='entry_probe_submit_source_v1', source_date=now.date().isoformat(),
+        owner_id='main_scalping:101', record_id='101', position_cycle_id='101', stock_code=SYMBOL,
+        bundle_id='probe-101', planned_qty=2, initial_parent_id='parent', account_key='fixture')
+    if fault=='parent':source['initial_parent_id']=''
+    source['sha256']=digest(source)
+    if fault=='source':source['sha256']='b'*64
+    bundle=dict(target_id=101, code=SYMBOL, requested_qty=2, order_no='0013982',
+        actual_submitted_qty=1, broker_route='SOR', continuation=dict(requested_qty=2,residual_qty=1),
+        entry_split_probe_submit_source=source)
+    rows=[row]
+    if fault=='open':row['state']='ORDER_BOUND'
+    if fault=='owner':row['owner_id']='manual_operator:other'
+    if fault=='date':row['order_date']='2026-10-01'
+    if fault=='extra':rows.append({**row,'broker_order_no':'0013983'})
+    if fault=='amount':row['fill_amount']=0
+    if fault=='account':row['account_key']='other'
+    if fault=='bundle':bundle['order_no']='0013983'
+    if fault=='residual':bundle['residual_order_nos']=['0013983']
+    monkeypatch.setattr(probe,'PROBE_RUNTIME_STATE_PATH',tmp_path/'probe.json')
+    probe.update_probe_runtime_bundle('probe-101',phase='probe_submitted',now=now,**bundle)
+    monkeypatch.setattr(receipts,'DATA_DIR',tmp_path/'data')
+    monkeypatch.setattr(receipts,'_sell_pending_submit_path',lambda _:tmp_path/'sell.json')
+    monkeypatch.setattr(receipts,'_sell_receipt_recovery_path',lambda _:tmp_path/'sell-receipt.json')
+    if fault=='sell':(tmp_path/'sell.json').write_text('{}')
+    monkeypatch.setattr(sync,'evaluate_main_bot_control_exclusion',lambda _:SimpleNamespace(excluded=fault=='manual'))
+    monkeypatch.setattr(sync,'log_error',lambda *a:None)
+    record=SimpleNamespace(id=101,strategy='SCALPING',status='BUY_ORDERED',buy_qty=2,
+        buy_price=9999 if fault=='price' else 10000,buy_time=now,sell_time=None,sell_price=0)
+    target=dict(id=101,code=SYMBOL,status='BUY_ORDERED',pending_entry_orders=[dict(ord_no='0013982')])
+    registry=SimpleNamespace(position_intents=lambda **_:deepcopy(rows))
+    before=probe.PROBE_RUNTIME_STATE_PATH.read_bytes()
+    result=sync._restore_registered_entry_buy(record,target,SYMBOL,1,registry)
+    if fault is not None:
+        assert result is None and record.buy_qty==2 and record.status=='BUY_ORDERED'
+        assert probe.PROBE_RUNTIME_STATE_PATH.read_bytes()==before
+        return
+    assert result['quantity']==1 and record.buy_qty==1 and record.status=='HOLDING'
+    restored=dict(id=101,code=SYMBOL,buy_qty=1,buy_price=10000,buy_time=now)
+    assert vote.restore_buy_fill_receipt(restored,receipts.DATA_DIR)=='restored'
+    assert len(vote.buy_fill_legs_from_runtime(restored))==1
+    state=probe._load_probe_runtime_state(now.date().isoformat())['bundles']['probe-101']
+    assert state['phase']=='aborted' and state['terminal_outcome']=='residual_not_submitted'
+    assert state['requested_qty']==2 and state['actual_submitted_qty']==1
+    assert target['entry_split_probe_residual_expand_forbidden'] is True
+    assert 'pending_entry_orders' not in target
+    assert sync._restore_registered_entry_buy(record,None,SYMBOL,1,registry)==result

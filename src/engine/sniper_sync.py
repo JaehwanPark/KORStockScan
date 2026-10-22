@@ -1023,7 +1023,7 @@ def _restore_registered_partial_sell(record, target, code, remaining_qty, mismat
 
 
 def _restore_registered_entry_buy(record, target, code, quantity, registry):
-    """Restore one complete unit-leg probe from its native owned fill census.
+    """Restore terminal unit legs from their native owned fill census.
 
     Aggregate account quantity is never a cost or ownership source. The existing
     probe and registry owners must agree on every terminal leg before changing
@@ -1039,7 +1039,8 @@ def _restore_registered_entry_buy(record, target, code, quantity, registry):
     target_id = getattr(record, "id", None)
     owner = f"main_scalping:{target_id}"
     today = datetime.now(receipts._KST).date()
-    if (type(quantity) is not int or quantity <= 1 or old_qty not in {1, quantity}
+    if (type(quantity) is not int or quantity < 1 or old_qty < 1
+            or quantity > 1 and old_qty not in {1, quantity}
             or type(target_id) is not int or target_id <= 0
             or str(getattr(record, "strategy", "")).upper() != "SCALPING"
             or str(getattr(record, "status", "")).upper() not in {"HOLDING", "BUY_ORDERED", "SELL_ORDERED"}
@@ -1081,14 +1082,15 @@ def _restore_registered_entry_buy(record, target, code, quantity, registry):
         payload = probe._load_probe_runtime_state(today.isoformat())
         bundles = [b for b in (payload.get("bundles") or {}).values() if isinstance(b, dict)
             and b.get("target_id") == target_id and b.get("code") == code
-            and b.get("phase") in {"residual_submitting", "residual_submitted", "complete"}]
+            and b.get("phase") in {"probe_submitted", "residual_submitting", "residual_submitted", "complete", "aborted"}]
         if len(bundles) != 1:
             return None
         bundle = bundles[0]
+        probe_only = quantity == 1
         expected = [bundle.get("order_no"), *(bundle.get("residual_order_nos") or [])]
         first = by_order.get(bundle.get("order_no"))
         if (len(by_order) != quantity or len(expected) != quantity or set(expected) != set(by_order)
-                or bundle.get("requested_qty") != quantity or not first
+                or not first
                 or any(not str(r.get("client_intent_id") or "").startswith(
                     owner+":"+str(target_id)+":"+(
                         "ENTRY_BUY:" if r is first else "ENTRY_RESIDUAL_BUY:")) for r in filled)
@@ -1098,9 +1100,40 @@ def _restore_registered_entry_buy(record, target, code, quantity, registry):
         amount = sum(r["fill_amount"] for r in filled)
         evidence = dict(bundle_id=bundle["bundle_id"], quantity=quantity, fill_amount=amount,
             registry_event_hashes={n:r["event_hash"] for n,r in by_order.items()})
+        if probe_only:
+            from src.engine.scalping.strategy_owner_components import digest
+            source = bundle.get("entry_split_probe_submit_source") or {}
+            requested = bundle.get("requested_qty")
+            continuation = bundle.get("continuation") or {}
+            # Only the exact terminal initial probe can close an unsent remainder.
+            # A partial/open broker order, an unbound plan or another intent is
+            # never inferred from account aggregate quantity.
+            if (type(requested) is not int or requested <= 1
+                    or old_qty not in {1, requested}
+                    or str(record.status).upper() not in {"BUY_ORDERED", "HOLDING"}
+                    or bundle.get("phase") not in {"probe_submitted", "aborted"}
+                    or bundle.get("actual_submitted_qty") != 1
+                    or bundle.get("residual_submitted_qty", 0) != 0
+                    or continuation.get("requested_qty") != requested
+                    or continuation.get("residual_qty") != requested-1
+                    or source.get("schema") != "entry_probe_submit_source_v1"
+                    or source.get("sha256") != digest({k:v for k,v in source.items() if k != "sha256"})
+                    or any(source.get(k) != v for k,v in dict(source_date=today.isoformat(),
+                        owner_id=owner, record_id=str(target_id), position_cycle_id=str(target_id),
+                        stock_code=code, bundle_id=bundle["bundle_id"], planned_qty=requested).items())
+                    or not source.get("initial_parent_id")
+                    or not source.get("account_key") or source["account_key"] != first.get("account_key")
+                    or bundle.get("broker_route") != first.get("route")
+                    or not str(first.get("client_intent_id") or "").startswith(
+                        f"{owner}:{target_id}:ENTRY_BUY:entry_split_probe_0:1:")
+                    or bundle.get("phase") == "aborted" and bundle.get("registered_entry_recovery") != evidence):
+                return None
+        elif bundle.get("requested_qty") != quantity or bundle.get("phase") not in {
+                "residual_submitting", "residual_submitted", "complete"}:
+            return None
         expected_price = first["fill_amount"] if old_qty == 1 else amount/quantity
         if (not isclose(_to_float(record.buy_price), expected_price, abs_tol=0.0001)
-                or old_qty == quantity and (bundle.get("phase") != "complete"
+                or old_qty == quantity and not probe_only and (bundle.get("phase") != "complete"
                     or bundle.get("registered_entry_recovery") != evidence)):
             return None
         recovered = dict(id=target_id, code=code, buy_time=record.buy_time,
@@ -1149,11 +1182,17 @@ def _restore_registered_entry_buy(record, target, code, quantity, registry):
                       f"code={code} reason={type(exc).__name__}:{exc}")
             return None
         # This is native receipt completion, not a synthesized broker terminal.
-        probe.update_probe_runtime_bundle(bundle["bundle_id"], phase="complete",
+        probe.update_probe_runtime_bundle(bundle["bundle_id"], phase="aborted" if probe_only else "complete",
             now=datetime.now(receipts._KST), filled_qty=quantity, actual_submitted_qty=quantity,
             avg_buy_price=amount/quantity, registered_entry_recovery=evidence,
             buy_fill_identity_recovery=bundle.get("buy_fill_identity_recovery") or dict(
-                identity=identity, previous_receipt_sha256=previous_sha))
+                identity=identity, previous_receipt_sha256=previous_sha),
+            **(dict(reason="registered_initial_probe_receipt_recovery",
+                terminal_abort_reason="registered_initial_probe_receipt_recovery",
+                terminal_outcome="residual_not_submitted", residual_terminal_qty=requested-1,
+                entry_split_probe_scale_in_forbidden=True,
+                entry_split_probe_residual_expand_forbidden=True, probe_expand_forbidden=True)
+                if probe_only else {}))
         record.buy_qty = quantity
         record.buy_price = amount / quantity
         record.initial_buy_qty = quantity
@@ -1163,8 +1202,12 @@ def _restore_registered_entry_buy(record, target, code, quantity, registry):
             target["buy_fill_identity_store_sha256"] = identity
             target.pop("buy_fill_identity_store_gap", None)
             target.update(status="HOLDING", buy_qty=quantity, buy_price=amount/quantity, scale_in_locked=True,
-                initial_buy_qty=quantity, entry_split_probe_phase="complete",
+                initial_buy_qty=quantity, entry_split_probe_phase="aborted" if probe_only else "complete",
                 entry_filled_qty=quantity, entry_fill_amount=amount)
+            if probe_only:
+                target.update(entry_split_probe_scale_in_forbidden=True,
+                    entry_split_probe_residual_expand_forbidden=True, probe_expand_forbidden=True,
+                    entry_split_probe_bundle_id=bundle["bundle_id"])
             target["_entry_receipt_requested_by_order_no"] = {n:1 for n in by_order}
             target["_entry_receipt_filled_by_order_no"] = {n:1 for n in by_order}
             target["_entry_receipt_filled_amount_by_order_no"] = {n:r["fill_amount"] for n,r in by_order.items()}
