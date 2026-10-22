@@ -4242,7 +4242,7 @@ REVIEWED_ENTRY_COST_PAIRS = {'src/engine/ai_engine_openai.py': (('4a70967c006a6d
                                               ('afbd53084fbf25dfa6f91c865d74b0327b02a38d9b3b3d7957c7a60a78874a1b',
                                                '3f08c6ad233609367839f48a9bdea3493fc09188c14077d8a19043f9c0b56390'))}
 REVIEWED_ENTRY_COST_DEPENDENCY_VARIANTS = {
-    key: {**value,
+    (key[0], REVIEWED_ENTRY_COST_HASHES.get(key[0], key[1])): {**value,
         'selector_path': 'src/engine/sniper_sync.py',
         'selector_sha256': REVIEWED_ENTRY_COST_HASHES['src/engine/sniper_sync.py'],
         'dependencies': {**value['dependencies'], **REVIEWED_ENTRY_COST_HASHES},
@@ -4554,7 +4554,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
             extensions = {name: REVIEWED_POST_SELL_SOURCE_HASHES.get(repository_name(name), sha)
                           for name, sha in extensions.items()}
         if operator_market_present:
-            operator_variants = (REVIEWED_POSTCLOSE_RECOVERY_DEPENDENCY_VARIANTS if postclose_recovery_present
+            operator_variants = (REVIEWED_ENTRY_COST_DEPENDENCY_VARIANTS if entry_cost_present
+                                 else REVIEWED_POSTCLOSE_RECOVERY_DEPENDENCY_VARIANTS if postclose_recovery_present
                                  else REVIEWED_P5_ANCESTRY_DEPENDENCY_VARIANTS if p5_ancestry_present
                                  else REVIEWED_OPERATOR_MARKET_DEPENDENCY_VARIANTS)
             operator_variant = operator_variants.get((trigger, trigger_sha))

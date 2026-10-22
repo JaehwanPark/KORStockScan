@@ -1841,7 +1841,8 @@ def test_source_reader_handoff_preserves_issued_policy_and_exact_dependencies(tm
         names.update(handoff.REVIEWED_DELAY_MACHINE_PARENT_HASHES)
     for name in names:
         path = root/name; path.parent.mkdir(parents=True,exist_ok=True)
-        path.write_bytes(subprocess.check_output(['git','-C',str(canonical),'show','e3665f20a:'+os.path.normpath(name)]) if p5_ancestry and not postclose_recovery and name!='src/engine/automation/intraday_release_handoff.py' else
+        path.write_bytes(subprocess.check_output(['git','-C',str(canonical),'show','75e0fbbf7:'+os.path.normpath(name)]) if postclose_recovery and name!='src/engine/automation/intraday_release_handoff.py' else
+            subprocess.check_output(['git','-C',str(canonical),'show','e3665f20a:'+os.path.normpath(name)]) if p5_ancestry and not postclose_recovery and name!='src/engine/automation/intraday_release_handoff.py' else
             subprocess.check_output(['git','-C',str(canonical),'show','b82a84620:'+os.path.normpath(name)]) if operator_market and not p5_ancestry and name!='src/engine/automation/intraday_release_handoff.py' else
             subprocess.check_output(['git','-C',str(canonical),'show','19297ead7:'+os.path.normpath(name)]) if issued_post_sell_source and name!='src/engine/automation/intraday_release_handoff.py' else
             subprocess.check_output(['git','-C',str(canonical),'show','0b36f17fc:'+os.path.normpath(name)]) if issued_holding_input and name!='src/engine/automation/intraday_release_handoff.py' else
