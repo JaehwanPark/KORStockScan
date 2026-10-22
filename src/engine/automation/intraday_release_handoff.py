@@ -4568,6 +4568,22 @@ REVIEWED_ENTRY_COST_DEPENDENCY_VARIANTS = {
 }
 
 
+# Signed volume-surge metadata uses the existing signed parser. Preserve the
+# consumed native-expiry profile; bind exact adapter bytes without policy changes.
+REVIEWED_ENTRY_COST_PRE_SIGNED_SURGE_HASHES = REVIEWED_ENTRY_COST_HASHES
+REVIEWED_ENTRY_COST_PRE_SIGNED_SURGE_VARIANTS = REVIEWED_ENTRY_COST_DEPENDENCY_VARIANTS
+REVIEWED_SIGNED_SURGE_HASHES = {'src/utils/kiwoom_utils.py': '498cfc4bc4ce9b1cbe13f0b70967da7f2dbb113c6d70563924b03c98d371b323'}
+REVIEWED_ENTRY_COST_HASHES = {**REVIEWED_ENTRY_COST_HASHES, **REVIEWED_SIGNED_SURGE_HASHES}
+REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS,
+    'src/utils/kiwoom_utils.py': REVIEWED_ENTRY_COST_PAIRS.get('src/utils/kiwoom_utils.py', ()) + (('00b0fffbf665ac0d598fa53bc02ad4b0a927943846ed9de94fb7449ec05a9a0f', '498cfc4bc4ce9b1cbe13f0b70967da7f2dbb113c6d70563924b03c98d371b323'),)}
+REVIEWED_ENTRY_COST_DEPENDENCY_VARIANTS = {
+    key: {**value, 'dependencies': {**value['dependencies'], **REVIEWED_SIGNED_SURGE_HASHES},
+        'contract_extensions': {origin: {name: REVIEWED_SIGNED_SURGE_HASHES.get(os.path.normpath(name), sha)
+            for name, sha in paths.items()} for origin, paths in value['contract_extensions'].items()},
+    } for key, value in REVIEWED_ENTRY_COST_PRE_SIGNED_SURGE_VARIANTS.items()
+}
+
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -4716,7 +4732,11 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     expiry_health_present = any((root / name).is_file()
         and hashlib.sha256(candidate_bytes(name)).hexdigest() == sha
         for name, sha in REVIEWED_EXPIRY_HEALTH_HASHES.items())
-    entry_cost_hashes = (REVIEWED_ENTRY_COST_HASHES if expiry_health_present
+    signed_surge_present = all((root / name).is_file()
+        and hashlib.sha256(candidate_bytes(name)).hexdigest() == sha
+        for name, sha in REVIEWED_SIGNED_SURGE_HASHES.items())
+    entry_cost_hashes = (REVIEWED_ENTRY_COST_HASHES if signed_surge_present
+        else REVIEWED_ENTRY_COST_PRE_SIGNED_SURGE_HASHES if expiry_health_present
         else REVIEWED_ENTRY_COST_PRE_EXPIRY_HEALTH_HASHES if first_turn_present
         else REVIEWED_ENTRY_COST_PRE_FIRST_TURN_HASHES if prepared_start_present
         else REVIEWED_ENTRY_COST_PRE_PREPARED_START_HASHES if main_preparation_present
@@ -4725,7 +4745,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         else REVIEWED_ENTRY_COST_PRE_PREPARED_VALIDATION_HASHES if coordination_present
         else REVIEWED_ENTRY_COST_PRE_COORDINATION_HASHES if native_label_present
         else REVIEWED_ENTRY_COST_PRE_NATIVE_LABEL_HASHES)
-    entry_cost_variants = (REVIEWED_ENTRY_COST_DEPENDENCY_VARIANTS if expiry_health_present
+    entry_cost_variants = (REVIEWED_ENTRY_COST_DEPENDENCY_VARIANTS if signed_surge_present
+        else REVIEWED_ENTRY_COST_PRE_SIGNED_SURGE_VARIANTS if expiry_health_present
         else REVIEWED_ENTRY_COST_PRE_EXPIRY_HEALTH_VARIANTS if first_turn_present
         else REVIEWED_ENTRY_COST_PRE_FIRST_TURN_VARIANTS if prepared_start_present
         else REVIEWED_ENTRY_COST_PRE_PREPARED_START_VARIANTS if main_preparation_present

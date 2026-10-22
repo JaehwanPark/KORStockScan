@@ -2203,7 +2203,7 @@ def test_postclose_recovery_handoff_keeps_complete_reviewed_generation(tmp_path,
 
 @pytest.mark.parametrize('family',['main_stop','holding_vote','pre_submit_delay'])
 @pytest.mark.parametrize('fault',[None,'missing','dirty','committed_change','parent_mix'])
-@pytest.mark.parametrize('generation',['current','consumed_pre_startup','consumed_pre_shutdown','consumed_pre_native_label','consumed_pre_coordination','consumed_pre_prepared_validation','consumed_pre_prepared_repair','consumed_pre_main_preparation','consumed_pre_prepared_start','consumed_pre_first_turn','consumed_pre_expiry_health'])
+@pytest.mark.parametrize('generation',['current','consumed_pre_startup','consumed_pre_shutdown','consumed_pre_native_label','consumed_pre_coordination','consumed_pre_prepared_validation','consumed_pre_prepared_repair','consumed_pre_main_preparation','consumed_pre_prepared_start','consumed_pre_first_turn','consumed_pre_expiry_health','consumed_pre_signed_surge'])
 def test_entry_cost_handoff_keeps_exact_complete_generation(tmp_path,family,fault,generation,
         dependency='src/engine/monitoring/entry_attempt_identity.py'):
     import hashlib,os,subprocess
@@ -2223,19 +2223,24 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(tmp_path,family,faul
         'consumed_pre_main_preparation':handoff.REVIEWED_ENTRY_COST_PRE_MAIN_PREPARATION_HASHES,
         'consumed_pre_prepared_start':handoff.REVIEWED_ENTRY_COST_PRE_PREPARED_START_HASHES,
         'consumed_pre_first_turn':handoff.REVIEWED_ENTRY_COST_PRE_FIRST_TURN_HASHES,
-        'consumed_pre_expiry_health':handoff.REVIEWED_ENTRY_COST_PRE_EXPIRY_HEALTH_HASHES}[generation])
+        'consumed_pre_expiry_health':handoff.REVIEWED_ENTRY_COST_PRE_EXPIRY_HEALTH_HASHES,
+        'consumed_pre_signed_surge':handoff.REVIEWED_ENTRY_COST_PRE_SIGNED_SURGE_HASHES}[generation])
     for name in hashes:
         content=((canonical/name).read_bytes() if generation=='current' else
             subprocess.check_output(['git','-C',str(canonical),'show',
                 {'consumed_pre_startup':'90bf2d11f','consumed_pre_shutdown':'70fc572f8',
-                 'consumed_pre_native_label':'b1519a2d4','consumed_pre_coordination':'3dd9f1bf5','consumed_pre_prepared_validation':'bf330ae92','consumed_pre_prepared_repair':'81f43b8ba','consumed_pre_main_preparation':'8644e15fc','consumed_pre_prepared_start':'3b951f1f1','consumed_pre_first_turn':'e9ee2c8ea','consumed_pre_expiry_health':'9476e9ecd'}[generation]+':'+name]))
+                 'consumed_pre_native_label':'b1519a2d4','consumed_pre_coordination':'3dd9f1bf5','consumed_pre_prepared_validation':'bf330ae92','consumed_pre_prepared_repair':'81f43b8ba','consumed_pre_main_preparation':'8644e15fc','consumed_pre_prepared_start':'3b951f1f1','consumed_pre_first_turn':'e9ee2c8ea','consumed_pre_expiry_health':'9476e9ecd','consumed_pre_signed_surge':'bf26ddf0e'}[generation]+':'+name]))
         (root/name).write_bytes(content)
     name='src/engine/automation/intraday_release_handoff.py'
     (root/name).write_bytes((canonical/name).read_bytes())
     source=dependency
     path=root/source
     if fault=='missing':path.unlink()
-    elif fault=='parent_mix':path.write_bytes(subprocess.check_output(['git','-C',str(root),'show','75e0fbbf7:'+source]))
+    elif fault=='parent_mix':
+        # The immediate adapter predecessor is a valid complete issued profile.
+        # Mix an earlier adapter instead to exercise an unreviewed combination.
+        mixed_origin = '7f2552aedde8fec6ef904a43105827907e50dfc8' if source == 'src/utils/kiwoom_utils.py' else '75e0fbbf7'
+        path.write_bytes(subprocess.check_output(['git','-C',str(root),'show',mixed_origin+':'+source]))
     elif fault=='committed_change':path.write_bytes(path.read_bytes()+b'\nUNREVIEWED=True\n')
     subprocess.run(['git','-C',str(root),'add','src'],check=True)
     subprocess.run(['git','-C',str(root),'commit','-qm','integrated source fixture'],check=True)
@@ -2262,6 +2267,7 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(tmp_path,family,faul
     'src/engine/scalping/reversal_code_handoff.py',
     'src/engine/monitoring/submission_bottleneck_monitor.py',
     'src/engine/scalping/zero_base_probe.py',
+    'src/utils/kiwoom_utils.py',
 ])
 def test_native_selection_label_handoff_rejects_incomplete_generation(tmp_path,family,fault,dependency):
     test_entry_cost_handoff_keeps_exact_complete_generation(
