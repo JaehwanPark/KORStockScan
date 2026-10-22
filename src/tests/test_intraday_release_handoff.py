@@ -2377,6 +2377,10 @@ def test_postclose_workflow_review_retains_current_and_native_predecessor_closur
     ('src/engine/kiwoom_sniper_v2.py','missing'),
     ('src/engine/kiwoom_websocket.py','committed_change'),
     ('src/engine/scalping/pre_submit_delay_observation.py','parent_mix'),
+    ('src/engine/automation/main_trailing_source_reuse.py','parent_mix'),
+    ('src/engine/automation/main_trailing_source_reuse.py','missing'),
+    ('src/engine/automation/main_trailing_source_assembler.py','parent_mix'),
+    ('src/engine/automation/main_trailing_source_assembler.py','committed_change'),
 ])
 def test_sentinel_route_successor_keeps_complete_reviewed_source_group(tmp_path,family,dependency,fault):
     test_entry_cost_handoff_keeps_exact_complete_generation(

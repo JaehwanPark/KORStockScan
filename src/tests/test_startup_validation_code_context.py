@@ -1336,7 +1336,9 @@ def test_main_preparation_independently_binds_postclose_workflow_revision(damage
 @pytest.mark.parametrize('relative', ['src/engine/kiwoom_sniper_v2.py',
     'src/engine/kiwoom_websocket.py','src/engine/sniper_state_handlers.py',
     'src/engine/scalping/pre_submit_delay_observation.py',
-    'src/engine/monitoring/submission_bottleneck_monitor.py'])
+    'src/engine/monitoring/submission_bottleneck_monitor.py',
+    'src/engine/automation/main_trailing_source_reuse.py',
+    'src/engine/automation/main_trailing_source_assembler.py'])
 @pytest.mark.parametrize('damage', [None,'unreviewed','wrong_origin'])
 def test_main_preparation_independently_reviews_sentinel_route_sources(relative,damage):
     import subprocess

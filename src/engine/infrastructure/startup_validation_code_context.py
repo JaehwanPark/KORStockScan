@@ -184,6 +184,20 @@ REVIEWED_PREPARATION_HISTORY.setdefault('src/engine/sniper_state_handlers.py', s
 REVIEWED_PREPARATION_HISTORY.setdefault('src/engine/scalping/pre_submit_delay_observation.py', set()).update({('99d7b8d5e57ad886433747cee55f8f12c9a71d539577d94adff03543a8ff724d',
   '225bf41983835e7ab53febd50d0cb42d13ce5b296322887a519a53e24281e8ff')})
 
+# Exact frozen-master gzip source repair; original policy/custody stay unchanged.
+REVIEWED_PREPARATION_HISTORY.setdefault('src/engine/automation/main_trailing_source_reuse.py', set()).update({('4c38cd9add7e87e7a50529f1a0ad379dde4b786fb8405bf02ee1c7e117a280ec',
+  'bdbfff175232f9595b5180bd64b1f288f659e8964d4f7306311d7c45f3c940ba'),
+ ('88faf62cd0e01d4b32f5f36ca96b37fdf3a4bd2432e0adcab8ca1c9d8cfd8ac5',
+  'bdbfff175232f9595b5180bd64b1f288f659e8964d4f7306311d7c45f3c940ba'),
+ ('acf252905da4704ff54a3adffdd74ecf7c6b9ab056b52b6719fab8be91866b97',
+  'bdbfff175232f9595b5180bd64b1f288f659e8964d4f7306311d7c45f3c940ba')})
+REVIEWED_PREPARATION_HISTORY.setdefault('src/engine/automation/main_trailing_source_assembler.py', set()).update({('947171df074a8074ebb3d9bcca5710a2b001ccc00a211c58d99113ab5317e77b',
+  'b951b49987a039de6b9746f40ae9f3190facb4c42dd28265a1585d02c52ef413'),
+ ('af2d5343723e53093eb2fcc8debcf70b7d13c964b448ff10a094d61971ad4d29',
+  'b951b49987a039de6b9746f40ae9f3190facb4c42dd28265a1585d02c52ef413'),
+ ('d76ee7b7c79ea1d420f4432f9026690b3155f7e815f0dbf1fec66016b51d8e26',
+  'b951b49987a039de6b9746f40ae9f3190facb4c42dd28265a1585d02c52ef413')})
+
 def reviewed_preparation_pair(relative, old, current):
     return (REVIEWED_PREPARATION_SOURCES.get(relative) == (old, current)
             or (old, current) in REVIEWED_PREPARATION_HISTORY.get(relative, ()))

@@ -421,3 +421,32 @@ def test_native_cursor_issuer_accepts_only_the_bound_data_mount(tmp_path, route)
         with pytest.raises((ValueError, OSError, KeyError)):
             reuse.collect_proofs(data, origin)
     assert origin.read_bytes() == original and holding.read_bytes() == before
+
+
+@pytest.mark.parametrize('damage',[None,'content','truncated','missing','symlink','oversize','logical_link','plain_replaced'])
+def test_frozen_master_gzip_transition_preserves_exact_original_bytes(tmp_path,damage):
+    import gzip
+    data,origin,holding,original=approved(tmp_path)
+    path=next((data/'report/micro_reversion_economic_reference').glob('micro_reversion_symbol_master_*.json'))
+    raw=path.read_bytes();archive=Path(str(path)+'.gz')
+    archive.write_bytes(gzip.compress(raw));path.unlink()
+    if damage=='content':archive.write_bytes(gzip.compress(raw+b' '))
+    elif damage=='truncated':archive.write_bytes(archive.read_bytes()[:-5])
+    elif damage=='missing':archive.unlink()
+    elif damage=='symlink':
+        target=tmp_path/'foreign.gz';target.write_bytes(archive.read_bytes());archive.unlink();archive.symlink_to(target)
+    elif damage=='oversize':archive.write_bytes(gzip.compress(b'x'*(reuse.MAX_JSON_BYTES+1)))
+    elif damage=='logical_link':path.symlink_to(tmp_path/'absent.json')
+    elif damage=='plain_replaced':path.write_bytes(raw+b' ')
+    before=holding.read_bytes()
+    def verify():
+        manifest=reuse.prepare(data,origin,tmp_path/'reused')
+        result=research.run(manifest,input_root=manifest.parent,output_root=tmp_path/'new-report',dry_run=False)
+        native=handoff.verify_report(tmp_path/'new-report'/f'research_{DAY}.json',target_date=TARGET)
+        assert native[0]['initial_policy']==original['initial_policy']
+        assert result['assembly_census']==original['assembly_census']
+    if damage:
+        with pytest.raises((ValueError,OSError,EOFError,reuse.InputPending)):verify()
+    else:verify()
+    assert holding.read_bytes()==before
+    assert not path.exists() or damage=='plain_replaced'

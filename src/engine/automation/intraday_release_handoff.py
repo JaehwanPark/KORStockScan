@@ -4787,9 +4787,11 @@ REVIEWED_NATIVE_PREOPEN_VARIANTS = {
 # Review: postclose-root-cause-recovery-review-2026-10-19.md,2026-10-23.
 REVIEWED_ENTRY_COST_PRE_SENTINEL_SCOPE_HASHES = REVIEWED_ENTRY_COST_HASHES
 REVIEWED_ENTRY_COST_PRE_SENTINEL_SCOPE_VARIANTS = REVIEWED_ENTRY_COST_DEPENDENCY_VARIANTS
-REVIEWED_SENTINEL_SCOPE_HASHES = {'src/engine/buy_funnel_sentinel.py': '40b489fff0e1b82edbf36b734424ca7826dbc2c4c8a3b27ee9069c9381e7df2a',
+REVIEWED_SENTINEL_SCOPE_HASHES = {'src/engine/automation/main_trailing_source_assembler.py': 'b951b49987a039de6b9746f40ae9f3190facb4c42dd28265a1585d02c52ef413',
+ 'src/engine/automation/main_trailing_source_reuse.py': 'bdbfff175232f9595b5180bd64b1f288f659e8964d4f7306311d7c45f3c940ba',
+ 'src/engine/buy_funnel_sentinel.py': '40b489fff0e1b82edbf36b734424ca7826dbc2c4c8a3b27ee9069c9381e7df2a',
  'src/engine/holding_exit_sentinel.py': '7ae845b51d16bf425337e4758d1f83047f1f4e1c3479d39875523f0e2748012a',
- 'src/engine/infrastructure/startup_validation_code_context.py': 'b633b8f1ca53e1a0d08bc6ff6c9c976a72648a4bb1d7ec4d353d7bb0fe029a60',
+ 'src/engine/infrastructure/startup_validation_code_context.py': 'e5286745b38ef116eecd26830a98bb1679d93662b1a8758ff626f92a03ec42a6',
  'src/engine/kiwoom_sniper_v2.py': '02ecf7b4a55042fbcd2a7b4f59bf8602bed6020730f0a8bb326b41d5d6418866',
  'src/engine/kiwoom_websocket.py': 'ef70d8fc0fd74416fc1e7a9c27dca68663a1f057b7e2b14041b255a66a9af377',
  'src/engine/monitoring/sentinel_event_scope.py': '5a06206336713a85bbf28e479ae39482cd77549ee9296b9a92b90ef7f61aa559',
@@ -4823,6 +4825,14 @@ REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
                                          'bd2c589431b0f507b2bbbba31cfc700a22dcab07b914313dc101add2cc9c9686',
                                          'eaca4d2d23d2764c42e3f7cc2f73d04db0b29bb8115cabac4f10cf48e89d57aa',
                                          'edfd4af04194182dff2a3ced3952dbfc5dc989d85906409c0172fabadb381419']}.items()}}
+REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
+    name: REVIEWED_ENTRY_COST_PAIRS.get(name, ()) + tuple((old, REVIEWED_SENTINEL_SCOPE_HASHES[name])
+        for old in before) for name, before in {'src/engine/automation/main_trailing_source_assembler.py': ['947171df074a8074ebb3d9bcca5710a2b001ccc00a211c58d99113ab5317e77b',
+                                                             'af2d5343723e53093eb2fcc8debcf70b7d13c964b448ff10a094d61971ad4d29',
+                                                             'd76ee7b7c79ea1d420f4432f9026690b3155f7e815f0dbf1fec66016b51d8e26'],
+ 'src/engine/automation/main_trailing_source_reuse.py': ['4c38cd9add7e87e7a50529f1a0ad379dde4b786fb8405bf02ee1c7e117a280ec',
+                                                         '88faf62cd0e01d4b32f5f36ca96b37fdf3a4bd2432e0adcab8ca1c9d8cfd8ac5',
+                                                         'acf252905da4704ff54a3adffdd74ecf7c6b9ab056b52b6719fab8be91866b97']}.items()}}
 REVIEWED_ENTRY_COST_DEPENDENCY_VARIANTS = {
     (key[0], REVIEWED_SENTINEL_SCOPE_HASHES.get(key[0], key[1])): {
         **value, 'dependencies': {**value['dependencies'], **REVIEWED_SENTINEL_SCOPE_HASHES},

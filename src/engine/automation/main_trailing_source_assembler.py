@@ -242,6 +242,10 @@ def source_generation_matches(root, source_date, path, generation):
         frozen = frozen_official_source(root,path)
         if frozen is not None:
             return frozen[1] == generation
+    from .main_trailing_source_reuse import archived_master_matches
+    archived = archived_master_matches(root,source_date,path,generation)
+    if archived is not None:
+        return archived
     if byte_generation(path) == generation:
         return True
     if Path(path) != Path(root)/'runtime/order_owner_registry.jsonl':

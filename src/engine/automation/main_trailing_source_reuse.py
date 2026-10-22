@@ -76,6 +76,44 @@ def _receipt_stat(value):
     return [value[key] for key in ('device','inode','size','mtime_ns','ctime_ns')]
 
 
+
+def archived_master_matches(root, source_date, path, generation):
+    """Authenticate a frozen master's exact bytes after bounded gzip storage."""
+    path = Path(path)
+    if (path.exists() or path.parent != Path(root).resolve()/'report/micro_reversion_economic_reference'
+            or not re.fullmatch(r'micro_reversion_symbol_master_\d{4}-\d{2}-\d{2}\.json', path.name)):
+        return None
+    if path.is_symlink():
+        return False
+    from datetime import date
+    import gzip
+    import zlib
+    from src.engine.infrastructure.validation_digest_session import ACTIVE
+    try:
+        day = path.name[-15:-5]
+        if date.fromisoformat(day).isoformat() != day or day > source_date:
+            return False
+        archive = Path(str(path)+'.gz')
+        before = file_stat(archive)
+        size = generation.get('size')
+        if (generation.get('path') != path.name or generation.get('schema') is not None
+                or type(size) is not int or not 0 < size <= MAX_JSON_BYTES
+                or before[2] > MAX_JSON_BYTES):
+            return False
+        session = ACTIVE.get()
+        if session is not None and session.native_read_budget is not None:
+            charge = before[2] + size
+            if charge > session.native_read_budget['remaining']:
+                raise InputPending('trailing_reuse_master_read_budget')
+            session.native_read_budget['remaining'] -= charge
+        with gzip.open(archive, 'rb') as handle:
+            raw = handle.read(size+1)
+        return (len(raw) == size and hashlib.sha256(raw).hexdigest() == generation.get('sha256')
+                and file_stat(archive) == before)
+    except (OSError,ValueError,TypeError,EOFError,zlib.error):
+        return False
+
+
 def collect_proofs(data_root, original_manifest_path):
     """Verify native issuers; return only matching current byte epochs."""
     root=Path(data_root).resolve(strict=True);origin=Path(original_manifest_path)
@@ -96,9 +134,13 @@ def collect_proofs(data_root, original_manifest_path):
             archived_snapshot = (Path(path).parent == root/'report/monitor_snapshots'
                 and Path(path).suffix == '.json' and not Path(path).exists()
                 and Path(path+'.gz.archive_receipt.json').is_file())
+            archived_master = (Path(path).parent == root/'report/micro_reversion_economic_reference'
+                and Path(path).name.startswith('micro_reversion_symbol_master_')
+                and Path(path).suffix == '.json' and not Path(path).exists()
+                and Path(path+'.gz').exists())
             cost_index = (Path(path).name == 'index.json' and Path(path).parent.parent
                 == root/'runtime/initial_quantity_research_costs')
-            if generation.get('schema') in {VOTE_INVENTORY_SCHEMA, INDEX_SCHEMA+':generation'} or archived_snapshot or cost_index:
+            if generation.get('schema') in {VOTE_INVENTORY_SCHEMA, INDEX_SCHEMA+':generation'} or archived_snapshot or archived_master or cost_index:
                 logical[(path,digest(generation))]=dict(path=path,generation=generation)
                 continue
             old=expected.get(path)
@@ -570,6 +612,13 @@ def verify_frozen_inventory(manifest, assembly_root):
     new={name:generation for name,generation in new.items() if name not in current_costs}
     new.update((name,old[name]) for name in frozen_costs)
     for name,generation in old.items():
+        alias = name+'.gz'
+        if name not in new and alias in new and archived_master_matches(root,source_date,name,generation):
+            from src.engine.lifecycle.holding_window_generation import byte_generation
+            if byte_generation(Path(alias)) != new[alias]:
+                raise InputPending('trailing_reuse_archived_master_changed')
+            # Storage changes no frozen cohort or source-generation identity.
+            new.pop(alias);new[name]=generation
         candidate=new.get(name)
         if candidate is None and name.endswith('.jsonl.gz.archive_receipt.json'):
             from .main_trailing_source_store import NAMESPACES
