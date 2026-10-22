@@ -924,7 +924,7 @@ def read_rows(data_root, path, *, kinds=None, identities=None, symbols=None, sta
                 verified_append_after_snapshot=end_generation != start_generation)
 
 
-def read_order_fill_windows(data_root, path, record_ids, *, expected_generation):
+def read_order_fill_windows(data_root, path, record_ids, *, expected_generation, consume):
     """Producer-only bounded migration of pre-index BUY fill observations.
 
     Report readers never call this. Each cost revision is its own durable
@@ -960,7 +960,7 @@ def read_order_fill_windows(data_root, path, record_ids, *, expected_generation)
     started = time.monotonic()
     expected_anchors = {ref['decoded_offset']:ref for _,ref in anchors
                         if any(start <= ref['decoded_offset'] < end for start,end in merged)}
-    seen, events, selected, retained = set(), [], 0, 0
+    seen, recovered, selected, retained = set(), 0, 0, 0
     row_limit = 256 * 1024
     oversize = 0
     physical_identity = signature(physical.lstat())
@@ -1003,8 +1003,11 @@ def read_order_fill_windows(data_root, path, record_ids, *, expected_generation)
                             retained += size
                             if retained > 1024 * 1024:
                                 raise ValueError('research_buy_window_retained_budget')
-                            events.append((row, dict(path=str(logical), decoded_offset=offset,
-                                                     size=size, sha256=sha)))
+                            # Transfer only admitted retained data to the cost
+                            # producer; no cross-date raw event list is kept.
+                            consume(row, dict(path=str(logical), decoded_offset=offset,
+                                              size=size, sha256=sha))
+                            recovered += 1
                     else:
                         oversize += 1
                     offset += size
@@ -1018,9 +1021,9 @@ def read_order_fill_windows(data_root, path, record_ids, *, expected_generation)
     if (seen != set(expected_anchors) or signature(physical.lstat()) != physical_identity
             or generation(data_root, logical) != expected_generation):
         raise ValueError('research_buy_window_generation_changed')
-    return events, dict(selected_bytes=selected, physical_bytes_read=physical_read,
+    return dict(selected_bytes=selected, physical_bytes_read=physical_read,
                         decoded_prefix_bytes=merged[-1][1] if merged else 0,
-                        wall_seconds=time.monotonic()-started, recovered_events=len(events),
+                        wall_seconds=time.monotonic()-started, recovered_events=recovered,
                         oversize_rows_skipped=oversize)
 
 

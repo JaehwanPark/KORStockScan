@@ -567,28 +567,51 @@ def _refresh_native_research_costs(root, completion_date, *, completion_source, 
             if ledger_for(record)['buy_filled_qty'] < number(row['buy_qty']):
                 missing.setdefault(_clock(row.get('buy_time') or row['rec_date']).date().isoformat(), set()).add(record)
         recovered = []
+        recovered_claim = Claim(0)
+        extra_claims.append(recovered_claim)
+        original_observations = {}
+        seen_source_refs = set()
+        def observation_key(event):
+            return digest(dict(timestamp=event.timestamp, code=event.code, stage=event.stage, fields=event.fields))
+        for record,events in observations.items():
+            counts = original_observations[record] = {}
+            for event in events:
+                if event.stage in {'position_rebased_after_fill','scale_in_executed'}:
+                    key = observation_key(event)
+                    counts[key] = counts.get(key,0) + 1
         def add_observation(payload, reference):
             record = str(payload.get('record_id'))
             if record not in observations or str(payload.get('stock_code'))[:6] != rows[record]['code']:
                 raise ValueError('research_cost_buy_record_binding_invalid')
+            source_key = (reference['path'], reference['decoded_offset'], reference['size'], reference['sha256'])
+            if source_key in seen_source_refs:
+                return
+            seen_source_refs.add(source_key)
+            recovered_claim.grow(len(indexed.encode(payload)) * 12)
             fields = review._decode_threshold_json_fields(dict(payload.get('fields') or {}))
             fields['id'] = record
-            observations[record].append(review.HoldingEvent(str(payload['emitted_at'])[:19].replace('T',' '),
-                '', rows[record]['code'], payload['stage'], fields, payload.get('text_payload') or ''))
-            recovered.append(dict(record_id=record, reference=reference))
+            event = review.HoldingEvent(str(payload['emitted_at'])[:19].replace('T',' '),
+                '', rows[record]['code'], payload['stage'], fields, payload.get('text_payload') or '')
+            key = observation_key(event)
+            joined = original_observations[record].get(key,0) > 0
+            if joined:
+                original_observations[record][key] -= 1
+            else:
+                observations[record].append(event)
+            # Join one identical original observation once. A second physical
+            # event or conflicting payload still reaches native duplicate guards.
+            recovered.append(dict(record_id=record, reference=reference, joined_original=joined))
         migration_io = {}
         for day,records in missing.items():
             if day not in buy_sources:
                 continue  # Immutable source loss remains an invalid receipt.
-            extra_claims.append(Claim(12 * 1024 * 1024))
             path = root/'pipeline_events'/f'pipeline_events_{day}.jsonl'
             for value,reference in indexed.read_rows(root, path, kinds=['pipeline_fill_receipt'], identities=sorted(records)):
                 add_observation(value['row'], reference)
             remaining = {record for record in records if ledger_for(record)['buy_filled_qty'] < number(rows[record]['buy_qty'])}
             if remaining:
-                events, migration_io[day] = indexed.read_order_fill_windows(root, path, remaining,
-                    expected_generation=buy_sources[day])
-                for payload,reference in events: add_observation(payload, reference)
+                migration_io[day] = indexed.read_order_fill_windows(root, path, remaining,
+                    expected_generation=buy_sources[day], consume=add_observation)
         positions = []
         cost_only = {'source_gap_sell_leg_configured_cost', 'source_gap_profit_rate_unreconciled',
                      'source_gap_exact_cost_missing', 'source_gap_broker_actual_cost_missing'}

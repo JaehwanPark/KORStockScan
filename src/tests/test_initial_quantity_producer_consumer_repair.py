@@ -1894,7 +1894,8 @@ def test_original_stream_entry_seal_survives_preservation_then_compression(tmp_p
 
 
 @pytest.mark.parametrize('legacy', [False, True])
-@pytest.mark.parametrize('fill_source', ['indexed', 'historical_window', 'missing', 'conflicting', 'guard'])
+@pytest.mark.parametrize('fill_source', ['indexed', 'historical_window', 'missing', 'conflicting', 'guard',
+    'partial_indexed', 'partial_historical'])
 def test_completion_cost_adapter_consumes_original_buy_without_changing_fact_bytes(
         tmp_path, monkeypatch, legacy, fill_source):
     from src.engine import sniper_trade_review_report as review
@@ -1911,6 +1912,10 @@ def test_completion_cost_adapter_consumes_original_buy_without_changing_fact_byt
     day = '2026-10-08'
     entry_day = '2026-10-07' if legacy and fill_source == 'indexed' else day
     item = position(1)
+    partial=fill_source.startswith('partial_')
+    if partial:
+        item['buy_legs']=[{**item['buy_legs'][0],'qty':1},
+            {**item['buy_legs'][0],'qty':1,'execution_no':'103','at':day+' 10:00:01'}]
     observed = source(tmp_path)
     official.atomic(official.source_path(tmp_path, day), observed)
     registry(tmp_path, [item])
@@ -1920,6 +1925,7 @@ def test_completion_cost_adapter_consumes_original_buy_without_changing_fact_byt
     _, events, _, _, _ = fixture()
     buy = events[0]
     buy.fields.update(id='1', order_no='11', execution_no='101')
+    if partial:buy.fields.update(fill_qty=1,order_filled_qty=1,order_remaining_qty=1,fill_quality='PARTIAL_FILL')
     sell = events[-1]
     sell.fields.update(id='1', order_no='12', execution_no='102',
         main_lifecycle_exit_qty=2, cumulative_sell_qty=2)
@@ -1931,6 +1937,7 @@ def test_completion_cost_adapter_consumes_original_buy_without_changing_fact_byt
         terminal_decision_authority='broker_sell_fill_observation_only',
         strict_completion_reasons=['source_gap_buy_fill_missing'], quantity_research_cost=old['1'],
         timeline=[dict(stage=sell.stage, timestamp=sell.timestamp, fields=sell.fields)])
+    if partial:identity['timeline'].insert(0,dict(stage=buy.stage,timestamp=buy.timestamp,fields=buy.fields))
     original, path = _quantity_completion_overlay_fixture(tmp_path, monkeypatch, identity=identity)
     original.update(rec_date=entry_day, buy_time=day+'T10:00:00+09:00', buy_qty=2, buy_price=10000)
     if legacy:
@@ -1953,9 +1960,12 @@ def test_completion_cost_adapter_consumes_original_buy_without_changing_fact_byt
         payload = dict(record_id=1, stock_code='005930', pipeline='HOLDING_PIPELINE',
             stage=buy.stage, emitted_at=day+'T10:00:00', fields=buy.fields)
         project = indexed.project
-        if fill_source == 'historical_window':
+        if fill_source in {'historical_window','partial_historical'}:
             monkeypatch.setattr(indexed, 'project', lambda ns,row:None if row.get('stage') == buy.stage else project(ns,row))
         append(tmp_path, log, payload)
+        if partial:
+            append(tmp_path,log,dict(payload,emitted_at=day+'T10:00:01',fields={**buy.fields,
+                'execution_no':'103','order_filled_qty':2,'order_remaining_qty':0,'fill_quality':'FULL_FILL'}))
         if fill_source == 'conflicting':
             append(tmp_path, log, dict(payload,fields={**buy.fields,'fill_price':10001}))
         elif fill_source == 'guard':
@@ -1969,8 +1979,13 @@ def test_completion_cost_adapter_consumes_original_buy_without_changing_fact_byt
             if self == log: pytest.fail('indexed fill caused a historical raw scan')
             return raw_open(self,*args,**kwargs)
         monkeypatch.setattr(Path, 'open', no_raw)
-    for _ in range(2):
-        cache.prepare_completion_cost_revisions(tmp_path,day,day,validate_day=policy._quantity_original_fact_generation_issue)
+    from contextlib import nullcontext
+    from src.engine.lifecycle.research_input_budget import Claim
+    # Native registry/census reservations coexist with the bounded migration.
+    # Per-date worst-case reservations used to exhaust the unchanged 64MiB cap.
+    with (Claim(52*1024*1024) if fill_source in {'historical_window','partial_historical'} else nullcontext()):
+        for _ in range(2):
+            cache.prepare_completion_cost_revisions(tmp_path,day,day,validate_day=policy._quantity_original_fact_generation_issue)
     # The second preparation must reuse native revision, not original windows.
     monkeypatch.setattr(indexed,'read_order_fill_windows',lambda *a,**kw:pytest.fail('unchanged migration repeated'),raising=False)
     cache.prepare_completion_cost_revisions(tmp_path,day,day,validate_day=policy._quantity_original_fact_generation_issue)

@@ -67,7 +67,9 @@ def test_original_buy_observations_reach_cost_producer_without_entering_trailing
         assert _gzip_file(path,dry_run=False)[0]
     generation=store.generation(tmp_path,path)
     if historical:
-        events,io=store.read_order_fill_windows(tmp_path,path,['1'],expected_generation=generation)
+        events=[]
+        io=store.read_order_fill_windows(tmp_path,path,['1'],expected_generation=generation,
+            consume=lambda payload,reference:events.append((payload,reference)))
         assert io['selected_bytes']==logical_size
     else:
         events=list(store.read_rows(tmp_path,path,kinds=['pipeline_fill_receipt'],identities=['1']))
@@ -79,7 +81,7 @@ def test_original_buy_observations_reach_cost_producer_without_entering_trailing
     physical=Path(str(path)+'.gz') if compressed else path
     physical.write_bytes(physical.read_bytes()+b'{}\n')
     with pytest.raises(ValueError,match='trailing_index_|research_buy_window_'):
-        store.read_order_fill_windows(tmp_path,path,['1'],expected_generation=generation)
+        store.read_order_fill_windows(tmp_path,path,['1'],expected_generation=generation,consume=lambda *a:None)
 
 
 @pytest.mark.parametrize("mode", ["verified_append", "strict_append", "missing_append", "rewrite"])

@@ -27,11 +27,16 @@ def registry(root, positions):
         anchor = dict(schema=REGISTRY_SCHEMA, intent_id="intent-" + item["record_id"],
             account_key="test_account", order_date=DAY, owner_type="main_scalping",
             owner_id=owner, position_id=owner, symbol=item["symbol"], side="BUY", action="NEW",
-            route=leg["route"], quantity=leg["qty"])
+            route=leg["route"], quantity=sum(part['qty'] for part in item['buy_legs']))
         events = [dict(anchor, event="INTENT_RESERVED", state="INTENT_RESERVED"),
-            dict(anchor, event="ORDER_BOUND", state="ORDER_BOUND", broker_order_no=leg["order_no"]),
-            dict(anchor, event="FILL_RECORDED", state="ORDER_BOUND", broker_order_no=leg["order_no"],
-                 execution_no=leg["execution_no"], filled_qty=leg["qty"], fill_amount=leg["qty"] * leg["price"])]
+            dict(anchor, event="ORDER_BOUND", state="ORDER_BOUND", broker_order_no=leg["order_no"])]
+        quantity=amount=0
+        for part in item['buy_legs']:
+            assert part['order_no']==leg['order_no']
+            quantity+=part['qty'];amount+=part['qty']*part['price']
+            events.append(dict(anchor,event='FILL_RECORDED',state='ORDER_BOUND',
+                broker_order_no=part['order_no'],execution_no=part['execution_no'],
+                filled_qty=quantity,fill_amount=amount))
         for row in events:
             row["previous_hash"] = previous
             row["event_hash"] = hashlib.sha256(previous.encode() + OrderOwnerRegistry._canonical(row)).hexdigest()
