@@ -529,7 +529,10 @@ finally:
                 or closure.get('digest_binding', {}).get('pid') != diagnostics['stats']['pid']):
             fail('startup_native_machine_closure_invalid')
         value = {**value, 'native_machine_closure': closure}
-    return {**value, 'native_validation_io': diagnostics,
+    return {**value, 'verification_code_root': str(execution_root),
+            'verification_code_commit': (_git(execution_root, 'rev-parse', 'HEAD')
+                if execution_root != selected_root else value.get('selected_release_commit')),
+            'native_validation_io': diagnostics,
             'native_process_lifecycle': result.native_process_lifecycle}
 
 

@@ -76,6 +76,7 @@ def test_migration_preserves_original_and_reads_only_new_suffix(tmp_path, monkey
     assert sum(row['event_count'] for row in result)==(2 if append else 1)
     assert sum(reads)==raw.stat().st_size-start
     assert Path(receipt['original_manifest_archive']).read_bytes()==original
+
     assert receipt['original_manifest_sha256']==hashlib.sha256(original).hexdigest()
     assert receipt['original_checkpoint']==json.loads(original)['checkpoint_digest']
     assert receipt['from_parser']==C.PREVIOUS_PARSER and receipt['to_parser']==C.CURRENT_PARSER
@@ -85,6 +86,25 @@ def test_migration_preserves_original_and_reads_only_new_suffix(tmp_path, monkey
     _, again=P.update_and_load_pipeline_event_summaries(**options)
     assert again['contract_migration']==receipt
     assert Path(receipt['original_manifest_archive']).read_bytes()==original
+
+
+def test_submit_terminal_successor_preserves_native_summary_callbacks_and_prefix(tmp_path):
+    import ast,subprocess
+    old=subprocess.check_output(['git','-C',str(Path(B.__file__).resolve().parents[2]),
+        'show','75e0fbbf7:src/engine/buy_funnel_sentinel.py'],text=True)
+    def definitions(source):
+        return {n.name:ast.dump(n,include_attributes=False) for n in ast.parse(source).body
+            if isinstance(n,ast.FunctionDef) and n.name in {
+                '_blocker_label_from_stage_fields','_is_ignored_event','_safe_str'}}
+    assert definitions(old)==definitions(Path(B.__file__).read_text())
+    raw,options,manifest,original,_=predecessor(tmp_path,parser_contract=C.CURRENT_PARSER,
+        buy_owner=C.PRE_TERMINAL_BUY_OWNER)
+    end=raw.stat().st_size
+    with raw.open('a') as out:out.write(json.dumps(event(2))+'\n')
+    rows,meta=P.update_and_load_pipeline_event_summaries(**options)
+    assert meta['start_raw_offset']==end and meta['rebuilt'] is False
+    assert sum(r['event_count'] for r in rows)==2
+    assert Path(meta['contract_migration']['original_manifest_archive']).read_bytes()==original
 
 
 @pytest.mark.parametrize('change,reason', [

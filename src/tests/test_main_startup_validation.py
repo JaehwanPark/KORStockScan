@@ -156,6 +156,7 @@ def test_consumed_native_preopen_uses_candidate_only_in_exact_predecessor_scope(
     from src.engine.automation import intraday_release_handoff as H
     code,data=native_preparation_cli;selected=code.parent/'native-selected'
     monkeypatch.setattr(validation,'ROOT',code)
+    monkeypatch.setattr(validation,'_git',lambda *a:'a'*40)
     monkeypatch.setattr(H,'closed_consumption_observation',lambda day: (_ for _ in ()).throw(ValueError('live')))
     monkeypatch.setattr(H,'_read',lambda path:dict(actual_pid_receipt=dict(pid=123)))
     monkeypatch.setattr(H,'verify_predecessor_consumption',lambda *a,**kw:dict(status='pass',

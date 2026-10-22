@@ -540,6 +540,18 @@ def _delay_contract_paths(raw):
     return list(paths)
 
 
+def _native_verifier_code(proof):
+    """Keep actual native verifier code distinct from consumed policy origin."""
+    native=proof['native_verification']
+    root=native.get('verification_code_root',proof['selected_release_root'])
+    commit=native.get('verification_code_commit',proof['selected_release_commit'])
+    allowed={(proof['selected_release_root'],proof['selected_release_commit']),
+             (proof['execution_release_root'],proof['execution_release_commit'])}
+    if (root,commit) not in allowed or Path(root).resolve(strict=True)!=Path(root):
+        raise ValueError('startup_native_verifier_code_identity_invalid')
+    return Path(root),commit
+
+
 def _attest_delay_inventory(selected, commit, records, sources):
     """Parent-only exact Git origin; the child consumes no Git subprocess."""
     import subprocess
@@ -861,7 +873,10 @@ def bind_main_preparation(root, commit, data_root, intake):
         for ref in item['artifacts'].values():
             if sources.setdefault(ref['path'], ref['sha256']) != ref['sha256']:
                 raise ValueError('startup_delay_native_source_conflict')
-    delay_inventory = _attest_delay_inventory(selected, original_commit,
+    native_root,native_commit=_native_verifier_code(dict(native_verification=native,
+        selected_release_root=str(selected),selected_release_commit=original_commit,
+        execution_release_root=str(root),execution_release_commit=commit))
+    delay_inventory = _attest_delay_inventory(native_root, native_commit,
         closure.get('delay_selections', {}), sources)
     proof = dict(schema=MAIN_PROOF_SCHEMA, target_date=day, policy_path=str(policy),
         policy_sha256=bundle['bundle_sha256'], policy_file_sha256=_sha(policy),
@@ -1260,13 +1275,13 @@ def _delay_selection_records(proof):
         raise ValueError('startup_delay_selection_closure_invalid')
     origin = proof.get('delay_inventory_git_attestation')
     if records:
-        selected = Path(proof['selected_release_root'])
+        selected, native_commit = _native_verifier_code(proof)
         declaration = selected/_DELAY_CONTRACT_OWNER
         if (not isinstance(origin, dict) or origin.get('schema') != 'startup_delay_native_inventory_git_v1'
-                or origin.get('origin_commit') != proof['selected_release_commit']
+                or origin.get('origin_commit') != native_commit
                 or origin.get('selected_release_root') != str(selected)
                 or selected.resolve(strict=True) != selected
-                or _git_head(selected) != proof['selected_release_commit']
+                or _git_head(selected) != native_commit
                 or origin.get('declaration_path') != str(declaration)
                 or declaration.resolve(strict=True) != declaration
                 or _sha(declaration) != origin.get('declaration_sha256')
@@ -1316,7 +1331,7 @@ def _delay_selection_records(proof):
                 or _digest(inventory) != item.get('native_code_sha256')):
             raise ValueError('startup_delay_native_code_inventory_invalid')
         for relative, expected in inventory.items():
-            path = Path(proof['selected_release_root']) / relative
+            path = selected / relative
             if (path.resolve(strict=True) != path or not _hex(expected)
                     or proof['source_hashes'].get(str(path)) != expected or _sha(path) != expected):
                 raise ValueError('startup_delay_native_code_changed')

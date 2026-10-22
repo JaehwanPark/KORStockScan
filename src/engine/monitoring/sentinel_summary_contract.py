@@ -29,7 +29,8 @@ PREVIOUS_BUY_OWNER = '83d8b3d9e41f496e7f868789d635472fd5ebd994489f3db31bbb1f6705
 INTERMEDIATE_BUY_OWNER = 'd487b4041fff24f690f78bef9bbfea1bdbf6dedd59c70095585b23e9fe1005e7'
 PRE_SCOPED_BUY_OWNER = '332ffe2791e389741af907e3fa304352a0abea01e222053a20bff2ba2de7400b'
 PRE_LIQUIDITY_BUY_OWNER = '6c41ee5823caa738bdc40c6da07e8b5fe4714976a9efc7668e90dac33a325993'
-CURRENT_BUY_OWNER = '4918513346f28c8908b0fe18085663ef662ba2dc03349b4b7822ff1656b908d1'
+PRE_TERMINAL_BUY_OWNER = '4918513346f28c8908b0fe18085663ef662ba2dc03349b4b7822ff1656b908d1'
+CURRENT_BUY_OWNER = 'b1836d21a079e7164d3c04629b1bb83e5f9475dda917c34b97802c2e2e3a95b7'
 LIMIT = 32 * 1024 * 1024
 SUMMARY_LIMIT = 128 * 1024 * 1024
 DEFINITIONS = {
@@ -110,6 +111,7 @@ def _callback_predecessors(callbacks, parser_path):
     _parser_dependencies(parser)
     original, parser_only, funnel_old, funnel_intermediate, base_parser = [], [], [], [], []
     pre_recheck_parser, funnel_pre_scoped, pre_read_reuse_parser, funnel_pre_liquidity = [], [], [], []
+    funnel_pre_terminal = []
     funnel = tuple(getattr(f, '__name__', None) for f in callbacks) == (
         '_blocker_label_from_stage_fields', '_is_ignored_event')
     for callback in callbacks:
@@ -141,6 +143,7 @@ def _callback_predecessors(callbacks, parser_path):
         funnel_intermediate.extend((source, INTERMEDIATE_BUY_OWNER if funnel else prior_owner))
         funnel_pre_scoped.extend((source, PRE_SCOPED_BUY_OWNER if funnel else prior_owner))
         funnel_pre_liquidity.extend((source, PRE_LIQUIDITY_BUY_OWNER if funnel else prior_owner))
+        funnel_pre_terminal.extend((source, PRE_TERMINAL_BUY_OWNER if funnel else prior_owner))
     digest = lambda parts: hashlib.sha256('\n'.join(parts).encode()).hexdigest()
     if funnel:
         # These are reviewed parser/owner pairs, not independent allowlists.
@@ -155,6 +158,7 @@ def _callback_predecessors(callbacks, parser_path):
             (BASE_PARSER, digest(funnel_pre_scoped)),
             (PRE_READ_REUSE_PARSER, digest(funnel_pre_liquidity)),
             (CURRENT_PARSER, digest(funnel_pre_liquidity)),
+            (CURRENT_PARSER, digest(funnel_pre_terminal)),
         }
     else:
         # Preserve the existing parser-only migration for unchanged external

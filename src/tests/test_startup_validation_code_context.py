@@ -827,6 +827,24 @@ def test_delay_inventory_attests_exact_origin_declaration_not_current_keys(delay
     assert sources == {str(case['root']/path): sha for path, sha in case['inventory'].items()}
 
 
+@pytest.mark.parametrize('damage',[None,'foreign','mixed_commit'])
+def test_candidate_native_delay_inventory_keeps_original_policy_origin_separate(delay_contract_origins,damage):
+    old,new=delay_contract_origins['original'],delay_contract_origins['current']
+    proof=dict(selected_release_root=str(old['root']),selected_release_commit=old['commit'],
+        execution_release_root=str(new['root']),execution_release_commit=new['commit'],
+        native_verification=dict(verification_code_root=str(new['root']),verification_code_commit=new['commit']))
+    if damage=='foreign':proof['native_verification']['verification_code_root']=str(new['root'].parent)
+    if damage=='mixed_commit':proof['native_verification']['verification_code_commit']=old['commit']
+    if damage:
+        with pytest.raises(ValueError,match='native_verifier_code_identity'):C._native_verifier_code(proof)
+    else:
+        root,commit=C._native_verifier_code(proof)
+        assert root==new['root'] and commit==new['commit']
+        with pytest.raises(ValueError,match='native_code_inventory'):
+            C._attest_delay_inventory(old['root'],old['commit'],new['records'],{})
+        assert C._attest_delay_inventory(root,commit,new['records'],{})['code_hashes']==new['inventory']
+
+
 @pytest.mark.parametrize('damage', ['missing', 'extra', 'digest', 'mixed_old_new',
                                    'mixed_new_old', 'origin_commit', 'source_conflict'])
 def test_delay_inventory_rejects_unknown_or_mixed_origin(delay_contract_origins, damage):
