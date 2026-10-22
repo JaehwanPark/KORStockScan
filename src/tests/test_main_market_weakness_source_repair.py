@@ -2908,10 +2908,11 @@ def test_missing_historical_reader_proof_is_distinct_from_price_source_loss(tmp_
     assert counts['outcome_U_reason_native_label_source_contract_missing'] == 1
 
 
-def test_latest_progress_resumes_after_backlog_using_actual_committed_label_index(tmp_path,monkeypatch):
+@pytest.mark.parametrize('offset',[0,[0,0]])
+def test_latest_progress_resumes_after_backlog_using_actual_committed_label_index(tmp_path,monkeypatch,offset):
     days=[(datetime.fromisoformat(DAY)-timedelta(days=n)).date().isoformat() for n in (3,2,1,0)]
     root=A.namespace(tmp_path);parts=[A.write_partition(root,[dict(row(identity=name,origin='confirmation_replay'),auxiliary_hash=None)]) for name in ('a','b')]
-    cursor=dict(source_date=DAY,status='in_progress',generation='a'*64,source_index=3,offset=0,partitions=parts,native_indexed_rows=0)
+    cursor=dict(source_date=DAY,status='in_progress',generation='a'*64,source_index=3,offset=offset,partitions=parts,native_indexed_rows=0)
     A.atomic(root/DAY/'cursor.json',cursor)
     monkeypatch.setattr(A,'cursor_current',lambda data,c:c.get('source_date')==DAY)
     choose=lambda:A.select_source_date(tmp_path,days,night=DAY,check_preflight=lambda:None)
@@ -2949,7 +2950,7 @@ def test_latest_resume_rejects_invalid_or_unchanged_generation_progress(tmp_path
     if damage=='index_alias':assert target.read_bytes()==b'unchanged' and path.is_symlink()
 
 
-@pytest.mark.parametrize('bad',[[],dict(generation='unknown',position=[0]*5),dict(generation='a'*64,position=[True]*5),dict(generation='a'*64,position=[0])])
+@pytest.mark.parametrize('bad',[[],dict(generation='unknown',position=[0]*5),dict(generation='a'*64,position=[True]*6),dict(generation='a'*64,position=[0])])
 def test_latest_progress_rejects_malformed_sealed_checkpoint_without_replacing_it(tmp_path,monkeypatch,bad):
     root=A.namespace(tmp_path);path=root/'schedule_cursor.json'
     A.atomic(path,R.seal(dict(latest_checkpoint_before=bad,latest_priority_night=DAY,latest_priority_date=DAY)))

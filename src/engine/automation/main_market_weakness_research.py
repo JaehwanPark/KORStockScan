@@ -3412,7 +3412,13 @@ def select_source_date(data_root, dates, *, night, check_preflight):
                 or not re.fullmatch("[0-9a-f]{64}", generation)
                 or not cursor_current(data_root, cursor)):
             return None
-        position = [cursor.get("source_index", 0), cursor.get("offset", 0),
+        offset = cursor.get("offset", 0)
+        # Native byte offsets and replay [partition, row] offsets are distinct
+        # producer shapes. Normalize their order without discarding progress.
+        offset = [0, offset] if type(offset) is int else offset
+        if not isinstance(offset, list) or len(offset) != 2:
+            return None
+        position = [cursor.get("source_index", 0), *offset,
                     len(cursor.get("partitions", [])), cursor.get("native_indexed_rows", 0)]
         if any(type(value) is not int or value < 0 for value in position):
             return None
@@ -3435,7 +3441,7 @@ def select_source_date(data_root, dates, *, night, check_preflight):
             or not isinstance(before.get("generation"), str)
             or not re.fullmatch("[0-9a-f]{64}", before["generation"])
             or not isinstance(before.get("position"), list)
-            or len(before["position"]) != 5
+            or len(before["position"]) != 6
             or any(type(value) is not int or value < 0 for value in before["position"])):
         raise ValueError("source_rotation_checkpoint_invalid")
     advanced = False
