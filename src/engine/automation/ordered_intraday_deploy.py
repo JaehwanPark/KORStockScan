@@ -358,7 +358,8 @@ def stopped_preparation_failure_sources(failed, failed_path):
     sources = {}
     known = phase_error in {
         ('selected', '[Errno 11] Resource temporarily unavailable'),
-        ('prepared', 'tuple indices must be integers or slices, not str')}
+        ('prepared', 'tuple indices must be integers or slices, not str'),
+        ('prepared', 'deployment_selection_changed')}
     if not known and phase_error[0] == 'prepared':
         # Legacy embedding stored repr(result) rather than a short error. Bind
         # that immutable failure to its actual native final; never infer PASS.
@@ -405,7 +406,7 @@ def stopped_preparation_failure_sources(failed, failed_path):
     return sources
 
 
-def execute(driver):
+def execute(driver, *, validate_prepared=None):
     """Order is deliberate: no selection or shared document write before drain."""
     try:
         driver.preflight()
@@ -415,6 +416,8 @@ def execute(driver):
                 driver.drain()
                 driver.publish()
                 driver.prepare()
+            if validate_prepared is not None:
+                validate_prepared(driver)
             driver.start()
             return driver.attest()
     except BaseException as exc:
@@ -1077,7 +1080,7 @@ class Deployment:
 
 def _stopped_intraday_predecessor(day, previous, previous_commit, identity, failed_path, *, _depth=0):
     """Recheck the genuine same-day consumption, without inventing a native PID."""
-    if _depth > 2:
+    if _depth > 3:
         raise ValueError('deployment_stopped_predecessor_ancestry_invalid')
     proof_path = Path(failed_path).with_name('preflight-intraday_release_handoff.log')
     if not proof_path.exists():
@@ -1085,7 +1088,7 @@ def _stopped_intraday_predecessor(day, previous, previous_commit, identity, fail
         parent = failed.get('failed_hold_adoption') or {}
         origin = Path(parent.get('failed_transition_path') or '')
         expected = Path(failed_path).parent.parent/(parent.get('failed_selected_commit') or '')/'status.json'
-        if (_depth >= 2 or origin != expected or origin == Path(failed_path)
+        if (_depth >= 3 or origin != expected or origin == Path(failed_path)
                 or not parent.get('intraday_predecessor_proof_sha256')
                 or parent.get('transfer_status') != 'transferred_exact_owned_hold'):
             raise ValueError('deployment_stopped_predecessor_ancestry_invalid')

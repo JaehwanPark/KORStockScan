@@ -148,7 +148,7 @@ def _assert_detector_lock_held(workspace):
             fcntl.flock(other, fcntl.LOCK_EX | fcntl.LOCK_NB)
 
 
-@pytest.mark.parametrize('chain',[False,True,'two'])
+@pytest.mark.parametrize('chain',[False,True,'two','three'])
 @pytest.mark.parametrize('damage', [None, 'proof_pid', 'proof_basis', 'consumed', 'handoff', 'policy', 'preopen', 'manifest','parent_hash','parent_path','parent_proof','depth'])
 def test_stopped_intraday_recovery_requires_original_consumption_and_every_frozen_byte(tmp_path, monkeypatch, damage,chain):
     if not chain and damage in ('parent_hash','parent_path','parent_proof','depth'):return
@@ -189,16 +189,23 @@ def test_stopped_intraday_recovery_requires_original_consumption_and_every_froze
         if damage=='parent_hash':parent['failed_transition_sha256']='0'*64
         if damage=='parent_path':parent['failed_transition_path']=str(tmp_path/'foreign.json')
         if damage=='parent_proof':parent['intraday_predecessor_proof_sha256']='0'*64
-        if damage=='depth':depth=2
+        if damage=='depth':depth=3
         failed_path=tmp_path/('c'*40)/'status.json';failed_path.parent.mkdir()
         failed_path.write_bytes(D._json_bytes(dict(failed_hold_adoption=parent,predecessor_identity=identity,
             previous_commit=commit,candidate_commit='c'*40)))
-        if chain=='two':
+        if chain in ('two','three'):
             parent=dict(failed_transition_path=str(failed_path),failed_selected_commit='c'*40,
                 failed_transition_sha256=D.H._sha(failed_path),intraday_predecessor_proof_sha256=D.H._sha(proof_path),
                 transfer_status='transferred_exact_owned_hold')
             failed_path=tmp_path/('d'*40)/'status.json';failed_path.parent.mkdir()
-            failed_path.write_bytes(D._json_bytes(dict(failed_hold_adoption=parent)))
+            failed_path.write_bytes(D._json_bytes(dict(failed_hold_adoption=parent,predecessor_identity=identity,
+                previous_commit=commit,candidate_commit='d'*40)))
+            if chain=='three':
+                parent=dict(failed_transition_path=str(failed_path),failed_selected_commit='d'*40,
+                    failed_transition_sha256=D.H._sha(failed_path),intraday_predecessor_proof_sha256=D.H._sha(proof_path),
+                    transfer_status='transferred_exact_owned_hold')
+                failed_path=tmp_path/('e'*40)/'status.json';failed_path.parent.mkdir()
+                failed_path.write_bytes(D._json_bytes(dict(failed_hold_adoption=parent)))
     monkeypatch.setattr(D.H,'_paths',lambda *a:(handoff_path,consumed_path))
     monkeypatch.setattr(D.H,'_preopen_path',lambda *a:preopen)
     monkeypatch.setattr(D.H.bootstrap,'manifest_path',lambda *a:manifest)
@@ -1508,13 +1515,13 @@ def test_execute_reserves_sentinel_before_drain_releases_before_start(tmp_path,f
         fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
 
 
-@pytest.mark.parametrize('prepared',[False,True])
+@pytest.mark.parametrize('prepared',[False,True,'published_comparison'])
 @pytest.mark.parametrize('damage',[None,'missing','status','date','pid','changed_after_preflight','window','summary'])
 def test_stopped_lock_recovery_requires_all_native_preparations(stopped_recovery,damage,prepared):
     d,path,_=stopped_recovery;value=D.H._read(path)
     value['error']='[Errno 11] Resource temporarily unavailable'
     if prepared:
-        value.update(failed_phase='prepared',error='tuple indices must be integers or slices, not str',
+        value.update(failed_phase='prepared',error=('deployment_selection_changed' if prepared=='published_comparison' else 'tuple indices must be integers or slices, not str'),
             sentinel_source_window=dict(schema='sentinel_source_window_preparation_v1',target_date=d.day,runtime_effect=False),
             sentinel_summary=dict(status='ok',runtime_effect=False))
     if damage in ('window','summary'):
@@ -1577,3 +1584,28 @@ def test_stopped_prestart_failure_is_bound_to_original_native_p5(stopped_recover
             native.write_bytes(native.read_bytes()+b' ')
             with pytest.raises(ValueError,match='generation_changed'):d.acquire_hold()
     assert original==(path.read_bytes(),d.hold.read_bytes())
+
+
+@pytest.mark.parametrize('reject',[False,True])
+def test_execute_owns_start_after_prepared_validation(tmp_path,monkeypatch,reject):
+    from contextlib import nullcontext
+    calls=[]
+    monkeypatch.setattr(D,'_source_database_epoch',lambda *a:nullcontext())
+    monkeypatch.setattr(D,'sentinel_preparation_lock',lambda *a:nullcontext())
+    class Driver:
+        workspace=tmp_path;day='2026-10-22'
+        def __getattr__(self,name):
+            def step(*args):
+                calls.append(name)
+                if name=='attest':return {'status':'pass'}
+            return step
+    def validate(driver):
+        assert calls==['preflight','acquire_hold','drain','publish','prepare']
+        calls.append('validate_prepared')
+        if reject:raise ValueError('native P5 failed')
+    if reject:
+        with pytest.raises(ValueError,match='native P5 failed'):D.execute(Driver(),validate_prepared=validate)
+        assert calls[-1]=='fail' and 'start' not in calls
+    else:
+        assert D.execute(Driver(),validate_prepared=validate)=={'status':'pass'}
+        assert calls[-3:]==['validate_prepared','start','attest']
