@@ -179,7 +179,7 @@ def _native_preparation_check(selected_root, target_date, source_date, capture_m
     if capture_machine is not False and (not isinstance(capture_machine, str)
             or re.fullmatch('[0-9a-f]{32}', capture_machine) is None):
         raise ValueError('startup_native_preparation_run_id_invalid')
-    execution_root, closed = selected_root, False
+    execution_root, closed, native_pid = selected_root, False, None
     if ROOT != selected_root:
         from src.engine.automation import intraday_release_handoff as H
         try:
@@ -194,6 +194,17 @@ def _native_preparation_check(selected_root, target_date, source_date, capture_m
             R.validate_release(workspace, dict(schema='runtime_release_selection_v1', workspace=str(workspace),
                 release_root=str(ROOT), git_commit=_git(ROOT, 'rev-parse', 'HEAD')))
             execution_root, closed = ROOT, True
+        if not closed:
+            try:
+                selection = H._read(H.DATA_DIR/'runtime/runtime_release_selection.json')
+                live_pid = (selection.get('actual_pid_receipt') or {}).get('pid')
+                proof = H.verify_predecessor_consumption(target_date, pid=live_pid)
+                if (proof.get('status') == 'pass' and proof.get('basis') == 'native_preopen'
+                        and proof.get('actual_pid_consumed') is True
+                        and proof.get('release_root') == str(selected_root)):
+                    execution_root, native_pid = ROOT, live_pid
+            except (OSError, ValueError, TypeError, KeyError):
+                pass
     # The selected CLI still performs its full current-contract verification.
     # Reuse only digests already read in this one child; the existing postclose
     # context neither loads nor writes a persistent cache and clears on exit.
@@ -202,7 +213,9 @@ def _native_preparation_check(selected_root, target_date, source_date, capture_m
 sys.path.insert(0,sys.argv.pop(1))
 source_date=sys.argv.pop(1)
 run_id=sys.argv.pop(1)
-closed=sys.argv.pop(1)=='1'
+mode=sys.argv.pop(1)
+closed=mode=='1'
+native_pid=int(mode.split(':',1)[1]) if mode.startswith('native:') else None
 capture=run_id!='0'
 from src.engine.infrastructure.validation_digest_session import postclose_session
 from src.utils.constants import DATA_DIR
@@ -406,7 +419,11 @@ try:
             from contextlib import nullcontext
             if closed:
                 from src.engine.automation.intraday_release_handoff import closed_predecessor_review
-            with closed_predecessor_review(sys.argv[-1]) if closed else nullcontext():
+            if native_pid is not None:
+                from src.engine.automation.intraday_release_handoff import predecessor_review
+            scope = (closed_predecessor_review(sys.argv[-1]) if closed else
+                predecessor_review(sys.argv[-1],pid=native_pid) if native_pid is not None else nullcontext())
+            with scope:
                 runpy.run_module('src.engine.automation.next_preopen_readiness',run_name='__main__')
         finally:
             if capture:
@@ -421,7 +438,7 @@ finally:
             stats=session.stats,remaining_entries=len(session.entries)),sort_keys=True),file=sys.stderr)
 '''
     command = [str(execution_root / '.venv/bin/python'), '-I', '-B', '-c',
-               script, str(execution_root), source_date, capture_machine or '0', str(int(closed)), '--verify',
+               script, str(execution_root), source_date, capture_machine or '0', 'native:'+str(native_pid) if native_pid is not None else str(int(closed)), '--verify',
                '--target-date', target_date]
     env = _safe_process_environment()
     diagnostic_receipt = dict(source_date=source_date, target_date=target_date,

@@ -4186,7 +4186,9 @@ REVIEWED_POSTCLOSE_RECOVERY_DEPENDENCY_VARIANTS = {
 # member requires the complete predecessor plus the exact integrated sources.
 # Review: postclose-root-cause-recovery-review-2026-10-19.md.
 REVIEWED_ENTRY_COST_HASHES = {'src/engine/ai_engine_openai.py': '3463333df619b52d896ea02779647fa48adf6ae29a45713de80cf31c213806c7',
+ 'src/engine/automation/main_startup_validation.py': 'f06cb819017a70e436ab8a3b60a5ce32539000344b69c844c9cc9b39e1a7a949',
  'src/engine/automation/main_trailing_source_store.py': '9605fcdc48f11e3c92a1ddaa7846a2f5d725e6d9518d658095235e3c435fb520',
+ 'src/engine/automation/next_preopen_readiness.py': '7a7e5f878931007ecd8e5f6eab655fcc548c8ec97b1ec560cf702281d6618f85',
  'src/engine/automation/policy_generation_fixture_validation.py': '28ec0362fddac74b6a1ad9230b4729879faccdf1e67ab9245e27eae5c4b45331',
  'src/engine/buy_funnel_sentinel.py': 'b1836d21a079e7164d3c04629b1bb83e5f9475dda917c34b97802c2e2e3a95b7',
  'src/engine/lifecycle/broker_cost_allocation.py': '404a1fb1f49683eba1e0443b74758cda11fd8b62452e49f229808b7e5769afae',
@@ -4204,10 +4206,16 @@ REVIEWED_ENTRY_COST_PAIRS = {'src/engine/ai_engine_openai.py': (('4a70967c006a6d
                                      '3463333df619b52d896ea02779647fa48adf6ae29a45713de80cf31c213806c7'),
                                     ('bdcf09bf1f19e4cb649c01105c7aa363b04bddcb8749793a8f701cc06cc8d185',
                                      '3463333df619b52d896ea02779647fa48adf6ae29a45713de80cf31c213806c7')),
+ 'src/engine/automation/main_startup_validation.py': (('b6bd145a6b7b1508a81667d35932dc802b3f1c4123df75ddf991738daea34d54',
+                                                       'f06cb819017a70e436ab8a3b60a5ce32539000344b69c844c9cc9b39e1a7a949'),
+                                                      ('399ee38f0d22991d9761e5d301f8bc6af15b53fe2a8ba582cbc0435bd62daa67',
+                                                       'f06cb819017a70e436ab8a3b60a5ce32539000344b69c844c9cc9b39e1a7a949')),
  'src/engine/automation/main_trailing_source_store.py': (('e9f596c589348c1090c54eb971ede6497f20d2ccb1a0fb45340b05797fd1e2b8',
                                                           '9605fcdc48f11e3c92a1ddaa7846a2f5d725e6d9518d658095235e3c435fb520'),
                                                          ('aca2d7dda4c8eda53f6634a73b133090e73c511cc62973584f31633245edd850',
                                                           '9605fcdc48f11e3c92a1ddaa7846a2f5d725e6d9518d658095235e3c435fb520')),
+ 'src/engine/automation/next_preopen_readiness.py': (('c7ba75db4fedb705bdbfc4b7c2bdd39ac527b44b111d33c9639e911adaded88e',
+                                                      '7a7e5f878931007ecd8e5f6eab655fcc548c8ec97b1ec560cf702281d6618f85'),),
  'src/engine/automation/policy_generation_fixture_validation.py': (('88e251b6268e1814ad2e1ff6882381edb5c733973de72ad1b377ec3335cde058',
                                                                     '28ec0362fddac74b6a1ad9230b4729879faccdf1e67ab9245e27eae5c4b45331'),
                                                                    ('64d9ceffad22ca5e4875fcbfd497ab450a908e427c190af5f4f109ffec6daf83',
@@ -5291,13 +5299,9 @@ def _verify_consumed_handoff(day, commit, *, now=None):
         return dict(status='fail', findings=[str(exc)], target_date=day, actual_pid_consumed=False)
 
 
-def verify_predecessor_consumption(day, *, pid):
-    """Candidate's full read-only revalidation before an ordered cutover.
-
-    The candidate must be immutable, and every affected policy consumer must
-    pass its exact reviewed source-pair gate. This does not attest candidate
-    consumption or change the selector, checklist, policy or predecessor.
-    """
+@contextmanager
+def predecessor_review(day, *, pid):
+    """Read-only exact live predecessor scope for a clean candidate validator."""
     from src.engine.infrastructure import runtime_release_router as router
     root, commit = _selection(require_selected_cwd=False)
     candidate = Path(__file__).resolve().parents[3]
@@ -5307,16 +5311,26 @@ def verify_predecessor_consumption(day, *, pid):
     if root == candidate:
         raise ValueError('intraday_predecessor_candidate_already_selected')
     identity = _identity(pid)
-    token = _PREDECESSOR_REVIEW.set(dict(day=day, root=root, commit=commit,
-        code_root=candidate, code_commit=candidate_commit, identity=identity))
+    review = dict(day=day, root=root, commit=commit,
+        code_root=candidate, code_commit=candidate_commit, identity=identity)
+    token = _PREDECESSOR_REVIEW.set(review)
     try:
-        result = verify_pid_consumption(day, pid=pid)
-        if result.get('status') == 'pass':
-            result.update(verification_code_root=str(candidate), verification_code_commit=candidate_commit,
-                          candidate_pid_consumed=False, runtime_effect=False)
-        return result
+        yield review
+        if _identity(pid) != identity or _selection(require_selected_cwd=False) != (root, commit):
+            raise ValueError('intraday_predecessor_review_generation_changed')
     finally:
         _PREDECESSOR_REVIEW.reset(token)
+
+
+def verify_predecessor_consumption(day, *, pid):
+    """Fully revalidate the live predecessor without selecting or consuming code."""
+    with predecessor_review(day, pid=pid) as review:
+        result = verify_pid_consumption(day, pid=pid)
+        if result.get('status') == 'pass':
+            result.update(verification_code_root=str(review['code_root']),
+                          verification_code_commit=review['code_commit'],
+                          candidate_pid_consumed=False, runtime_effect=False)
+        return result
 
 
 def consume(day, *, pid, now=None):

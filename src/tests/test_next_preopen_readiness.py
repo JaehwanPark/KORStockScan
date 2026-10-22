@@ -264,6 +264,29 @@ def test_prepare_isolated_then_detects_source_and_release_drift(monkeypatch, tmp
     midnight = datetime(2026, 10, 2, 0, 36, tzinfo=KST)
     assert readiness.prepare(source, target_date=target, now=midnight)["status"] == "prepared_verified"
     assert readiness.verify_prepared(target, require_today=True, now=midnight)["status"] == "pass"
+    from src.engine.automation import intraday_release_handoff as handoff
+    original_selection=selection.read_bytes()
+    with monkeypatch.context() as consumed:
+        _json(selection,dict(git_commit='a'*40,actual_pid_consumed=True,
+            actual_pid_receipt=dict(pid=123)))
+        consumed.setattr(handoff,'_paths',lambda *a:(tmp_path/'no-intraday',tmp_path/'no-consumed'))
+        proof=dict(status='pass',basis='native_preopen',actual_pid_consumed=True,
+            selected_release_commit='a'*40,pid_identity=dict(pid=123,start_ticks='10'))
+        consumed.setattr(handoff,'verify_pid_consumption',lambda *a,**kw:proof.copy())
+        snapshot=tmp_path/'original-checklist.md';snapshot.write_text('original sealed checklist')
+        consumed.setattr(handoff,'preserve_checklist',lambda day:dict(path=str(snapshot),source_date=source))
+        checked=readiness.verify_prepared(target,now=midnight)
+        assert checked['status']=='pass' and checked['handoff_basis']=='native_consumed_preopen_preserved_generation'
+        assert checked['actual_pid_consumed'] is False and checked['runtime_effect'] is False
+        consumed.setattr(handoff,'verify_pid_consumption',lambda *a,**kw:dict(proof,status='fail'))
+        assert readiness.verify_prepared(target,now=midnight)['status']=='fail'
+        calls=[]
+        def changed(*a,**kw):
+            calls.append(True)
+            return dict(proof,pid_identity=dict(pid=123,start_ticks='10' if len(calls)==1 else '11'))
+        consumed.setattr(handoff,'verify_pid_consumption',changed)
+        assert readiness.verify_prepared(target,now=midnight)['status']=='fail'
+    selection.write_bytes(original_selection)
     with monkeypatch.context() as bounded:
         bounded.setattr(readiness.bootstrap, "INITIAL_QUANTITY_CURRENT", tmp_path / "quantity-absent.json")
         bounded.setattr(readiness.bootstrap, "verify_bootstrap", lambda *a, **kw: (_ for _ in ()).throw(

@@ -523,20 +523,36 @@ def verify_prepared(target_date: str, *, require_today: bool = False,
         release_changed = (receipt["selected_release_commit"] != commit
                            or receipt["selection_sha256"] != _sha(selection_path))
         expected_source = receipt
+        snapshot = None
         if release_changed:
-            from src.engine.automation.intraday_release_handoff import verify as verify_intraday
-            handoff = verify_intraday(target_date, commit, now=now)
-            preserved = handoff.get("handoff") or {}
-            if (handoff["status"] != "pass" or preserved.get("prepared_receipt_path") != str(receipt_path)
-                    or preserved.get("prepared_receipt_sha256") != _sha(receipt_path)):
-                raise ValueError("prepared_source_or_release_changed")
-            handoff_basis = "intraday_preserved_preopen_generation"
-            reseal = preserved.get('postclose_source_reseal')
-            if reseal is not None:
-                expected_source = reseal['current_source_receipts']
-                handoff_basis = 'intraday_preserved_preopen_generation_current_postclose_resealed'
-        snapshot = ((preserved.get('postclose_source_reseal') or {}).get('historical_checklist')
-                    if release_changed else None)
+            from src.engine.automation import intraday_release_handoff as H
+            selection = _read(selection_path)
+            native_pid = (selection.get('actual_pid_receipt') or {}).get('pid')
+            native = (receipt['selected_release_commit'] == commit
+                and selection.get('actual_pid_consumed') is True
+                and not H._paths(target_date, commit)[0].exists())
+            if native:
+                checked = H.verify_pid_consumption(target_date, pid=native_pid, now=now)
+                if (checked.get('status') != 'pass' or checked.get('basis') != 'native_preopen'
+                        or checked.get('actual_pid_consumed') is not True
+                        or checked.get('selected_release_commit') != commit):
+                    raise ValueError('prepared_native_consumption_unverified')
+                snapshot = H.preserve_checklist(target_date)
+                if snapshot['source_date'] != receipt['source_date']:
+                    raise ValueError('prepared_native_source_date_changed')
+                handoff_basis = 'native_consumed_preopen_preserved_generation'
+            else:
+                handoff = H.verify(target_date, commit, now=now)
+                preserved = handoff.get('handoff') or {}
+                if (handoff['status'] != 'pass' or preserved.get('prepared_receipt_path') != str(receipt_path)
+                        or preserved.get('prepared_receipt_sha256') != _sha(receipt_path)):
+                    raise ValueError('prepared_source_or_release_changed')
+                handoff_basis = 'intraday_preserved_preopen_generation'
+                reseal = preserved.get('postclose_source_reseal')
+                if reseal is not None:
+                    expected_source = reseal['current_source_receipts']
+                    handoff_basis = 'intraday_preserved_preopen_generation_current_postclose_resealed'
+                snapshot = (preserved.get('postclose_source_reseal') or {}).get('historical_checklist')
         source = _source_receipts(receipt["source_date"], target_date,
             **({"generation_only": True} if generation_only or snapshot else {}),
             **({"checklist_snapshot": Path(snapshot['path'])} if snapshot else {}))
@@ -589,6 +605,10 @@ def verify_prepared(target_date: str, *, require_today: bool = False,
         if (check.get("status") != "pass"
                 or check.get("manifest_sha256") != receipt["manifest_content_sha256"]):
             raise ValueError("prepared_bootstrap_changed:" + ",".join(check.get("findings") or []))
+        if handoff_basis == 'native_consumed_preopen_preserved_generation':
+            if (H.verify_pid_consumption(target_date, pid=native_pid, now=now) != checked
+                    or _read(selection_path) != selection):
+                raise ValueError('prepared_native_consumption_changed')
     except (OSError, ValueError, KeyError, TypeError, subprocess.CalledProcessError) as exc:
         findings.append(str(exc))
         receipt = {}

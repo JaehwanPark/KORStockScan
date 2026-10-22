@@ -152,6 +152,22 @@ def test_invalid_closed_origin_cannot_choose_candidate_native_reader(native_prep
         validation._native_preparation_check(selected,DAY,'2026-10-16')
 
 
+def test_consumed_native_preopen_uses_candidate_only_in_exact_predecessor_scope(native_preparation_cli,monkeypatch):
+    from src.engine.automation import intraday_release_handoff as H
+    code,data=native_preparation_cli;selected=code.parent/'native-selected'
+    monkeypatch.setattr(validation,'ROOT',code)
+    monkeypatch.setattr(H,'closed_consumption_observation',lambda day: (_ for _ in ()).throw(ValueError('live')))
+    monkeypatch.setattr(H,'_read',lambda path:dict(actual_pid_receipt=dict(pid=123)))
+    monkeypatch.setattr(H,'verify_predecessor_consumption',lambda *a,**kw:dict(status='pass',
+        basis='native_preopen',actual_pid_consumed=True,release_root=str(selected)))
+    (code/'src/engine/automation/intraday_release_handoff.py').write_text(
+        'from contextlib import contextmanager\n@contextmanager\ndef predecessor_review(day,*,pid):\n'
+        f'    assert day=={DAY!r} and pid==123\n    yield\n')
+    result=validation._native_preparation_check(selected,DAY,'2026-10-16')
+    assert result['status']=='pass' and result['native_process_lifecycle']['child_terminated'] is True
+    assert result['actual_pid_consumed'] is False
+
+
 def test_native_timeout_terminates_owned_frozen_child_without_touching_unrelated_child(tmp_path):
     pid_path = tmp_path/'frozen.pid'
     script = "import subprocess,sys,time; from pathlib import Path; p=subprocess.Popen([sys.executable,'-c','import time;time.sleep(60)']); Path(sys.argv[1]).write_text(str(p.pid)); time.sleep(60)"
