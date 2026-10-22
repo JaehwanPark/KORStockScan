@@ -5694,6 +5694,15 @@ class KiwoomWSManager:
         if not normalized_codes:
             return
 
+        # Recheck at the command consumer: admissions can follow a producer's
+        # inactive-target snapshot. Keep both physical items and the 0D cache.
+        from src.engine.scalping.pre_submit_delay_observation import should_retain_ws_subscription
+        now_ts = time.time()
+        normalized_codes = {code for code in normalized_codes
+                            if not should_retain_ws_subscription(code, now_ts=now_ts)}
+        if not normalized_codes:
+            return
+
         items_by_code_snapshot = {}
         with self.lock:
             items_by_code_snapshot = {

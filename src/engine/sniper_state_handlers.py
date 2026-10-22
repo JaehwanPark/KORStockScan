@@ -41721,7 +41721,7 @@ def _retry_entry_ai_submit_authority_before_block(
                 retry_ws_data,
                 limit=40,
                 now_ts=now_ts,
-                broker_route=(fixed_source_route or {}).get("broker_route"),
+                broker_route=(fixed_source_route or {}).get("broker_route") or stock.get("broker_route"),
                 allow_integrated_sor_execution_view=True,
             )
             fields["pre_submit_entry_ai_authority_retry_history_ready_elapsed_ms"] = (
@@ -41752,7 +41752,7 @@ def _retry_entry_ai_submit_authority_before_block(
                 now_ts=retry_context_now_ts,
                 recent_candles=recent_candles,
                 source_meta=candle_source_meta,
-                broker_route=(fixed_source_route or {}).get("broker_route"),
+                broker_route=(fixed_source_route or {}).get("broker_route") or stock.get("broker_route"),
                 include_investor_source=True,
             )
             fields["pre_submit_entry_ai_authority_retry_context_build_elapsed_ms"] = (
@@ -47378,6 +47378,7 @@ def _apply_entry_ai_price_canary(
             venue=candle_venue,
             session=candle_session,
             limit=fetch_candle_limit,
+            broker_route=stock.get("broker_route"),
             allow_integrated_sor_execution_view=True,
         )
     except Exception as exc:
@@ -47456,7 +47457,7 @@ def _apply_entry_ai_price_canary(
             now_ts=time.time(),
             recent_candles=recent_candles,
             source_meta=candle_source_meta,
-            broker_route=(fixed_source_route or {}).get("broker_route"),
+            broker_route=(fixed_source_route or {}).get("broker_route") or stock.get("broker_route"),
             include_investor_source=True,
         )
         # Auxiliary context preparation may outlive the market snapshot taken
@@ -52467,7 +52468,8 @@ def _build_tick_source_quality_log_fields(feature_probe):
     tick_source_quality_fields_sent = bool(out)
     _copy_ai_preflight_log_fields(payload, out)
     out.update(
-        {key: value for key, value in payload.items() if str(key).startswith("entry_ai_final_")}
+        {key: value for key, value in payload.items()
+         if str(key).startswith("entry_ai_final_") or key == "entry_ai_quote_time_policy_receipt"}
     )
     if tick_source_quality_fields_sent:
         out["tick_source_quality_fields_sent"] = True
@@ -62020,6 +62022,9 @@ def _resolve_scanner_async_entry_ai(
         budget.require()
         stock_snapshot = thaw_scanner_async_value(async_context.stock_snapshot)
         prepared_ws = thaw_scanner_async_value(async_context.ws_snapshot)
+        # Preserve the attach owner's explicit route before generic defaults.
+        # In premarket a known NXT source must not become unresolved SOR.
+        entry_broker_route = stock_snapshot.get("broker_route")
         for key, value in _scanner_promotion_correlation_fields(stock_snapshot).items():
             prepared_ws.setdefault(key, value)
         prepared_reentry = stock_snapshot.get(
@@ -62046,7 +62051,7 @@ def _resolve_scanner_async_entry_ai(
                 None,
             ),
             ws_data=prepared_ws,
-            broker_route=kiwoom_orders.resolve_order_dmst_stex_tp(),
+            broker_route=entry_broker_route or kiwoom_orders.resolve_order_dmst_stex_tp(),
         ))
         from src.trading.market.entry_ws_source import select_trade_history
         source_started = time.perf_counter()
@@ -62062,6 +62067,7 @@ def _resolve_scanner_async_entry_ai(
             code,
             prepared_ws,
             venue=generation.venue,
+            broker_route=entry_broker_route,
             limit=40,
             now_ts=time.time(),
             allow_integrated_sor_execution_view=True,
@@ -62098,6 +62104,7 @@ def _resolve_scanner_async_entry_ai(
             code,
             prepared_ws,
             venue=generation.venue,
+            broker_route=entry_broker_route,
             session=None,
             limit=40,
             model_bar_limit=20,
@@ -63498,7 +63505,7 @@ def _handle_watching_strategy_branch(
                                 venue=stock.get("effective_venue") or stock.get("venue"),
                                 limit=40,
                                 now_ts=now_ts,
-                                broker_route=(fixed_source_route or {}).get("broker_route"),
+                                broker_route=(fixed_source_route or {}).get("broker_route") or stock.get("broker_route"),
                                 allow_integrated_sor_execution_view=True,
                                 reduced_inputs=True,
                             )
@@ -63537,7 +63544,7 @@ def _handle_watching_strategy_branch(
                                 now_ts=entry_context_now_ts,
                                 recent_candles=recent_candles,
                                 source_meta=candle_source_meta,
-                                broker_route=(fixed_source_route or {}).get("broker_route"),
+                                broker_route=(fixed_source_route or {}).get("broker_route") or stock.get("broker_route"),
                                 include_investor_source=False,
                             )
                             stock.pop("ai_wait_rebound_recheck_pending", None)
@@ -65383,7 +65390,7 @@ def _handle_watching_strategy_branch(
                                     ws_data,
                                     limit=40,
                                     now_ts=now_ts,
-                                    broker_route=(fixed_source_route or {}).get("broker_route"),
+                                    broker_route=(fixed_source_route or {}).get("broker_route") or stock.get("broker_route"),
                                     allow_integrated_sor_execution_view=True,
                                 )
                             )
@@ -65399,7 +65406,7 @@ def _handle_watching_strategy_branch(
                                 now_ts=gatekeeper_context_now_ts,
                                 recent_candles=gatekeeper_candles,
                                 source_meta=gatekeeper_candle_meta,
-                                broker_route=(fixed_source_route or {}).get("broker_route"),
+                                broker_route=(fixed_source_route or {}).get("broker_route") or stock.get("broker_route"),
                                 include_investor_source=True,
                             )
                             gatekeeper_snapshot_ws = dict(ws_data or {})

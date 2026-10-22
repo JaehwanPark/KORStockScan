@@ -1184,3 +1184,30 @@ def test_frozen_operating_route_matches_current_watch_and_decision(monkeypatch,h
         assert frozen["broker_route"] == decision_route
         from src.engine.scalping.strategy_owner_components import digest
         assert frozen["sha256"] == digest({k:v for k,v in frozen.items() if k!="sha256"})
+
+
+@pytest.mark.parametrize('hour,venue,bucket,source,route', [
+    (8,'PREMARKET_KRX_LIKE','krx_like_premarket','nxt_only','NXT'),
+    (10,'KRX','krx_regular','krx_nxt_integrated','SOR'),
+    (17,'KRX_NXT_INTEGRATED','KRX_NXT_AFTERMARKET','krx_nxt_integrated','SOR'),
+])
+def test_zero_base_explicit_trace_binds_plan_and_final_request_without_conflict_override(
+    monkeypatch, hour, venue, bucket, source, route,
+):
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    at = datetime(2026,10,23,hour,10,tzinfo=ZoneInfo('Asia/Seoul')).timestamp()
+    monkeypatch.setattr(handlers, 'is_scalping_buy_time_allowed', lambda _t: True)
+    stock = dict(code='053800', source_signature='ZERO_BASE_DISCOVERY:'+'b'*64,
+        broker_route=route, market_data_route=source, effective_venue=venue,
+        market_session_bucket=bucket,
+        last_watching_ai_machine_primary_fields={'ai_trace_broker_route':route})
+    planned = dict(qty=1, price=91900, tag='normal')
+    assert handlers._bind_main_entry_order_request(stock, planned, now_ts=at)
+    request = handlers._resolve_live_entry_order_request('SCALPING', planned, '00', 91900)
+    assert handlers._bind_main_entry_order_request(stock, request, now_ts=at)
+    assert request['dmst_stex_tp'] == route
+    conflict = 'SOR' if route == 'NXT' else 'NXT'
+    assert not handlers._bind_main_entry_order_request(stock, dict(dmst_stex_tp=conflict), now_ts=at)
+    stock['last_watching_ai_machine_primary_fields']['ai_trace_broker_route'] = conflict
+    assert not handlers._bind_main_entry_order_request(stock, {}, now_ts=at)

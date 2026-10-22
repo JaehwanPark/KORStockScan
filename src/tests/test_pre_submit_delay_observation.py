@@ -520,3 +520,127 @@ def test_submit_terminal_preserves_actual_recheck_and_submit_ids(monkeypatch):
     assert emitted[0]['resolved_machine_attempt_id'] == 'new'
     assert not emitted[0]['actual_order_submitted']
     assert emitted[0]['terminal_reason'] == 'submit_call_returned_false'
+
+
+def test_pending_horizons_retain_source_even_while_sampler_holds_due_state():
+    assert observer.register('053800', state('incident', stamp=10))
+    due = observer.take_due('053800', 40)
+    assert not observer._HEAPS
+    assert observer.should_retain_ws_subscription('053800', now_ts=40)
+    assert not observer.should_retain_ws_subscription('other', now_ts=40)
+    for row in due:
+        row['remaining_sec'].clear()
+        observer.advance('053800', row)
+    assert not observer.should_retain_ws_subscription('053800', now_ts=40)
+
+
+def test_retention_is_per_intent_bounded_and_shutdown_never_waits_for_horizons():
+    assert observer.register('053800', state('first', stamp=10))
+    assert observer.register('053800', state('second', stamp=20))
+    assert observer.should_retain_ws_subscription('053800', now_ts=192.9)
+    observer.discard('053800', 'first', reason='test_censored')
+    assert observer.should_retain_ws_subscription('053800', now_ts=202.9)
+    assert not observer.should_retain_ws_subscription('053800', now_ts=203)
+    assert not observer.should_retain_ws_subscription('053800', now_ts=19)
+    observer.configure_sink(lambda *a, **kw: {'status':'queued'})
+    assert observer.shutdown()
+    assert not observer.should_retain_ws_subscription('053800', now_ts=40)
+
+
+def test_watch_expiry_retains_ws_cache_until_all_follow_up_quotes(monkeypatch):
+    from src.engine import kiwoom_sniper_v2 as main, kiwoom_websocket as ws
+    from src.engine import sniper_state_handlers as handlers
+    import asyncio
+    import json
+    from concurrent.futures import Future
+    packets = []
+    async def send(payload):
+        packets.append(json.loads(payload))
+    def schedule(coroutine, loop):
+        result = Future()
+        result.set_result(asyncio.run(coroutine))
+        return result
+    monkeypatch.setattr(ws.asyncio, 'run_coroutine_threadsafe', schedule)
+    clock = [10.]
+    monkeypatch.setattr(observer.time, 'time', lambda: clock[0])
+    manager = ws.KiwoomWSManager('test-token')
+    manager._market_data_transport_epoch = 7
+    manager.websocket = SimpleNamespace(send=send)
+    manager.loop = SimpleNamespace(is_running=lambda: True)
+    manager._session_ready.set()
+    manager.subscribed_codes = {'053800', '000001'}
+    manager._registered_items_by_code = {'053800': ('053800_NX',), '000001': ('000001_AL',)}
+    manager.realtime_data['000001'] = {}
+    monkeypatch.setattr(main, 'WS_MANAGER', manager)
+    monkeypatch.setattr(main, 'should_retain_ws_subscription', lambda *a, **kw: False)
+    monkeypatch.setattr(main, '_is_scanner_promotion_pending_attach', lambda *a, **kw: False)
+    monkeypatch.setattr(handlers, 'should_retain_rising_missed_nxt_post_block_subscription', lambda *a, **kw: False)
+    commands, quotes = [], []
+    def publish(topic, payload):
+        assert topic == 'COMMAND_WS_UNREG'
+        commands.extend(payload['codes'])
+        manager._handle_unreg_event(payload)
+    monkeypatch.setattr(main, 'event_bus', SimpleNamespace(publish=publish))
+    monkeypatch.setattr(handlers, '_log_pre_submit_delay_event', lambda *a, **kw: quotes.append(kw) or True)
+    value = state('incident')
+    value.update(route='NXT_ONLY', quote_transport_epoch=7, remaining_sec=[30,60,120,180])
+    assert observer.register('053800', value)
+    # A watch/order terminal is independent of the outstanding source lease.
+    for horizon in (30,60,120,180):
+        clock[0] = 10. + horizon + .02
+        manager.realtime_data['053800'] = {'realtime_type_snapshots_by_route': {'nxt': {'0D': {
+            'item':'053800_NX', 'market_route':'NXT_ONLY', 'transport_epoch':7,
+            'observed_epoch':clock[0]-.01, 'orderbook':{
+                'asks':[{'price':91900,'volume':10}], 'bids':[{'price':91800,'volume':10}]}}}}}
+        main._prune_ws_subscriptions_for_inactive_targets([{'code':'053800','status':'EXPIRED'}])
+        # Even an independently generated unregistration command is checked.
+        manager._handle_unreg_event({'codes':['053800']})
+        assert manager.get_pre_submit_delay_depth('053800')['realtime_type_snapshots_by_route']
+        assert observer.sample_due(manager.get_pre_submit_delay_depth, handlers.observe_pre_submit_delay_quote) == 1
+    assert [q['target_delay_sec'] for q in quotes] == [30,60,120,180]
+    assert all(q['quote_valid'] for q in quotes)
+    assert commands == ['000001']
+    assert len(packets) == 1 and packets[0]['trnm'] == 'REMOVE'
+    assert all(row['item'] == ['000001_AL'] for row in packets[0]['data'])
+    main._prune_ws_subscriptions_for_inactive_targets([])
+    assert commands == ['000001', '053800']
+    assert '053800' not in manager.realtime_data
+    assert '053800' not in manager.subscribed_codes
+    assert len(packets) == 2 and packets[1]['trnm'] == 'REMOVE'
+    assert all(row['item'] == ['053800_NX'] for row in packets[1]['data'])
+
+
+def test_budget_expiry_preserves_only_pending_observation_source(monkeypatch):
+    from src.engine import kiwoom_sniper_v2 as main
+    commands = []
+    monkeypatch.setattr(observer.time, 'time', lambda: 40.)
+    monkeypatch.setattr(main, 'should_retain_ws_subscription', lambda *a, **kw: False)
+    monkeypatch.setattr(main.sniper_state_handlers, 'should_retain_rising_missed_nxt_post_block_subscription', lambda *a, **kw: False)
+    monkeypatch.setattr(main, 'emit_pipeline_event', lambda *a, **kw: None)
+    monkeypatch.setattr(main, 'event_bus', SimpleNamespace(publish=lambda topic, payload: commands.extend(payload['codes'])))
+    assert observer.register('053800', state('pending'))
+    targets = [dict(code=code, name=code, strategy='SCALPING', status='WATCHING',
+                    position_tag='SCANNER') for code in ('053800','000001')]
+    main._expire_scalping_watch_budget_targets(targets[:], targets, reason='test_reallocation')
+    assert commands == ['000001']
+    assert targets == []  # The source lease does not keep a trading target alive.
+
+
+@pytest.mark.parametrize('mutation', ['transport', 'stale', 'conflict'])
+def test_retained_subscription_does_not_approve_invalid_quote(monkeypatch, mutation):
+    from src.engine import sniper_state_handlers as handlers
+    quotes = []
+    monkeypatch.setattr(handlers, '_log_pre_submit_delay_event', lambda *a, **kw: quotes.append(kw) or True)
+    value = state('invalid'); value['remaining_sec'] = [30]
+    assert observer.register('053800', value)
+    depth = dict(item='053800_AL', market_route='KRX_NXT_INTEGRATED', transport_epoch=1,
+                 observed_epoch=40.01, orderbook={'asks':[{'price':100,'volume':10}],
+                                               'bids':[{'price':99,'volume':10}]})
+    partitions = {'integrated':{'0D':depth}}
+    if mutation == 'transport': depth['transport_epoch'] = 2
+    elif mutation == 'stale': depth['observed_epoch'] = 30.
+    else: partitions['duplicate'] = {'0D':dict(depth)}
+    assert observer.should_retain_ws_subscription('053800', now_ts=40.02)
+    handlers.observe_pre_submit_delay_quote({}, '053800', dict(market_data_transport_epoch=1,
+        realtime_type_snapshots_by_route=partitions), now_ts=40.02)
+    assert len(quotes) == 1 and quotes[0]['quote_valid'] is False
