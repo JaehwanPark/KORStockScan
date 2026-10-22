@@ -1451,13 +1451,16 @@ def test_async_entry_expired_result_is_discarded_and_schedules_fresh_recheck(
         "ws_route",
         "broker_route",
         "expected_request_code",
+        "explicit_broker_route",
     ),
     (
-        ("KRX", "", "", "KRX", "005930"),
-        ("KRX", "_AL", "krx_nxt_integrated", "SOR", "005930"),
-        ("KRX", "_AL", "krx_nxt_integrated", "KRX", "005930"),
-        ("PREMARKET_KRX_LIKE", "", "", "KRX", "005930_NX"),
-        ("NXT", "", "", "KRX", "005930_NX"),
+        ("KRX", "", "", "KRX", "005930", None),
+        ("KRX", "_AL", "krx_nxt_integrated", "SOR", "005930", None),
+        ("KRX", "_AL", "krx_nxt_integrated", "KRX", "005930", None),
+        ("PREMARKET_KRX_LIKE", "", "", "KRX", "005930_NX", None),
+        ("NXT", "", "", "KRX", "005930_NX", None),
+        ("PREMARKET_KRX_LIKE", "_NX", "nxt_only", "SOR", "005930_NX", "NXT"),
+        ("KRX", "_AL", "krx_nxt_integrated", "NXT", "005930", "SOR"),
     ),
 )
 @pytest.mark.parametrize("execution_refresh", [False, True])
@@ -1470,6 +1473,7 @@ def test_async_entry_bridge_prepares_off_thread_then_commits_on_current_state(
     ws_route,
     broker_route,
     expected_request_code,
+    explicit_broker_route,
     execution_refresh,
 ):
     # Cold hydration must never scan the growing production pipeline in a
@@ -1487,6 +1491,7 @@ def test_async_entry_bridge_prepares_off_thread_then_commits_on_current_state(
         lambda *args, **kwargs: "krx_regular",
     )
     requested_codes = []
+    source_routes = []
     monkeypatch.setattr(
         handlers.kiwoom_utils,
         "get_tick_history_ka10003",
@@ -1497,12 +1502,14 @@ def test_async_entry_bridge_prepares_off_thread_then_commits_on_current_state(
     monkeypatch.setattr(
         handlers,
         "fetch_entry_candles_with_meta",
-        lambda *args, **kwargs: ([{"close": 1000}], {"source": "test"}),
+        lambda *args, **kwargs: (source_routes.append(("candles", kwargs.get("broker_route")))
+            or ([{"close": 1000}], {"source": "test"})),
     )
     monkeypatch.setattr(
         handlers,
         "build_entry_candle_context",
-        lambda *args, **kwargs: {"schema": "test"},
+        lambda *args, **kwargs: (source_routes.append(("context", kwargs.get("broker_route")))
+            or {"schema": "test"}),
     )
     monkeypatch.setattr(
         handlers,
@@ -1541,6 +1548,8 @@ def test_async_entry_bridge_prepares_off_thread_then_commits_on_current_state(
         "venue_resolution": f"session_clock_explicit_{venue.lower()}",
         "source_signature": "VALUE_TOP",
     }
+    if explicit_broker_route:
+        stock["broker_route"] = explicit_broker_route
     ws_data = {
         "curr": 1001,
         "orderbook": {"ask": 1002, "bid": 1000},
@@ -1626,6 +1635,7 @@ def test_async_entry_bridge_prepares_off_thread_then_commits_on_current_state(
         assert evaluated[0][0]["curr"] == 1003
         assert ws_data["curr"] == 1001
     assert requested_codes == [expected_request_code]
+    assert source_routes == [("candles", explicit_broker_route), ("context", explicit_broker_route)]
     assert "_scanner_async_cache_key" not in stock
 
 

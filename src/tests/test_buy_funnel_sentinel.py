@@ -1316,6 +1316,33 @@ def _write_events(tmp_path, target_date: str, rows: list[dict]) -> None:
             handle.write(json.dumps(row, ensure_ascii=False) + "\n")
 
 
+@pytest.mark.parametrize("clock,scope,expected", [
+    ("08:03:00", "PREMARKET_KRX_LIKE", "NOT_YET_DUE"),
+    ("08:10:00", "PREMARKET_KRX_LIKE", "SUBMIT_DROUGHT_CRITICAL"),
+    ("09:03:00", "KRX", "NOT_YET_DUE"),
+    ("09:10:00", "KRX", "SUBMIT_DROUGHT_CRITICAL"),
+])
+def test_premarket_and_regular_have_separate_due_windows(monkeypatch, tmp_path, clock, scope, expected):
+    monkeypatch.setattr(sentinel, "DATA_DIR", tmp_path)
+    day = "2026-10-23"
+    rows = []
+    for venue, session, hour in [("PREMARKET_KRX_LIKE", "premarket_krx_like", "08"),
+                                 ("KRX", "krx_regular", "09")]:
+        for index in range(3):
+            for second, stage in [(0, "ai_confirmed"), (1, "budget_pass")]:
+                rows.append(_event(day, f"{hour}:01:{index * 2 + second:02}", stage,
+                    record_id=f"{venue}-{index}", fields={"effective_venue": venue,
+                    "market_session_bucket": session, "evaluation_attempt_id": f"{venue}-{index}"}))
+    _write_events(tmp_path, day, rows)
+    report = sentinel.build_buy_funnel_sentinel_report(day,
+        as_of=sentinel._parse_as_of(day, clock))
+    key = f"{scope}|{'PREMARKET_KRX_LIKE' if scope.startswith('PREMARKET') else 'KRX_REGULAR'}"
+    scoped = report["current"]["by_venue_session"][key]
+    assert scoped["summary"]["stage_unique"]["budget_pass"] == 3
+    assert scoped["classification"]["primary"] == expected
+    assert report["policy"]["live_runtime_effect"] is False
+
+
 @pytest.mark.parametrize('clock', ['2026-10-12T10:00:00.933801', '2026-10-12T10:00:00.933801+09:00', '2026-10-12T01:00:00.933801+00:00'])
 def test_submission_monitor_export_preserves_native_clock_and_attempt(clock):
     from datetime import datetime, timedelta

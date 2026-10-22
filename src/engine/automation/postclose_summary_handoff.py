@@ -1244,16 +1244,26 @@ def stage_receipt_issues(report_dir, day, stage, *, code_hash=None,
             and all(ch in '0123456789abcdef' for ch in selection.get('git_commit', ''))
             and selected_root.is_absolute()
             and selected_root.parent.name == 'KORStockScan-runtime-releases'):
-            release_roots = [selected_root]
-            try:
-                managed_roots = sorted(
-                    child for child in selected_root.parent.iterdir()
-                    if child.is_dir() and (child / '.git').exists()
-                )
-            except OSError:
-                managed_roots = []
-            if len(managed_roots) <= 256:
-                release_roots.extend(root for root in managed_roots if root != selected_root)
+            origin = value.get('stage_code_root')
+            if 'stage_code_root' in value:
+                # New native terminals pin their producer. A conflicting pin
+                # cannot fall through to some other compatible release.
+                origin_root = Path(origin) if isinstance(origin, str) else Path('.')
+                release_roots = [origin_root] if (
+                    origin_root.is_absolute() and not origin_root.is_symlink()
+                    and origin_root.is_dir() and origin_root.resolve() == origin_root
+                    and origin_root.parent == selected_root.parent
+                    and (origin_root / '.git').exists()) else []
+            else:
+                # Legacy evidence keeps the original 256-root work bound.
+                # Unrelated release growth must not disable every candidate.
+                try:
+                    managed_roots = sorted(child for child in selected_root.parent.iterdir()
+                        if child != selected_root and child.is_dir() and (child / '.git').exists())
+                except OSError:
+                    managed_roots = []
+                release_roots = [selected_root, *managed_roots[:255]]
+            if release_roots:
                 commands = stage_commands(stage, day,
                     value.get('publication_date') or day,
                     recovery=value.get('recovery_mode', False))
@@ -1938,7 +1948,8 @@ def run_stage(stage, day, *, report_dir, project, publication=None, effective=No
         now = lambda: datetime.now(ZoneInfo('Asia/Seoul')).isoformat()
         value = dict(schema=STAGE_SCHEMA, stage_id=stage, source_date=day, target_date=day,
             publication_date=publication, effective_date=effective, run_id=uuid.uuid4().hex,
-            stage_code_sha256=code, recovery_mode=recovery, status='pending', exit_code=None, pid=os.getpid(),
+            stage_code_sha256=code, stage_code_root=str(project.resolve()),
+            recovery_mode=recovery, status='pending', exit_code=None, pid=os.getpid(),
             process_start_ticks=Path('/proc/self/stat').read_text().split()[21], started_at=now(),
             heartbeat_at=now(), prerequisite_receipts={}, sources={}, retryable=True,
             policy_disposition='incumbent_carry', computation_executed=execute,

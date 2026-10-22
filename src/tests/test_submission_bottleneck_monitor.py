@@ -5348,14 +5348,15 @@ def test_native_feature_gap_false_branch_with_missing_features_is_verified(tmp_p
     assert json.dumps(row, sort_keys=True) == before
 
 
+@pytest.mark.parametrize("reason", ["entry_split_probe_first_deferred", "main_entry_order_route_invalid"])
 @pytest.mark.parametrize("tamper", [None, "missing_reason", "unknown_reason", "accepted", "raised", "parent", "schema", "call", "record", "before", "other_call", "missing_record", "conflicting_finish", "duplicate"])
-def test_call_local_terminal_reason_reaches_monitor_without_inventing_old_outcomes(tamper):
+def test_call_local_terminal_reason_reaches_monitor_without_inventing_old_outcomes(tamper, reason):
     from dataclasses import replace
     fields = dict(entry_submit_attempt_id="call-one", entry_submit_attempt_schema="call_local_submit_attempt_v1",
         entry_submit_attempt_authority="observation_only", entry_submit_attempt_parent_promotion_id="parent-1",
         entry_submit_attempt_broker_accepted=False, entry_submit_attempt_return_outcome="returned_false",
         entry_submit_attempt_terminal_schema="call_local_terminal_v1",
-        entry_submit_attempt_terminal_reason="entry_split_probe_first_deferred",
+        entry_submit_attempt_terminal_reason=reason,
         submit_call_outcome="returned_false", submit_call_return_outcome="returned_false", submit_call_broker_accepted=False)
     if tamper == "missing_reason": fields.pop("entry_submit_attempt_terminal_reason")
     if tamper == "unknown_reason": fields["entry_submit_attempt_terminal_reason"] = "unknown_guard"
@@ -5386,12 +5387,13 @@ def test_call_local_terminal_reason_reaches_monitor_without_inventing_old_outcom
     assert row["broker_acceptance_observed"] is False
     if valid:
         assert row["final_state"] == "final_guard_blocked"
-        assert row["final_guard_evidence"][0]["reason"] == "entry_split_probe_first_deferred"
+        assert row["final_guard_evidence"][0]["reason"] == reason
     else:
         assert row["final_state"] not in {"final_guard_blocked", "broker_rejected", "submit_pipeline_reached"}
 
 
-def test_submit_return_site_to_native_logger_cache_and_monitor(monkeypatch):
+@pytest.mark.parametrize("reason", ["entry_split_probe_first_deferred", "main_entry_order_route_invalid"])
+def test_submit_return_site_to_native_logger_cache_and_monitor(monkeypatch, reason):
     from src.engine import sniper_state_handlers as handlers
     from src.engine.monitoring.entry_attempt_identity import bind_submit_attempt_machine_lineage, observe_submit_attempt
     stock = {'id': 1, 'code': '005930', 'name': 'fixture', 'strategy': 'SCALPING', 'scanner_promotion_id': 'parent-1'}
@@ -5410,13 +5412,13 @@ def test_submit_return_site_to_native_logger_cache_and_monitor(monkeypatch):
     def run(stock, code):
         assert bind_submit_attempt_machine_lineage(stock, code, receipt)
         handlers._log_entry_pipeline(stock, code, 'latency_pass')
-        handlers._set_async_terminal(stock, 'entry_split_probe_first_deferred')
+        handlers._set_async_terminal(stock, reason)
         return False
     assert run(stock, stock['code']) is False
     assert [e.stage for e in events] == ['latency_pass', 'entry_submit_attempt_finished']
     row = monitor.snapshot(events, START + timedelta(seconds=3))['rows'][0]
     assert row['final_state'] == 'final_guard_blocked'
-    assert row['final_guard_evidence'][0]['reason'] == 'entry_split_probe_first_deferred'
+    assert row['final_guard_evidence'][0]['reason'] == reason
     assert row['broker_acceptance_observed'] is False
     assert '_async_consumption_guard' not in stock
 

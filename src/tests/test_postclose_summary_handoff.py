@@ -1205,18 +1205,23 @@ def test_machine_strategy_refresh_runs_before_auxiliary_ai():
 
 
 
-def test_unchanged_stage_accepts_exact_selected_release_code_hash(stage_environment, monkeypatch, tmp_path):
+@pytest.mark.parametrize('unrelated', [0, 257])
+@pytest.mark.parametrize('origin', ['legacy', 'pinned', 'changed', 'outside', 'missing', 'null', 'symlink'])
+def test_unchanged_stage_accepts_exact_selected_release_code_hash(stage_environment, monkeypatch, tmp_path, unrelated, origin):
     h, day, report, run, _ = stage_environment
     run('legacy_machine_report')
+    assert h._load_json(h.stage_path(report, day, 'legacy_machine_report'))['stage_code_root'] == str(tmp_path)
 
     managed = tmp_path / 'KORStockScan-runtime-releases'
     release = managed / 'immutable-release'
-    previous = managed / 'previous-release'
+    previous = managed / ('zz-previous-release' if origin == 'pinned' else 'previous-release')
     for root in (release, previous):
         (root / '.git').mkdir(parents=True)
         dispatcher = root / 'src/engine/automation/postclose_summary_handoff.py'
         dispatcher.parent.mkdir(parents=True)
         dispatcher.write_text('# pinned release dispatcher\n')
+    for index in range(unrelated):
+        (managed / f'z-unrelated-{index:03}' / '.git').mkdir(parents=True)
     selection = report.parent / 'runtime' / 'runtime_release_selection.json'
     selection.parent.mkdir(parents=True, exist_ok=True)
     selection.write_text(json.dumps({
@@ -1228,15 +1233,27 @@ def test_unchanged_stage_accepts_exact_selected_release_code_hash(stage_environm
     def code_hash(stage, commands, project, *, dispatcher_path=None):
         if dispatcher_path is None:
             return 'repaired-code'
-        return 'previous-release-code' if project.name == 'previous-release' else 'selected-release-code'
+        return 'previous-release-code' if project == previous else 'selected-release-code'
 
     monkeypatch.setattr(h, '_stage_code', code_hash)
     path = h.stage_path(report, day, 'legacy_machine_report')
     terminal = h._load_json(path)
+    terminal.pop('stage_code_root', None)  # Original v3 receipts did not record this field.
     terminal['stage_code_sha256'] = 'previous-release-code'
+    if origin != 'legacy':
+        terminal['stage_code_root'] = str(previous)
+    if origin == 'changed': terminal['stage_code_root'] = str(release)
+    if origin == 'outside': terminal['stage_code_root'] = str(tmp_path)
+    if origin == 'missing': (previous / 'src/engine/automation/postclose_summary_handoff.py').unlink()
+    if origin == 'null': terminal['stage_code_root'] = None
+    if origin == 'symlink':
+        link = managed / 'linked-producer'
+        link.symlink_to(previous, target_is_directory=True)
+        terminal['stage_code_root'] = str(link)
     h._stage_write(path, terminal)
 
-    assert h.stage_receipt_issues(report, day, 'legacy_machine_report', code_hash='repaired-code') == []
+    expected = [] if origin in {'legacy', 'pinned'} else ['legacy_machine_report:code_changed']
+    assert h.stage_receipt_issues(report, day, 'legacy_machine_report', code_hash='repaired-code') == expected
 
 
 def test_auxiliary_stage_hash_binds_tuner_implementation(tmp_path):
