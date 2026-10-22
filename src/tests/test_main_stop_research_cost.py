@@ -27,11 +27,16 @@ def registry(root, positions):
         anchor = dict(schema=REGISTRY_SCHEMA, intent_id="intent-" + item["record_id"],
             account_key="test_account", order_date=DAY, owner_type="main_scalping",
             owner_id=owner, position_id=owner, symbol=item["symbol"], side="BUY", action="NEW",
-            route=leg["route"], quantity=leg["qty"])
+            route=leg["route"], quantity=sum(part['qty'] for part in item['buy_legs']))
         events = [dict(anchor, event="INTENT_RESERVED", state="INTENT_RESERVED"),
-            dict(anchor, event="ORDER_BOUND", state="ORDER_BOUND", broker_order_no=leg["order_no"]),
-            dict(anchor, event="FILL_RECORDED", state="ORDER_BOUND", broker_order_no=leg["order_no"],
-                 execution_no=leg["execution_no"], filled_qty=leg["qty"], fill_amount=leg["qty"] * leg["price"])]
+            dict(anchor, event="ORDER_BOUND", state="ORDER_BOUND", broker_order_no=leg["order_no"])]
+        quantity=amount=0
+        for part in item['buy_legs']:
+            assert part['order_no']==leg['order_no']
+            quantity+=part['qty'];amount+=part['qty']*part['price']
+            events.append(dict(anchor,event='FILL_RECORDED',state='ORDER_BOUND',
+                broker_order_no=part['order_no'],execution_no=part['execution_no'],
+                filled_qty=quantity,fill_amount=amount))
         for row in events:
             row["previous_hash"] = previous
             row["event_hash"] = hashlib.sha256(previous.encode() + OrderOwnerRegistry._canonical(row)).hexdigest()
@@ -105,6 +110,30 @@ def setup(tmp_path, *, mutate=None, publish=True):
     if publish:
         allocation.persist_research_costs(costs, DAY, receipts, [DAY])
     return data, costs, rows, sidecar, receipts
+
+
+def test_cost_revision_discovers_new_original_dependency_date_without_second_projection_read(tmp_path,monkeypatch):
+    items=[position(1,buy_day='2026-10-07')]
+    native(tmp_path,items)
+    registry(tmp_path,items)
+    observed=source(tmp_path)
+    official.atomic(official.source_path(tmp_path,DAY),observed)
+    allocation.persist_research_costs(tmp_path,DAY,
+        allocation.build_research_cost_allocations({DAY:observed},items),[DAY],
+        native_revision={'schema':'initial_quantity_late_cost_revision_v2'})
+    rows,proof,_=stop._native_projection(tmp_path,DAY)
+    for claim in rows.budget_claims:claim.close()
+    completion=dict(source_date=DAY,projection=proof['projection'],
+        actual_cost_source_generation=proof['original_cost_generation'])
+    calls=[];original=stop._native_projection
+    def counted(*args,**kwargs):
+        calls.append(args[1]);return original(*args,**kwargs)
+    monkeypatch.setattr(stop,'_native_projection',counted)
+    current=allocation.refresh_native_research_costs(tmp_path,DAY,completion_source=completion)
+    assert current['source_dates']==['2026-10-07',DAY]
+    assert calls==[DAY]
+    receipt=json.loads((tmp_path/'runtime/initial_quantity_research_costs'/DAY/'1.json').read_bytes())
+    assert receipt['status']=='research_cost_invalid' and receipt.get('allocated_net_pnl_krw') is None
 
 
 def prepare(data, costs, cutoff=None):

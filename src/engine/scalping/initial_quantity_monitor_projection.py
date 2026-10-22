@@ -63,6 +63,7 @@ scalping/pre_submit_delay_initial_policy.py
 scalping/mechanistic_entry_runtime_policy.py
 lifecycle/broker_cost_reconciliation.py
 lifecycle/broker_cost_allocation.py
+lifecycle/main_stop_research_cost.py
 lifecycle/broker_cost_source.py
 lifecycle/holding_window_generation.py
 lifecycle/research_storage.py

@@ -42,7 +42,16 @@ _FIELDS = frozenset((
     "exit_signal", "strict_completion_status", "strict_completion_reasons",
     "actual_cost_reconciliation", "quantity_research_cost", "profit_rate",
     "realized_pnl_krw", "broker_actual_fees_taxes_krw", "market_session_bucket",
-    "effective_venue", "actual_execution_venue", "actual_execution_venue_verified"))
+    "effective_venue", "actual_execution_venue", "actual_execution_venue_verified",
+    "name", "holding_seconds", "add_count", "avg_down_count", "pyramid_count",
+    "scanner_promotion_id", "broker_actual_cost_observed", "realized_pnl_krw_source",
+    "configured_fee_estimate_krw", "ai_review_summary", "gatekeeper_replay"))
+
+_EXECUTION_STAGES = frozenset((
+    'position_rebased_after_fill', 'scale_in_executed', 'entry_buy_order_terminal_confirmed',
+    'scale_in_buy_order_terminal_confirmed', 'sell_partial_fill_progress',
+    'nxt_rising_missed_tp1_partial_fill_progress',
+    'nxt_rising_missed_tp1_partial_sell_completed', 'sell_completed'))
 
 
 def _canonical(value):
@@ -134,11 +143,11 @@ def _admit_cost_inputs(root, day, claims):
     return paths
 
 
-def _native_projection(root, day):
+def _native_projection(root, day, *, execution_events=False):
     """Verify native byte receipts independently of the current cost generation."""
     claims, transient_claims = [], []
     try:
-        return _native_projection_read(root, day, claims, transient_claims)
+        return _native_projection_read(root, day, claims, transient_claims, execution_events=execution_events)
     except BaseException:
         # Exceptions may retain their traceback frames beyond this call.
         for claim in claims:
@@ -149,7 +158,7 @@ def _native_projection(root, day):
             claim.close()
 
 
-def _native_projection_read(root, day, claims, transient_claims):
+def _native_projection_read(root, day, claims, transient_claims, *, execution_events=False):
     from src.engine.sniper_trade_review_report import completed_census_projection_ids
     raw = root / "report/monitor_snapshots" / f"trade_review_{day}.json"
     sidecar = raw.with_suffix(".completed_projection.json")
@@ -179,7 +188,9 @@ def _native_projection_read(root, day, claims, transient_claims):
             raise ValueError("stop_research_native_projection_invalid")
         generation = byte_generation(sidecar)
         rows = (value.get("sections") or {}).get("completed_trade_projection")
-        rows = [{k: v for k, v in row.items() if k in _FIELDS} for row in rows]
+        rows = [{k: ([event for event in v if event.get('stage') in _EXECUTION_STAGES]
+                     if k == 'timeline' else v) for k, v in row.items()
+                 if k in _FIELDS or execution_events and k == 'timeline'} for row in rows]
         for row in rows:
             account_row(row)
         proof = {"projection": generation, "legacy_self_seal": value["artifact_sha256"]}
@@ -191,13 +202,47 @@ def _native_projection_read(root, day, claims, transient_claims):
                 or receipt.get("date") != day or receipt.get("projection") != generation
                 or receipt.get("artifact_sha256") != exact.digest({k: v for k, v in receipt.items() if k != "artifact_sha256"})):
             raise ValueError("stop_research_native_dependency_invalid")
-        header, rows = {}, []
+        header, rows, shared_fields = {}, [], {}
         def project(reader):
             row = {}
             row_claim = Claim(0)
             claims.append(row_claim)
             def selected(key, child):
-                if key in _FIELDS:
+                if key == 'timeline' and execution_events:
+                    events = []
+                    def event(current):
+                        observation = {}
+                        def part(name, leaf):
+                            if name in {'stage', 'timestamp'}:
+                                observation[name] = leaf.value(4096)
+                            elif name == 'fields':
+                                # Native timeline envelopes put stage before
+                                # fields. Unknown layouts fail closed later.
+                                if observation.get('stage') in _EXECUTION_STAGES:
+                                    observation[name] = leaf.value(allocation.CACHED_RECEIPT_MAX_BYTES)
+                                else:
+                                    leaf.skip()
+                            else:
+                                leaf.skip()
+                            return iter(())
+                        for _ in current.fields(part): pass
+                        if observation.get('stage') in _EXECUTION_STAGES:
+                            # Reobservations retain their original timestamp
+                            # and full payload. Intern equal field dictionaries
+                            # rather than charging/retaining thousands of copies.
+                            fields = observation.get('fields')
+                            if isinstance(fields, dict):
+                                identity = _canonical(fields)
+                                if identity not in shared_fields:
+                                    account_row(fields, row_claim)
+                                    shared_fields[identity] = fields
+                                observation['fields'] = shared_fields[identity]
+                            account_row({k:v for k,v in observation.items() if k != 'fields'}, row_claim)
+                            events.append(observation)
+                        return None
+                    for _ in child.array(event): pass
+                    row['timeline'] = events
+                elif key in _FIELDS:
                     row[key] = child.value(allocation.CACHED_RECEIPT_MAX_BYTES)
                     # Reader owns transient decode; each returned field must
                     # remain admitted while the rest of this row is streamed.
@@ -285,6 +330,8 @@ def _native_projection_read(root, day, claims, transient_claims):
         pass
     indexed = BudgetedRows({str(row["id"]): row for row in rows})
     indexed.budget_claims = claims
+    indexed.native_header = {key:value.get(key) for key in ('meta', 'metrics', 'snapshot_identity', 'date')}
+    claims.append(Claim(len(json.dumps(indexed.native_header).encode()) * 8))
     return indexed, proof, paths
 
 

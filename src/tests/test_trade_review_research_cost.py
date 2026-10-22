@@ -393,6 +393,36 @@ def test_unknown_venue_reobservations_require_native_terminal_proof(fault):
     assert ledger["sell_receipt_reobservation_audit"] == []
 
 
+@pytest.mark.parametrize("fault", [None, "partial_venue", "partial_authority", "venue", "authority", "extra"])
+def test_unknown_venue_metadata_extensions_are_atomic_and_exact(fault):
+    from datetime import datetime
+    from src.engine.sniper_execution_receipts import _native_sell_receipt_identity
+
+    trade, events = unknown_venue_reobserved_sell_fixture()
+    fields = {k: v for k, v in events[-1].fields.items() if not k.startswith("native_receipt_")}
+    identity = _native_sell_receipt_identity(
+        {"id": 1, "code": "123456"}, "123456", "1", "sell_completed", fields,
+        datetime.fromisoformat(fields["exit_execution_received_at"]))
+    assert "native_receipt_operational_venue" in identity
+    assert "native_receipt_venue_assignment_authority" in identity
+    if fault == "partial_venue":
+        identity.pop("native_receipt_venue_assignment_authority")
+    elif fault == "partial_authority":
+        identity.pop("native_receipt_operational_venue")
+    elif fault == "venue":
+        identity["native_receipt_operational_venue"] = "KRX"
+    elif fault == "authority":
+        identity["native_receipt_venue_assignment_authority"] = "unverified_authority"
+    elif fault == "extra":
+        identity["native_receipt_unrecognized_metadata"] = "unknown"
+    events[-1] = replace(events[-1], fields={**fields, **identity})
+    before = deepcopy(events)
+    ledger = review._completed_execution_ledger(trade, events)
+    assert ("source_gap_duplicate_sell_execution" in ledger["strict_completion_reasons"]) is (fault is not None)
+    assert bool(ledger["sell_receipt_reobservation_audit"]) is (fault is None)
+    assert events == before
+
+
 @pytest.mark.parametrize("fault", ["quantity", "fees", "owner", "account", "route", "authority", "clock", "source_gap", "native_identity", "unwrapped", "unknown"])
 def test_sell_identity_collision_without_full_unchanged_native_proof_stays_excluded(fault):
     trade, events = reobserved_sell_fixture()
