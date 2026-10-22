@@ -4707,12 +4707,12 @@ REVIEWED_ENTRY_COST_DEPENDENCY_VARIANTS = {
 # actually consumed predecessor as a complete immutable dependency generation.
 REVIEWED_ENTRY_COST_PRE_PREPARED_OWNER_HASHES = REVIEWED_ENTRY_COST_HASHES
 REVIEWED_ENTRY_COST_PRE_PREPARED_OWNER_VARIANTS = REVIEWED_ENTRY_COST_DEPENDENCY_VARIANTS
-REVIEWED_PREPARED_OWNER_HASHES = {'src/engine/automation/ordered_intraday_deploy.py': '94e0b4a434ffda65586ec070b185f34049021c724385850945e15709bd19dd9e', 'src/engine/automation/prepared_policy_code_handoff.py': '5bf1ed07810e5beeba889493c83bdd5b8eaa913b1710fc534c8a20246e1422e3'}
+REVIEWED_PREPARED_OWNER_HASHES = {'src/engine/automation/ordered_intraday_deploy.py': 'afa9ca5839c59670f4c38f6898089cd8c743157b87ead058e393d5f78d4e07ab', 'src/engine/automation/prepared_policy_code_handoff.py': '5bf1ed07810e5beeba889493c83bdd5b8eaa913b1710fc534c8a20246e1422e3', 'src/engine/infrastructure/runtime_release_router.py': 'ab16b27904d4d9b2b680a27219844d76bb692bc257385b23e4abed5abe93d962'}
 REVIEWED_ENTRY_COST_HASHES = {**REVIEWED_ENTRY_COST_HASHES, **REVIEWED_PREPARED_OWNER_HASHES}
 REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
     name: REVIEWED_ENTRY_COST_PAIRS.get(name, ()) + tuple((old, current) for old in sorted(
         {pair[0] for pair in REVIEWED_ENTRY_COST_PAIRS.get(name, ())}
-        | {REVIEWED_ENTRY_COST_PRE_PREPARED_OWNER_HASHES.get(name, '00d78a00a10ad6c3d4cdc68083b659a6e5d4b0230ff38b87d7c2d52648f47a0c')}))
+        | {REVIEWED_ENTRY_COST_PRE_PREPARED_OWNER_HASHES.get(name, {'src/engine/infrastructure/runtime_release_router.py': '58daee5eebdc8f02bf4fc86477929b0a05cc14438c5251c7e52d12b4d2a7f308'}.get(name, '00d78a00a10ad6c3d4cdc68083b659a6e5d4b0230ff38b87d7c2d52648f47a0c'))}))
     for name, current in REVIEWED_PREPARED_OWNER_HASHES.items()}}
 REVIEWED_ENTRY_COST_DEPENDENCY_VARIANTS = {
     (key[0], REVIEWED_PREPARED_OWNER_HASHES.get(key[0], key[1])): {

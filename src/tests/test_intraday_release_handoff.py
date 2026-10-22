@@ -2276,6 +2276,7 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(tmp_path,family,faul
     'src/engine/automation/main_market_weakness_research.py',
     'src/engine/automation/ordered_intraday_deploy.py',
     'src/engine/automation/prepared_policy_code_handoff.py',
+    'src/engine/infrastructure/runtime_release_router.py',
     'src/engine/scalping/reversal_code_handoff.py',
     'src/engine/monitoring/submission_bottleneck_monitor.py',
     'src/engine/scalping/zero_base_probe.py',

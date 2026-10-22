@@ -424,21 +424,22 @@ def stopped_preparation_failure_sources(failed, failed_path):
 
 def execute(driver, *, validate_prepared=None):
     """Order is deliberate: no selection or shared document write before drain."""
-    try:
-        driver.preflight()
-        with _source_database_epoch(driver.workspace, driver.day):
-            with sentinel_preparation_lock(driver):
-                driver.acquire_hold()
-                driver.drain()
-                driver.publish()
-                driver.prepare()
-            if validate_prepared is not None:
-                validate_prepared(driver)
-            driver.start()
-            return driver.attest()
-    except BaseException as exc:
-        driver.fail(exc)
-        raise
+    with R.scheduled_execution_lease(driver.workspace, exclusive=True):
+        try:
+            driver.preflight()
+            with _source_database_epoch(driver.workspace, driver.day):
+                with sentinel_preparation_lock(driver):
+                    driver.acquire_hold()
+                    driver.drain()
+                    driver.publish()
+                    driver.prepare()
+                if validate_prepared is not None:
+                    validate_prepared(driver)
+                driver.start()
+                return driver.attest()
+        except BaseException as exc:
+            driver.fail(exc)
+            raise
 
 
 

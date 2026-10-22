@@ -1162,17 +1162,57 @@ def test_print_plan_never_starts_or_restarts(release, monkeypatch, capsys):
     assert json.loads(capsys.readouterr().out)["release_root"] == str(root)
 
 
+@pytest.mark.parametrize('operation', sorted(set(router.TAGS.values())))
+def test_scheduled_run_pins_selection_until_its_child_finishes(release, monkeypatch, operation):
+    workspace, root, _, _ = release
+    monkeypatch.setattr(router, '__file__', str(workspace / 'src/engine/infrastructure/runtime_release_router.py'))
+    monkeypatch.setattr(router.sys, 'argv', ['router', operation, '2026-10-22'])
+    monkeypatch.setattr(router.os, 'chdir', lambda *_: None)
+    original = router.selected_release
+    def require_lease(*args):
+        with pytest.raises(ValueError, match='scheduled_execution_active'):
+            with router.scheduled_execution_lease(workspace, exclusive=True): pass
+        return original(*args)
+    monkeypatch.setattr(router, 'selected_release', require_lease)
+    def child(command, **kwargs):
+        require_lease(workspace)
+        assert kwargs['env']['PROJECT_DIR'] == str(root)
+        with router.scheduled_execution_lease(workspace): pass
+        # Native family writers can still take the independent release-set lock.
+        with router.runtime_release_set_lock(workspace): pass
+        return subprocess.CompletedProcess(command, 7)
+    monkeypatch.setattr(router.subprocess, 'run', child)
+    monkeypatch.setattr(router.os, 'execvpe', lambda *_: pytest.fail('lease must cover child lifetime'))
+    assert router.main() == 7
+    with router.scheduled_execution_lease(workspace, exclusive=True): pass
+
+
 def test_archive_recovery_preserves_explicit_source_date(release,monkeypatch):
     workspace,root,_,_=release
     monkeypatch.setattr(router,'__file__',str(workspace/'src/engine/infrastructure/runtime_release_router.py'))
     monkeypatch.setattr(router.sys,'argv',['router','archive','2026-10-07'])
     monkeypatch.setattr(router.os,'chdir',lambda *a:None)
     captured=[]
-    monkeypatch.setattr(router.os,'execvpe',lambda executable,command,env:captured.append((command,env)))
+    def child(command, **kwargs):
+        captured.append((command, kwargs['env']))
+        return subprocess.CompletedProcess(command, 0)
+    monkeypatch.setattr(router.subprocess, 'run', child)
     router.main()
     command,env=captured[0]
     assert command[-1]=='0' and env['TARGET_DATE']=='2026-10-07'
     assert env['PROJECT_DIR']==str(root)
+
+
+def test_scheduled_child_keeps_lease_after_router_descriptor_closes(tmp_path):
+    with router.scheduled_execution_lease(tmp_path) as descriptor:
+        child = subprocess.Popen([sys.executable, '-c', 'import sys; sys.stdin.read()'],
+                                 stdin=subprocess.PIPE, pass_fds=(descriptor,))
+    try:
+        with pytest.raises(ValueError, match='scheduled_execution_active'):
+            with router.scheduled_execution_lease(tmp_path, exclusive=True): pass
+    finally:
+        child.communicate(timeout=5)
+    with router.scheduled_execution_lease(tmp_path, exclusive=True): pass
 
 
 def test_snapshot_plan_targets_selected_incremental_wrapper_with_exact_date(release):

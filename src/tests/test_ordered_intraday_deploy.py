@@ -330,6 +330,8 @@ def test_transition_does_not_advance_past_failed_phase(tmp_path, failure):
         workspace=tmp_path;day='2026-10-12'
         def __getattr__(self, name):
             def step(*args):
+                with pytest.raises(ValueError, match='scheduled_execution_active'):
+                    with D.R.scheduled_execution_lease(tmp_path, exclusive=True): pass
                 calls.append(name)
                 if name == failure:
                     raise ValueError(name)
@@ -342,6 +344,19 @@ def test_transition_does_not_advance_past_failed_phase(tmp_path, failure):
     else:
         assert D.execute(Driver()) == {'status': 'pass'}
         assert calls == steps
+
+
+def test_active_scheduled_owner_blocks_before_deployment_preflight(tmp_path):
+    calls = []
+    class Driver:
+        workspace = tmp_path
+        def preflight(self): calls.append('preflight')
+        def fail(self, exc): calls.append(str(exc))
+    with D.R.scheduled_execution_lease(tmp_path):
+        with pytest.raises(ValueError, match='scheduled_execution_active'):
+            D.execute(Driver())
+    assert calls == []
+    assert not (tmp_path / 'data/runtime/operator_startup_hold.json').exists()
 
 
 @pytest.mark.parametrize('failure', [None, 'drain', 'attest'])
