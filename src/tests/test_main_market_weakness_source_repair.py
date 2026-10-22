@@ -97,6 +97,424 @@ def native_capture():
     return body, t
 
 
+def native_path_sources(tmp_path, monkeypatch, mutation=None):
+    from src.tests.test_main_market_weakness_research_automation import setup_sources
+
+    data, trace_path, _ = setup_sources(tmp_path, monkeypatch)
+    body, trace_row = native_capture()
+    assessment = body["source"]["assessment"]
+    event = assessment["event"]
+    event["event_id"] = f"{DAY}:SOR:SOR_REGULAR:005930:3:7"
+    assessment["event_id"] = event["event_id"]
+    native = body["runtime_consumption"]["continuous_reversal"]
+    native.update(
+        event_id=event["event_id"], assessment_sha256=R.native_digest(assessment)
+    )
+    body["machine_observation_sha256"] = R.native_digest(
+        {k: v for k, v in body.items() if k != "machine_observation_sha256"}
+    )
+    trace_row.update(machine_observation_sha256=body["machine_observation_sha256"])
+    trace_path.write_text(json.dumps(trace_row) + "\n")
+    payload = data / "ai_decision_payloads" / f"ai_decision_payloads_{DAY}.jsonl"
+    payload.parent.mkdir()
+    payload.write_text(json.dumps(body) + "\n")
+    monkeypatch.setattr(A, "scope_contract", lambda *a, **k: {})
+    at = event["epoch"]
+    rows = [
+        [
+            at + i,
+            999,
+            i + 1,
+            100 + i,
+            99,
+            100,
+            1,
+            1,
+            1,
+            "005930_AL",
+            0,
+            3,
+            7 + i,
+            "SOR_REGULAR",
+            "SOR_REGULAR",
+        ]
+        for i in range(3)
+    ]
+    if mutation == "native_epoch":
+        rows[0][11] = 4
+    elif mutation == "native_sequence":
+        rows[0][12] = 8
+    elif mutation == "item":
+        rows[0][9] = "005930"
+    elif mutation == "ask":
+        rows[0][5] = 101
+    elif mutation == "excluded":
+        rows[0][8] = 0
+    elif mutation == "sequence_gap":
+        rows[1][2] = 4
+    elif mutation == "clock":
+        rows[0][0] += 0.001
+    elif mutation == "boolean":
+        rows[0][11] = True
+    elif mutation == "duplicate":
+        rows.insert(1, list(rows[0]))
+    normalized = data / "normalized.json.gz"
+    write_gzip(
+        normalized,
+        json.dumps(
+            dict(
+                day=DAY,
+                venue="SOR",
+                session="SOR_REGULAR",
+                runtime_effect=False,
+                columns=[
+                    "receive_epoch",
+                    "transport_epoch",
+                    "series_sequence",
+                    "trade_price",
+                    "bid",
+                    "ask",
+                    "qty",
+                    "side",
+                    "valid",
+                    "source_item",
+                    "quote_age_ms",
+                    "native_transport_epoch",
+                    "native_route_sequence",
+                    "native_receive_session",
+                    "exchange_session",
+                ],
+                namespace_contract=dict(
+                    transport_epoch_column="collector_sequence_epoch",
+                    native_transport_epoch="ws_native_epoch",
+                    native_route_sequence="ws_native_route_sequence",
+                ),
+                symbols={"005930": rows},
+            )
+        ).encode(),
+    )
+    if mutation == "legacy":
+        content = json.loads(gzip.decompress(normalized.read_bytes()))
+        content["columns"] = content["columns"][:11]
+        content.pop("namespace_contract")
+        content["symbols"]["005930"] = [point[:11] for point in rows]
+        write_gzip(normalized, json.dumps(content).encode())
+    report = R.seal(
+        dict(
+            schema="continuous_reversal_operating_comparison_v1",
+            source_date=DAY,
+            status="completed",
+            label_contract=R.LABEL,
+            parent_bundle_sha256="b" * 64,
+            partitions=[
+                dict(
+                    normalized_source=dict(
+                        day=DAY,
+                        venue="SOR",
+                        session="SOR_REGULAR",
+                        path=str(normalized),
+                        sha256=A.file_hash(normalized),
+                        issues={},
+                    ),
+                    records_object=1,
+                    records_sha256=R.digest([]),
+                )
+            ],
+        )
+    )
+    A.atomic(
+        data / "report/continuous_reversal_operating" / DAY / "machine-comparison.json",
+        report,
+    )
+
+    class Reader:
+        receipts = {}
+
+        def __init__(self, *a):
+            pass
+
+        def get(self, oid):
+            return []
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(A, "ReadObjects", Reader)
+    return data, trace_path, payload, normalized
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        None,
+        "native_epoch",
+        "native_sequence",
+        "item",
+        "ask",
+        "excluded",
+        "sequence_gap",
+        "clock",
+        "boolean",
+        "duplicate",
+        "legacy",
+    ],
+)
+def test_actual_native_label_uses_ws_identity_without_replay_confirmation(
+    tmp_path, monkeypatch, mutation
+):
+    data, trace_path, payload, _ = native_path_sources(tmp_path, monkeypatch, mutation)
+    original = [trace_path.read_bytes(), payload.read_bytes()]
+    A.process_date(data, DAY, stop_at=time.monotonic() + 15)
+    cursor = A.read_json(A.namespace(data) / DAY / "cursor.json")
+    rows = list(A.projection_rows(cursor["partitions"]))
+    assert len(rows) == 1 and rows[0]["native_binding_status"] == "verified"
+    assert rows[0]["outcome"] == ("W" if mutation is None else "U")
+    if mutation is None:
+        assert rows[0]["label_binding"] == "exact_event_time_actual_ask"
+        assert rows[0]["label_binding_ref"]["point_index"] == 0
+        assert rows[0]["label_binding_ref"]["label_contract"] == R.LABEL
+    assert [trace_path.read_bytes(), payload.read_bytes()] == original
+    assert A.cursor_current(data, cursor)
+    assert A.process_date(data, DAY, stop_at=time.monotonic() + 5)["delta"] == 0
+
+def test_native_path_label_index_reuses_complete_partitions(tmp_path, monkeypatch):
+    from src.engine.scalping import continuous_reversal_source as source
+
+    data, _, _, _ = native_path_sources(tmp_path, monkeypatch)
+    A.process_date(data, DAY, stop_at=time.monotonic() + 15)
+    root = A.namespace(data)
+    cursor = A.read_json(root / DAY / "cursor.json")
+    monkeypatch.setattr(
+        source,
+        "iter_normalized_symbols",
+        lambda *a: pytest.fail("unchanged source rescanned"),
+    )
+    db = A.label_index(root, cursor, data_root=data, stop_at=time.monotonic() + 5)
+    db.close()
+
+@pytest.mark.parametrize("failure", ["crc", "changed", "header"])
+@pytest.mark.parametrize("compressed", [False, True])
+def test_native_label_dependency_failure_preserves_trace_population(
+    tmp_path, monkeypatch, failure, compressed
+):
+    from src.engine.scalping import continuous_reversal_source as source
+
+    data, trace_path, _, normalized = native_path_sources(tmp_path, monkeypatch)
+    if compressed:
+        write_gzip(Path(str(trace_path) + ".gz"), trace_path.read_bytes())
+        trace_path.unlink()
+    if failure in {"crc", "header"}:
+        if failure == "crc":
+            content = bytearray(normalized.read_bytes())
+            content[-5] ^= 1
+            normalized.write_bytes(content)
+        else:
+            content = json.loads(gzip.decompress(normalized.read_bytes()))
+            content["namespace_contract"]["native_transport_epoch"] = "collector_epoch"
+            write_gzip(normalized, json.dumps(content).encode())
+        path = (
+            data
+            / "report/continuous_reversal_operating"
+            / DAY
+            / "machine-comparison.json"
+        )
+        report = A.read_json(path)
+        report["partitions"][0]["normalized_source"]["sha256"] = A.file_hash(normalized)
+        A.atomic(path, R.seal(report))
+    else:
+        original = source.iter_normalized_symbols
+
+        def changed(path, **kwargs):
+            yield from original(path, **kwargs)
+            with Path(path).open("ab") as handle:
+                handle.write(b"changed")
+
+        monkeypatch.setattr(source, "iter_normalized_symbols", changed)
+    with pytest.raises(A.Deferred, match="native_label_source"):
+        A.process_date(data, DAY, stop_at=time.monotonic() + 15)
+    cursor = A.read_json(A.namespace(data) / DAY / "cursor.json")
+    assert cursor["status"] == "in_progress"
+    assert (
+        cursor["source_descriptor"]["sources"][cursor["source_index"]]["kind"]
+        == "natural_trace"
+    )
+    assert not cursor.get("terminal_path")
+    assert not any(p["rows"] for p in cursor["partitions"])
+    path = A.namespace(data) / DAY / cursor["generation"] / "label_bindings.sqlite"
+    with sqlite3.connect(path) as db:
+        assert (
+            db.execute(
+                "SELECT count(*) FROM labels WHERE id LIKE 'native-label:%'"
+            ).fetchone()[0]
+            == 0
+        )
+
+
+def test_native_path_labels_cover_multiple_captured_events(tmp_path, monkeypatch):
+    data, trace_path, payload_path, _ = native_path_sources(tmp_path, monkeypatch)
+    body = json.loads(payload_path.read_text())
+    trace_row = json.loads(trace_path.read_text())
+    assessment = body["source"]["assessment"]
+    event = assessment["event"]
+    at = datetime.fromisoformat(event["at"]) + timedelta(seconds=1)
+    event.update(
+        at=at.isoformat(),
+        epoch=at.timestamp(),
+        native_sequence=8,
+        event_id=f"{DAY}:SOR:SOR_REGULAR:005930:3:8",
+        canonical_opportunity_id="canonical2",
+    )
+    assessment.update(event_id=event["event_id"], opportunity_key="canonical2")
+    body["label_context"]["evaluation_attempt_id"] = "attempt2"
+    body["source"]["exact_payload"]["evaluation_attempt_id"] = "attempt2"
+    body["captured_at"] = (at + timedelta(seconds=1)).isoformat()
+    native = body["runtime_consumption"]["continuous_reversal"]
+    native.update(
+        captured_at=body["captured_at"],
+        event_id=event["event_id"],
+        snapshot_read_at=at.timestamp() + 0.5,
+        exact_payload_sha256=R.native_digest(body["source"]["exact_payload"]),
+        assessment_sha256=R.native_digest(assessment),
+    )
+    body["machine_observation_sha256"] = R.native_digest(
+        {k: v for k, v in body.items() if k != "machine_observation_sha256"}
+    )
+    trace_row.update(
+        evaluation_attempt_id="attempt2",
+        decision_ts=(at + timedelta(seconds=2)).isoformat(),
+        continuous_reversal_consumption=native,
+        machine_observation_sha256=body["machine_observation_sha256"],
+    )
+    with payload_path.open("a") as handle:
+        handle.write(json.dumps(body) + "\n")
+    with trace_path.open("a") as handle:
+        handle.write(json.dumps(trace_row) + "\n")
+    A.process_date(data, DAY, stop_at=time.monotonic() + 15)
+    cursor = A.read_json(A.namespace(data) / DAY / "cursor.json")
+    rows = list(A.projection_rows(cursor["partitions"]))
+    assert len(rows) == 2 and all(row["outcome"] == "W" for row in rows)
+    assert {row["label_binding_ref"]["point_index"] for row in rows} == {0, 1}
+
+
+def test_legacy_missing_ws_namespace_never_labels_new_native_source(
+    tmp_path, monkeypatch
+):
+    from src.engine.scalping.continuous_reversal_source import iter_normalized_symbols
+
+    _, _, _, path = native_path_sources(tmp_path, monkeypatch)
+    content = json.loads(gzip.decompress(path.read_bytes()))
+    expected = {
+        k: content[k]
+        for k in (
+            "day",
+            "venue",
+            "session",
+            "runtime_effect",
+            "columns",
+            "namespace_contract",
+        )
+    }
+    content["columns"] = content["columns"][:11]
+    content.pop("namespace_contract")
+    content["symbols"]["005930"] = [
+        point[:11] for point in content["symbols"]["005930"]
+    ]
+    write_gzip(path, json.dumps(content).encode())
+    assert (
+        list(
+            iter_normalized_symbols(
+                path, expected_metadata=expected, legacy_native_columns=True
+            )
+        )
+        == []
+    )
+    with pytest.raises(ValueError, match="namespace_contract_invalid"):
+        list(iter_normalized_symbols(path, expected_metadata=expected))
+
+
+def test_native_label_hard_interruption_replays_compressed_trace(tmp_path, monkeypatch):
+    data, trace_path, _, _ = native_path_sources(tmp_path, monkeypatch)
+    write_gzip(Path(str(trace_path) + ".gz"), trace_path.read_bytes())
+    trace_path.unlink()
+    original = A.index_native_path_labels
+
+    def interrupt(*args, **kwargs):
+        raise KeyboardInterrupt()
+
+    monkeypatch.setattr(A, "index_native_path_labels", interrupt)
+    with pytest.raises(KeyboardInterrupt):
+        A.process_date(data, DAY, stop_at=time.monotonic() + 15)
+    cursor = A.read_json(A.namespace(data) / DAY / "cursor.json")
+    assert cursor["compressed_in_progress"]["label_dependency_pending"] is True
+    monkeypatch.setattr(A, "index_native_path_labels", original)
+    A.process_date(data, DAY, stop_at=time.monotonic() + 15)
+    cursor = A.read_json(A.namespace(data) / DAY / "cursor.json")
+    rows = list(A.projection_rows(cursor["partitions"]))
+    assert len(rows) == 1 and rows[0]["outcome"] == "W"
+
+
+def test_native_label_uses_zero_eligible_census_without_decoding_excluded_paths(
+    tmp_path, monkeypatch
+):
+    from src.engine.scalping import continuous_reversal_source as source
+
+    data, _, _, path = native_path_sources(tmp_path, monkeypatch)
+    content = json.loads(gzip.decompress(path.read_bytes()))
+    for point in content["symbols"]["005930"]:
+        point[8] = 0
+    write_gzip(path, json.dumps(content).encode())
+    report_path = (
+        data / "report/continuous_reversal_operating" / DAY / "machine-comparison.json"
+    )
+    report = A.read_json(report_path)
+    part = report["partitions"][0]
+    part["normalized_source"].update(
+        sha256=A.file_hash(path), rows=3, issues={"source_epoch_unverified": 3}
+    )
+    part["points"] = 0
+    A.atomic(report_path, R.seal(report))
+    monkeypatch.setattr(
+        source,
+        "iter_normalized_symbols",
+        lambda *a, **k: pytest.fail("excluded source decoded"),
+    )
+    A.process_date(data, DAY, stop_at=time.monotonic() + 15)
+    cursor = A.read_json(A.namespace(data) / DAY / "cursor.json")
+    rows = list(A.projection_rows(cursor["partitions"]))
+    assert len(rows) == 1 and rows[0]["outcome"] == "U"
+    assert cursor["gaps"]["replay_upstream_source_epoch_unverified"] == 3
+
+
+def test_native_path_window_keeps_original_index_and_quiet_horizon_boundary(
+    tmp_path, monkeypatch
+):
+    data, _, _, path = native_path_sources(tmp_path, monkeypatch)
+    content = json.loads(gzip.decompress(path.read_bytes()))
+    rows = content["symbols"]["005930"]
+    start = rows[0][0]
+    for point in rows:
+        point[3] = 100
+    prior = list(rows[0])
+    prior[0] = start - 10000
+    prior[2] = 0
+    prior[12] = 6
+    boundary = list(rows[-1])
+    boundary[0] = start + 5000
+    boundary[2] = 4
+    boundary[12] = 10
+    content["symbols"]["005930"] = [prior, *rows, boundary]
+    write_gzip(path, json.dumps(content).encode())
+    report_path = (
+        data / "report/continuous_reversal_operating" / DAY / "machine-comparison.json"
+    )
+    report = A.read_json(report_path)
+    report["partitions"][0]["normalized_source"]["sha256"] = A.file_hash(path)
+    A.atomic(report_path, R.seal(report))
+    A.process_date(data, DAY, stop_at=time.monotonic() + 15)
+    cursor = A.read_json(A.namespace(data) / DAY / "cursor.json")
+    row = list(A.projection_rows(cursor["partitions"]))[0]
+    assert row["outcome"] == "F" and row["label_binding_ref"]["point_index"] == 1
+
+
 def write_gzip(path, value):
     path.parent.mkdir(parents=True, exist_ok=True)
     with gzip.open(path, "wb") as handle:

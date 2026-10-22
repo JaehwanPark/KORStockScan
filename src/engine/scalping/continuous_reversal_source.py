@@ -202,26 +202,58 @@ def freeze_normalized_sources(data_root, day, out):
     return outputs
 
 
-def iter_normalized_symbols(path):
+def iter_normalized_symbols(path, *, expected_metadata=None, legacy_native_columns=False, native_windows=None):
     """Decode a frozen partition once; retain only one symbol's rows in RAM.
 
     The disk spool keeps legacy sorted-symbol order even when the producer's
     first-observation order differs. Drain and verify gzip before yielding.
+    Native windows append the original symbol-row index to each selected row.
     """
     import tempfile
     import pickle
     from src.engine.lifecycle.research_json_stream import Reader
     path=Path(path);before=path.stat();index={};found=False
+    metadata={}
     with tempfile.TemporaryFile(mode='w+b') as spool:
         with gzip.open(path,'rt',encoding='utf-8') as handle:
             reader=Reader(handle,budgeted=False)
             def field(key,r):
                 nonlocal found
-                if key!='symbols':r.discard();return
+                if key!='symbols':
+                    if expected_metadata is not None and key in expected_metadata:
+                        metadata[key]=r.value(65536)
+                    else:
+                        r.discard()
+                    return
                 found=True
                 def symbol(code,child):
                     start=spool.tell()
-                    rows=child.value(1024*1024*1024)
+                    if native_windows is None:
+                        rows=child.value(1024*1024*1024)
+                    else:
+                        if code not in native_windows:
+                            child.discard()
+                            return ()
+                        intervals=[]
+                        for left,right in sorted(native_windows[code]):
+                            if intervals and left<=intervals[-1][1]:
+                                intervals[-1]=(intervals[-1][0],max(intervals[-1][1],right))
+                            else:
+                                intervals.append((left,right))
+                        rows=[];position=0;last=-math.inf
+                        for original_index,row in enumerate(child.array(lambda r:r.value(65536))):
+                            if (not isinstance(row,list) or not row or type(row[0]) not in (int,float)
+                                    or not math.isfinite(row[0]) or row[0]<last):
+                                raise ValueError('normalized_native_window_clock_invalid')
+                            t=row[0];last=t;boundary=False
+                            while position<len(intervals) and t>intervals[position][1]:
+                                position+=1;boundary=True
+                            # Keep the first observation beyond each horizon:
+                            # an unbroken quiet path can prove a timeout there.
+                            if boundary or (position<len(intervals) and intervals[position][0]<=t):
+                                rows.append([*row,original_index])
+                                if len(rows)>200000:
+                                    raise ValueError('normalized_native_window_budget')
                     if not isinstance(rows,list):raise ValueError('normalized_symbol_rows_invalid')
                     pickle.dump(rows,spool,protocol=pickle.HIGHEST_PROTOCOL)
                     index[code]=start
@@ -233,6 +265,15 @@ def iter_normalized_symbols(path):
         if (before.st_dev,before.st_ino,before.st_size,before.st_mtime_ns,before.st_ctime_ns)!=(after.st_dev,after.st_ino,after.st_size,after.st_mtime_ns,after.st_ctime_ns):
             raise ValueError('normalized_source_changed_during_read')
         if not found:raise ValueError('normalized_symbols_missing')
+        if expected_metadata is not None and any(metadata.get(k)!=v for k,v in expected_metadata.items()):
+            # The pre-2026-10-09 writer had no WS namespace columns. It
+            # cannot label captured native events; never infer an identity.
+            if (legacy_native_columns and metadata.get('namespace_contract') is None
+                    and metadata.get('columns')==expected_metadata['columns'][:11]
+                    and all(metadata.get(k)==v for k,v in expected_metadata.items()
+                            if k not in {'columns','namespace_contract'})):
+                return
+            raise ValueError('normalized_source_namespace_contract_invalid')
         for symbol,offset in sorted(index.items()):
             spool.seek(offset)
             yield symbol,pickle.load(spool)  # Only this invocation's private spool.

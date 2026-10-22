@@ -894,7 +894,10 @@ def test_selected_optional_code_requires_all_reviewed_modules(tmp_path, monkeypa
         A.selected_optional_code(Path(__file__).resolve().parents[2])
 
 
-@pytest.mark.parametrize("damage", [None, "source", "wrapper", "dependency"])
+@pytest.mark.parametrize(
+    "damage",
+    [None, "source", "wrapper", "dependency", "kernel", "normalized", "reader"],
+)
 def test_optional_installer_checks_executing_release_not_mutable_workspace(
     tmp_path, monkeypatch, damage
 ):
@@ -910,6 +913,9 @@ def test_optional_installer_checks_executing_release_not_mutable_workspace(
         "src/engine/risk/market_weakness_threshold_policy.py",
         "src/engine/market_panic_breadth_collector.py",
         "src/engine/scalping/micro_reversion/symbol_master.py",
+        "src/engine/scalping/continuous_reversal.py",
+        "src/engine/scalping/continuous_reversal_source.py",
+        "src/engine/lifecycle/research_json_stream.py",
         "deploy/run_main_market_weakness_research_postclose.sh",
     )
     for name in names:
@@ -920,7 +926,14 @@ def test_optional_installer_checks_executing_release_not_mutable_workspace(
         old.parent.mkdir(parents=True, exist_ok=True)
         old.write_bytes((executing / name).read_bytes())
     (workspace / names[0]).write_text("older workspace code")
-    changed = {"source": names[0], "wrapper": names[-1], "dependency": names[3]}
+    changed = {
+        "source": names[0],
+        "wrapper": names[-1],
+        "dependency": names[3],
+        "kernel": names[-4],
+        "normalized": names[-3],
+        "reader": names[-2],
+    }
     if damage:
         (selected / changed[damage]).write_text("unreviewed code")
     monkeypatch.setattr(router, "selected_release", lambda root: (selected, {}))

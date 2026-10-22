@@ -68,3 +68,55 @@
 근거: [원 incident 대사](../../tmp/weakness-source-handoff-20261021/incident.json), [원 코드 실패](../../tmp/weakness-source-handoff-20261021/baseline-regression.txt), [관련 회귀](../../tmp/weakness-source-handoff-20261021/regression.txt), [보완 후 회귀](../../tmp/weakness-source-handoff-20261021/supplemental-regression.txt), [최종 준비 영수증](../../tmp/weakness-source-handoff-20261021/final-candidate/readiness.json). 이 마지막 영수증이 clean candidate/정확한 commit·native handoff·parity·보호 파일/PID 대사를 소유한다.
 
 최종 정적 검증: 별도 fixed-watch producer/terminal135 PASS, compile·diff PASS, print-only parser23항목 중 해당 현재 owner1건이다. 기준faa67a01d 대비 비테스트 소스2파일 +117/-5, 테스트2파일 +106/-4, 문서3파일 +58/-0; 이동0·새 모듈0·신규 진입점0이다. 순증은 기존 owner 내부의 압축 원문/CRC·sealed 집계 검증과 회귀, 기존 Acceptance/History 인계 및 감사 기록이다. 다른 canonical 변경은 이 커밋에 포함하지 않는다.
+
+
+## 실제 판정의 경로 라벨 수리와 제한 재처리 — 2026-10-22
+
+사용자 지시는 장중 추가 로깅 없는 원인 수리·반복 리뷰와 과거7일 제한 재처리·누적/알림 판정 대사다. 기준 selected는b1519a2d4433401a5f969149789abfe3f1b76306, 설치 code a19fb4dd·native calendar true다. 격리 수정 branch는fix/weakness-natural-label-binding-20261022이며 Main 선택·재기동·설치/cron·매매 정책·provider/Telegram 호출 권한을 추가하지 않는다.
+
+### 원인 → 수리 → 회귀
+
+- 10/21 실제94행은 U였고 검증된 canonical72행 모두 기존 label key를 찾지 못했다. 기존 색인은 확인 리플레이 기회만 수록한다. 실제 WS의16자리 native epoch/route sequence와 collector의19자리 epoch/series sequence가 다르며, 실제 기회가 독립 리플레이 FSM에 다시 등장한다는 보장도 없다. timestamp 문자열 표현 차이를 느슨하게 대조하거나 가까운 가격을 차용하는 수리가 아니다.
+- 기존 label_index에 native 경로 라벨 단계를 통합한다. 기존 native observation 검증과 actual ask를 그대로 사용하고, 선언된 WS namespace·event ID·종목/item·venue/session·기록 시각이 같은 원천 point에서 기존 K.label의 비용.0023/순+.4%/순-3%/1800초 CF를 계산한다. 기존 normalized streaming owner가 EOF/CRC·metadata를 먼저 검증한다. 한 partition의 완료는 기존 label SQLite에 저장하여 trace chunk마다 재독하지 않는다. 원 정책/기계/보조 응답과 guard는 바꾸지 않는다.
+- 원 point가 제외됐거나 ask가 다르거나 신원이 충돌하면 U다.10/9 이전11열 역사 형식에는 WS 신원이 없어 U로 보존하고 현재/알 수 없는 namespace 계약 손상은 계속 거부한다. Source reader·path kernel·streaming reader도 연구 code binding에 포함한다.
+- 제한 재생에서 새로 확인한 압축 trace 전이 결함도 수리했다. label 의존성 Deferred가 compressed source를 다음 source로 이동시켜 재개 후 빈 모집단 완료를 만들 수 있었다. 해당 이유에서는 staging을 되돌리고 같은 source/offset0을 유지한다. 기존 다른 압축 복구 소비자는 그대로 유지한다. 원 advance=True 조건을 재현하면 compressed CRC 회귀가 source_index 범위 초과로 실패하고 수리 후 정상 pending을 유지한다.
+- 실제94행의 메모리 대사에서 W5/F3/U86으로 복구됐고 PASS29 중6행이 확정됐다(W3/F3). 이는 CF 경로 label이며 실체결/실현손익이 아니다. 첫 제한 native path 검증은3.358초/peak333,684,736B였다. 확인점이 제외된27건과 horizon이 짧은23건은 U를 유지했다. 이 probe는 전체 생산·누적 소비와 구분한다.
+
+기본 원 코드의 생산→소비 회귀는 U/W assertion으로1FAIL이다. 변경 후 최종6suite312PASS는 namespace/seq/item/ask/clock/boolean/중복·source 제외·경로 gap·여러 실제 사건·완료 cache·CRC/세대 교체/namespace 손상·압축 pending·구 namespace 부재의 역사/현재 구분을 포함한다. 새 raw logging/수집기/worker/CLI/production module/주문·정책 변경은0이다. 격리 input root 재생은 source anchor와 observer source_path guard가 원대로 거부했다. 실패한 root와 시도는 남겼으며 이를 허용하는 guard 변경은 하지 않았다.
+
+### 기존 경로의 대체·제거
+
+| 기존 경로 | 처분 | 소비 근거 |
+| --- | --- | --- |
+| label_index의 replay-only 실제 label 연결 | consolidated | 같은 owner가 검증 native 사건의 path label도 기존 index에 작성한다. 새 producer/DB는 없다. |
+| _index_label과 원 replay/alias reader | retained | 저장된 offline auxiliary·동일 신원의 역사 replay 소비에 필요하며 기존 부정 회귀를 유지한다. |
+| bind_natural_label의 단일 alias 조회 | consolidated | 정확한 native-label 키를 우선 소비하고 원 typed/time/ask 검증을 유지한다. |
+| iter_normalized_symbols | retained/extended | 기존 replay caller는 기존 기본값을 사용한다. 새 label caller만 명시적 metadata/역사 형식을 검사한다. |
+| compressed Deferred의 무조건 다음 source 이동 | consolidated | label 의존성 실패에 한해 같은 source에서 pending, 다른 기존 실패 전이는 유지한다. |
+
+새 module/worker/dispatch·제거 유예0이다. 추가 코드는 기존 owner의 native path label 기능과 서로 다른 실패 회귀에 필요하다. 기존 원천/실패/역사 reader와 퇴역 권한 경계는 보존한다.
+
+### 실제 제한 복구와 마지막 소비
+
+기존 selected producer로 과거7일을95.668초에 실제 재처리했다. attempt96a23e00d688455da70974c74940d0b9, peak112,721,920B, rchar1,931,948,531B/physical read952,967,168B/write413,630,464B였다. 새 누적02bee56f3d21cac201fc05cd71d0e9317119f0db4097972cadc1f83a62da98a2는9/29~10/21의14일이며 comparison_current=true·migration=false·pending/invalidated0, 후보184/적격0/not_eligible다. 설정·selector·cron cursor·원 night 예약·outbox5개 hash가 동일하다. 장중 성능 영향0을 측정했다고 해석하지 않는다.
+
+수리본 code binding 때문에 무효화되는14일을 기존 canonical namespace에서 worker1/512MiB·단계60초/전체900초·낮은 CPU/I/O 우선순위로 단회 복구한다. 결정적 실패·무진전·selected/config 변경·heavy owner 진입 시 중단한다. 설치 code/calendar 재결속을 위조하거나 Main을 재기동하지 않는다. 정기 worker의 채택은 통합 배포/정식 installer 뒤 별도 확인한다. 이번 수동 복구와 후속 정기 소비의 코드 세대를 혼동하지 않는다.
+
+원 strict checklist snapshot5d44c3e5b68855253bd1052229c1f6dad84e0d1eed476ea508d06bf111052747은 기존 preserve_checklist로 검증·보존했다. 원 source21/target22/미종결 owner를 유지한다. [단회 실행·원 실패·검증 근거](../../tmp/weakness-native-label-repair-20261022/)에 실제 결과를 보존하며 추가 최종 수용은 이 절에 기록한다.
+
+
+### 보완 후 실제 최종 수용
+
+추가 resource 리뷰에서 native label adapter가 전량 제외가 입증된 partition을 다시 해독하고 필요한 event horizon보다 큰 종목 배열을 메모리에 올리는 경로를 보완했다. sealed ref의 rows/epoch 제외 수와 points0이 일치하면 U를 유지하며 해독하지 않는다. 나머지는 기존 streaming reader가 native 사건의30분 window와 첫 horizon 이후 행만 보존한다. 원 symbol-row index를 함께 전달하여 label provenance가 바뀌지 않으며 invalid/sequence 단절도 남긴다. 한 symbol view는200,000행 이내다. 원10/15 v1 감독 중단은 세부reason이 남지 않아 memory/wall/순간 resource gate 중 어느 조건인지는 미확정으로 보존한다. 이후 각 supervisor의 exit/reason을 기록했고 v2의 모든 단계는exit0/reason=null이다. 이전 입력 root·계약 실패와 이 중단을 성공 이력으로 덮지 않았다.
+
+hard interruption도 label_dependency_pending이라는 기존 압축 cursor 단계로 보존하여 다음 실행이 같은 source에서 다시 읽는다. KeyboardInterrupt 재현 뒤 실제 재개에서 판정 행/라벨이 유지되는 회귀를 추가했다. 최종6suite312PASS, compile/diff check PASS, automation/test Ruff의 신규 소견0이다. 공유 legacy stream owner의 전체 style 정리는 이번 범위에서 제외했다. 새 source helper의 기존 default consumer3곳과 기본/손상 회귀도 대조했다.
+
+수리본의 실제 canonical 복구 attempt0886f27778594cb19a4b0fe08b7d6920은155.274초, worker peak127,467,520B(약121.6MiB)였다. 전체 rchar4,095,883,361B/physical read1,580,249,088B/write1,082,368,000B다.10/15는8.698초/92,217,344B로 완료했다. source 범위9/29~10/21의14일 전부 수리 code1b9f27f47b074c69b87ca3906d7cec4f9d2ad59ddc92af68fa4ff96003441c4c에서 cursor_current=true, 누적39d5f0b0ff5b69dc6e0cfcb2105753952674b53b76490e40062c8d1d2a20456f의 comparison_current=true/migration=false/pending·invalidated=[]를 직접 확인했다.
+
+10/21 새 daily21d99a1580e059830839ec26b550ee43c2a78343da44f258e5c7c39d04c00ac2는 실제94행을 W5/F3/U86으로 보존하고 PASS29 중6행을 W3/F3으로 연결했다. 전체 분석18,649행의 W1513/F11931/U5205이며 원 raw epoch 제외206,358은 daily/terminal에 그대로 남았다. 복구된8행 중6행의 시장 연결은 RECOVERY/B,2행은 시장 연결U다. 이 표본을 확정 약세 조정 효과나 실현 이익으로 해석하지 않는다. 후보184의 전향 baseline resolved는 전부0, 상태178 uncertainty_unresolved/6 source_gap, 적격0이다.
+
+native notification f569c0b602a61ba37a502e2c6169b624a893cbc3673f898219e72a4a52903d57은 not_eligible이며 같은 누적 generation·attempt·phase completed·manual summary를 대사했다. 실제 발송0, outbox/selector/설치/자동 순환 cursor/원 야간 예산5개 hash가 같다. 마지막 consumer 근거는 [직접 검증](../../tmp/weakness-native-label-repair-20261022/final-consumer-verification.json), [실제 복구](../../tmp/weakness-native-label-repair-20261022/reviewed-code-v2-recovery-result.json), [native 누적](../../data/report/main_market_weakness_research/cumulative/current.json)이다.
+
+이 수용은 사용자 승인 단회 실행의 코드·자료·누적·알림 판정 수용이다. 실제 Main/정기 wrapper는 여전히selected b1519a2d4/설치 a19fb4dd다. 새 수리 code의 정기 채택·native optional installer 재결속과 다음 야간 소비는 미실행이며 통합 배포 owner에 남긴다. 설치를 손으로 고치거나 active selector/cron을 바꾸어 완료를 만들지 않는다. 정기 incumbent 코드가 새 연구 generation을 자기 코드로 해석할 수 없으므로 다음21:40 전에 통합 배포 세션이 이 차이를 확인해야 한다. Main 정책/PREOPEN·자연 주문·비용 후 경제성의 새 완료 주장도 없다.
+
+Git scope baseline b1519a2d4433401a5f969149789abfe3f1b76306: source 2files +356/-19 (net 337); tests 2files +433/-2 (net 431); docs 3files +66/-0 (net 66). Moves0/new module·worker·entrypoint0이며 공용 reader는 기존3개 consumer를 유지한다. 실제 native path label·원 제외/경로 보존·chunk checkpoint와 서로 다른 부정 회귀에 필요한 순증이다. 별도 dirty 문서/런타임 변경은 포함하지 않는다.

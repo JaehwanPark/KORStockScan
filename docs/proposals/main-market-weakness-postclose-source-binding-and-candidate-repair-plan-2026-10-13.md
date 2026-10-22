@@ -289,3 +289,15 @@ gzip-only 날짜/종목 마스터·엄격한 alias 검증, 원 native 본문과 
 `MainMarketWeaknessPostcloseObservation1008`은 기존 checklist builder의 OPEN 인계 대상이다. 전일 OPEN의 stable ID·Acceptance·History를 보존하며 target의 명시적 종료/기존 항목이 우선한다. 현재 owner는 한 건이어야 하며 completed/absent는 다시 만들지 않는다. 수집 종료 증빙은 기존 collector→canary closed→normalized source→operating replay→weakness consumer가 소유한다. 종료 증빙 없는 과거 epoch를 소급 승인하지 않는다.
 
 이번 권한은 배포본 준비까지다. 실제 전환 시 기존 설치 enabled/notify/calendar/예산을 유지한 optional code binding 갱신이 필요하다. 이후 기존 야간 worker가 최신 마감일→backlog→누적 currentness→알림 disposition을 확인한다. 지금 재기동·selector 변경·cron 변경·보고서 재발행·Telegram 호출을 실행하지 않는다. [검토 기록](../audits/main-market-weakness-source-completeness-and-status-review-2026-10-16.md#압축-재결속수집-증빙일일-인계-배포-후보--2026-10-21).
+
+## 14. 2026-10-22 실제 판정의 장후 경로 라벨과 제한 복구
+
+사용자는 장중 추가 로깅 없이 실제 판정과 라벨의 연결 원인 수리·반복 리뷰, 과거7거래일 재처리와 누적/알림 판정 재검증을 지시했다. §13의 당시 준비 범위와 구분해 이 단회 닫힌 원천 복구를 실행한다. Main selector/재기동·cron/설치 설정·주문/정책 변경 및 Telegram 시험 발송은 포함하지 않는다.
+
+기존 `label_index`는 저장된 확인 리플레이 기회만 색인했다. 실제 WS 이벤트의 epoch/route sequence와 collector의 epoch/series sequence는 서로 다른 namespace이며, 같은 사건이 리플레이 FSM에서 재확인된다는 보장도 없다. 기존 native observation으로 검증한 사건을 frozen normalized source의 선언된 `native_transport_epoch/native_route_sequence`·종목·item·venue/session·기록 시각·actual ask에 정확히 연결한다. 시간의 근접 매칭이나 collector namespace의 대입은 금지한다. 같은 기존 `continuous_reversal.label`과 비용.0023·목표 순+.4%·soft stop 순-3%·1800초 계약으로 CF 라벨을 계산하며 실체결/손익으로 표시하지 않는다.
+
+기존 JSON streaming owner가 해시 결속된 partition의 gzip EOF/CRC와 metadata를 확인한 뒤 한 종목씩 공급한다. 연구 generation 안에서 partition 완료를 기존 SQLite label index에 checkpoint하여 trace chunk마다 다시 읽지 않는다. 신원 충돌·변경 ask·제외 row·경로 단절/부족은 U이고, WS namespace가 기록되지 않은10/9 이전의 확인된11열 역사 형식은 U로 보존한다. 현재/알 수 없는 schema와 신원·시간·출처 변경은 계속 거부한다. 새 source reader와 경로 label kernel도 기존 code binding에 포함한다.
+
+라벨 의존성 실패는 trace 원천 불량으로 분류하거나 압축 trace를 다음 source로 이동시키지 않는다. 해당 압축 source의 미확정 staging을 되돌리고 같은 source에서 pending을 유지한다. 원 실패와 이전 산출물은 보존하며 결정적 실패의 동일 재시도를 중단한다.
+
+기존 selected producer로9/29·9/30·10/2·10/6·10/7·10/8·10/12를 worker1/512MiB·단계60초·전체600초 이내 단회 재처리한다. 수리본의 code binding 변경으로 나머지7일도 무효화되므로 기존 canonical 연구 namespace에서9/29~10/21의14일까지만 단회 복구·검증한다(전체900초, worker1/512MiB, 단계60초). 장중10/22 원천 본문은 읽지 않는다. 외부 source anchor·동결 observer 출처 검증이 거부한 격리 입력 root를 허용하도록 guard를 바꾸지 않는다. 원 실패와 중간 시도를 보존하고, 이 실행을 정기 야간·선택본 교체·설치 재결속으로 표시하지 않는다. 정기 소비는 통합 배포 후 native optional installer의 code/calendar 결속과 다음 야간을 별도 수용한다. 결과·대체/제거·회귀·원천 결손은 [기존 리뷰](../audits/main-market-weakness-source-completeness-and-status-review-2026-10-16.md#실제-판정의-경로-라벨-수리와-제한-재처리--2026-10-22)에 기록한다.

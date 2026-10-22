@@ -7,6 +7,7 @@ PREOPEN or runtime stage and cannot regenerate an upstream source or policy.
 from __future__ import annotations
 
 import argparse
+import bisect
 import contextlib
 import ctypes
 from datetime import date, datetime, time as dt_time, timedelta
@@ -303,10 +304,15 @@ def code_hash(code_root=None):
         Path(R.__file__).parents[1] / "risk/market_weakness_threshold_policy.py",
         Path(R.__file__).parents[1] / "market_panic_breadth_collector.py",
         Path(R.__file__).parent / "micro_reversion/symbol_master.py",
+        Path(R.__file__).parent / "continuous_reversal.py",
+        Path(R.__file__).parent / "continuous_reversal_source.py",
+        Path(R.__file__).parents[1] / "lifecycle/research_json_stream.py",
     ]
     if code_root is not None:
         executing_root = Path(__file__).resolve().parents[3]
-        modules = [Path(code_root) / p.resolve().relative_to(executing_root) for p in modules]
+        modules = [
+            Path(code_root) / p.resolve().relative_to(executing_root) for p in modules
+        ]
     return R.digest(
         {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in modules}
     )
@@ -1007,7 +1013,7 @@ def replay_records(
         store.close()
 
 
-def label_index(root, cursor):
+def label_index(root, cursor, *, data_root=None, stop_at=float("inf")):
     path = root / cursor["source_date"] / cursor["generation"] / "label_bindings.sqlite"
     path.parent.mkdir(parents=True, exist_ok=True)
     db = sqlite3.connect(path)
@@ -1025,7 +1031,273 @@ def label_index(root, cursor):
             _index_label(db, row)
         db.execute("INSERT INTO loaded VALUES(?)", (part["sha256"],))
     db.commit()
+    if data_root is not None:
+        try:
+            index_native_path_labels(data_root, root, cursor, db, stop_at=stop_at)
+        except (ValueError, EOFError, OSError, zlib.error) as exc:
+            db.close()
+            # A path-label dependency failure is not a malformed trace. Keep
+            # its cursor/population pending rather than silently skipping it.
+            raise Deferred(
+                "native_label_path_budget"
+                if str(exc) == "normalized_native_window_budget"
+                else "native_label_source_contract_invalid"
+            ) from exc
+        except BaseException:
+            db.close()
+            raise
     return db
+
+
+def index_native_path_labels(data_root, root, cursor, db, *, stop_at):
+    """Label captured events in the existing frozen path, not replay FSM events.
+
+    Collector continuity uses columns 1/2; captured WS identity uses 11/12.
+    Neither namespace, the actual ask nor the captured clock is approximated.
+    Each immutable normalized partition is decoded once per research generation.
+    """
+    from src.engine.scalping import continuous_reversal as K
+    from src.engine.scalping.continuous_reversal_source import iter_normalized_symbols
+
+    complete = "native-paths-complete"
+    if db.execute("SELECT 1 FROM loaded WHERE partition=?", (complete,)).fetchone():
+        return
+    natives = native_index(root, cursor)
+    events = {}
+    try:
+        for (raw,) in natives.execute("SELECT row FROM native WHERE conflict=0"):
+            native = strict_json(raw)
+            event = native.get("event") or {}
+            canonical = native.get("canonical_opportunity_id")
+            at = R.timestamp(event.get("at"))
+            if not canonical or not at or not event.get("source_item"):
+                continue
+            ep, seq = event.get("native_epoch"), event.get("native_sequence")
+            if type(ep) is not int or type(seq) is not int or min(ep, seq) <= 0:
+                continue
+            day = cursor["source_date"]
+            if at.date().isoformat() != day or event.get("event_id") != (
+                f"{day}:{event.get('venue')}:{event.get('session')}:"
+                f"{native['symbol']}:{ep}:{seq}"
+            ):
+                continue
+            row = dict(
+                source_date=day,
+                symbol=native["symbol"],
+                opportunity_id=canonical,
+                canonical_alias=event.get("canonical_opportunity_id") or canonical,
+                machine_confirmed_at=event["at"],
+                event_id=event["event_id"],
+                entry_ask=R.number(event.get("entry_ask")),
+                session=event.get("session"),
+                route=event.get("venue"),
+                source_item=event["source_item"],
+                native_epoch=ep,
+                native_sequence=seq,
+            )
+            key = exact_event_key(row)
+            if key and row["entry_ask"] is not None and row["entry_ask"] > 0:
+                events[key] = row
+            if len(events) > 4096:
+                raise Deferred("native_label_population_budget")
+    finally:
+        natives.close()
+    for source in cursor["source_descriptor"].get("sources", []):
+        if source.get("kind") != "operating_comparison" or not events:
+            continue
+        report = check_seal(read_json(source["path"]))
+        if not (
+            report.get("schema") == "continuous_reversal_operating_comparison_v1"
+            and report.get("status") == "completed"
+            and report.get("source_date") == cursor["source_date"]
+            and report.get("label_contract") == R.LABEL
+            and report.get("parent_bundle_sha256")
+        ):
+            # replay_records already reports this unavailable/legacy contract.
+            # Preserve the natural population with U, without borrowing labels.
+            continue
+        for part in report.get("partitions", []):
+            ref = part.get("normalized_source", {})
+            selected = {
+                key: row
+                for key, row in events.items()
+                if (
+                    ref.get("day") == row["source_date"]
+                    and ref.get("venue") == row["route"]
+                    and ref.get("session") == row["session"]
+                )
+            }
+            if not selected:
+                continue
+            if (
+                type(ref.get("rows")) is int
+                and ref["rows"] > 0
+                and ref.get("issues", {}).get("source_epoch_unverified") == ref["rows"]
+                and type(part.get("points")) is int
+                and part["points"] == 0
+            ):
+                # The sealed upstream census proves no eligible path in this
+                # partition. Preserve U; never decode excluded raw rows again.
+                continue
+            marker = "native-path:" + R.digest(ref)
+            if db.execute(
+                "SELECT 1 FROM loaded WHERE partition=?", (marker,)
+            ).fetchone():
+                continue
+            if time.monotonic() >= stop_at:
+                raise Deferred("native_label_wall_budget")
+            path = source_path(data_root, ref["path"])
+            before = verify_file(root, path, ref["sha256"], stop_at=stop_at)
+            by_symbol = {}
+            for key, row in selected.items():
+                by_symbol.setdefault(row["symbol"], {})[key] = row
+            native_windows = {
+                symbol: [
+                    (
+                        R.timestamp(row["machine_confirmed_at"]).timestamp(),
+                        R.timestamp(row["machine_confirmed_at"]).timestamp() + 1800,
+                    )
+                    for row in targets.values()
+                ]
+                for symbol, targets in by_symbol.items()
+            }
+            with db:
+                expected_metadata = dict(
+                    day=ref["day"],
+                    venue=ref["venue"],
+                    session=ref["session"],
+                    runtime_effect=False,
+                    columns=[
+                        "receive_epoch",
+                        "transport_epoch",
+                        "series_sequence",
+                        "trade_price",
+                        "bid",
+                        "ask",
+                        "qty",
+                        "side",
+                        "valid",
+                        "source_item",
+                        "quote_age_ms",
+                        "native_transport_epoch",
+                        "native_route_sequence",
+                        "native_receive_session",
+                        "exchange_session",
+                    ],
+                    namespace_contract=dict(
+                        transport_epoch_column="collector_sequence_epoch",
+                        native_transport_epoch="ws_native_epoch",
+                        native_route_sequence="ws_native_route_sequence",
+                    ),
+                )
+                for symbol, rows in iter_normalized_symbols(
+                    path,
+                    expected_metadata=expected_metadata,
+                    legacy_native_columns=ref["day"] < "2026-10-09",
+                    native_windows=native_windows,
+                ):
+                    if time.monotonic() >= stop_at:
+                        raise Deferred("native_label_wall_budget")
+                    targets = by_symbol.get(symbol)
+                    if not targets:
+                        continue
+                    identities = {}
+                    for key, row in targets.items():
+                        identity = (
+                            row["native_epoch"],
+                            row["native_sequence"],
+                            row["source_item"],
+                            R.timestamp(row["machine_confirmed_at"]),
+                        )
+                        identities.setdefault(identity, []).append(key)
+                    anchors = {}
+                    for i, point in enumerate(rows):
+                        if len(point) < 13 or any(
+                            type(v) is not int or v <= 0 for v in point[11:13]
+                        ):
+                            continue  # Legacy collector identity cannot prove WS identity.
+                        identity = (
+                            *point[11:13],
+                            point[9],
+                            R.timestamp(K.iso(point[0])),
+                        )
+                        for key in identities.get(identity, []):
+                            anchors.setdefault(key, []).append(i)
+                    symbol_times = [p[0] for p in rows]
+                    for key, indices in anchors.items():
+                        row = targets[key]
+                        index = indices[0]
+                        point = rows[index]
+                        reason = (
+                            "native_event_path_conflict"
+                            if len(indices) != 1
+                            else (
+                                "native_entry_source_excluded"
+                                if not point[8]
+                                else (
+                                    "native_entry_ask_mismatch"
+                                    if not K.good_quote(point)
+                                    or point[5] != row["entry_ask"]
+                                    else None
+                                )
+                            )
+                        )
+                        label = dict(status="UNRESOLVED", reason=reason)
+                        if reason is None:
+                            # Only the bounded 30-minute suffix is needed. Preserve
+                            # every invalid row and collector/sequence discontinuity.
+                            start = R.timestamp(row["machine_confirmed_at"]).timestamp()
+                            end = bisect.bisect_right(symbol_times, start + 1800)
+                            path_rows = rows[index : min(len(rows), end + 1)]
+                            if len(path_rows) > 200000:
+                                raise Deferred("native_label_path_budget")
+                            path_rows[0] = list(path_rows[0])
+                            path_rows[0][0] = start
+                            _, ends, valid = K.segments(path_rows)
+                            path_times = [p[0] for p in path_rows]
+                            tree = K.Tree([p[3] if p[8] else None for p in path_rows])
+                            label = K.label(
+                                path_rows,
+                                path_times,
+                                tree,
+                                ends,
+                                valid,
+                                0,
+                                row["entry_ask"],
+                            )
+                        outcome, reason = R.label_value(
+                            label, row["entry_ask"], R.LABEL
+                        )
+                        value = dict(
+                            row,
+                            outcome=outcome,
+                            outcome_reason=reason,
+                            source_ref=dict(
+                                normalized_source=ref,
+                                stat=before,
+                                point_index=point[-1],
+                                label_contract=R.LABEL,
+                            ),
+                        )
+                        raw = json.dumps(value, sort_keys=True)
+                        label_key = "native-label:" + key
+                        old = db.execute(
+                            "SELECT row FROM labels WHERE id=?", (label_key,)
+                        ).fetchone()
+                        if old and old[0] != raw:
+                            db.execute(
+                                "UPDATE labels SET conflict=1 WHERE id=?", (label_key,)
+                            )
+                        elif not old:
+                            db.execute(
+                                "INSERT INTO labels VALUES(?,?,0)", (label_key, raw)
+                            )
+                if before != stat_receipt(path):
+                    raise Deferred("native_label_source_changed")
+                db.execute("INSERT INTO loaded VALUES(?)", (marker,))
+    with db:
+        db.execute("INSERT INTO loaded VALUES(?)", (complete,))
+
 
 
 def native_key(row):
@@ -1347,13 +1619,25 @@ def _index_label(db, row):
 def bind_natural_label(row, labels):
     if row.get("identity_grade") != "canonical" or row.get("entry_ask") is None:
         return
-    keys = {row["opportunity_id"], row.get("canonical_alias"), exact_event_key(row)} - {
-        None
-    }
-    found_rows = [
-        labels.execute("SELECT row,conflict FROM labels WHERE id=?", (k,)).fetchone()
-        for k in keys
-    ]
+    exact = exact_event_key(row)
+    native = (
+        labels.execute(
+            "SELECT row,conflict FROM labels WHERE id=?", ("native-label:" + exact,)
+        ).fetchone()
+        if exact
+        else None
+    )
+    keys = {row["opportunity_id"], row.get("canonical_alias"), exact} - {None}
+    found_rows = (
+        [native]
+        if native
+        else [
+            labels.execute(
+                "SELECT row,conflict FROM labels WHERE id=?", (k,)
+            ).fetchone()
+            for k in keys
+        ]
+    )
     if any(r and r[1] for r in found_rows):
         row["outcome_reason"] = "exact_label_binding_conflict"
         return
@@ -1729,7 +2013,7 @@ def process_date(data_root, source_date, *, stop_at, clock=time.monotonic):
         )
     streams = {}
 
-    def abandon_compressed(reason):
+    def abandon_compressed(reason, *, advance=True):
         ticket = cursor.pop("compressed_in_progress", None)
         if not ticket:
             return
@@ -1756,18 +2040,22 @@ def process_date(data_root, source_date, *, stop_at, clock=time.monotonic):
             "source_dependency_receipts", []
         )
         cursor["gaps"] = ticket["gaps"]
-        cursor["gaps"][reason] = cursor["gaps"].get(reason, 0) + 1
+        if advance:
+            cursor["gaps"][reason] = cursor["gaps"].get(reason, 0) + 1
         db = native_index(root, cursor)
         try:
             db.execute("DELETE FROM native WHERE source=?", (ticket["source_path"],))
             db.commit()
         finally:
             db.close()
-        cursor.update(source_index=ticket["source_index"] + 1, offset=0)
+        cursor.update(source_index=ticket["source_index"] + int(advance), offset=0)
         atomic(path, cursor)
 
     if cursor.get("compressed_in_progress"):
-        abandon_compressed("compressed_resume_unavailable")
+        abandon_compressed(
+            "compressed_resume_unavailable",
+            advance=not cursor["compressed_in_progress"].get("label_dependency_pending"),
+        )
     while cursor["source_index"] < len(sources):
         if clock() >= stop_at:
             for stream in streams.values():
@@ -1816,7 +2104,12 @@ def process_date(data_root, source_date, *, stop_at, clock=time.monotonic):
                     cursor.setdefault("source_ranges", []).append(
                         dict(path=source["path"], **range_proof)
                     )
-                labels = label_index(root, cursor)
+                if cursor.get("compressed_in_progress"):
+                    cursor["compressed_in_progress"]["label_dependency_pending"] = True
+                    atomic(path, cursor)
+                labels = label_index(root, cursor, data_root=data_root, stop_at=stop_at)
+                if cursor.get("compressed_in_progress"):
+                    cursor["compressed_in_progress"].pop("label_dependency_pending", None)
                 natives = native_index(root, cursor)
                 try:
                     for row in rows:
@@ -1956,11 +2249,14 @@ def process_date(data_root, source_date, *, stop_at, clock=time.monotonic):
                     raise Deferred("incomplete_source_tail")
                 cursor["offset"] = offset
             atomic(path, cursor)
-        except Deferred:
+        except Deferred as exc:
             for stream in streams.values():
                 stream.close()
             if cursor.get("compressed_in_progress"):
-                abandon_compressed("compressed_resume_unavailable")
+                abandon_compressed(
+                    "compressed_resume_unavailable",
+                    advance=not str(exc).startswith("native_label_"),
+                )
             raise
         except (
             FileNotFoundError,
