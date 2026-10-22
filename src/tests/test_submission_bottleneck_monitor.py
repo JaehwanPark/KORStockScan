@@ -324,7 +324,7 @@ def test_known_sparse_source_availability_diagnostics_remain_warning_not_contrac
     assert monitor.observation_health_projection(result)['status']=='not_eligible'
 
 
-@pytest.mark.parametrize('reason',['reversal_first_signal_invalidated','reversal_signal_generation_changed',
+@pytest.mark.parametrize('reason',['reversal_first_signal_invalidated','reversal_first_price_hold_invalidated','reversal_signal_generation_changed',
                                   'required_feature_blocked_before_assessment'])
 def test_native_validated_lifecycle_diagnostic_is_not_an_observer_failure(reason):
     result=_recorded_guard_health_fixture()
@@ -5497,3 +5497,71 @@ def test_lineage_native_index_reads_exact_entry_rows_outside_large_irrelevant_su
     assert source['window_covered'] is True and source['read_count']==int(legacy)
     assert source['bytes_read']+source['index_bytes_read'] <= budget
     assert source['bytes_read'] < path.stat().st_size/2
+
+
+@pytest.mark.parametrize('cumulative', [False, True])
+@pytest.mark.parametrize('damage', [None, 'no_breach', 'ready', 'predicate_missing', 'source',
+    'epoch', 'scope', 'registration', 'route', 'bundle', 'branch_phase', 'late'])
+def test_registered_native_first_hold_breach_is_diagnostic_only(tmp_path, monkeypatch, cumulative, damage):
+    from copy import deepcopy
+    from src.engine.scalping import reversal_extended_runtime as B
+    from src.engine.scalping import reversal_current_backend as dispatch
+    from src.engine.scalping import reversal_source_diagnostics as source
+    from src.engine.scalping.reversal_extended_state import State
+    from src.engine.scalping.reversal_path_catalog import cell_key
+    from src.tests.test_reversal_manual_registration import bid_for, hold_rows
+    from src.tests.test_reversal_path_policy import row
+    bid = 'manual_cumulative_a2a227bdaaad838d381a774c' if cumulative else bid_for('other_non_fixed', 'FIRST_HOLD3')
+    symbol = '034020' if cumulative else '000001'
+    values = hold_rows()
+    for tick in values:
+        if cumulative: tick[3:6] = [x*59000/99.5 for x in tick[3:6]]
+        tick[9] = symbol+'_NX'
+    state = State(branch_ids=[bid], session_anchor=values[0], generation='a'*64)
+    for tick in values: state.observe(tick, symbol=symbol, venue='NXT', session='NXT_PREMARKET')
+    assert state.ready
+    at = values[-1][0]; day = datetime.fromtimestamp(at, B.K.KST).date().isoformat()
+    cell = cell_key(symbol, 'PRE', values[-1][3])
+    monkeypatch.setattr(B, '_STATES', {(symbol,'NXT',symbol+'_NX','PRE',day,cell):state})
+    monkeypatch.setattr(B, '_CLAIMS', {})
+    monkeypatch.setattr(B, '_GENERATION', 'f'*64)
+    monkeypatch.setattr(B, '_FAMILY', dict(family_sha256='f'*64,
+        machine_cells={cell:dict(routes={'NXT':dict(scope_execution_hash='a'*64)})}))
+    monkeypatch.setattr(dispatch, 'backend', lambda *args:B)
+    monkeypatch.setattr(source.time, 'time', lambda:at)
+    claim = source.claim_snapshot_with_receipt(symbol,'NXT','NXT_PREMARKET',now=at,
+        item=symbol+'_NX',family_sha256='f'*64)
+    assert claim
+    # The actual native owner retires the held signal when its floor breaks.
+    price = 58999 if cumulative else 99.49
+    update = row(126,price); update[9]=symbol+'_NX'
+    state.observe(update,symbol=symbol,venue='NXT',session='NXT_PREMARKET')
+    monkeypatch.setattr(source.time, 'time', lambda:at+1)
+    with pytest.raises(ValueError) as error:
+        source.validate_claim_with_receipt(claim,'f'*64,now=at+1,
+            evaluation_attempt_id='aims-held',machine_bundle_sha256='b'*64)
+    assert str(error.value)=='reversal_signal_path_changed'
+    receipt=deepcopy(error.value.reversal_source_receipt)
+    trace=dict(schema='ai_decision_trace_v1',stock_code=symbol,decision_trace_id='held-trace',
+        decision_ts=B.K.iso(at+1.01),decision_stage='entry_screen',provider_called=False,
+        actual_order_submitted=False,machine_evaluation_status='assessment_contract_invalid',
+        market_data_route='nxt_only',evaluation_attempt_id='aims-held',machine_bundle_sha256='b'*64,
+        machine_contract_error='reversal_signal_path_changed',continuous_reversal_rejected_claim_receipt=receipt)
+    if damage=='no_breach':receipt['latest_native_observation'][3]=values[-1][3]
+    elif damage=='ready':receipt['registered_signal_ready']=True
+    elif damage=='predicate_missing':receipt['native_predicates'].pop('first_signal_turn_matches')
+    elif damage=='source':receipt['latest_native_observation'][8]=0
+    elif damage=='epoch':receipt['latest_native_observation'][1]+=1
+    elif damage=='scope':receipt['scope'][0]='foreign'
+    elif damage=='registration':receipt['source_registration_receipt']['sha256']='c'*64
+    elif damage=='route':trace['market_data_route']='krx_only'
+    elif damage=='bundle':trace['machine_bundle_sha256']='c'*64
+    elif damage=='branch_phase':next(iter(receipt['snapshot'][0]['branch_signals'].values()))['decision_phase']='FIRST_UPTICK'
+    elif damage=='late':receipt['state_observed_epoch']+=10
+    _source_gap_files(tmp_path,datetime.fromtimestamp(at+1.1,B.K.KST),traces=[trace])
+    before=deepcopy(trace)
+    result=monitor.source_gap_semantics(tmp_path,datetime.fromtimestamp(at+1.1,B.K.KST))
+    assert result['issues']==({} if damage is None else {'machine_trace:reversal_signal_path_changed':1})
+    if damage is None:
+        assert result['diagnostics']=={'machine_trace:reversal_first_price_hold_invalidated':1}
+    assert trace==before

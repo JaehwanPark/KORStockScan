@@ -5,6 +5,7 @@ from datetime import date
 import pytest
 
 from src.engine import buy_funnel_sentinel as sentinel
+from src.engine.monitoring import sentinel_event_scope as event_scope
 
 
 def _private_compact_fields(fields):
@@ -1213,7 +1214,8 @@ def test_effective_nxt_scope_overrides_legacy_entry_venue_and_uses_time_phase():
     event = sentinel._event_from_cache_row(sentinel._payload_to_cache_row(payload))
 
     assert event is not None
-    assert sentinel._explicit_event_scope(event) == (
+    assert event_scope.explicit_event_scope(event.fields, event.emitted_at,
+            venue_keys=sentinel.VENUE_SCOPE_FIELD_KEYS, session_keys=sentinel.SESSION_SCOPE_FIELD_KEYS) == (
         "NXT",
         "NXT_AFTERMARKET",
         "pass",
@@ -1235,14 +1237,15 @@ def test_dual_aftermarket_scope_preserves_unknown_and_actual_execution_venue():
     event = sentinel._event_from_cache_row(sentinel._payload_to_cache_row(payload))
 
     assert event is not None
-    assert sentinel._explicit_event_scope(event) == (
+    assert event_scope.explicit_event_scope(event.fields, event.emitted_at,
+            venue_keys=sentinel.VENUE_SCOPE_FIELD_KEYS, session_keys=sentinel.SESSION_SCOPE_FIELD_KEYS) == (
         "KRX_NXT_INTEGRATED",
         "KRX_NXT_AFTERMARKET",
         "pass",
     )
-    assert sentinel._actual_execution_venue(event) == "UNKNOWN"
+    assert event_scope.actual_execution_venue(event.fields) == "UNKNOWN"
     event.fields["actual_execution_venue"] = "NXT"
-    assert sentinel._actual_execution_venue(event) == "NXT"
+    assert event_scope.actual_execution_venue(event.fields) == "NXT"
 
 
 def test_solo_aftermarket_scope_is_not_folded_into_dual():
@@ -1259,7 +1262,8 @@ def test_solo_aftermarket_scope_is_not_folded_into_dual():
     event = sentinel._event_from_cache_row(sentinel._payload_to_cache_row(payload))
 
     assert event is not None
-    assert sentinel._explicit_event_scope(event) == (
+    assert event_scope.explicit_event_scope(event.fields, event.emitted_at,
+            venue_keys=sentinel.VENUE_SCOPE_FIELD_KEYS, session_keys=sentinel.SESSION_SCOPE_FIELD_KEYS) == (
         "NXT",
         "NXT_AFTERMARKET_SOLO",
         "pass",
@@ -1279,7 +1283,8 @@ def test_premarket_venue_rejects_regular_krx_session():
     event = sentinel._event_from_cache_row(sentinel._payload_to_cache_row(payload))
 
     assert event is not None
-    assert sentinel._explicit_event_scope(event) == (
+    assert event_scope.explicit_event_scope(event.fields, event.emitted_at,
+            venue_keys=sentinel.VENUE_SCOPE_FIELD_KEYS, session_keys=sentinel.SESSION_SCOPE_FIELD_KEYS) == (
         "CONFLICT",
         "CONFLICT",
         "conflict",
@@ -1299,7 +1304,8 @@ def test_runtime_krx_like_premarket_session_token_is_preserved():
     event = sentinel._event_from_cache_row(sentinel._payload_to_cache_row(payload))
 
     assert event is not None
-    assert sentinel._explicit_event_scope(event) == (
+    assert event_scope.explicit_event_scope(event.fields, event.emitted_at,
+            venue_keys=sentinel.VENUE_SCOPE_FIELD_KEYS, session_keys=sentinel.SESSION_SCOPE_FIELD_KEYS) == (
         "PREMARKET_KRX_LIKE",
         "PREMARKET_KRX_LIKE",
         "pass",
@@ -4945,3 +4951,89 @@ def test_main_scoped_markdown_uses_overall_and_labels_scanner_compatibility():
     assert "PASS반환=1" in rendered
     assert "물리전송미관측=1" in rendered
     assert "scanner_only_legacy_compatibility" in rendered
+
+
+@pytest.mark.parametrize('bad', [None, 'unknown_reason', 'wrong_parent', 'broker_accepted', 'raised', 'missing_start'])
+def test_native_route_guard_completion_closes_only_its_exact_call(bad):
+    from datetime import datetime, timedelta
+    from src.engine.monitoring import entry_attempt_identity as identity
+    events = []
+    stock = {'id': 17, 'scanner_promotion_id': 'ZBPROM-exact'}
+    start = datetime(2026, 10, 23, 8, 5)
+    common = dict(entry_primary_decision_owner='mechanistic_entry_adjudicator',
+        evaluation_attempt_id='aims-exact', scanner_promotion_id='ZBPROM-exact',
+        effective_venue='PREMARKET_KRX_LIKE', market_session_bucket='premarket_krx_like',
+        policy_bundle_hash='b'*64, entry_mechanistic_action='ENTER_NOW', entry_ai_screen_status='pass')
+    def emit(stage, fields):
+        events.append(sentinel.PipelineEvent(start + timedelta(milliseconds=len(events)),
+            'ENTRY_PIPELINE', stage, 'Fixture', '053800', '17', {**common, **fields}))
+    def finish(s, code, outcome):
+        fields = identity.submit_attempt_fields(s, code)
+        fields.update(submit_call_outcome=outcome, submit_call_return_outcome=outcome,
+            submit_call_broker_accepted=False)
+        if bad == 'wrong_parent': fields['entry_submit_attempt_parent_promotion_id']='other'
+        if bad == 'broker_accepted': fields['entry_submit_attempt_broker_accepted']=True
+        if bad == 'raised': fields['submit_call_return_outcome']='raised'
+        emit('entry_submit_attempt_finished', fields)
+    @identity.observe_submit_attempt(on_finish=finish)
+    def submit(s, code):
+        if bad != 'missing_start': emit('budget_pass', identity.submit_attempt_fields(s, code))
+        identity.record_submit_attempt_terminal(s,
+            'unknown_guard' if bad == 'unknown_reason' else 'main_entry_order_route_invalid')
+        return False
+    emit('ai_confirmed', {})
+    assert submit(stock, '053800') is False
+    # Use native cache normalization, as scheduled consumers do.
+    events = [sentinel._event_from_cache_row(sentinel._payload_to_cache_row(dict(
+        event_type='pipeline_event', emitted_at=e.emitted_at.isoformat(), pipeline=e.pipeline,
+        stage=e.stage, stock_name=e.stock_name, stock_code=e.stock_code,
+        record_id=e.record_id, fields=e.fields))) for e in events]
+    result = sentinel._machine_primary_entry_funnel(events)
+    row = result['evaluation_ledger'][0]
+    assert row['final_guard_blocked'] is (bad is None)
+    assert not row['broker_acceptance_observed'] and not row['submit_pipeline_reached']
+    assert result['ai_pass_terminal_conservation']['difference'] == 0
+
+
+@pytest.mark.parametrize('day', ['2026-09-13', '2026-09-14'])
+@pytest.mark.parametrize('clock,phase', [('08:59:59', 'UNKNOWN'), ('09:00:00', 'UNKNOWN'),
+    ('15:30:00', 'UNKNOWN'), ('15:30:01', 'UNKNOWN'), ('15:59:59', 'UNKNOWN'),
+    ('16:00:00', 'KRX_NXT_AFTERMARKET'), ('19:39:59', 'KRX_NXT_AFTERMARKET'),
+    ('19:40:00', 'KRX_NXT_AFTERMARKET_CLOSE_ONLY'),
+    ('19:44:59', 'KRX_NXT_AFTERMARKET_CLOSE_ONLY'),
+    ('19:45:00', 'KRX_NXT_AFTERMARKET_TERMINAL_EXIT'),
+    ('19:59:59', 'KRX_NXT_AFTERMARKET_TERMINAL_EXIT'), ('20:00:00', 'UNKNOWN')])
+def test_shared_scope_keeps_both_owner_clock_boundaries(day, clock, phase):
+    from datetime import datetime
+    from src.engine import holding_exit_sentinel as holding
+    at = datetime.fromisoformat(day+'T'+clock)
+    for owner in (sentinel, holding):
+        fields = {'market_data_route': 'SOR'}
+        result = event_scope.explicit_event_scope(fields, at,
+            venue_keys=owner.VENUE_SCOPE_FIELD_KEYS, session_keys=owner.SESSION_SCOPE_FIELD_KEYS)
+        expected_scope = (('CONFLICT', 'CONFLICT', 'conflict')
+            if phase == 'UNKNOWN' or day < '2026-09-14' else ('KRX_NXT_INTEGRATED', phase, 'pass'))
+        assert result == expected_scope
+        expected = 'NXT_PREMARKET' if clock < '09:00:00' else 'NXT_AFTERMARKET' if clock > '15:30:00' else 'NXT_REGULAR'
+        assert event_scope.session_for_venue('NXT', at) == expected
+
+
+def test_shared_scope_preserves_priority_lazy_reads_and_removed_private_paths():
+    from datetime import datetime
+    from collections.abc import Mapping
+    from src.engine import holding_exit_sentinel as holding
+    class Lazy(Mapping):
+        def __getitem__(self, key):
+            if key in {'effective_venue', 'holding_context_venue'}:
+                return {'effective_venue':'NXT', 'holding_context_venue':'KRX'}[key]
+            raise KeyError(key)
+        def __iter__(self): raise AssertionError('full field materialization forbidden')
+        def __len__(self): raise AssertionError('full field materialization forbidden')
+    for owner, venue in ((sentinel, 'NXT'), (holding, 'KRX')):
+        at = datetime(2026, 10, 23, 10)
+        result = event_scope.explicit_event_scope(Lazy(), at,
+            venue_keys=owner.VENUE_SCOPE_FIELD_KEYS, session_keys=owner.SESSION_SCOPE_FIELD_KEYS)
+        assert result == (venue, venue+'_REGULAR', 'pass')
+        for name in ('_canonical_venue', '_canonical_session', '_session_for_venue',
+                     '_explicit_event_scope', '_actual_execution_venue'):
+            assert not hasattr(owner, name)

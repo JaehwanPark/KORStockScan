@@ -7,6 +7,8 @@ artifacts.
 
 from __future__ import annotations
 
+from src.engine.monitoring import sentinel_event_scope as event_scope
+
 import argparse
 from bisect import bisect_left
 import fcntl
@@ -51,12 +53,6 @@ FORBIDDEN_AUTOMATIONS = [
     "ai_cache_ttl_mutation",
     "bot_restart",
 ]
-EXPLICIT_TRADABLE_VENUES = {
-    "KRX",
-    "NXT",
-    "KRX_NXT_INTEGRATED",
-    "PREMARKET_KRX_LIKE",
-}
 VENUE_SCOPE_FIELD_KEYS = (
     "decision_market_scope",
     "market_data_route",
@@ -358,140 +354,14 @@ def _exact_attempt_key(event: PipelineEvent) -> str | None:
     return f"id:{record_id}"
 
 
-def _canonical_venue(value: Any) -> str | None:
-    text = _safe_str(value).upper()
-    if text in {"KRX_NXT_INTEGRATED", "KRX_NXT", "KRX+NXT", "SOR"}:
-        return "KRX_NXT_INTEGRATED"
-    if text in {"NXT_ONLY", "NXT"}:
-        return "NXT"
-    if text in {"KRX_ONLY", "KRX"}:
-        return "KRX"
-    if text in EXPLICIT_TRADABLE_VENUES:
-        return text
-    if text in {"_NX", "NXT_PREMARKET", "NXT_AFTERMARKET", "NXT_REGULAR"}:
-        return "NXT"
-    if text in {"KRX_REGULAR", "KRX"}:
-        return "KRX"
-    return None
-
-
-def _canonical_session(value: Any) -> str | None:
-    text = _safe_str(value).upper()
-    if not text:
-        return None
-    if text in {
-        "KRX_NXT_AFTERMARKET",
-        "KRX_NXT_AFTERMARKET_CLOSE_ONLY",
-        "KRX_NXT_AFTERMARKET_TERMINAL_EXIT",
-        "NXT_AFTERMARKET_SOLO",
-        "SESSION_TRANSITION",
-        "CLOSED",
-    }:
-        return text
-    if "PREMARKET_KRX_LIKE" in text or "KRX_LIKE_PREMARKET" in text:
-        return "PREMARKET_KRX_LIKE"
-    if "NXT" in text and "PRE" in text:
-        return "NXT_PREMARKET"
-    if "NXT" in text and ("AFTER" in text or "POST" in text):
-        return "NXT_AFTERMARKET"
-    if "NXT" in text:
-        return "NXT_REGULAR"
-    if "KRX" in text:
-        return "KRX_REGULAR"
-    return None
-
-
-def _session_for_venue(venue: str, emitted_at: datetime) -> str:
-    if venue == "PREMARKET_KRX_LIKE":
-        return "PREMARKET_KRX_LIKE"
-    if venue == "KRX":
-        return "KRX_REGULAR"
-    if venue == "KRX_NXT_INTEGRATED":
-        if emitted_at.date() < date(2026, 9, 14):
-            return "UNKNOWN"
-        if time(16, 0) <= emitted_at.time() < time(19, 40):
-            return "KRX_NXT_AFTERMARKET"
-        if time(19, 40) <= emitted_at.time() < time(19, 45):
-            return "KRX_NXT_AFTERMARKET_CLOSE_ONLY"
-        if time(19, 45) <= emitted_at.time() < time(20, 0):
-            return "KRX_NXT_AFTERMARKET_TERMINAL_EXIT"
-        return "UNKNOWN"
-    if emitted_at.time() < time(9, 0):
-        return "NXT_PREMARKET"
-    if emitted_at.time() > time(15, 30):
-        return "NXT_AFTERMARKET"
-    return "NXT_REGULAR"
-
-
-def _explicit_event_scope(event: PipelineEvent) -> tuple[str, str, str] | None:
-    venue = next(
-        (
-            venue
-            for key in VENUE_SCOPE_FIELD_KEYS[:-1]
-            if (venue := _canonical_venue(event.fields.get(key))) is not None
-        ),
-        None,
-    )
-    fallback_venue = _canonical_venue(event.fields.get(VENUE_SCOPE_FIELD_KEYS[-1]))
-    session = next(
-        (
-            session
-            for key in SESSION_SCOPE_FIELD_KEYS[:-1]
-            if (session := _canonical_session(event.fields.get(key))) is not None
-        ),
-        None,
-    )
-    fallback_session = _canonical_session(
-        event.fields.get(SESSION_SCOPE_FIELD_KEYS[-1])
-    )
-    venue = venue or fallback_venue
-    session = session or fallback_session
-    if venue is None and session is not None:
-        if session.startswith("KRX_NXT_AFTERMARKET"):
-            venue = "KRX_NXT_INTEGRATED"
-        else:
-            venue = (
-                "PREMARKET_KRX_LIKE"
-                if session == "PREMARKET_KRX_LIKE"
-                else ("NXT" if session.startswith("NXT_") else "KRX")
-            )
-    if venue is None:
-        return None
-    if session is None:
-        session = _session_for_venue(venue, event.emitted_at)
-    elif (
-        venue == "NXT"
-        and session == "NXT_REGULAR"
-        and (
-            event.emitted_at.time() < time(9, 0)
-            or event.emitted_at.time() > time(15, 30)
-        )
-    ):
-        session = _session_for_venue(venue, event.emitted_at)
-    if (
-        (venue == "NXT" and not session.startswith("NXT_"))
-        or (venue == "KRX" and session != "KRX_REGULAR")
-        or (
-            venue == "KRX_NXT_INTEGRATED"
-            and not session.startswith("KRX_NXT_AFTERMARKET")
-        )
-        or (venue == "PREMARKET_KRX_LIKE" and session != "PREMARKET_KRX_LIKE")
-    ):
-        return "CONFLICT", "CONFLICT", "conflict"
-    return venue, session, "pass"
-
-
-def _actual_execution_venue(event: PipelineEvent) -> str:
-    value = _safe_str(event.fields.get("actual_execution_venue")).upper()
-    return value if value in {"KRX", "NXT"} else "UNKNOWN"
-
-
 def _partition_events_by_venue_session(
     events: list[PipelineEvent],
 ) -> tuple[dict[str, list[PipelineEvent]], dict[str, int]]:
     explicit_by_attempt: dict[str, dict[datetime, set[tuple[str, str]]]] = defaultdict(
         lambda: defaultdict(set))
-    explicit_scopes = [_explicit_event_scope(event) for event in events]
+    explicit_scopes = [event_scope.explicit_event_scope(
+            event.fields, event.emitted_at, venue_keys=VENUE_SCOPE_FIELD_KEYS,
+            session_keys=SESSION_SCOPE_FIELD_KEYS) for event in events]
     for event, scope in zip(events, explicit_scopes):
         exact_key = _exact_attempt_key(event)
         if scope and scope[2] == "pass" and exact_key:
@@ -1436,7 +1306,7 @@ def build_holding_exit_sentinel_report(
             "actual_execution_venue_counts": dict(
                 sorted(
                     Counter(
-                        _actual_execution_venue(event) for event in source_events
+                        event_scope.actual_execution_venue(event.fields) for event in source_events
                     ).items()
                 )
             ),

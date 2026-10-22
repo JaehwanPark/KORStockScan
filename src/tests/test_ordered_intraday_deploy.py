@@ -1673,3 +1673,32 @@ def test_execute_owns_start_after_prepared_validation(tmp_path,monkeypatch,rejec
     else:
         assert D.execute(Driver(),validate_prepared=validate)=={'status':'pass'}
         assert calls[-3:]==['validate_prepared','start','attest']
+
+
+@pytest.mark.parametrize('reason', ['callback_predecessor_unverified', 'append_budget_exceeded'])
+def test_summary_migration_rejection_prevents_hold_and_drain(driver, monkeypatch, reason):
+    from src.engine.monitoring import sentinel_summary_contract as summary
+    d = driver
+    _failed_hold_fixture(d, monkeypatch)
+    native_calls = _mock_adoption_preflight(d, monkeypatch)
+    def native(root, module, *args, **kwargs):
+        native_calls.append(module)
+        return dict(status='pass', basis='intraday_policy_preserving_handoff')
+    d.run_json = native
+    d.adopt_failed_hold = False
+    d.hold.unlink()
+    checklist = d.workspace/'docs/checklists'/(d.day+'-stage2-todo-checklist.md')
+    before = d.selection.read_bytes(), checklist.read_bytes()
+    calls = []
+    def reject(*_):
+        calls.append('summary_preflight')
+        raise RuntimeError('summary_contract_migration_'+reason)
+    monkeypatch.setattr(summary, 'check_pending_migration', reject)
+    for name in ('acquire_hold', 'drain', 'publish', 'prepare', 'start'):
+        monkeypatch.setattr(d, name, lambda *_, name=name: calls.append(name))
+    monkeypatch.setattr(d, 'fail', lambda error: calls.append('failed'))
+    with pytest.raises(RuntimeError, match=reason):
+        D.execute(d)
+    assert calls == ['summary_preflight', 'failed']
+    assert before == (d.selection.read_bytes(), checklist.read_bytes())
+    assert not d.hold.exists() and not d.flag.exists()

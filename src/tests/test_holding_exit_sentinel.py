@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from src.engine import holding_exit_sentinel as sentinel
+from src.engine.monitoring import sentinel_event_scope as event_scope
 from src.engine.ai.holding_exit_vote import PATH_POLICY_BY_MARKET, input_snapshot_id
 from src.engine.scalping.holding_profit_exit_semantics import audit_profit_exit_flow
 from src.engine.scalping.holding_path_vote_policy import policy_path
@@ -62,7 +63,8 @@ def test_indexed_scope_matches_exhaustive_nearest_including_ties_and_invalid_ids
     rng.shuffle(events)
     groups, quality = defaultdict(list), Counter()
     for event in events:
-        explicit = sentinel._explicit_event_scope(event)
+        explicit = event_scope.explicit_event_scope(event.fields, event.emitted_at,
+            venue_keys=sentinel.VENUE_SCOPE_FIELD_KEYS, session_keys=sentinel.SESSION_SCOPE_FIELD_KEYS)
         if explicit is not None:
             venue, session, reason = explicit
         else:
@@ -70,7 +72,8 @@ def test_indexed_scope_matches_exhaustive_nearest_including_ties_and_invalid_ids
             candidates = [(abs((other.emitted_at-event.emitted_at).total_seconds()), scope[:2])
                 for other in events if identity is not None
                 and sentinel._exact_attempt_key(other) == identity
-                and (scope := sentinel._explicit_event_scope(other)) is not None and scope[2] == "pass"]
+                and (scope := event_scope.explicit_event_scope(other.fields, other.emitted_at,
+            venue_keys=sentinel.VENUE_SCOPE_FIELD_KEYS, session_keys=sentinel.SESSION_SCOPE_FIELD_KEYS)) is not None and scope[2] == "pass"]
             nearest = {scope for distance, scope in candidates
                        if distance == min(value[0] for value in candidates)} if candidates else set()
             if len(nearest) == 1:
@@ -180,7 +183,7 @@ def test_baseline_projection_covers_summary_field_contract():
     readers = (sentinel._is_non_real_observation, sentinel._is_explicit_real_sell_execution,
         sentinel._count_cache_miss, sentinel._count_parse_fail, sentinel._score50_origin_counts,
         sentinel._count_holding_score_preflight_blocked, sentinel._stage_reason_top,
-        sentinel._actual_execution_venue)
+        event_scope.actual_execution_venue)
     required = set(sentinel.VENUE_SCOPE_FIELD_KEYS + sentinel.SESSION_SCOPE_FIELD_KEYS)
     for reader in readers:
         for node in ast.walk(ast.parse(inspect.getsource(reader))):
@@ -583,7 +586,8 @@ def test_current_holding_nxt_phase_overrides_legacy_krx_entry_venue():
     event = sentinel._event_from_cache_row(sentinel._payload_to_cache_row(payload))
 
     assert event is not None
-    assert sentinel._explicit_event_scope(event) == (
+    assert event_scope.explicit_event_scope(event.fields, event.emitted_at,
+            venue_keys=sentinel.VENUE_SCOPE_FIELD_KEYS, session_keys=sentinel.SESSION_SCOPE_FIELD_KEYS) == (
         "NXT",
         "NXT_AFTERMARKET",
         "pass",
@@ -605,12 +609,13 @@ def test_dual_aftermarket_scope_keeps_broker_actual_venue_separate():
     event = sentinel._event_from_cache_row(sentinel._payload_to_cache_row(payload))
 
     assert event is not None
-    assert sentinel._explicit_event_scope(event) == (
+    assert event_scope.explicit_event_scope(event.fields, event.emitted_at,
+            venue_keys=sentinel.VENUE_SCOPE_FIELD_KEYS, session_keys=sentinel.SESSION_SCOPE_FIELD_KEYS) == (
         "KRX_NXT_INTEGRATED",
         "KRX_NXT_AFTERMARKET_CLOSE_ONLY",
         "pass",
     )
-    assert sentinel._actual_execution_venue(event) == "KRX"
+    assert event_scope.actual_execution_venue(event.fields) == "KRX"
 
 
 def test_dual_aftermarket_missing_actual_venue_stays_unknown():
@@ -627,7 +632,7 @@ def test_dual_aftermarket_missing_actual_venue_stays_unknown():
     event = sentinel._event_from_cache_row(sentinel._payload_to_cache_row(payload))
 
     assert event is not None
-    assert sentinel._actual_execution_venue(event) == "UNKNOWN"
+    assert event_scope.actual_execution_venue(event.fields) == "UNKNOWN"
 
 
 def test_premarket_venue_rejects_regular_krx_session():
@@ -643,7 +648,8 @@ def test_premarket_venue_rejects_regular_krx_session():
     event = sentinel._event_from_cache_row(sentinel._payload_to_cache_row(payload))
 
     assert event is not None
-    assert sentinel._explicit_event_scope(event) == (
+    assert event_scope.explicit_event_scope(event.fields, event.emitted_at,
+            venue_keys=sentinel.VENUE_SCOPE_FIELD_KEYS, session_keys=sentinel.SESSION_SCOPE_FIELD_KEYS) == (
         "CONFLICT",
         "CONFLICT",
         "conflict",
@@ -663,7 +669,8 @@ def test_runtime_krx_like_premarket_session_token_is_preserved():
     event = sentinel._event_from_cache_row(sentinel._payload_to_cache_row(payload))
 
     assert event is not None
-    assert sentinel._explicit_event_scope(event) == (
+    assert event_scope.explicit_event_scope(event.fields, event.emitted_at,
+            venue_keys=sentinel.VENUE_SCOPE_FIELD_KEYS, session_keys=sentinel.SESSION_SCOPE_FIELD_KEYS) == (
         "PREMARKET_KRX_LIKE",
         "PREMARKET_KRX_LIKE",
         "pass",

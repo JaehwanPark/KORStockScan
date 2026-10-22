@@ -945,6 +945,36 @@ def _reversal_lifecycle_diagnostic(row):
         cause = receipt.get("failure_cause")
         if (operating and cause == row['machine_contract_error'] == 'reversal_signal_path_changed'
                 and 0 <= age <= 5 and receipt.get('registered_signal_ready') is False
+                and event.get('decision_phase') == 'FIRST_PRICE_HOLD'
+                and event.get('branch_signals') and latest[0] > event['epoch']
+                and latest[2] > event['native_sequence']):
+            # The registered-claim path uses the same native held-price owner
+            # as the earlier quote-observer path. Prove every branch's actual
+            # floor breach; absent ready membership alone is never sufficient.
+            from src.engine.scalping.reversal_extended_auxiliary import validate_signal
+            from src.engine.scalping.reversal_cumulative_runtime import hold_breached
+            expected = dict(native_state_present=True, legacy_last_present=True,
+                latest_source_valid=True, native_epoch_matches=True,
+                first_signal_turn_matches=None, scope_generation_matches=True,
+                ready_membership_present=False)
+            predicates = receipt.get('native_predicates')
+            if (isinstance(predicates, dict) and set(expected) <= set(predicates)
+                    and all(predicates[k] is v for k, v in expected.items())
+                    and receipt.get('failed_native_predicates') == ['ready_membership_present']):
+                branches = event['branch_signals']
+                for bid, signal in branches.items():
+                    validate_signal(signal)
+                    if (signal.get('extended_definition_id') != bid
+                            or signal.get('decision_phase') != 'FIRST_PRICE_HOLD'
+                            or any(signal.get(k) != event[k] for k in ('symbol', 'venue',
+                                'market', 'source_item', 'event_id', 'signal_id', 'epoch',
+                                'native_epoch', 'native_sequence', 'registry_generation'))
+                            or not hold_breached(signal, latest)):
+                        break
+                else:
+                    return 'reversal_first_price_hold_invalidated'
+        if (operating and cause == row['machine_contract_error'] == 'reversal_signal_path_changed'
+                and 0 <= age <= 5 and receipt.get('registered_signal_ready') is False
                 and event.get('decision_phase') == 'FIRST_UPTICK'
                 and event.get('branch_signals')
                 and all(s.get('decision_phase') == 'FIRST_UPTICK'
@@ -3431,7 +3461,7 @@ def _verified_machine_role_partition(partition, actor, now, bundle, n, invalid, 
 
 def _scanner_observation_identity(observation):
     """Exact native scanner identity; no symbol/time inference or validity claim."""
-    from src.engine.buy_funnel_sentinel import _canonical_session
+    from src.engine.monitoring.sentinel_event_scope import canonical_session
     context = observation.get('label_context')
     if not isinstance(context, dict):
         return None
@@ -3444,7 +3474,7 @@ def _scanner_observation_identity(observation):
             or observation.get('watch_origin') == 'MAIN_FIXED_WATCH'):
         return None
     parts[3] = parts[3].upper()
-    parts[4] = _canonical_session(parts[4])
+    parts[4] = canonical_session(parts[4])
     return 'machine:' + '|'.join(parts)
 
 
@@ -3500,7 +3530,7 @@ def machine_semantics(data_root, now, *, tail_bytes=8 * 1024 * 1024, incident_ev
     from src.engine.scalping import entry_strategy_policy as strategy
     from src.engine.scalping import mechanistic_entry_runtime_policy as runtime
     from src.engine.scalping.ai_decision_trace import _json_bytes
-    from src.engine.buy_funnel_sentinel import _canonical_session
+    from src.engine.monitoring.sentinel_event_scope import canonical_session
 
     now = stamp(now)
     day = now.date().isoformat()
@@ -3654,7 +3684,7 @@ def machine_semantics(data_root, now, *, tail_bytes=8 * 1024 * 1024, incident_ev
                         for blocker in (source.get("setup_evidence") or {}).get("source_quality_blockers", []):
                             result["source_invalid_blockers"][blocker] = result["source_invalid_blockers"].get(blocker, 0) + 1
                         continue
-                    scope = (str(context["effective_venue"]).upper(), _canonical_session(context["session_bucket"]))
+                    scope = (str(context["effective_venue"]).upper(), canonical_session(context["session_bucket"]))
                     frozen = generations[bundle_hash]
                     if frozen.get("continuous_reversal"):
                         if bundle_hash not in verified_reversal_generations:
@@ -4188,7 +4218,7 @@ def observation_health_projection(result):
     # Share the native terminal contract with the closed-PASS guard consumer
     # below; source semantics already verifies the exact rejection receipt.
     native_invalidation = {'reversal_signal_expired', 'reversal_signal_generation_changed',
-                           'reversal_first_signal_invalidated'}
+                           'reversal_first_signal_invalidated', 'reversal_first_price_hold_invalidated'}
     allowed_diagnostics = {'machine_probe:' + reason for reason in
         ('route_snapshot_missing', '0B_missing', '0B_age_exceeded', '0D_missing', '0D_age_exceeded')}
     allowed_diagnostics.update('machine_trace:' + reason for reason in
