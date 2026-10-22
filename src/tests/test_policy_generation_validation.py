@@ -214,6 +214,43 @@ def test_shared_dependency_change_creates_new_capability_and_fixture_paths(tmp_p
     assert all(path.read_bytes()==raw for path,raw in originals.items())
 
 
+@pytest.mark.parametrize('damage',[None,'plan','issuer','source','evidence'])
+def test_late_historical_fixture_uses_exact_original_issuer_plan(tmp_path,monkeypatch,damage):
+    import subprocess
+    from src.engine.monitoring import policy_generation_code_handoff as handoff
+    from src.engine.infrastructure import runtime_release_router as router
+    data=tmp_path/'data'
+    _,report,_,path,value,seal=_fixture(data,'holding_vote')
+    issuer=tmp_path/'issuer';issuer.mkdir()
+    subprocess.run(['git','init','-q',str(issuer)],check=True)
+    plan={}
+    for name in validation.plan_identity('holding_vote'):
+        target=issuer/name;target.parent.mkdir(parents=True,exist_ok=True)
+        target.write_bytes(b'original reviewed validation bytes\n')
+        plan[name]=validation.file_sha(target)
+    subprocess.run(['git','-C',str(issuer),'add','.'],check=True)
+    subprocess.run(['git','-C',str(issuer),'-c','user.name=fixture','-c','user.email=fixture@example.test',
+        'commit','-qm','original issuer'],check=True)
+    revision=subprocess.check_output(['git','-C',str(issuer),'rev-parse','HEAD'],text=True).strip()
+    def validate(workspace,selection):
+        assert selection['release_root']==str(issuer) and selection['git_commit']==revision
+        if damage=='issuer':raise ValueError('untrusted issuer')
+    monkeypatch.setattr(router,'validate_release',validate)
+    sha=validation.file_sha(report)
+    value.update(validation_plan=plan,release_root=str(issuer),git_commit=revision,
+        protected_artifact_sha256={str(report):sha})
+    if damage=='plan':value['validation_plan']={**plan,next(iter(plan)):'b'*64}
+    if damage=='source':value['protected_artifact_sha256'][str(report)]='b'*64
+    if damage=='evidence':value['evidence']['network.json']='b'*64
+    seal()
+    contract=dict(code_sha256=value['code_sha256'],fixture_receipt=None)
+    if damage:
+        with pytest.raises(ValueError):handoff._historical_fixture(contract,data,'holding_vote',late_report=(report,sha))
+    else:
+        result=handoff._historical_fixture(contract,data,'holding_vote',late_report=(report,sha))
+        assert result['path']==str(path)
+
+
 @pytest.mark.parametrize('family', ['entry_cancel_wait','rising_missed','holding_vote','auxiliary'])
 @pytest.mark.parametrize('review_map', ['REVIEWED_SUCCESSORS', 'REVIEWED_PRESERVED_SOURCE_SUCCESSORS',
     'REVIEWED_DEPLOYED_SOURCE_SUCCESSORS', 'REVIEWED_DELAY_SOURCE_SUCCESSORS',
