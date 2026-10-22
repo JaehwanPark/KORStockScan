@@ -918,7 +918,22 @@ def test_optional_installer_checks_executing_release_not_mutable_workspace(
         "src/engine/lifecycle/research_json_stream.py",
         "deploy/run_main_market_weakness_research_postclose.sh",
     )
-    for name in names:
+    dependencies = tuple(
+        "src/engine/scalping/" + name + ".py"
+        for name in (
+            "reversal_auxiliary_intraday",
+            "reversal_auxiliary_registry",
+            "reversal_auxiliary_wire",
+            "reversal_auxiliary_compatibility",
+            "reversal_auxiliary_transition",
+            "reversal_auxiliary_production_input",
+            "reversal_auxiliary_risk_role_experiment",
+            "reversal_operating_auxiliary",
+            "reversal_extended_union",
+            "continuous_reversal_policy_v5",
+        )
+    )
+    for name in names + dependencies:
         path = selected / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes((executing / name).read_bytes())

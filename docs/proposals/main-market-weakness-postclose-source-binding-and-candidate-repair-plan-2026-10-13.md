@@ -301,3 +301,14 @@ gzip-only 날짜/종목 마스터·엄격한 alias 검증, 원 native 본문과 
 라벨 의존성 실패는 trace 원천 불량으로 분류하거나 압축 trace를 다음 source로 이동시키지 않는다. 해당 압축 source의 미확정 staging을 되돌리고 같은 source에서 pending을 유지한다. 원 실패와 이전 산출물은 보존하며 결정적 실패의 동일 재시도를 중단한다.
 
 기존 selected producer로9/29·9/30·10/2·10/6·10/7·10/8·10/12를 worker1/512MiB·단계60초·전체600초 이내 단회 재처리한다. 수리본의 code binding 변경으로 나머지7일도 무효화되므로 기존 canonical 연구 namespace에서9/29~10/21의14일까지만 단회 복구·검증한다(전체900초, worker1/512MiB, 단계60초). 장중10/22 원천 본문은 읽지 않는다. 외부 source anchor·동결 observer 출처 검증이 거부한 격리 입력 root를 허용하도록 guard를 바꾸지 않는다. 원 실패와 중간 시도를 보존하고, 이 실행을 정기 야간·선택본 교체·설치 재결속으로 표시하지 않는다. 정기 소비는 통합 배포 후 native optional installer의 code/calendar 결속과 다음 야간을 별도 수용한다. 결과·대체/제거·회귀·원천 결손은 [기존 리뷰](../audits/main-market-weakness-source-completeness-and-status-review-2026-10-16.md#실제-판정의-경로-라벨-수리와-제한-재처리--2026-10-22)에 기록한다.
+
+
+## 15. 2026-10-22 effective registry·과거 제한 복구 계약
+
+registry가 선언된 자연 판정은 원 native request/hash와 실제 G registry binding, logical schema, v2 wire/decoder 및 원 overlay/inheritance의 scope·확인 시점으로 검증한다. 기본 binding fallback은 미선언 자료에만 남긴다. immutable provenance는 검증된 파일 identity/coverage로 cache하고 행별 request/wire/시점 검증은 유지한다. 공통 source dependency는 cursor에서 경로별로 한 번 소유하며 index/projection에 반복 복제하지 않는다. missing/수정된 dependency는 다음 검증을 무효화하되 해당 row의 증거 결손을 전체 입력의 임의 PASS나 실행 허용으로 바꾸지 않는다.
+
+raw auxiliary response 계약과 응답 후 실행 guard 계약을 분리한다. 실제 raw PASS를 보존하면서 기존 실행 rejected/unknown은 post-auxiliary 효과 분모에서 제외한다. registry 검증 실패, `historical_reader_compatibility_missing`, epoch/path/horizon의 label U 및 `role_unverified`를 같은 표본 부족으로 표시하지 않는다. 과거 호환 증빙이 없으면 original reader/source SHA로 native owner에서 먼저 검증하며 임의 compatibility receipt/강제 PASS를 만들지 않는다.
+
+사용자 승인 단회 closed-source 복구는 기존 namespace lock·nice/resource supervisor와 native custody context에서 지정7일만 처리한다. `cumulative(from_date=...)`는 recovery_from_date/configured 시작일을 source scope에 함께 봉인하고 currentness/notifier가 같은 범위를 소비한다. 이전 기간은 immutable 진단으로 보존하며 검증하지 않은 이전 날짜를 새코드 current로 합산하지 않는다. 변경된 잘못된 binding의 후보는 재동결하고 이미 보유한 날짜 이후 cutoff를 적용한다. 장중 logger/판정/provider/주문·정기 cron/selector/PID 변경 권한은 이 단회 복구에서 발생하지 않는다.
+
+구현·실제7일 소비와 남은 과거 증빙/원천·기계 capability는 [원 owner의 10/22 수용](../audits/main-market-weakness-source-completeness-and-status-review-2026-10-16.md#effective-registry-결속-수리와-7거래일-제한-복구--2026-10-22)에 기록한다.

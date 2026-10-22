@@ -26,7 +26,7 @@ from src.engine.risk.market_weakness_threshold_policy import observation_thresho
 
 KST = ZoneInfo("Asia/Seoul")
 VERSION = "main_market_weakness_research_v1"
-REPAIR_VERSION = "source_binding_confirmed_cohort_v2"
+REPAIR_VERSION = "effective_registry_confirmed_cohort_v3"
 LABEL = dict(
     target_net_pct=0.4, stop_net_pct=-3.0, cost_rate=0.0023, horizon_seconds=1800
 )
@@ -97,6 +97,16 @@ def scope_key(row):
                 outcome_kind=row.get("outcome_kind"),
                 label_contract=LABEL,
                 auxiliary_binding=row.get("auxiliary_binding"),
+                **(
+                    {
+                        "effective_auxiliary_verified": row.get(
+                            "auxiliary_binding_status"
+                        )
+                        == "verified"
+                    }
+                    if row.get("auxiliary_registry_declared")
+                    else {}
+                ),
             )
         )
     return digest(
@@ -278,6 +288,13 @@ def project_native_observation(raw, source_date):
             evaluation_role=raw.get("evaluation_role"),
             request_binding=request_binding,
             request_binding_verified=request_verified,
+            auxiliary_registry_sha256=assessment.get("auxiliary_registry_sha256"),
+            effective_auxiliary_binding=assessment.get("auxiliary_binding"),
+            auxiliary_registry_declared=bool(
+                assessment.get("auxiliary_registry_sha256")
+                or assessment.get("auxiliary_overlay_sha256")
+                or (assessment.get("auxiliary_binding") or {}).get("registry_sha256")
+            ),
         ),
         None,
     )
@@ -377,6 +394,16 @@ def bind_native(row, observation):
             observation.get("request_binding_verified") is True
             and row.get("auxiliary_hash") == native.get("auxiliary_component_sha256")
             and (
+                not observation.get("auxiliary_registry_declared")
+                or (
+                    observation.get("effective_auxiliary_status") == "verified"
+                    and (
+                        row.get("auxiliary_verdict") in {"not_called", "not_evaluated"}
+                        or row.get("auxiliary_response_contract_verified") is True
+                    )
+                )
+            )
+            and (
                 row.get("auxiliary_verdict") in {"not_called", "not_evaluated"}
                 or row.get("auxiliary_version") == binding.get("prompt_version")
             )
@@ -385,6 +412,20 @@ def bind_native(row, observation):
             row["auxiliary_binding_status"] = "verified"
         else:
             row["auxiliary_binding_status"] = "request_or_component_binding_unverified"
+        if observation.get("auxiliary_registry_declared"):
+            row["auxiliary_registry_declared"] = True
+            row["auxiliary_registry_sha256"] = observation["auxiliary_registry_sha256"]
+            row["auxiliary_binding_reason"] = observation.get(
+                "effective_auxiliary_reason"
+            ) or (
+                (
+                    "auxiliary_trace_version_mismatch"
+                    if row.get("auxiliary_version") != binding.get("prompt_version")
+                    else "auxiliary_response_or_component_unverified"
+                )
+                if row["auxiliary_binding_status"] != "verified"
+                else None
+            )
 
 
 def project_trace(raw, source_date, listing_market=None):
@@ -439,6 +480,9 @@ def project_trace(raw, source_date, listing_market=None):
         verdict = "not_evaluated"
     features = {k: number(event.get(k)) for k in FEATURES}
     ask = number(event.get("entry_ask"))
+    effective = raw.get("entry_ai_effective_assessment")
+    malformed_effective = effective is not None and not isinstance(effective, dict)
+    effective = effective if isinstance(effective, dict) else {}
     row = dict(
         opportunity_id=identity,
         identity_grade="canonical" if canonical else "trace_only",
@@ -459,6 +503,28 @@ def project_trace(raw, source_date, listing_market=None):
         auxiliary_hash=raw.get("entry_ai_component_sha256")
         or native.get("auxiliary_component_sha256"),
         auxiliary_version=raw.get("prompt_version"),
+        auxiliary_registry_declared=str(raw.get("prompt_version", "")).startswith(
+            "main_auxiliary_prompt_registry_"
+        ),
+        auxiliary_response_contract_verified=(
+            raw.get("entry_auxiliary_response_contract_valid") is True
+            and raw.get("entry_auxiliary_response_contract_errors") == []
+        ),
+        auxiliary_execution_status=(
+            "rejected"
+            if (
+                raw.get("entry_ai_contract_valid") is False
+                or raw.get("entry_post_response_execution_valid") is False
+                or effective.get("contract_valid") is False
+            )
+            else (
+                "verified"
+                if raw.get("entry_ai_contract_valid") is True
+                and not malformed_effective
+                else "unverified"
+            )
+        ),
+        auxiliary_execution_reasons=list(raw.get("entry_ai_contract_errors") or [])[:8],
         machine_action=raw.get("entry_mechanistic_action"),
         auxiliary_verdict=verdict,
         event_id=native.get("event_id") or assessment.get("event_id"),
@@ -919,13 +985,24 @@ def selection(row, candidate, join):
         # verified boolean cannot establish replay lineage or new outcomes.
         return None
     if kind == "post_auxiliary_withhold_cf" and (
-        row.get("auxiliary_verdict") != "PASS" or not row.get("auxiliary_hash")
+        row.get("auxiliary_verdict") != "PASS"
+        or not row.get("auxiliary_hash")
+        or row.get("auxiliary_execution_status") == "rejected"
+        or (
+            row.get("auxiliary_registry_declared")
+            and row.get("auxiliary_execution_status") != "verified"
+        )
     ):
         return None
     if (
         kind == "post_auxiliary_withhold_cf"
-        and row.get("native_binding_status") == "verified"
-        and row.get("cohort_contract")
+        and (
+            row.get("auxiliary_registry_declared")
+            or (
+                row.get("native_binding_status") == "verified"
+                and row.get("cohort_contract")
+            )
+        )
         and row.get("auxiliary_binding_status") != "verified"
     ):
         return None
@@ -1230,6 +1307,14 @@ class Aggregator:
         summary["counts"]["rows"] += 1
         if row.get("native_binding_status"):
             summary["counts"]["native_binding_" + row["native_binding_status"]] += 1
+        if row.get("auxiliary_binding_status"):
+            summary["counts"][
+                "auxiliary_binding_" + row["auxiliary_binding_status"]
+            ] += 1
+        if row.get("auxiliary_binding_reason"):
+            summary["counts"][
+                "auxiliary_binding_reason_" + row["auxiliary_binding_reason"]
+            ] += 1
         summary["counts"]["join_" + join["grade"]] += 1
         summary["counts"]["identity_" + str(row.get("identity_grade"))] += 1
         if join["grade"] == "U":
@@ -1238,6 +1323,12 @@ class Aggregator:
             summary["counts"]["outcome_U_reason_" + str(row.get("outcome_reason"))] += 1
         summary["counts"]["machine_" + str(row.get("machine_action"))] += 1
         summary["counts"]["auxiliary_" + str(row.get("auxiliary_verdict"))] += 1
+        if row.get("auxiliary_verdict") == "PASS" and row.get(
+            "auxiliary_execution_status"
+        ):
+            summary["counts"]["execution_" + row["auxiliary_execution_status"]] += 1
+            for reason in row.get("auxiliary_execution_reasons", []):
+                summary["counts"]["execution_reason_" + str(reason)] += 1
         summary["counts"]["outcome_" + row["outcome"]] += 1
         summary["counts"]["state_" + join.get("state", "UNKNOWN")] += 1
         summary["counts"][
@@ -1250,7 +1341,14 @@ class Aggregator:
             summary["counts"][
                 "delay_" + str(delay) + "_join_" + row["joins"][str(delay)]["grade"]
             ] += 1
-        if join["grade"] in {"A", "B"} and row.get("identity_grade") == "canonical":
+        if (
+            join["grade"] in {"A", "B"}
+            and row.get("identity_grade") == "canonical"
+            and (
+                not row.get("auxiliary_registry_declared")
+                or row.get("auxiliary_binding_status") == "verified"
+            )
+        ):
             for key, value in dict(
                 row.get("features", {}), index_change_pct=join.get("index_change_pct")
             ).items():
@@ -1270,6 +1368,19 @@ class Aggregator:
                 kind == "post_auxiliary_withhold_cf"
                 and row.get("auxiliary_verdict") != "PASS"
             ):
+                continue
+            if (
+                kind == "post_auxiliary_withhold_cf"
+                and row.get("auxiliary_execution_status") == "rejected"
+            ):
+                summary["counts"]["existing_execution_rejected"] += 1
+                continue
+            if (
+                kind == "post_auxiliary_withhold_cf"
+                and row.get("auxiliary_registry_declared")
+                and row.get("auxiliary_execution_status") != "verified"
+            ):
+                summary["counts"]["execution_unverified_excluded"] += 1
                 continue
             decisions = {
                 c["candidate_id"]: {
