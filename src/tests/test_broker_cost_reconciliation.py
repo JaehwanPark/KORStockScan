@@ -129,6 +129,33 @@ def test_cost_revision_changes_source_generation_and_invalid_rows_stay_isolated(
     with pytest.raises(ValueError): cost.load_receipt(tmp_path, "2026-10-08", "2")
 
 
+@pytest.mark.parametrize('damage',[None,'receipt','official','actual','missing'])
+def test_declared_research_revalidates_original_bytes_without_reusing_current_index(tmp_path,damage):
+    from src.engine.lifecycle import broker_cost_source as official
+    day='2026-10-08';root=tmp_path/'runtime/initial_quantity_research_costs'/day
+    generations=root/'generations';generations.mkdir(parents=True)
+    def publish(record):
+        receipt=dict(record_id=record,receipt_sha256=str(record)*64)
+        sha=cost.digest(receipt);(generations/(sha+'.json')).write_text(json.dumps(receipt))
+        index=dict(schema=cost.RESEARCH_COST_INDEX_SCHEMA,completion_date=day,receipts={str(record):sha},source_dates=[])
+        index['index_sha256']=cost.digest(index);(root/'index.json').write_text(json.dumps(index))
+        return generations/(sha+'.json')
+    first=publish(1)
+    source=official.source_path(tmp_path,day);source.parent.mkdir(parents=True);source.write_text('{}')
+    original=cost.source_generation(tmp_path,day);declared=original['quantity_research_cost_generation']
+    publish(2)
+    assert cost.source_generation(tmp_path,day)!=original
+    if damage=='receipt':first.write_text('{}')
+    if damage=='missing':first.unlink()
+    if damage=='official':source.write_text('{"changed":true}')
+    if damage=='actual':
+        path=cost.receipt_path(tmp_path,day,'1');path.parent.mkdir(parents=True);path.write_text('{}')
+    if damage in {'receipt','missing'}:
+        with pytest.raises(ValueError):cost.source_generation(tmp_path,day,declared_research=declared)
+    else:
+        assert (cost.source_generation(tmp_path,day,declared_research=declared)==original)==(damage is None)
+
+
 def test_initial_partial_buys_and_additional_buy_costs_are_all_required():
     _, _, ledger, context, receipt = fixture()
     initial = ledger["buy_fill_legs"][0]

@@ -69,7 +69,8 @@ def load_receipt(data_root: Path, completion_date: str, record_id: str) -> dict 
     return value
 
 
-def source_generation(data_root: Path, completion_date: str, *, additional_source_dates=None) -> dict:
+def source_generation(data_root: Path, completion_date: str, *, additional_source_dates=None,
+                      declared_research=None) -> dict:
     directory = receipt_path(data_root, completion_date, "1").parent
     if any(parent.is_symlink() for parent in (directory, directory.parent, directory.parent.parent)):
         raise ValueError("cost_source_directory_symlink")
@@ -113,12 +114,34 @@ def source_generation(data_root: Path, completion_date: str, *, additional_sourc
     # corrections then invalidate only reports that actually depend on them.
     research = Path(data_root) / "runtime/initial_quantity_research_costs" / completion_date
     index_path = research / "index.json"
-    if additional_source_dates is not None or index_path.exists():
+    if declared_research is not None and additional_source_dates is not None:
+        raise ValueError('research_cost_declared_scope_conflict')
+    if declared_research is not None or additional_source_dates is not None or index_path.exists():
         if any(p.is_symlink() for p in (research, research.parent, index_path)):
             raise ValueError("research_cost_generation_symlink")
         index = None
         indexed_receipts = []
-        if index_path.exists():
+        if declared_research is not None:
+            # Revalidate references sealed by an existing immutable report.
+            # Current official/actual costs and every original receipt byte
+            # remain mandatory; a newer research allocation is a separate scope.
+            if (not isinstance(declared_research, dict)
+                    or set(declared_research) != {'source_dates', 'receipts'}
+                    or not isinstance(declared_research['receipts'], list)
+                    or not isinstance(declared_research['source_dates'], list)
+                    or len(declared_research['receipts']) > RESEARCH_COST_MAX_RECORDS
+                    or len(declared_research['source_dates']) > RESEARCH_COST_MAX_DATES):
+                raise ValueError('research_cost_declared_generation_invalid')
+            receipt_rows = declared_research['receipts']
+            date_rows = declared_research['source_dates']
+            index = dict(schema=RESEARCH_COST_INDEX_SCHEMA, completion_date=completion_date,
+                receipts={r['record_id']: r['content_sha256'] for r in receipt_rows},
+                source_dates=[r['source_date'] for r in date_rows])
+            if (len(index['receipts']) != len(receipt_rows)
+                    or len(set(index['source_dates'])) != len(date_rows)):
+                raise ValueError('research_cost_declared_generation_duplicate')
+            index['index_sha256'] = digest(index)
+        elif index_path.exists():
             if index_path.stat().st_size > MAX_GENERATION_BYTES:
                 raise ValueError("research_cost_index_size_limit")
             with index_path.open("rb") as handle:
@@ -126,6 +149,7 @@ def source_generation(data_root: Path, completion_date: str, *, additional_sourc
             if len(index_raw) > MAX_GENERATION_BYTES:
                 raise ValueError("research_cost_index_size_limit")
             index = json.loads(index_raw)
+        if index is not None:
             if (index.get("schema") != RESEARCH_COST_INDEX_SCHEMA
                     or index.get("completion_date") != completion_date
                     or index.get("index_sha256") != digest({k: v for k, v in index.items() if k != "index_sha256"})

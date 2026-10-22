@@ -308,6 +308,44 @@ def test_late_native_cost_revision_invalidates_selection_and_reuses_price_replay
     assert raw.read_bytes()==original
 
 
+@pytest.mark.parametrize('damage',[None,'original_receipt','official','actual'])
+def test_carried_policy_consumes_only_original_declared_research_costs(tmp_path,damage):
+    from src.engine.lifecycle import broker_cost_reconciliation as cost,broker_cost_source as official
+    day,target='2026-10-12','2026-10-13'
+    directory=tmp_path/'runtime/initial_quantity_research_costs'/day
+    (directory/'generations').mkdir(parents=True)
+    def publish_index(record):
+        value=dict(record_id=record,receipt_sha256=str(record)*64);sha=cost.digest(value)
+        path=directory/'generations'/(sha+'.json');path.write_text(json.dumps(value))
+        index=dict(schema=cost.RESEARCH_COST_INDEX_SCHEMA,completion_date=day,receipts={str(record):sha},source_dates=[])
+        index['index_sha256']=cost.digest(index);(directory/'index.json').write_text(json.dumps(index))
+        return path
+    original=publish_index(1)
+    _,report,parent,source=publication(tmp_path)
+    completed=json.loads((tmp_path/'costs.json').read_text())['rows']
+    economic=dict(report['economic_sources'],cost_generations={day:cost.source_generation(tmp_path,day)})
+    bundle,_=post.publish(tmp_path,day,target,
+        parents={f'{r}|{m}':baseline() for r in policy.ROLES for m in policy.MARKETS},
+        parent_receipt=parent,source_paths=[source],snapshot_receipt=report['snapshot_receipt'],
+        completed=completed,economic_sources=economic)
+    assert all(c['status']!='selected' for c in bundle['cells'].values())
+    publish_index(2)
+    if damage=='original_receipt':original.write_text('{}')
+    if damage=='official':
+        path=official.source_path(tmp_path,day);path.parent.mkdir(parents=True);path.write_text('{}')
+    if damage=='actual':
+        path=cost.receipt_path(tmp_path,day,'1');path.parent.mkdir(parents=True);path.write_text('{}')
+    if damage:
+        with pytest.raises(ValueError):post.read_committed(tmp_path,day)
+    else:
+        loaded,_,_,_=post.read_committed(tmp_path,day)
+        assert loaded==bundle
+        env,receipt=post.handoff(tmp_path,target)
+        assert receipt['status']=='verified_carried' and env[policy.ENV_SHA]
+        with pytest.raises(ValueError,match='cost_generation_changed'):
+            post.read_committed(tmp_path,day,verify_full=True)
+
+
 @pytest.mark.parametrize('name',['pipeline_events_2026-10-08.bad.jsonl','anything_2026-10-08.jsonl','pipeline_events_2026-10-18.jsonl'])
 def test_native_cost_date_partition_is_validated_before_any_publication(tmp_path,name):
     with pytest.raises(ValueError,match='partition_invalid'):

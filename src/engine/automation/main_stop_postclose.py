@@ -674,7 +674,11 @@ def read_committed(root, day, *, pointer=None, verify_full=False):
     from src.engine.lifecycle.broker_cost_reconciliation import source_generation
     for cost_day, expected in economic.get('cost_generations', {}).items():
         if source_generation(Path(root), cost_day) != expected:
-            raise ValueError('stop_native_cost_generation_changed')
+            declared = expected.get('quantity_research_cost_generation')
+            if (verify_full or any(c['status'] == 'selected' for c in bundle['cells'].values())
+                    or declared is None
+                    or source_generation(Path(root), cost_day, declared_research=declared) != expected):
+                raise ValueError('stop_native_cost_generation_changed')
     for cell in bundle['cells'].values():
         if cell['status'] == 'selected':
             from .operator_policy_succession import stop_key_authority
