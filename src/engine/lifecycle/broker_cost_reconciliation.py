@@ -86,6 +86,10 @@ def source_generation(data_root: Path, completion_date: str, *, additional_sourc
             paths.append(path)
     paths.sort()
     total_bytes = 0
+    def account_read(size):
+        nonlocal total_bytes
+        total_bytes+=size
+        if total_bytes>MAX_GENERATION_BYTES:raise ValueError('research_cost_generation_size_limit')
     for path in paths:
         if not path.stem.isdigit() or path.is_symlink() or path.stat().st_size > MAX_BYTES:
             raise ValueError("cost_source_path_or_size_invalid")
@@ -185,6 +189,7 @@ def source_generation(data_root: Path, completion_date: str, *, additional_sourc
                                          "receipt_sha256": receipt.get("receipt_sha256")})
         dates = sorted(set(additional_source_dates if additional_source_dates is not None
                            else (index or {}).get("source_dates", [])))
+        declared_sources={row['source_date']:row for row in declared_research['source_dates']} if declared_research is not None else {}
         if len(dates) > RESEARCH_COST_MAX_DATES:
             raise ValueError("research_cost_dependency_date_limit")
         sources = []
@@ -198,11 +203,15 @@ def source_generation(data_root: Path, completion_date: str, *, additional_sourc
             if path.exists():
                 if path.stat().st_size > SOURCE_MAX_BYTES:
                     raise ValueError("research_cost_source_dependency_size_limit")
-                with path.open("rb") as handle:
-                    raw = handle.read(SOURCE_MAX_BYTES + 1)
+                if day in declared_sources:
+                    from .broker_cost_source import declared_source_bytes
+                    raw=declared_source_bytes(data_root,declared_sources[day],account_read=account_read)
+                else:
+                    with path.open("rb") as handle:
+                        raw = handle.read(SOURCE_MAX_BYTES + 1)
                 if len(raw) > SOURCE_MAX_BYTES:
                     raise ValueError("research_cost_source_dependency_size_limit")
-                total_bytes += len(raw)
+                if day not in declared_sources:total_bytes += len(raw)
                 if total_bytes > MAX_GENERATION_BYTES:
                     raise ValueError("research_cost_generation_size_limit")
                 try:

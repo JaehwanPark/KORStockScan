@@ -11,10 +11,12 @@ from contextlib import contextmanager
 from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 import fcntl
+import hashlib
 import json
 import os
 from pathlib import Path
 import re
+import stat
 import tempfile
 import time
 import uuid
@@ -128,27 +130,102 @@ def validate(value, target_date):
     return value
 
 
-def load_source(data_root, target_date):
-    path = source_path(data_root, target_date)
-    if not path.exists():
-        return None
-    if path.is_symlink() or path.parent.is_symlink() or path.stat().st_size > MAX_BYTES:
+def _source_raw(path, *, account_read=None):
+    if path.is_symlink() or any(p.is_symlink() for p in path.parents):
         raise ValueError("broker_cost_source_path_or_size_invalid")
-    with path.open("rb") as f:
-        raw = f.read(MAX_BYTES + 1)
-    if len(raw) > MAX_BYTES:
+    descriptor=os.open(path,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK)
+    with os.fdopen(descriptor,'rb') as stream:
+        before=os.fstat(stream.fileno())
+        if not stat.S_ISREG(before.st_mode) or before.st_size>MAX_BYTES:
+            raise ValueError('broker_cost_source_path_or_size_invalid')
+        if account_read is not None:account_read(before.st_size)
+        raw=stream.read(MAX_BYTES+1);finished=os.fstat(stream.fileno())
+    signature=lambda s:(s.st_dev,s.st_ino,s.st_size,s.st_mtime_ns,s.st_ctime_ns)
+    if (len(raw)!=before.st_size or len(raw)>MAX_BYTES or signature(before)!=signature(finished)
+            or signature(before)!=signature(path.lstat())):
         raise ValueError("broker_cost_source_size_limit")
-    return validate(json.loads(raw), target_date)
+    return raw
+
+
+def load_source(data_root, target_date):
+    path = source_path(Path(data_root).resolve(), target_date)
+    if not path.exists():return None
+    return validate(json.loads(_source_raw(path)), target_date)
+
+
+def _declared_window_unchanged(original, current):
+    """A wider settlement window may add later rows, never revise old facts."""
+    from collections import Counter
+    omitted={'source_sha256','observed_at','observations'}
+    if ({k:v for k,v in original.items() if k not in omitted}
+            !={k:v for k,v in current.items() if k not in omitted}
+            or set(original['observations'])!=set(current['observations'])
+            or datetime.fromisoformat(current['observed_at'])<datetime.fromisoformat(original['observed_at'])):
+        return False
+    for key,old in original['observations'].items():
+        new=current['observations'][key]
+        if ({k:v for k,v in old.items() if k not in {'observed_at','request','pages'}}
+                !={k:v for k,v in new.items() if k not in {'observed_at','request','pages'}}
+                or datetime.fromisoformat(new['observed_at'])<datetime.fromisoformat(old['observed_at'])):
+            return False
+        if not key.startswith('kt00015_'):
+            if old['request']!=new['request'] or old['pages']!=new['pages']:return False
+            continue
+        old_request=old['request'];new_request=new['request']
+        if ({k:v for k,v in old_request.items() if k!='end_dt'}
+                !={k:v for k,v in new_request.items() if k!='end_dt'}
+                or new_request['end_dt']<old_request['end_dt']):return False
+        rows_name=LISTS[key]
+        headers=lambda obs:{digest({k:v for k,v in page.items() if k not in {rows_name,'return_msg'}}) for page in obs['pages']}
+        if headers(old)!=headers(new):return False
+        old_rows=Counter(digest(row) for page in old['pages'] for row in page[rows_name])
+        new_rows=[row for page in new['pages'] for row in page[rows_name]]
+        counts=Counter(digest(row) for row in new_rows)
+        if old_rows-counts:return False
+        remaining=old_rows.copy()
+        for row in new_rows:
+            sha=digest(row)
+            if remaining[sha]:remaining[sha]-=1;continue
+            day=row.get('trde_dt')
+            if not isinstance(day,str) or not re.fullmatch(r'\d{8}',day):return False
+            datetime.strptime(day,'%Y%m%d')
+            if not old_request['end_dt']<day<=new_request['end_dt']:return False
+    return True
+
+
+def declared_source_bytes(data_root, reference, *, account_read=None):
+    """Consume an exact native historical generation after a proven extension.
+
+    Live generation discovery still reads the current alias. Original-window
+    correction, account/provider drift, missing bytes and unknown data fail.
+    """
+    path=source_path(Path(data_root).resolve(),reference['source_date'])
+    raw=_source_raw(path,account_read=account_read)
+    if hashlib.sha256(raw).hexdigest()==reference.get('sha256'):return raw
+    logical=reference.get('source_sha256')
+    if (not re.fullmatch('[0-9a-f]{64}',str(logical))
+            or not re.fullmatch('[0-9a-f]{64}',str(reference.get('sha256')))):
+        raise ValueError('broker_cost_declared_generation_invalid')
+    current=validate(json.loads(raw),reference['source_date'])
+    archive=path.parent/'generations'/reference['source_date']/(logical+'.json')
+    try:original_raw=_source_raw(archive,account_read=account_read)
+    except FileNotFoundError:raise ValueError('broker_cost_declared_generation_missing') from None
+    original=validate(json.loads(original_raw),reference['source_date'])
+    if (original['source_sha256']!=logical
+            or hashlib.sha256(original_raw).hexdigest()!=reference['sha256']
+            or not _declared_window_unchanged(original,current)
+            or _source_raw(path,account_read=account_read)!=raw):
+        raise ValueError('broker_cost_declared_window_changed')
+    return original_raw
 
 
 def _archive_source(data_root, target_date, previous):
     """Retain the original alias bytes before a later observation replaces it."""
     if previous is None:
         return
-    path = source_path(data_root, target_date)
-    with path.open("rb") as handle:
-        raw = handle.read(MAX_BYTES + 1)
-    if len(raw) > MAX_BYTES or validate(json.loads(raw), target_date) != previous:
+    path = source_path(Path(data_root).resolve(), target_date)
+    raw=_source_raw(path)
+    if validate(json.loads(raw), target_date) != previous:
         raise ValueError("broker_cost_source_changed_before_archive")
     directory = path.parent / "generations" / target_date
     if directory.is_symlink() or directory.parent.is_symlink():

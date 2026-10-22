@@ -273,6 +273,9 @@ def _cost_signature(data_root, costs):
         paths.add(root/'runtime/holding_broker_cost_sources'/(day+'.json'))
         for source in item['generation'].get('quantity_research_cost_generation', {}).get('source_dates', []):
             paths.add(root/'runtime/holding_broker_cost_sources'/(source['source_date']+'.json'))
+            logical=source.get('source_sha256')
+            if isinstance(logical,str) and re.fullmatch('[0-9a-f]{64}',logical):
+                paths.add(root/'runtime/holding_broker_cost_sources/generations'/source['source_date']/(logical+'.json'))
         for receipt in item['generation'].get('quantity_research_cost_generation', {}).get('receipts', []):
             paths.add(research/'generations'/(receipt['content_sha256']+'.json'))
     if len(paths) > 20000:
@@ -302,8 +305,8 @@ def _costs(report, data_root):
         raise ValueError('quantity_monitor_cost_date_budget')
     for item in expected:
         costs, day = item['generation'], item['source_date']
-        dates = costs.get('quantity_research_cost_generation', {}).get('source_dates')
-        kwargs = {'additional_source_dates': [row['source_date'] for row in dates]} if dates is not None else {}
+        declared=costs.get('quantity_research_cost_generation')
+        kwargs={'declared_research':declared if declared is not None else False}
         if source_generation(data_root, day, **kwargs) != costs:
             raise ValueError('quantity_monitor_cost_generation_changed')
     return expected

@@ -46,6 +46,60 @@ def seal(source):
     source["source_sha256"] = digest({k: v for k, v in source.items() if k != "source_sha256"})
 
 
+@pytest.mark.parametrize('damage',[None,'missing_archive','archive_bytes','account','provider','clock','old_fact','old_settlement','removed_old_row','old_date_row','missing_date','request'])
+def test_declared_cost_window_uses_exact_history_but_live_generation_still_advances(tmp_path,damage):
+    import hashlib
+    source,_,transport,calls=broker_fixture(tmp_path)
+    first_row={'trde_dt':'20261008','cntr_dt':'20261006','cmsn':'1'}
+    def initial(api,payload):
+        pages,meta=transport(api,payload)
+        if api=='kt00015':pages[0]['trst_ovrl_trde_prps_array']=[deepcopy(first_row)]
+        return pages,meta
+    source=C.collect(tmp_path,DAY,transport=initial,now=NOW,refresh=True)
+    day='2026-10-10'
+    original=source_generation(tmp_path,day,additional_source_dates=[DAY])
+    declared=original['quantity_research_cost_generation']
+    def later(api,payload):
+        pages,meta=transport(api,payload)
+        if api=='kt00015':pages[0]['trst_ovrl_trde_prps_array']=[deepcopy(first_row),{'trde_dt':'20261009','cntr_dt':'20261007','cmsn':'1'}]
+        return pages,meta
+    C.collect(tmp_path,DAY,transport=later,now=NOW+timedelta(days=2),refresh=True)
+    archive=C.source_path(tmp_path,DAY).parent/'generations'/DAY/(source['source_sha256']+'.json')
+    if damage=='missing_archive':archive.unlink()
+    elif damage=='archive_bytes':archive.write_text('{}')
+    else:
+        current=C.load_source(tmp_path,DAY)
+        if damage=='account':current['broker_account_sha256']='b'*64
+        elif damage=='provider':current['provider_config_sha256']='b'*64
+        elif damage=='clock':current['observations']['ka10170']['observed_at']=(NOW-timedelta(minutes=1)).isoformat()
+        elif damage=='old_fact':current['observations']['ka10170']['pages'][0]['tdy_trde_diary'][0]['cmsn_alm_tax']='11'
+        elif damage=='old_settlement':current['observations']['kt00015_buy']['pages'][0]['trst_ovrl_trde_prps_array'][0]['cmsn']='2'
+        elif damage=='removed_old_row':current['observations']['kt00015_buy']['pages'][0]['trst_ovrl_trde_prps_array'].pop(0)
+        elif damage=='old_date_row':current['observations']['kt00015_buy']['pages'][0]['trst_ovrl_trde_prps_array'][1]['trde_dt']='20261008'
+        elif damage=='missing_date':current['observations']['kt00015_buy']['pages'][0]['trst_ovrl_trde_prps_array'][1].pop('trde_dt')
+        elif damage=='request':current['observations']['kt00015_buy']['request']['stk_cd']='005930'
+        if damage:seal(current);C.atomic(C.source_path(tmp_path,DAY),current)
+    calls.clear()
+    assert source_generation(tmp_path,day,additional_source_dates=[DAY])!=original
+    if damage:
+        with pytest.raises(ValueError):source_generation(tmp_path,day,declared_research=declared)
+    else:
+        assert source_generation(tmp_path,day,declared_research=declared)==original
+        from src.engine.scalping import initial_quantity_monitor_projection as monitor
+        report={'census':{'persisted_fact_generations':{day:{'cost_generation':original}}}}
+        costs=monitor._costs(report,tmp_path)
+        inventory=monitor._cost_signature(tmp_path,costs)
+        assert inventory[str(archive.parent)]['entries'][archive.name] is not None
+        charges=[]
+        assert C.declared_source_bytes(tmp_path,declared['source_dates'][0],account_read=charges.append)==archive.read_bytes()
+        assert sum(charges)>=C.source_path(tmp_path,DAY).stat().st_size+archive.stat().st_size
+        def bounded(size):
+            raise ValueError('bounded_cost_read_budget')
+        with pytest.raises(ValueError,match='bounded_cost_read_budget'):
+            C.declared_source_bytes(tmp_path,declared['source_dates'][0],account_read=bounded)
+    assert calls==[]
+
+
 def test_real_cost_collection_and_whole_position_without_fake_fill_allocation(tmp_path):
     source, context, _, _ = broker_fixture(tmp_path)
     result = C.reconcile_position(source, **context)

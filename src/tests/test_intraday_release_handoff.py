@@ -2282,6 +2282,8 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(tmp_path,family,faul
     'src/engine/monitoring/submission_bottleneck_monitor.py',
     'src/engine/scalping/zero_base_probe.py',
     'src/utils/kiwoom_utils.py',
+    'src/engine/lifecycle/broker_cost_source.py',
+    'src/engine/scalping/initial_quantity_monitor_projection.py',
 ])
 def test_native_selection_label_handoff_rejects_incomplete_generation(tmp_path,family,fault,dependency):
     test_entry_cost_handoff_keeps_exact_complete_generation(
