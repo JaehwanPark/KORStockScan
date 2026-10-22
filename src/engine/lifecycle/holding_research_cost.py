@@ -137,6 +137,53 @@ def inventory(root, days):
     return paths
 
 
+def frozen_index(root, path, generation):
+    """Read exact prior native index bytes, never promote a later cost revision."""
+    root, path = Path(root).resolve(strict=True), Path(path)
+    day = path.parent.name
+    if (path != root/'runtime/initial_quantity_research_costs'/day/'index.json'
+            or date.fromisoformat(day).isoformat() != day
+            or generation.get('path') != 'index.json'
+            or type(generation.get('size')) is not int
+            or not 0 < generation['size'] <= MAX_REGISTRY_BYTES
+            or not isinstance(generation.get('sha256'), str)
+            or len(generation['sha256']) != 64
+            or any(c not in '0123456789abcdef' for c in generation['sha256'])):
+        raise ValueError('holding_research_cost_frozen_index_identity_invalid')
+
+    def read(source):
+        before = source.stat()
+        if (source.is_symlink() or any(p.is_symlink() for p in source.parents)
+                or not stat.S_ISREG(before.st_mode) or before.st_size > MAX_REGISTRY_BYTES):
+            raise ValueError('holding_research_cost_frozen_index_source_invalid')
+        value = _json(source, before, MAX_REGISTRY_BYTES)
+        if (source_stat(source.stat()) != source_stat(before)
+                or not isinstance(value, dict) or value.get('schema') != allocation.INDEX_SCHEMA
+                or value.get('completion_date') != day
+                or value.get('index_sha256') != digest({k:v for k,v in value.items() if k != 'index_sha256'})
+                or not isinstance(value.get('receipts'), dict) or len(value['receipts']) > allocation.MAX_RECORDS
+                or any(not isinstance(sha, str) or len(sha) != 64
+                    or any(c not in '0123456789abcdef' for c in sha) for sha in value['receipts'].values())
+                or not isinstance(value.get('source_dates'), list)
+                or len(value['source_dates']) > allocation.MAX_DATES
+                or any(not isinstance(d, str) or date.fromisoformat(d).isoformat() != d
+                    for d in value['source_dates'])):
+            raise ValueError('holding_research_cost_frozen_index_contract_invalid')
+        return value
+
+    current = read(path)
+    if byte_generation(path) == generation:
+        return current
+    # The native publisher archives the physical original before replacing its
+    # alias. Keep this a logical proof; never cache its SHA against the alias.
+    archive = path.parent/'index_generations'/(generation['sha256']+'.json')
+    old = read(archive)
+    observed = byte_generation(archive)
+    if any(observed.get(key) != generation[key] for key in ('size', 'sha256')):
+        raise ValueError('holding_research_cost_frozen_index_bytes_changed')
+    return old
+
+
 def _seal(body):
     return {**body, 'artifact_sha256': digest(body)}
 

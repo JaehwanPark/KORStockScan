@@ -8998,7 +8998,8 @@ def test_received_reversal_validator_exception_preserves_raw_response_and_waits_
     'duplicate_reservation', 'legacy_reservation', 'invalid_outbox_transition', 'corrupt_outbox',
     'outbox_io_failure', 'corrupt_legacy_journal', 'invalid_legacy_shape',
     'pre_adjudication_rejection', 'pre_adjudication_capture_io_failure',
-    'pre_exact_rejection', 'probe_pre_adjudication_rejection', 'post_capture_rejection'])
+    'pre_exact_rejection', 'probe_pre_adjudication_rejection', 'post_capture_rejection',
+    'local_deadline', 'unsent_deadline'])
 def test_full_analyze_target_received_reversal_exception_keeps_raw_and_execution_separate(tmp_path, monkeypatch, failure_stage):
     """Exercise real request, receipt, validator exception, fallback and trace."""
     import copy
@@ -9139,6 +9140,21 @@ def test_full_analyze_target_received_reversal_exception_keeps_raw_and_execution
                 raise outbox_owner.OperatingOpportunityError('operating_opportunity_already_reserved_or_transition_invalid')
             return advance(root, key, state, **kwargs)
         monkeypatch.setattr(outbox_owner, 'advance', fail_transition)
+    deadline_failure = failure_stage in {'local_deadline', 'unsent_deadline'}
+    if failure_stage == 'local_deadline':
+        engine.min_interval = 60
+        engine.last_call_time = time.time()
+        # A pre-adapter guard must never consume another call's metadata.
+        engine._set_last_transport_meta({'openai_request_id': 'stale-other-call'})
+    elif failure_stage == 'unsent_deadline':
+        def cancel_before_sdk(request):
+            assert request.transport_observation.fields()['provider_adapter_entered'] is True
+            error = openai_module.OpenAIHTTPWallClockDeadlineError(
+                'controlled_unsent_deadline', future_cancelled=True)
+            error.timing_meta = {'openai_http_attempt_count': 0,
+                'openai_http_provider_future_cancelled': True}
+            raise error
+        monkeypatch.setattr(engine, '_call_openai_responses_http', cancel_before_sdk)
     calls = []
     def create(**kwargs):
         calls.append(kwargs)
@@ -9155,6 +9171,42 @@ def test_full_analyze_target_received_reversal_exception_keeps_raw_and_execution
             async_producer_start_ticks=Path('/proc/self/stat').read_text().rsplit(')',1)[1].split()[19],
             async_origin_deadline_epoch=snapshot[0]['epoch']+5, async_order_venue='SOR',
             scanner_generation_id='controlled-generation'))
+    if deadline_failure:
+        from datetime import datetime
+        from src.engine.monitoring import submission_bottleneck_monitor as monitor
+        assert calls == [] and result['provider_called'] is False
+        assert result['action'] == 'WAIT' and result['score'] == 50
+        assert result['ai_result_source'] == 'entry_deadline_expired'
+        assert result['entry_ai_screen_status'] == 'not_evaluated_local'
+        assert result['entry_ai_screen_pass'] is False and result['broker_order_forbidden'] is True
+        assert engine.consecutive_failures == failure_before and not engine.ai_disabled
+        assert (stable_circuit(entry_circuit), stable_circuit(common_circuit)) == circuit_before
+        assert (engine.current_api_key_index, engine.current_key) == key_before and not rotations
+        traces = [json.loads(line) for p in (tmp_path/'ai_decision_trace').glob('*.jsonl')
+                  for line in p.read_text().splitlines()]
+        observations = [json.loads(line) for p in (tmp_path/'ai_decision_payloads').glob('*.jsonl')
+                        for line in p.read_text().splitlines()
+                        if json.loads(line).get('schema') == 'mechanistic_entry_observation_v1']
+        requests = [json.loads(line) for p in (tmp_path/'ai_decision_requests').glob('*.jsonl')
+                    for line in p.read_text().splitlines()]
+        assert len(traces) == len(observations) == 1
+        trace = traces[0]
+        assert trace['machine_observation_sha256'] == result['machine_observation_sha256']
+        assert trace['evaluation_attempt_id'] == result['evaluation_attempt_id']
+        assert trace['request_id'] != 'stale-other-call'
+        assert trace['provider_called'] is False and trace['actual_order_submitted'] is False
+        assert len(requests) == int(failure_stage == 'unsent_deadline')
+        if requests:
+            assert trace['request_id'] == requests[0]['request_id']
+        else:
+            assert engine._consume_last_transport_meta() == {'openai_request_id': 'stale-other-call'}
+        joined = monitor._reversal_provider_lineage(tmp_path, datetime.now(monitor.KST), observations,
+            tail_bytes=2**20, pid_identity=[os.getpid(), Path('/proc/self/stat').read_text().rsplit(')',1)[1].split()[19]])
+        assert joined['issues'] == joined['source_gaps'] == {}, joined
+        assert joined['trace_attempt_count'] == 1
+        assert joined['provider_transmission_attempt_count'] == joined['raw_response_observed_count'] == 0
+        assert joined['noncall_reasons'] == {'not_evaluated_local': 1}
+        return
     if pre_rejected or failure_stage == 'post_capture_rejection':
         assert calls == [] and result['provider_called'] is False
         assert result['action'] == 'DROP'

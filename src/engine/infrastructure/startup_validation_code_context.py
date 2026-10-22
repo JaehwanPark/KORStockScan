@@ -81,6 +81,9 @@ REVIEWED_PREPARATION_HISTORY = {
     # Startup log consolidation only; fixed compact model selection is unchanged.
     'src/engine/ai_engine_openai.py': {
         # Source-invalid provenance from the consumed fc51 adapter, no promotion.
+        # Local deadline terminals preserve capture/request identity without sending.
+        ('3463333df619b52d896ea02779647fa48adf6ae29a45713de80cf31c213806c7',
+         '9f9a3561db4dd3247ef14a47e3346f41453c98c0bf42b5ef7ff0be4a2a5b5e56'),
         ('3463333df619b52d896ea02779647fa48adf6ae29a45713de80cf31c213806c7',
          '808000bc7fd3782583a00ecce63e0a5e5704f6e6694e7c3311537aae72579b25'),
         ('194f9dcd748a0c94fe49c12618c3c5eb9f3d81b07de494f0b59ddc349aa43584',

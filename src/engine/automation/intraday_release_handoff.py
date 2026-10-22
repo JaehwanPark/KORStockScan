@@ -4590,9 +4590,16 @@ REVIEWED_ENTRY_COST_PRE_PREASSESSMENT_HASHES = {
     **REVIEWED_ENTRY_COST_HASHES,
     'src/engine/scalping/ai_decision_trace.py': REVIEWED_ROLE_LATENCY_HASHES[
         'src/engine/scalping/ai_decision_trace.py'],
+    'src/engine/automation/main_trailing_source_reuse.py': 'acf252905da4704ff54a3adffdd74ecf7c6b9ab056b52b6719fab8be91866b97',
+    'src/engine/automation/main_trailing_source_assembler.py': 'af2d5343723e53093eb2fcc8debcf70b7d13c964b448ff10a094d61971ad4d29',
+    'src/engine/lifecycle/broker_cost_reconciliation.py': '4fac0132c2281f278270b6d6c2bc171b4ff413f57b3075e9493173ab5cb144bc',
+    'src/engine/lifecycle/holding_research_cost.py': '3979cab1f18b2bd32933985d9e7c86068aa1284dc76dc278bbc171c0c4704911',
+    'src/engine/scalping/reversal_source_diagnostics.py': 'ad9fc4f2eeac858435cae48f9707275eabce46c8f48fee38e40029ea4a843c93',
+    'src/engine/monitoring/submission_bottleneck_monitor.py': '0cacfa688b336befe533f2010b3bfaea40d5d2fe778e4ca48d7347071114527e',
+    'src/engine/automation/main_trailing_source_store.py': '9605fcdc48f11e3c92a1ddaa7846a2f5d725e6d9518d658095235e3c435fb520',
 }
 REVIEWED_ENTRY_COST_PRE_PREASSESSMENT_VARIANTS = REVIEWED_ENTRY_COST_DEPENDENCY_VARIANTS
-REVIEWED_PREASSESSMENT_HASHES = {'src/engine/ai_engine_openai.py': '808000bc7fd3782583a00ecce63e0a5e5704f6e6694e7c3311537aae72579b25', 'src/engine/scalping/ai_decision_trace.py': 'ad480ce1fb75ce2ec9217e4623e5de31dfd83e9ff62520934ab0317da60e973b', 'src/engine/infrastructure/startup_validation_code_context.py': 'c5522698e91f80219d3f4ce53b8f7f8d3e173b39f137deef1d2dba1982c7b69b'}
+REVIEWED_PREASSESSMENT_HASHES = {'src/engine/ai_engine_openai.py': '9f9a3561db4dd3247ef14a47e3346f41453c98c0bf42b5ef7ff0be4a2a5b5e56', 'src/engine/scalping/ai_decision_trace.py': 'ad480ce1fb75ce2ec9217e4623e5de31dfd83e9ff62520934ab0317da60e973b', 'src/engine/infrastructure/startup_validation_code_context.py': 'be396153e7574f9cbf2d8a90145a373bbdc576adb116553896a9184093bcec47', 'src/engine/automation/main_trailing_source_reuse.py': 'baec89222444b9da87e867be5c980457ce544a32609fc28b3e771fa75174ba0d', 'src/engine/automation/main_trailing_source_assembler.py': 'd76ee7b7c79ea1d420f4432f9026690b3155f7e815f0dbf1fec66016b51d8e26', 'src/engine/lifecycle/broker_cost_reconciliation.py': 'e448a6d71b3ac419591ecc679d8fc180f0c021efc4146131236282eb4cc0485b', 'src/engine/lifecycle/holding_research_cost.py': 'cb4f4c3fb7a9b49dd8f113dd03b9d34cd1e8dd84304220415308ebeb0fb4f4c7', 'src/engine/scalping/reversal_source_diagnostics.py': 'bd5e37ae27b48464ea62f07b949979d3d5b112352f6e0e400c16e8f4fbc3cbee', 'src/engine/monitoring/submission_bottleneck_monitor.py': '9c51124b5c07b8ae9039e2e70d1f36da0e3b542136dd24d2ff66ccab642b4ccb', 'src/engine/automation/main_trailing_source_store.py': 'afe1370cd010ee50a1cefc6e0f3bed5febdd4e401ce6183dbbb3eaf3546ccf66'}
 REVIEWED_ENTRY_COST_HASHES = {**REVIEWED_ENTRY_COST_HASHES, **REVIEWED_PREASSESSMENT_HASHES}
 REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
     name: REVIEWED_ENTRY_COST_PAIRS.get(name, ()) + tuple((old, current) for old in sorted(

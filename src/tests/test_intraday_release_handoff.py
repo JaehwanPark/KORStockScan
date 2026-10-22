@@ -2262,6 +2262,12 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(tmp_path,family,faul
 @pytest.mark.parametrize('dependency',[
     'src/engine/ai_engine_openai.py',
     'src/engine/scalping/ai_decision_trace.py',
+    'src/engine/automation/main_trailing_source_reuse.py',
+    'src/engine/automation/main_trailing_source_store.py',
+    'src/engine/automation/main_trailing_source_assembler.py',
+    'src/engine/lifecycle/broker_cost_reconciliation.py',
+    'src/engine/lifecycle/holding_research_cost.py',
+    'src/engine/scalping/reversal_source_diagnostics.py',
     'src/engine/sniper_state_handlers.py',
     'src/engine/monitoring/runtime_performance.py',
     'src/engine/scalping/continuous_reversal_source.py',

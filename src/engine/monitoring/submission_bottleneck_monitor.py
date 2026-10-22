@@ -10,6 +10,7 @@ import json
 import math
 import os
 import re
+import sqlite3
 import subprocess
 import stat
 import time
@@ -233,6 +234,75 @@ def _recent_source_rows(path, now, *, time_field, tail_bytes=SOURCE_TAIL_BYTES,
     return rows, source
 
 
+def _indexed_entry_trace_rows(data_root, path, now, *, tail_bytes, window_sec, pid_identity=None):
+    """Use the native offset/hash index; never rebuild it or widen raw intake."""
+    from src.engine.automation import main_trailing_source_store as store
+    try:
+        generation = store.generation(data_root, path)
+    except (OSError, ValueError, sqlite3.Error):
+        return None  # Legacy/unindexed sources retain the bounded raw reader.
+    source = dict(status='partial', tail_truncated=False, window_covered=False,
+        recent_count=0, malformed_rows=0, missing_timestamp_rows=0,
+        incomplete_last_line=False, bytes_read=0, index_bytes_read=0,
+        read_count=0, source_size=generation['size'], native_index_generation=generation,
+        coverage_basis='native_index_projection_or_exact_raw_offset_size_sha256')
+    rows = []
+    cutoff = (now-timedelta(seconds=window_sec)).isoformat()
+    try:
+        with path.open('rb') as stream:
+            if store.signature(os.fstat(stream.fileno())) != generation['source_stat']:
+                raise ValueError('source_generation_changed')
+            for value, reference in store.read_rows(data_root, path,
+                    kinds=['entry_trace', 'source_gap'], after=cutoff, include_undated=True):
+                source['index_bytes_read'] += len(store.encode(value))
+                if source['index_bytes_read'] + source['bytes_read'] > tail_bytes:
+                    raise ValueError('indexed_trace_window_partition_required')
+                if value['kind'] != 'entry_trace':
+                    raise ValueError('indexed_trace_projection_gap')
+                at = stamp(value['row'].get('decision_ts'))
+                if at is None:
+                    source['missing_timestamp_rows'] += 1
+                    raise ValueError('indexed_trace_timestamp_missing')
+                if at.date() != now.date() or not 0 <= (now-at).total_seconds() <= window_sec:
+                    continue
+                native = value['row'].get('continuous_reversal_consumption') or {}
+                if pid_identity is not None and native and [str(native.get(k) or '')
+                        for k in ('pid', 'process_start_ticks')] != list(map(str,pid_identity)):
+                    continue
+                if value.get('lineage_projection_version') == 1:
+                    rows.append(value['row'])
+                    continue
+                size, offset = reference['size'], reference['decoded_offset']
+                if (type(size) is not int or type(offset) is not int or size <= 0 or offset < 0
+                        or offset+size > generation['size']
+                        or source['index_bytes_read'] + source['bytes_read'] + size > tail_bytes):
+                    raise ValueError('indexed_trace_window_partition_required')
+                stream.seek(offset)
+                raw = stream.read(size)
+                source['bytes_read'] += len(raw); source['read_count'] += 1
+                if len(raw) != size or hashlib.sha256(raw).hexdigest() != reference['sha256']:
+                    raise ValueError('indexed_trace_raw_hash_changed')
+                if not raw.endswith(b'\n'):
+                    source['incomplete_last_line'] = True
+                    raise ValueError('indexed_trace_incomplete_line')
+                row = json.loads(raw)
+                if (not isinstance(row, dict) or row.get('schema') != 'ai_decision_trace_v1'
+                        or row.get('decision_stage') != 'entry_screen'
+                        or row.get('decision_ts') != value['row'].get('decision_ts')
+                        or row.get('decision_trace_id') != value['row'].get('decision_trace_id')):
+                    raise ValueError('indexed_trace_projection_binding_invalid')
+                rows.append(row)
+            if (store.signature(os.fstat(stream.fileno())) != generation['source_stat']
+                    or store.generation(data_root, path) != generation):
+                raise ValueError('source_generation_changed')
+    except (OSError, ValueError, KeyError, TypeError, sqlite3.Error) as error:
+        source.update(reason=str(error)[:160], recent_count=len(rows))
+        return rows, source
+    source.update(status='complete', window_covered=True, recent_count=len(rows),
+        source_identity=dict(device=generation['source_stat'][0], inode=generation['source_stat'][1]))
+    return rows, source
+
+
 def _reversal_provider_lineage(data_root, now, observations, *, tail_bytes,
                                window_sec=WINDOW_SEC, pid_identity=None, _loaded=None):
     """Join the observation cohort using exact producer IDs and content hashes.
@@ -248,9 +318,11 @@ def _reversal_provider_lineage(data_root, now, observations, *, tail_bytes,
         request_rows, requests = _recent_source_rows(
             data_root/'ai_decision_requests'/f'ai_decision_requests_{now.date()}.jsonl',
             now, time_field='captured_at', tail_bytes=tail_bytes, window_sec=window_sec + 5)
-        trace_rows, traces = _recent_source_rows(
-            data_root/'ai_decision_trace'/f'ai_decision_trace_{now.date()}.jsonl',
-            now, time_field='decision_ts', tail_bytes=tail_bytes, window_sec=window_sec + 5)
+        trace_path = data_root/'ai_decision_trace'/f'ai_decision_trace_{now.date()}.jsonl'
+        indexed = _indexed_entry_trace_rows(data_root, trace_path, now,
+            tail_bytes=tail_bytes, window_sec=window_sec+5, pid_identity=pid_identity)
+        trace_rows, traces = indexed if indexed is not None else _recent_source_rows(
+            trace_path, now, time_field='decision_ts', tail_bytes=tail_bytes, window_sec=window_sec + 5)
     else:
         request_rows, requests, trace_rows, traces = _loaded
         historical = {}

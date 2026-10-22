@@ -409,7 +409,18 @@ TRACE_FIELDS = ('schema', 'decision_stage', 'decision_ts', 'stock_code',
     'entry_ai_risk_verdict', 'provider_called', 'decision_evaluation_status',
     'result_source', 'prompt_version', 'entry_ai_component_sha256',
     'response_completed_at', 'session_bucket', 'market_data_route',
-    'machine_bundle_sha256', 'entry_mechanistic_action', 'machine_observation_sha256')
+    'machine_bundle_sha256', 'entry_mechanistic_action', 'machine_observation_sha256',
+    # Existing report-only provider lineage consumes this bounded projection.
+    'async_request_id', 'async_producer_pid', 'async_producer_start_ticks',
+    'request_id', 'prompt_sha256', 'request_envelope_sha256', 'payload_semantic_sha256',
+    'provider_response_id', 'response_sha256', 'timeout', 'transport_timing',
+    'entry_ai_contract_errors', 'entry_ai_raw_risk_verdict', 'entry_ai_raw_fields_invalid_shape',
+    'entry_ai_raw_fields_present', 'entry_ai_raw_fields_source', 'entry_ai_raw_fields_truncated',
+    'entry_ai_raw_response_sha256', 'entry_ai_raw_risk_codes', 'entry_ai_raw_supporting_fact_ids',
+    'entry_ai_raw_contradicting_fact_ids', 'entry_ai_screen_status',
+    'entry_auxiliary_response_contract_valid', 'entry_post_response_execution_valid',
+    'entry_source_invalid_primary_blocker', 'machine_contract_error', 'reason',
+    'effective_venue', 'continuous_reversal_rejected_claim_receipt', 'actual_order_submitted')
 
 
 class InputPending(ValueError):
@@ -475,6 +486,7 @@ def project(namespace, row):
         # Keep all entry dispositions so missing/invalid AI is never recast as
         # an empty population. The consumer selects PASS by its native rules.
         value = dict(kind='entry_trace', identity=row.get('decision_trace_id'),
+                     lineage_projection_version=1,
                      row={key: row[key] for key in TRACE_FIELDS if key in row})
     elif namespace == 'pipeline_events':
         if (row.get('pipeline') == 'HOLDING_PIPELINE'
@@ -737,7 +749,8 @@ def _put(db, source, offset, raw, value, *, raw_identity=None):
     row=value.get('row') or {}
     db.execute('INSERT OR IGNORE INTO rows VALUES(?,?,?,?,?,?,?,?,?,?,?)',
         (source,offset,size,*pair,value['kind'],value.get('identity'),
-         row.get('stock_code') or row.get('symbol'),row.get('stage'),row.get('emitted_at') or row.get('session_key'),body))
+         row.get('stock_code') or row.get('symbol'),row.get('stage'),
+         row.get('emitted_at') or row.get('session_key') or row.get('decision_ts') or row.get('captured_at'),body))
     return leaf
 
 
@@ -880,7 +893,7 @@ def build_step(data_root, path, *, max_bytes=MAX_STEP_BYTES, seconds=1):
 
 
 def read_rows(data_root, path, *, kinds=None, identities=None, symbols=None, stages=None, after=None,
-              snapshot_receipt=None):
+              snapshot_receipt=None, include_undated=False):
     """Read verified rows; an explicit receipt may admit certified later appends."""
     with read_session(data_root), _database(data_root, path, readonly=True) as (db, path, namespace):
         if snapshot_receipt is not None:
@@ -903,7 +916,8 @@ def read_rows(data_root, path, *, kinds=None, identities=None, symbols=None, sta
                     raise ValueError('trailing_index_query_partition_required')
                 query += ' AND '+column+' IN ('+','.join('?' for _ in values)+')';args.extend(values)
         if after is not None:
-            query+=' AND emitted_at>=?';args.append(after)
+            query+=(' AND (emitted_at>=? OR emitted_at IS NULL)' if include_undated
+                    else ' AND emitted_at>=?');args.append(after)
         for offset, size, raw_sha, body_sha, body in db.execute(query+' ORDER BY offset', args):
             if len(body)>MAX_ROW_BYTES or hashlib.sha256(body).hexdigest()!=body_sha:
                 raise ValueError('trailing_index_projection_changed')

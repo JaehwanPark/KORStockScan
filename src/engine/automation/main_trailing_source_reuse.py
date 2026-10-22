@@ -96,7 +96,9 @@ def collect_proofs(data_root, original_manifest_path):
             archived_snapshot = (Path(path).parent == root/'report/monitor_snapshots'
                 and Path(path).suffix == '.json' and not Path(path).exists()
                 and Path(path+'.gz.archive_receipt.json').is_file())
-            if generation.get('schema') in {VOTE_INVENTORY_SCHEMA, INDEX_SCHEMA+':generation'} or archived_snapshot:
+            cost_index = (Path(path).name == 'index.json' and Path(path).parent.parent
+                == root/'runtime/initial_quantity_research_costs')
+            if generation.get('schema') in {VOTE_INVENTORY_SCHEMA, INDEX_SCHEMA+':generation'} or archived_snapshot or cost_index:
                 logical[(path,digest(generation))]=dict(path=path,generation=generation)
                 continue
             old=expected.get(path)
@@ -412,6 +414,32 @@ def _vote_prefix_unchanged(path, generation, source_date):
     return file_stat(path)==before
 
 
+def frozen_cost_declaration(data_root, day):
+    """Resolve only an active, approved replay's original research-cost scope."""
+    active = _REPLAY.get()
+    if active is None:
+        return None
+    manifest, assembly_root, cache = active
+    root = Path(data_root).resolve()
+    if root != Path(manifest.get('holding_research_cost_data_root') or manifest['source_data_root']).resolve():
+        return None
+    if day not in manifest['consumed_dates']:
+        return None
+    if 'cost_index_generations' not in cache:
+        cache['cost_index_generations'] = {row['path']:row['generation']
+            for row in storage.iter_tree(assembly_root,manifest['assembly_inventory_ref'])
+            if Path(row['path']).name == 'index.json' and Path(row['path']).parent.parent
+                == root/'runtime/initial_quantity_research_costs'}
+    path = root/'runtime/initial_quantity_research_costs'/day/'index.json'
+    generation = cache['cost_index_generations'].get(str(path))
+    if generation is None:
+        return False
+    from src.engine.lifecycle.holding_research_cost import frozen_index
+    body = frozen_index(root,path,generation)
+    return dict(source_dates=[dict(source_date=d) for d in body['source_dates']],
+        receipts=[dict(record_id=record,content_sha256=sha) for record,sha in body['receipts'].items()])
+
+
 def verify_frozen_inventory(manifest, assembly_root):
     """Revalidate the original cohort without making future journals inputs."""
     from .main_trailing_source_assembler import input_inventory,source_generation_matches,VOTE_INVENTORY_SCHEMA,universe
@@ -427,6 +455,29 @@ def verify_frozen_inventory(manifest, assembly_root):
     old={row['path']:row['generation'] for row in original
         if not row['path'].endswith('.claims.jsonl')}
     new={row['path']:row['generation'] for row in current}
+    # Cost correction publishes a new native index while retaining the exact
+    # prior index and receipt bodies. Replay this approved frozen cohort against
+    # those original dependencies, without importing the corrected economics.
+    from src.engine.lifecycle.holding_research_cost import frozen_index, inventory as cost_inventory
+    from src.engine.lifecycle.broker_cost_source import source_path as cost_source_path
+    cost_root=Path(manifest.get('holding_research_cost_data_root') or root).resolve()
+    current_costs=set(); frozen_costs=set()
+    for day in manifest['consumed_dates']:
+        index=cost_root/'runtime/initial_quantity_research_costs'/day/'index.json'
+        if str(index) not in old:
+            continue
+        body=frozen_index(cost_root,index,old[str(index)])
+        current_costs.update(str(p.resolve()) for p in cost_inventory(cost_root,[day]))
+        frozen_costs.add(str(index))
+        frozen_costs.update(str(index.parent/'generations'/(sha+'.json')) for sha in body['receipts'].values())
+        frozen_costs.update(str(cost_source_path(cost_root,d)) for d in body['source_dates'])
+    if not frozen_costs <= set(old):
+        raise InputPending('trailing_reuse_frozen_cost_inventory_unbound')
+    for name in frozen_costs:
+        if not source_generation_matches(cost_root,source_date,name,old[name]):
+            raise InputPending('trailing_reuse_frozen_cost_source_changed:'+name)
+    new={name:generation for name,generation in new.items() if name not in current_costs}
+    new.update((name,old[name]) for name in frozen_costs)
     for name,generation in old.items():
         candidate=new.get(name)
         is_vote=Path(name).parent==root/'runtime/holding_path_votes'

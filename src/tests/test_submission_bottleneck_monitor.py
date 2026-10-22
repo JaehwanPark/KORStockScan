@@ -5432,3 +5432,68 @@ def test_nonterminal_machine_rows_do_not_read_new_terminal_payload():
     decision = replace(decision, fields=NonterminalFields(decision.fields))
     result = sentinel._machine_primary_entry_funnel([decision])
     assert result['evaluation_ledger'][0]['final_state'] == 'pending'
+
+
+@pytest.mark.parametrize('legacy', [False, True])
+@pytest.mark.parametrize('damage', [None, 'raw_changed', 'index_stale', 'missing_clock', 'budget'])
+def test_lineage_native_index_reads_exact_entry_rows_outside_large_irrelevant_suffix(tmp_path, monkeypatch, damage, legacy):
+    from src.engine.automation import main_trailing_source_store as store
+    from pathlib import Path
+    if legacy or damage == 'raw_changed':
+        project = store.project
+        def original_projection(*args):
+            value = project(*args)
+            if value is not None:value.pop('lineage_projection_version', None)
+            return value
+        monkeypatch.setattr(store, 'project', original_projection)
+    now, observations, requests, traces, write = _current_provider_lineage_fixture(tmp_path, verdicts=('PASS',))
+    trace = traces[0]
+    trace['decision_stage'] = 'entry_screen'
+    if damage == 'missing_clock':
+        trace.pop('decision_ts')
+    path = tmp_path/'ai_decision_trace'/f'ai_decision_trace_{now.date()}.jsonl'
+    path.parent.mkdir(exist_ok=True);path.write_bytes(b'')
+    def append(value):
+        before = store.signature(path.stat());raw = json.dumps(value).encode()+b'\n'
+        with path.open('ab') as stream:stream.write(raw)
+        assert store.record_append(tmp_path,path,before=before,after=store.signature(path.stat()),raw=raw,row=value)
+    append(trace)
+    # A large holding row displaces a valid entry trace from the bounded tail.
+    append(dict(schema='ai_decision_trace_v1',decision_stage='holding_screen',
+        decision_ts=now.isoformat(),padding='x'*32768))
+    if damage == 'index_stale':
+        with path.open('ab') as stream:stream.write(b'{}\n')
+    elif damage == 'raw_changed':
+        # Keep the native index identity pinned so the exact-byte check, rather
+        # than only metadata, must detect the mismatched original line.
+        generation = store.generation(tmp_path,path)
+        original_signature = store.signature
+        with path.open('r+b') as stream:stream.write(b'!')
+        monkeypatch.setattr(store,'signature',lambda metadata:generation['source_stat'])
+        monkeypatch.setattr(store,'generation',lambda *a:generation)
+    original_open = Path.open;reads=[]
+    class ObservedStream:
+        def __init__(self,stream):self.stream=stream
+        def __getattr__(self,key):return getattr(self.stream,key)
+        def __enter__(self):self.stream.__enter__();return self
+        def __exit__(self,*args):return self.stream.__exit__(*args)
+        def read(self,size=-1):
+            assert size >= 0
+            value=self.stream.read(size);reads.append(len(value));return value
+    def observed_open(candidate,*args,**kwargs):
+        stream=original_open(candidate,*args,**kwargs)
+        return ObservedStream(stream) if candidate==path else stream
+    monkeypatch.setattr(Path,'open',observed_open)
+    budget = 100 if damage == 'budget' else 16384
+    joined=monitor._reversal_provider_lineage(tmp_path,now,observations,tail_bytes=budget,pid_identity=(123,'456'))
+    source=joined['source_windows']['traces']
+    assert sum(reads) <= budget
+    if damage:
+        assert source['status'] != 'complete' and joined['status'] != 'observed'
+        return
+    assert joined['source_gaps'] == joined['issues'] == {}, joined
+    assert joined['trace_attempt_count'] == joined['raw_response_observed_count'] == 1
+    assert source['coverage_basis']=='native_index_projection_or_exact_raw_offset_size_sha256'
+    assert source['window_covered'] is True and source['read_count']==int(legacy)
+    assert source['bytes_read']+source['index_bytes_read'] <= budget
+    assert source['bytes_read'] < path.stat().st_size/2

@@ -175,6 +175,15 @@ def verify_inventory(manifest, assembly_root):
 
 def source_generation_matches(root, source_date, path, generation):
     from .main_trailing_source_store import SCHEMA as INDEX_SCHEMA,generation as index_generation
+    cost_path = Path(path)
+    if (cost_path.name == 'index.json'
+            and cost_path.parent.parent == Path(root).resolve()/'runtime/initial_quantity_research_costs'):
+        from src.engine.lifecycle.holding_research_cost import frozen_index
+        try:
+            frozen_index(root, cost_path, generation)
+            return True
+        except (OSError, ValueError, KeyError, TypeError):
+            return False
     if generation.get('schema') == CALENDAR_GENERATION_SCHEMA:
         import zlib
         path=Path(path).absolute()

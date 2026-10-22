@@ -15,9 +15,14 @@ from src.engine.scalping.pre_submit_delay_initial_policy import digest
 from src.tests.test_main_trailing_source_assembler import fixture, DAY, TARGET, write
 
 
-def approved(tmp_path):
+def approved(tmp_path, *, cost=False):
     data = tmp_path/'data'
     fixture(data)
+    if cost:
+        from src.engine.lifecycle.broker_cost_allocation import persist_research_costs
+        persist_research_costs(data, DAY, {'1': dict(record_id='1',
+            schema='initial_quantity_broker_total_allocated_cost_v1',
+            status='research_cost_invalid', reason='original_cost_gap')}, [])
     origin = assembler.assemble(data, tmp_path/'original', source_date=DAY,
         target_date=TARGET, start_date=DAY, immutable=True)
     output = data/'report/main_all_scope_trailing'/DAY/'generations'/origin.parent.name
@@ -34,8 +39,18 @@ def approved(tmp_path):
     return data, origin, holding, result
 
 
-def test_approved_normalized_input_replays_and_verifies_with_original_gaps(tmp_path):
-    data, origin, holding, original = approved(tmp_path)
+@pytest.mark.parametrize('cost_revision', [False, True])
+def test_approved_normalized_input_replays_and_verifies_with_original_gaps(tmp_path, cost_revision):
+    data, origin, holding, original = approved(tmp_path, cost=cost_revision)
+    if cost_revision:
+        from src.engine.lifecycle.broker_cost_allocation import persist_research_costs
+        from src.engine.lifecycle.broker_cost_reconciliation import source_generation
+        persist_research_costs(data, DAY, {'1': dict(record_id='1',
+            schema='initial_quantity_broker_total_allocated_cost_v1',
+            status='research_cost_invalid', reason='later_cost_generation')}, [])
+        current_costs = source_generation(data, DAY)
+        index_path = data/'runtime/initial_quantity_research_costs'/DAY/'index.json'
+        current_index = index_path.read_bytes()
     before = holding.read_bytes()
     manifest = reuse.prepare(data, origin, tmp_path/'reused')
     value, _ = reuse.sealed(manifest)
@@ -50,6 +65,34 @@ def test_approved_normalized_input_replays_and_verifies_with_original_gaps(tmp_p
     assert current['initial_policy'] == original['initial_policy']
     assert current['assembly_census'] == original['assembly_census']
     assert holding.read_bytes() == before
+    if cost_revision:
+        assert source_generation(data, DAY) == current_costs
+        assert index_path.read_bytes() == current_index
+        with reuse.replay_session(value, manifest.parent):
+            assert source_generation(data, DAY) != current_costs
+        assert source_generation(data, DAY) == current_costs
+
+
+@pytest.mark.parametrize('damage', ['missing_history', 'changed_history', 'linked_history',
+    'changed_old_receipt', 'invalid_current_index'])
+def test_frozen_cost_revision_never_admits_missing_changed_or_unbound_bytes(tmp_path, damage):
+    from src.engine.lifecycle import broker_cost_allocation as costs
+    data, origin, _, _ = approved(tmp_path, cost=True)
+    index = data/'runtime/initial_quantity_research_costs'/DAY/'index.json'
+    old = json.loads(index.read_bytes())
+    history = index.parent/'index_generations'/(hashlib.sha256(index.read_bytes()).hexdigest()+'.json')
+    costs.persist_research_costs(data, DAY, {'1': dict(record_id='1',
+        schema='initial_quantity_broker_total_allocated_cost_v1',
+        status='research_cost_invalid', reason='later_cost_generation')}, [])
+    if damage == 'missing_history': history.unlink()
+    elif damage == 'changed_history': history.write_text('{}')
+    elif damage == 'linked_history':
+        target = tmp_path/'alias.json';history.rename(target);history.symlink_to(target)
+    elif damage == 'invalid_current_index': index.write_text('{}')
+    else: (index.parent/'generations'/(old['receipts']['1']+'.json')).write_text('{}')
+    with pytest.raises((ValueError, KeyError, OSError, reuse.InputPending)):
+        manifest = reuse.prepare(data, origin, tmp_path/'reused')
+        research.run(manifest, input_root=manifest.parent, output_root=tmp_path/'report', dry_run=False)
 
 
 @pytest.mark.parametrize('damage', ['holding', 'manifest', 'binding', 'partition'])

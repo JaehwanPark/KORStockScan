@@ -71,6 +71,9 @@ def load_receipt(data_root: Path, completion_date: str, record_id: str) -> dict 
 
 def source_generation(data_root: Path, completion_date: str, *, additional_source_dates=None,
                       declared_research=None) -> dict:
+    if declared_research is None and additional_source_dates is None:
+        from src.engine.automation.main_trailing_source_reuse import frozen_cost_declaration
+        declared_research = frozen_cost_declaration(data_root, completion_date)
     directory = receipt_path(data_root, completion_date, "1").parent
     if any(parent.is_symlink() for parent in (directory, directory.parent, directory.parent.parent)):
         raise ValueError("cost_source_directory_symlink")

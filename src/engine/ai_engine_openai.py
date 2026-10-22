@@ -11484,12 +11484,23 @@ class GPTSniperEngine:
                 and isinstance(e, OpenAIHTTPWallClockDeadlineError)
                 and e.future_cancelled)
             if unsent_entry_timeout or (isinstance(e, ValueError) and str(e).startswith('entry_machine_input_deadline_')):
-                return {"action":"WAIT", "score":50, "reason":str(e),
-                        "provider_called":bool(provider_attempted),
-                        "ai_result_source":"entry_deadline_expired",
-                        "entry_local_stage_clocks":dict(local_stage_clocks),
-                        "actual_order_submitted":False, "broker_order_forbidden":True,
-                        **machine_capture, **stage_fields}
+                deadline_result = {"action":"WAIT", "score":50, "reason":str(e),
+                    "provider_called":bool(provider_attempted),
+                    "entry_ai_screen_status":"not_evaluated_local", "entry_ai_screen_pass":False,
+                    "openai_local_failure_reason":str(e),
+                    "entry_local_stage_clocks":dict(local_stage_clocks),
+                    "actual_order_submitted":False, "broker_order_forbidden":True,
+                    **machine_capture, **stage_fields}
+                # Only this cancelled adapter has prepared request metadata.
+                # Pre-adapter guards must not take a previous call's identity.
+                if unsent_entry_timeout:
+                    deadline_result = self._merge_last_transport_meta(deadline_result)
+                return self._annotate_analysis_result(_merge_runtime_fields(deadline_result),
+                    prompt_type=prompt_type, prompt_version=prompt_version,
+                    response_ms=int((time.perf_counter()-analysis_started)*1000),
+                    parse_ok=False, parse_fail=False, fallback_score_50=False,
+                    cache_hit=False, cache_mode='miss', result_source='entry_deadline_expired',
+                    input_contract_fields=input_contract_fields)
             owned_entry_timeout = (entry_circuit_ticket is not None and provider_attempted
                 and not raw_auxiliary_response_fields
                 and getattr(e,'provider_common_error',None) is None
