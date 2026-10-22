@@ -909,7 +909,8 @@ def test_initial_registry_receipt_survives_native_consumer_and_late_rest_staging
 
 
 @pytest.mark.parametrize('fault', [None, 'open', 'owner', 'date', 'extra', 'amount',
-    'account', 'source', 'parent', 'bundle', 'residual', 'manual', 'price', 'sell'])
+    'account', 'source', 'parent', 'bundle', 'residual', 'manual', 'price', 'sell',
+    'missing_clock', 'naive_clock', 'wrong_clock_date'])
 def test_sync_consumes_terminal_initial_probe_without_submitting_residual(tmp_path, monkeypatch, fault):
     from types import SimpleNamespace
     from copy import deepcopy
@@ -939,6 +940,9 @@ def test_sync_consumes_terminal_initial_probe_without_submitting_residual(tmp_pa
     if fault=='extra':rows.append({**row,'broker_order_no':'0013983'})
     if fault=='amount':row['fill_amount']=0
     if fault=='account':row['account_key']='other'
+    if fault=='missing_clock':row.pop('fill_observed_at_kst')
+    if fault=='naive_clock':row['fill_observed_at_kst']=now.replace(tzinfo=None).isoformat()
+    if fault=='wrong_clock_date':row['fill_observed_at_kst']=(now-timedelta(days=1)).isoformat()
     if fault=='bundle':bundle['order_no']='0013983'
     if fault=='residual':bundle['residual_order_nos']=['0013983']
     monkeypatch.setattr(probe,'PROBE_RUNTIME_STATE_PATH',tmp_path/'probe.json')
@@ -954,7 +958,20 @@ def test_sync_consumes_terminal_initial_probe_without_submitting_residual(tmp_pa
     target=dict(id=101,code=SYMBOL,status='BUY_ORDERED',pending_entry_orders=[dict(ord_no='0013982')])
     registry=SimpleNamespace(position_intents=lambda **_:deepcopy(rows))
     before=probe.PROBE_RUNTIME_STATE_PATH.read_bytes()
-    result=sync._restore_registered_entry_buy(record,target,SYMBOL,1,registry)
+    if fault is None:
+        registry.symbol_registered=lambda _:True
+        registry.decision_activation_matches=lambda _:True
+        registry.reconcile_symbol_quantity=lambda **_:dict(position_quantities={'main_scalping:101':1})
+        monkeypatch.setattr(sync,'default_order_owner_registry',lambda:registry)
+        monkeypatch.setattr(sync,'resolve_symbol_owner_policy',lambda _:SimpleNamespace(
+            coexistence_enabled=True,policy_id='fixture',policy_hash='a'*64))
+        monkeypatch.setattr(sync,'ACTIVE_TARGETS',[target])
+        monkeypatch.setattr(sync,'log_info',lambda *a:None)
+        assert sync._preserve_coexistence_owner_inventory(record=record,code=SYMBOL,
+            real_codes={SYMBOL:dict(qty=1)},source='periodic_pending_buy_balance_sync')
+        result=target['symbol_owner_reconciliation']['main_entry_buy_receipt']
+    else:
+        result=sync._restore_registered_entry_buy(record,target,SYMBOL,1,registry)
     if fault is not None:
         assert result is None and record.buy_qty==2 and record.status=='BUY_ORDERED'
         assert probe.PROBE_RUNTIME_STATE_PATH.read_bytes()==before
