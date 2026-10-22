@@ -676,8 +676,8 @@ def read_committed(root, day, *, pointer=None, verify_full=False):
         if source_generation(Path(root), cost_day) != expected:
             declared = expected.get('quantity_research_cost_generation')
             if (verify_full or any(c['status'] == 'selected' for c in bundle['cells'].values())
-                    or declared is None
-                    or source_generation(Path(root), cost_day, declared_research=declared) != expected):
+                    or source_generation(Path(root), cost_day,
+                        declared_research=declared if declared is not None else False) != expected):
                 raise ValueError('stop_native_cost_generation_changed')
     for cell in bundle['cells'].values():
         if cell['status'] == 'selected':

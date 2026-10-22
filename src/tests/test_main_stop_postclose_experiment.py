@@ -308,8 +308,10 @@ def test_late_native_cost_revision_invalidates_selection_and_reuses_price_replay
     assert raw.read_bytes()==original
 
 
-@pytest.mark.parametrize('damage',[None,'original_receipt','official','actual'])
-def test_carried_policy_consumes_only_original_declared_research_costs(tmp_path,damage):
+@pytest.mark.parametrize('indexed,damage',[(indexed,damage)
+    for indexed in (True,False) for damage in (None,'original_receipt','official','actual')
+    if indexed or damage!='original_receipt'])
+def test_carried_policy_consumes_only_original_declared_research_costs(tmp_path,indexed,damage):
     from src.engine.lifecycle import broker_cost_reconciliation as cost,broker_cost_source as official
     day,target='2026-10-12','2026-10-13'
     directory=tmp_path/'runtime/initial_quantity_research_costs'/day
@@ -321,6 +323,7 @@ def test_carried_policy_consumes_only_original_declared_research_costs(tmp_path,
         index['index_sha256']=cost.digest(index);(directory/'index.json').write_text(json.dumps(index))
         return path
     original=publish_index(1)
+    if not indexed:(directory/'index.json').unlink()
     _,report,parent,source=publication(tmp_path)
     completed=json.loads((tmp_path/'costs.json').read_text())['rows']
     economic=dict(report['economic_sources'],cost_generations={day:cost.source_generation(tmp_path,day)})

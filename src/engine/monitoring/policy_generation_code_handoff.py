@@ -312,7 +312,7 @@ REVIEWED_ENTRY_COST_SUCCESSORS = {'auxiliary': ('4de7ce95386f5c05863e8e3fb56899c
  'entry_cancel_wait': ('47eb1ef2e45d3c48e663f6b3df505bc95da07fc6bcd168394441840af4764fff',
                        '88275729dd03ed1f0de7bb562a85fab49e1212447da4a268fb3cd9e175389313'),
  'holding_vote': ('48b92485c831e215a1d7fe1ef8664113d68186e040a768087cbcb18ab0892ac3',
-                  '5b2ea79a6f45e632d7eb2e4ab65109c956c8fb95806a35288ef579d0c465cd58'),
+                  'aa14bd6051d104461b5830b24df8ea0576402b4687fd9a808c707eb69b0e02ea'),
  'rising_missed': ('8c2725f4e329c95b79a74df8167bc5bbab80d6e08fe80fb6d7e4aaaa4d4c6e8d',
                    'b6d966e440e92d57a8874814c3fcc2dfe9c0eab54603d8c9c6f2e93734b240f7')}
 
@@ -322,7 +322,7 @@ REVIEWED_ENTRY_COST_SOURCE_SUCCESSORS = {'auxiliary': ('a2c47ec94d9ae8e1866af911
  'entry_cancel_wait': ('2382694e568af306027b58857aa2b5dff6fa0093347f4c8220a8ae6be001adef',
                        '88275729dd03ed1f0de7bb562a85fab49e1212447da4a268fb3cd9e175389313'),
  'holding_vote': ('e51ef1e839e2bf60aa7ecb7dd4eaed2d701c01816dc37298402701de9b75a9cd',
-                  '5b2ea79a6f45e632d7eb2e4ab65109c956c8fb95806a35288ef579d0c465cd58'),
+                  'aa14bd6051d104461b5830b24df8ea0576402b4687fd9a808c707eb69b0e02ea'),
  'rising_missed': ('75040f633f59cdadf8302ea2e68efdc05b1174f92c3caa73780d71e8e37bcd7e',
                    'b6d966e440e92d57a8874814c3fcc2dfe9c0eab54603d8c9c6f2e93734b240f7')}
 

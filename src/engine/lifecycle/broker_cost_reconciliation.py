@@ -114,6 +114,12 @@ def source_generation(data_root: Path, completion_date: str, *, additional_sourc
     # corrections then invalidate only reports that actually depend on them.
     research = Path(data_root) / "runtime/initial_quantity_research_costs" / completion_date
     index_path = research / "index.json"
+    if declared_research is False:
+        if additional_source_dates is not None:
+            raise ValueError('research_cost_declared_scope_conflict')
+        # The sealed original predates the dedicated research publisher.
+        # Its complete actual/official scope was revalidated above.
+        return result
     if declared_research is not None and additional_source_dates is not None:
         raise ValueError('research_cost_declared_scope_conflict')
     if declared_research is not None or additional_source_dates is not None or index_path.exists():
