@@ -254,6 +254,24 @@ def has_due(code, now):
         return bool(heap and heap[0][0] <= now)
 
 
+def should_retain_ws_subscription(code, *, now_ts=None):
+    """Keep existing sources through the last pending horizon, never create REG.
+
+    The active registry also covers a due intent temporarily removed from its
+    heap by the sampler. Order/watch terminals do not end this research lease.
+    The original admission clock bounds retention even if maintenance stalls.
+    """
+    now = time.time() if now_ts is None else now_ts
+    code = str(code)
+    with _LOCK:
+        return not _CLOSING and any(
+            key[0] == code and value.get('_commit_admitted', True)
+            and value['remaining_sec']
+            and value['committed_at_epoch'] <= now < value['committed_at_epoch'] + LIFETIME_SEC
+            for key, value in _ACTIVE.items()
+        )
+
+
 def take_due(code, now):
     """O(D log A), where D is limited; no global sweep or tick sorting."""
     result = []

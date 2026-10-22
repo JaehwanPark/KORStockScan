@@ -1340,6 +1340,7 @@ def _is_ok_response(res):
 
 
 def _prune_ws_subscriptions_for_inactive_targets(targets):
+    from src.engine.scalping.pre_submit_delay_observation import should_retain_ws_subscription as retain_delay_source
     if not WS_MANAGER:
         return
     subscribed_codes = list(getattr(WS_MANAGER, "subscribed_codes", set()) or [])
@@ -1367,6 +1368,8 @@ def _prune_ws_subscriptions_for_inactive_targets(targets):
         # normal micro-reversion demotion, which may replace plain/_NX/_AL and
         # silently break the post-sell observer's executable route contract.
         if should_retain_ws_subscription(norm, now_ts=now_ts):
+            continue
+        if retain_delay_source(norm, now_ts=now_ts):
             continue
         if _is_scanner_promotion_pending_attach(norm, now_ts=now_ts):
             continue
@@ -6061,11 +6064,13 @@ def _expire_scalping_watch_budget_targets(
         for target in active_targets or []
         if str(target.get("status") or "").upper() not in {"COMPLETED", "EXPIRED"}
     }
+    from src.engine.scalping.pre_submit_delay_observation import should_retain_ws_subscription as retain_delay_source
     unregister_codes = [
         code
         for code in sorted(set(expired_codes))
         if code not in active_codes
         and not should_retain_ws_subscription(code)
+        and not retain_delay_source(code)
         and not sniper_state_handlers.should_retain_rising_missed_nxt_post_block_subscription(
             code
         )
