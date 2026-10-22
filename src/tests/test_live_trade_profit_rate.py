@@ -4722,6 +4722,29 @@ def test_sync_balance_with_db_requests_restart_on_auth_failure(tmp_path, monkeyp
     assert invalidations == ["auth_restart:인증 실패(8005)"]
 
 
+def test_startup_reconciles_pending_main_custody_before_timeout_loop(monkeypatch):
+    record=SimpleNamespace(id=101,stock_code='005930',stock_name='TEST',
+        status='BUY_ORDERED',strategy='SCALPING',buy_qty=2,buy_price=9900,
+        buy_time=None,scale_in_locked=False)
+    monkeypatch.setattr(sniper_sync,'KIWOOM_TOKEN','token')
+    monkeypatch.setattr(sniper_sync,'DB',_SyncDB([record]))
+    monkeypatch.setattr(sniper_sync,'ACTIVE_TARGETS',[dict(id=101,code='005930',status='BUY_ORDERED')])
+    monkeypatch.setattr(sniper_sync.kiwoom_orders,'get_my_inventory',
+        lambda _:([dict(code='005930',qty=1,buy_price=10000)],{'KRX','NXT'}))
+    monkeypatch.setattr(sniper_sync,'publish_broker_account_snapshot',lambda **_:None)
+    calls=[]
+    def reconcile(**kwargs):
+        assert kwargs['record'] is record and record.status=='BUY_ORDERED'
+        assert kwargs['real_codes']['005930']['qty']==1
+        calls.append(kwargs['source'])
+        return True
+    monkeypatch.setattr(sniper_sync,'_preserve_coexistence_owner_inventory',reconcile)
+    monkeypatch.setattr(sniper_sync,'_recover_missing_broker_holdings',lambda *_:0)
+    sniper_sync.sync_balance_with_db()
+    assert calls==['startup_pending_buy_balance_sync']
+    assert record.status=='BUY_ORDERED' and record.buy_qty==2
+
+
 def test_startup_sync_quarantines_prebaseline_scalping_ghosts(monkeypatch):
     records = [
         type(

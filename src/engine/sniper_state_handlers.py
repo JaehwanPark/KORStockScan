@@ -93288,6 +93288,11 @@ def handle_buy_ordered_state(stock, code):
         orig_ord_no = stock.get("odno")
 
         if not orig_ord_no:
+            if (stock.get("broker_symbol_allocation_conflict")
+                    or stock.get("sell_cancel_reconciliation_required")):
+                # Missing local identity cannot erase unresolved native custody.
+                # The existing account/registry reconciliation owns recovery.
+                return
             _mutate_stock_state(
                 stock,
                 set_fields={"status": "WATCHING"},

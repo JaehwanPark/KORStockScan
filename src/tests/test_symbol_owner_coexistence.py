@@ -826,7 +826,7 @@ def test_sync_recovers_only_complete_exact_unit_entry_census(tmp_path, monkeypat
     monkeypatch.setattr(receipts,'_sell_pending_submit_path',lambda _:tmp_path/'sell.json')
     monkeypatch.setattr(receipts,'_sell_receipt_recovery_path',lambda _:tmp_path/'sell-receipt.json')
     if fault=='sell_custody':(tmp_path/'sell.json').write_text('{}')
-    monkeypatch.setattr(sync,'evaluate_main_bot_control_exclusion',lambda _:SimpleNamespace(excluded=fault=='manual'))
+    monkeypatch.setattr(sync,'evaluate_main_bot_control_exclusion',lambda _,**kw:SimpleNamespace(excluded=fault=='manual'))
     monkeypatch.setattr(sync,'ACTIVE_TARGETS',[target])
     monkeypatch.setattr(sync,'resolve_symbol_owner_policy',lambda _:SimpleNamespace(coexistence_enabled=True,
         policy_id='main-native',policy_hash='a'*64))
@@ -908,10 +908,11 @@ def test_initial_registry_receipt_survives_native_consumer_and_late_rest_staging
         tmp_path, monkeypatch, None, 'ENTRY_BUY', native=True)
 
 
+@pytest.mark.parametrize('cleared', [False, True])
 @pytest.mark.parametrize('fault', [None, 'open', 'owner', 'date', 'extra', 'amount',
     'account', 'source', 'parent', 'bundle', 'residual', 'manual', 'price', 'sell',
     'missing_clock', 'naive_clock', 'wrong_clock_date'])
-def test_sync_consumes_terminal_initial_probe_without_submitting_residual(tmp_path, monkeypatch, fault):
+def test_sync_consumes_terminal_initial_probe_without_submitting_residual(tmp_path, monkeypatch, fault, cleared):
     from types import SimpleNamespace
     from copy import deepcopy
     from src.engine import sniper_sync as sync, sniper_execution_receipts as receipts
@@ -951,11 +952,16 @@ def test_sync_consumes_terminal_initial_probe_without_submitting_residual(tmp_pa
     monkeypatch.setattr(receipts,'_sell_pending_submit_path',lambda _:tmp_path/'sell.json')
     monkeypatch.setattr(receipts,'_sell_receipt_recovery_path',lambda _:tmp_path/'sell-receipt.json')
     if fault=='sell':(tmp_path/'sell.json').write_text('{}')
-    monkeypatch.setattr(sync,'evaluate_main_bot_control_exclusion',lambda _:SimpleNamespace(excluded=fault=='manual'))
+    monkeypatch.setattr(sync,'evaluate_main_bot_control_exclusion',lambda _,**kw:SimpleNamespace(excluded=fault=='manual'))
     monkeypatch.setattr(sync,'log_error',lambda *a:None)
     record=SimpleNamespace(id=101,strategy='SCALPING',status='BUY_ORDERED',buy_qty=2,
+        rec_date=now.date(),stock_code=SYMBOL,
         buy_price=-1 if fault=='price' else 9900,buy_time=None,sell_time=None,sell_price=0)
     target=dict(id=101,code=SYMBOL,status='BUY_ORDERED',pending_entry_orders=[dict(ord_no='0013982')])
+    if cleared:
+        record.status='WATCHING';record.buy_qty=0
+        record.buy_price=-1 if fault=='price' else 0
+        target.update(status='WATCHING');target.pop('pending_entry_orders')
     registry=SimpleNamespace(position_intents=lambda **_:deepcopy(rows))
     before=probe.PROBE_RUNTIME_STATE_PATH.read_bytes()
     if fault is None:
@@ -967,13 +973,24 @@ def test_sync_consumes_terminal_initial_probe_without_submitting_residual(tmp_pa
             coexistence_enabled=True,policy_id='fixture',policy_hash='a'*64))
         monkeypatch.setattr(sync,'ACTIVE_TARGETS',[target])
         monkeypatch.setattr(sync,'log_info',lambda *a:None)
-        assert sync._preserve_coexistence_owner_inventory(record=record,code=SYMBOL,
-            real_codes={SYMBOL:dict(qty=1)},source='periodic_pending_buy_balance_sync')
+        if cleared:
+            class Query:
+                def filter(self,*a):return self
+                def filter_by(self,**kw):
+                    assert kw==dict(id=101);return self
+                def all(self):return []
+                def first(self):return record
+            session=SimpleNamespace(query=lambda _:Query())
+            assert sync._recover_missing_broker_holdings(session,{SYMBOL:dict(qty=1)})==1
+        else:
+            assert sync._preserve_coexistence_owner_inventory(record=record,code=SYMBOL,
+                real_codes={SYMBOL:dict(qty=1)},source='periodic_pending_buy_balance_sync')
         result=target['symbol_owner_reconciliation']['main_entry_buy_receipt']
     else:
         result=sync._restore_registered_entry_buy(record,target,SYMBOL,1,registry)
     if fault is not None:
-        assert result is None and record.buy_qty==2 and record.status=='BUY_ORDERED'
+        assert result is None and record.buy_qty==(0 if cleared else 2)
+        assert record.status==('WATCHING' if cleared else 'BUY_ORDERED')
         assert probe.PROBE_RUNTIME_STATE_PATH.read_bytes()==before
         return
     assert result['quantity']==1 and record.buy_qty==1 and record.status=='HOLDING'

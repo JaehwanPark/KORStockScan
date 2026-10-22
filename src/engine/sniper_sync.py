@@ -750,6 +750,7 @@ def _recover_missing_broker_holdings(session, real_codes):
     for code, real_data in real_codes.items():
         if code in tracked_codes:
             continue
+        owner_registry = None
         try:
             owner_policy = resolve_symbol_owner_policy(code)
             owner_registry = default_order_owner_registry()
@@ -770,6 +771,35 @@ def _recover_missing_broker_holdings(session, real_codes):
             evaluate_main_bot_control_exclusion(code, new_entry=False).excluded
             or coexistence_external_inventory
         ):
+            if coexistence_external_inventory and owner_registry is not None:
+                # A lost local order number may have reset an unconsumed Main
+                # row. Recover only its exact existing native owner/receipt;
+                # aggregate inventory must never create a new Main position.
+                try:
+                    census = owner_registry.reconcile_symbol_quantity(
+                        symbol=code, broker_quantity=_to_int(real_data.get("qty", 0)))
+                    for position, quantity in census["position_quantities"].items():
+                        if (not str(position).startswith("main_scalping:")
+                                or type(quantity) is not int or quantity <= 0):
+                            continue
+                        record_id = str(position).removeprefix("main_scalping:")
+                        if not record_id.isdecimal():
+                            continue
+                        record = session.query(RecommendationHistory).filter_by(
+                            id=int(record_id)).first()
+                        if (record is None or record.stock_code != code
+                                or record.rec_date != today or record.status != "WATCHING"
+                                or record.buy_time is not None or _to_int(record.buy_qty) != 0):
+                            continue
+                        _preserve_coexistence_owner_inventory(record=record, code=code,
+                            real_codes=real_codes, source="registered_entry_restart_recovery")
+                        if record.status == "HOLDING":
+                            recovered += 1
+                            tracked_codes.add(code)
+                except (OwnerRegistryError, SymbolOwnerPolicyError, OSError, ValueError) as exc:
+                    log_error(f"[REGISTERED_ENTRY_RESTART_BLOCKED] code={code} reason={exc}")
+                if code in tracked_codes:
+                    continue
             # Operator-owned inventory (including widget auto-trade fills) must
             # never be converted into a main-bot HOLDING target.  Doing so can
             # create a second sell owner and reserve the operator-owned shares.
@@ -1040,13 +1070,18 @@ def _restore_registered_entry_buy(record, target, code, quantity, registry):
     owner = f"main_scalping:{target_id}"
     today = datetime.now(receipts._KST).date()
     buy_time = getattr(record, "buy_time", None)
-    unconsumed_initial = (quantity == 1 and old_qty > 1 and buy_time is None
+    cleared_initial = (quantity == 1 and old_qty == 0 and buy_time is None
+        and str(getattr(record, "status", "")).upper() == "WATCHING"
+        and getattr(record, "rec_date", None) == today
+        and _to_float(getattr(record, "buy_price", 0)) == 0)
+    unconsumed_initial = cleared_initial or (quantity == 1 and old_qty > 1 and buy_time is None
         and str(getattr(record, "status", "")).upper() == "BUY_ORDERED")
-    if (type(quantity) is not int or quantity < 1 or old_qty < 1
+    if (type(quantity) is not int or quantity < 1 or old_qty < 1 and not cleared_initial
             or quantity > 1 and old_qty not in {1, quantity}
             or type(target_id) is not int or target_id <= 0
             or str(getattr(record, "strategy", "")).upper() != "SCALPING"
-            or str(getattr(record, "status", "")).upper() not in {"HOLDING", "BUY_ORDERED", "SELL_ORDERED"}
+            or (str(getattr(record, "status", "")).upper() not in {"HOLDING", "BUY_ORDERED", "SELL_ORDERED"}
+                and not cleared_initial)
             or (buy_time is None and not unconsumed_initial)
             or (buy_time is not None and buy_time.date() != today)
             or getattr(record, "sell_time", None) or _to_float(getattr(record, "sell_price", 0)) != 0
@@ -1113,8 +1148,8 @@ def _restore_registered_entry_buy(record, target, code, quantity, registry):
             # A partial/open broker order, an unbound plan or another intent is
             # never inferred from account aggregate quantity.
             if (type(requested) is not int or requested <= 1
-                    or old_qty not in {1, requested}
-                    or str(record.status).upper() not in {"BUY_ORDERED", "HOLDING"}
+                    or old_qty not in {1, requested} and not cleared_initial
+                    or str(record.status).upper() not in {"BUY_ORDERED", "HOLDING"} and not cleared_initial
                     or bundle.get("phase") not in {"probe_submitted", "aborted"}
                     or bundle.get("actual_submitted_qty") != 1
                     or bundle.get("residual_submitted_qty", 0) != 0
@@ -1145,7 +1180,7 @@ def _restore_registered_entry_buy(record, target, code, quantity, registry):
                 return None
         expected_price = first["fill_amount"] if old_qty == 1 else amount/quantity
         if ((not unconsumed_initial and not isclose(_to_float(record.buy_price), expected_price, abs_tol=0.0001))
-                or unconsumed_initial and not 0 < _to_float(record.buy_price) < float("inf")
+                or unconsumed_initial and not cleared_initial and not 0 < _to_float(record.buy_price) < float("inf")
                 or old_qty == quantity and not probe_only and (bundle.get("phase") != "complete"
                     or bundle.get("registered_entry_recovery") != evidence)):
             return None
@@ -1826,6 +1861,11 @@ def sync_balance_with_db():
                 )
                 .all()
             )
+            for record in custody_owner_records:
+                if str(getattr(record, "status", "")).upper() == "BUY_ORDERED":
+                    _preserve_coexistence_owner_inventory(record=record,
+                        code=str(record.stock_code).strip()[:6], real_codes=real_codes,
+                        source="startup_pending_buy_balance_sync")
             archive_active_records = [
                 record
                 for record in custody_owner_records

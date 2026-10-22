@@ -50,6 +50,36 @@ def revise(manifest, **changes):
     manifest.write_text(json.dumps(source))
 
 
+@pytest.mark.parametrize('oversized', [False, True])
+def test_deployment_checks_migration_budget_without_mutating_checkpoint(tmp_path, oversized):
+    day='2026-10-13'
+    raw=tmp_path/'pipeline_events'/('pipeline_events_'+day+'.jsonl')
+    raw.parent.mkdir();raw.write_text(json.dumps(event(1))+'\n')
+    directory=tmp_path/'pipeline_event_summaries'
+    _,meta=P.update_and_load_pipeline_event_summaries(raw_path=raw,summary_dir=directory,
+        target_date=day,reason_labeler=B._blocker_label_from_stage_fields,
+        ignore_payload=B._is_ignored_event,include_samples=False)
+    manifest=Path(meta['manifest_path'])
+    parts=[]
+    for f in (B._blocker_label_from_stage_fields,B._is_ignored_event):
+        parts.extend((inspect.getsource(f),C.PRE_TERMINAL_BUY_OWNER))
+    revise(manifest,callback_contract=hashlib.sha256('\n'.join(parts).encode()).hexdigest())
+    original=manifest.read_bytes()
+    if oversized:
+        with raw.open('ab') as stream:stream.truncate(raw.stat().st_size+C.LIMIT+1)
+        with pytest.raises(RuntimeError,match='append_budget_exceeded'):
+            C.check_pending_migration(tmp_path,day)
+    else:
+        assert C.check_pending_migration(tmp_path,day)['status']=='migration_verified'
+        P.update_and_load_pipeline_event_summaries(raw_path=raw,summary_dir=directory,
+            target_date=day,reason_labeler=B._blocker_label_from_stage_fields,
+            ignore_payload=B._is_ignored_event,include_samples=False)
+        assert C.check_pending_migration(tmp_path,day)['status']=='current_contract'
+        return
+    assert manifest.read_bytes()==original
+    assert not (directory/'contract_migrations').exists()
+
+
 @pytest.mark.parametrize('parser_callback', [False, True])
 @pytest.mark.parametrize('append', [False, True])
 def test_migration_preserves_original_and_reads_only_new_suffix(tmp_path, monkeypatch, parser_callback, append):

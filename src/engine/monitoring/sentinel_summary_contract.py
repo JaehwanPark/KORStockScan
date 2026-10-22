@@ -227,6 +227,36 @@ def verify_predecessor(**arguments):
         raise RuntimeError('summary_contract_migration_evidence_unavailable') from exc
 
 
+def check_pending_migration(data_root, day):
+    """Use the native migration proof before an authorized Main drain.
+
+    No checkpoint is changed here. An over-budget predecessor remains running
+    so its ordinary producer can catch up before the transition is retried.
+    """
+    from src.engine import buy_funnel_sentinel as buy, pipeline_event_summary as parser
+    manifest_path = Path(data_root) / 'pipeline_event_summaries' / (
+        'pipeline_event_summary_manifest_' + day + '.json')
+    manifest = json.loads(_read(manifest_path, LIMIT))
+    raw_path = Path(data_root) / 'pipeline_events' / ('pipeline_events_' + day + '.jsonl')
+    offset = manifest.get('raw_offset')
+    if type(offset) is not int or not 0 <= raw_path.stat().st_size - offset <= LIMIT:
+        _fail('append_budget_exceeded')
+    parser_path = Path(parser.__file__).resolve()
+    callback, _ = _callback_predecessors(
+        (buy._blocker_label_from_stage_fields, buy._is_ignored_event), parser_path)
+    parser_sha = hashlib.sha256(_read(parser_path, LIMIT)).hexdigest()
+    if (manifest.get('callback_contract') == callback
+            and manifest.get('parser_contract') == parser_sha):
+        return dict(status='current_contract', runtime_effect=False)
+    proof = verify_predecessor(manifest=manifest, manifest_path=manifest_path,
+        raw_path=raw_path,
+        summary_path=Path(data_root) / 'pipeline_event_summaries' / (
+            'pipeline_event_summary_' + day + '.jsonl'),
+        callbacks=(buy._blocker_label_from_stage_fields, buy._is_ignored_event),
+        callback_contract=callback, parser_path=parser_path, parser_contract=parser_sha)
+    return dict(status='migration_verified', proof=proof, runtime_effect=False)
+
+
 def _archive_predecessor(receipt, manifest_path):
     """The native writer preserves exact old bytes before publishing a successor."""
     manifest_path = Path(manifest_path)

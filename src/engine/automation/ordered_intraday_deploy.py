@@ -670,6 +670,9 @@ class Deployment:
             self.frozen.pop(str(self.checklist), None)
         _atomic(self.directory / 'checklist-before.md', self.document_before)
         self.assert_unchanged()
+        from src.engine.monitoring.sentinel_summary_contract import check_pending_migration
+        self.state['sentinel_summary_preflight'] = check_pending_migration(
+            self.workspace / 'data', self.day)
         self._preflight_native_verified = True
         if getattr(self, "adopt_failed_hold", False):
             # All native predecessor, policy/code and source checks above stay
@@ -928,7 +931,16 @@ class Deployment:
                       '--target-date', self.day)
         from src.engine.monitoring.sentinel_source_window import prepare
         source_window = prepare(self.workspace / 'data')
-        self.checkpoint('prepared', sentinel_source_window=source_window)
+        # Finish native summary migration while the startup hold still owns
+        # Main. First health must not discover an unprepared summary cursor.
+        from src.engine import buy_funnel_sentinel as buy
+        with (self.workspace / 'tmp/run_buy_funnel_sentinel.lock').open('a') as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            from src.engine.monitoring.sentinel_summary_contract import check_pending_migration
+            check_pending_migration(self.workspace / 'data', self.day)
+            _, summary = buy.load_pipeline_event_summaries(self.day)
+        self.checkpoint('prepared', sentinel_source_window=source_window,
+                        sentinel_summary=summary)
 
     def start(self):
         self.assert_hold()

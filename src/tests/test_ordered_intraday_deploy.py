@@ -10,6 +10,12 @@ import pytest
 from src.engine.automation import ordered_intraday_deploy as D
 
 
+@pytest.fixture(autouse=True)
+def _summary_preflight_contract(monkeypatch):
+    from src.engine.monitoring import sentinel_summary_contract as summary
+    monkeypatch.setattr(summary, 'check_pending_migration', lambda *_:dict(status='current_contract'))
+
+
 @pytest.fixture
 def stopped_recovery(tmp_path, monkeypatch):
     day = '2026-10-12'
@@ -1297,12 +1303,20 @@ def test_prepare_binds_native_source_window_before_start(monkeypatch, tmp_path, 
         if failure: raise ValueError('source_window_cache_unverified')
         return proof
     monkeypatch.setattr(window, 'prepare', prepare)
+    from src.engine import buy_funnel_sentinel as buy
+    (tmp_path/'tmp').mkdir()
+    def summary(day):
+        assert day == driver.day and calls[-1] == 'source_window'
+        calls.append('native_summary')
+        return [], {'status':'ok'}
+    monkeypatch.setattr(buy, 'load_pipeline_event_summaries', summary)
     if failure:
         with pytest.raises(ValueError, match='source_window_cache_unverified'): driver.prepare()
         assert calls[-1] == 'source_window'
     else:
         driver.prepare()
-        assert calls[-1] == ('prepared', {'sentinel_source_window':proof})
+        assert calls[-1] == ('prepared', {'sentinel_source_window':proof,
+                                        'sentinel_summary':{'status':'ok'}})
 
 
 @pytest.mark.parametrize('damage', [None, 'pid', 'start', 'old_generation', 'stale'])
