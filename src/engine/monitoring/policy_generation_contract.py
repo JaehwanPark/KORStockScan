@@ -82,6 +82,8 @@ COMPONENTS = {
 # it must not reuse a formerly current receipt or rewrite a historical one.
 COMMON_CODE_COMPONENTS = (
     "monitoring/policy_generation_contract.py",
+    "monitoring/policy_generation_validation.py",
+    "automation/policy_generation_fixture_validation.py",
     "lifecycle/holding_window_generation.py",
     "lifecycle/research_input_budget.py",
 )

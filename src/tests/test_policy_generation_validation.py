@@ -191,7 +191,11 @@ def test_fixture_publication_checks_the_same_shared_budget_dependency(monkeypatc
     assert len(calls)==1
 
 
-def test_budget_only_change_creates_new_capability_and_fixture_paths(tmp_path,monkeypatch):
+@pytest.mark.parametrize('dependency',[
+    'lifecycle/research_input_budget.py',
+    'monitoring/policy_generation_validation.py',
+    'automation/policy_generation_fixture_validation.py'])
+def test_shared_dependency_change_creates_new_capability_and_fixture_paths(tmp_path,monkeypatch,dependency):
     names=set(generation.COMMON_CODE_COMPONENTS)
     for paths in generation.COMPONENTS.values():names.update(paths)
     engine=tmp_path/'src/engine'
@@ -203,7 +207,7 @@ def test_budget_only_change_creates_new_capability_and_fixture_paths(tmp_path,mo
     for family,path in before.items():
         path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(('preserved '+family).encode())
     originals={path:path.read_bytes() for path in before.values()}
-    helper=engine/'lifecycle/research_input_budget.py'
+    helper=engine/dependency
     helper.write_bytes(helper.read_bytes()+b'\n# Different shared Claim generation.\n')
     after={family:validation.fixture_path(data,family) for family in validation.PLANS}
     assert all(after[family]!=before[family] and not after[family].exists() for family in validation.PLANS)
