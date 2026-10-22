@@ -1034,8 +1034,11 @@ class Deployment:
             from src.engine.monitoring.sentinel_summary_contract import check_pending_migration
             check_pending_migration(self.workspace / 'data', self.day)
             _, summary = buy.load_pipeline_event_summaries(self.day)
+        from src.engine.automation import prepared_policy_code_handoff as code
+        handoffs = code.issue_selected(self.workspace / 'data', self.day,
+                                       release_root=self.candidate)
         self.checkpoint('prepared', sentinel_source_window=source_window,
-                        sentinel_summary=summary)
+                        sentinel_summary=summary, native_prepared_code_handoffs=handoffs)
 
     def start(self):
         self.assert_hold()

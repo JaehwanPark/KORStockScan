@@ -299,6 +299,53 @@ def resolve_prepared_code_origin(data, day, *, family, policy_sha, expected, pat
     return result
 
 
+def issue_selected(data, day, *, release_root):
+    """Complete native prepared-code custody before the ordered P5 consumer.
+
+    The ordered caller holds the release-set lock and its owned startup hold.
+    Reuse verified receipts without rewriting their immutable generations.
+    """
+    from src.engine.automation import intraday_release_handoff as H
+    from src.engine.automation import ordered_intraday_deploy as D
+    from src.engine.infrastructure import runtime_release_router as R
+    from src.engine.scalping import main_stop_policy as S, holding_vote_experiment as V
+    from src.engine.scalping.pre_submit_delay_initial_policy import CONTRACT_PATHS
+    data, root = Path(data).resolve(), Path(release_root).resolve(strict=True)
+    with D._existing_selector_lock(data/'runtime/runtime_release_selection.lock'):
+        selected, commit = R.selected_release(data.parent)
+        if selected != root:
+            raise ValueError('prepared_code_issuance_not_selected')
+        selection = data/'runtime/runtime_release_selection.json'
+        before = _sha(selection)
+        checked = H._verify_handoff(day, commit)
+        if checked.get('status') != 'pass' or checked.get('findings'):
+            raise ValueError('prepared_code_issuance_handoff_invalid')
+        prepared_path = Path(checked['handoff']['prepared_receipt_path'])
+        prepared = _read(prepared_path)
+        manifest = _read(prepared['manifest_path'])
+        results = []
+        for family, inventory in (('pre_submit_delay', CONTRACT_PATHS),
+                                  ('main_stop', S.implementation_paths()),
+                                  ('holding_vote', V._code_paths())):
+            paths = {name: name if family == 'pre_submit_delay' else 'src/engine/'+name
+                     for name in inventory}
+            policy_sha = _bound(manifest, family)
+            _, expected = _policy(data, day, family, manifest)
+            actual = _digest({name: _sha(root/path) for name, path in paths.items()})
+            existing = verify(data, day, family=family, policy_sha=policy_sha,
+                              expected=expected, paths=paths, actual=actual)
+            path = receipt_path(data, day, commit, family)
+            if existing is None:
+                issue(data, day, family=family, policy_sha=policy_sha, expected=expected,
+                      paths=paths, release_root=root, prepared_receipt=prepared_path,
+                      origin_verification=prepared['verification_path'], confirm=AUTHORITY)
+            results.append(dict(family=family, path=str(path), sha256=_sha(path),
+                                actual_pid_consumed=False))
+        if _sha(selection) != before or R.selected_release(data.parent) != (root, commit):
+            raise ValueError('prepared_code_issuance_selection_changed')
+        return results
+
+
 def issue(data, day, *, family, policy_sha, expected, paths, release_root,
           prepared_receipt, origin_verification, confirm, previous_handoff=None):
     """Issue under the deployment caller's release-set and selection locks."""

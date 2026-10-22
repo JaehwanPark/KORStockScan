@@ -21,6 +21,8 @@ REVIEWED_AVG_DOWN_INPUT_COMMIT = 'deb996a22689ac08e171ea38966d070d63d236ee'
 @pytest.fixture
 def prepared(tmp_path, monkeypatch, request):
     family = getattr(request, 'param', 'pre_submit_delay')
+    complete = family == 'complete'
+    if complete: family = 'pre_submit_delay'
     data=tmp_path/'data'; data.mkdir()
     root=tmp_path/'release'; root.mkdir()
     source=root/'consumer.py'; source.write_text('reviewed code\n')
@@ -33,6 +35,9 @@ def prepared(tmp_path, monkeypatch, request):
     env=tmp_path/'env'; env.write_text('export TEST=true\n')
     manifest={'target_date':DAY,'selected_release_sha':ORIGIN,
               C.FAMILIES[family][0]:{'target_date':DAY,C.FAMILIES[family][1]:'policy'}}
+    if complete:
+        manifest.update({name: {'target_date': DAY, key: 'policy'}
+                         for name, key in C.FAMILIES.values()})
     manifest['manifest_sha256']=C._digest(manifest)
     mp=write('manifest.json',manifest)
     vp=write('verify.json',{'status':'pass','findings':[], 'manifest_sha256':manifest['manifest_sha256']})
@@ -94,6 +99,51 @@ def test_invalid_binding_never_uses_prepared_code_authority(prepared,fault):
 def test_missing_receipt_keeps_ordinary_native_path(tmp_path,monkeypatch):
     monkeypatch.setattr(R,'selected_release',lambda *a: (tmp_path,COMMIT))
     assert C.verify(tmp_path,DAY,family='main_stop',policy_sha='x',expected='x',paths={},actual='x') is None
+
+
+@pytest.mark.parametrize('prepared', ['complete'], indirect=True)
+@pytest.mark.parametrize('fault', [None, 'unselected', 'handoff', 'policy', 'changed_source', 'selection_race'])
+def test_ordered_selected_issuance_reaches_native_consumers_without_callback(prepared, monkeypatch, fault):
+    from contextlib import nullcontext
+    from src.engine.scalping import main_stop_policy as S, holding_vote_experiment as V
+    from src.engine.scalping import pre_submit_delay_initial_policy as L
+    data, root, args, _, _, pp = prepared
+    (data/'runtime').mkdir(exist_ok=True)
+    selector = data/'runtime/runtime_release_selection.json'; selector.write_text('{}')
+    native = root/'src/engine/consumer.py'; native.parent.mkdir(parents=True)
+    native.write_bytes((root/'consumer.py').read_bytes())
+    monkeypatch.setattr(S, 'implementation_paths', lambda: {'consumer.py': native})
+    monkeypatch.setattr(V, '_code_paths', lambda: {'consumer.py': native})
+    monkeypatch.setattr(L, 'CONTRACT_PATHS', {'consumer.py': root/'consumer.py'})
+    monkeypatch.setattr(O, '_existing_selector_lock', lambda _: nullcontext())
+    monkeypatch.setattr(H, '_verify_handoff', lambda *a: dict(status='pass', findings=[],
+                       handoff={'prepared_receipt_path': str(pp)}))
+    if fault == 'unselected': monkeypatch.setattr(R, 'selected_release', lambda _: (root.parent, COMMIT))
+    if fault == 'handoff': monkeypatch.setattr(H, '_verify_handoff', lambda *a: {'status':'fail','findings':['expired']})
+    if fault == 'policy': monkeypatch.setattr(C, '_policy', lambda *a: (data/'policy.json', 'wrong'))
+    if fault == 'changed_source': (data/'policy.json').write_text('{"changed":true}')
+    if fault == 'selection_race':
+        original = C.issue
+        def mutate(*a, **kw):
+            result = original(*a, **kw); selector.write_text('{"changed":true}'); return result
+        monkeypatch.setattr(C, 'issue', mutate)
+    original_prepared = pp.read_bytes()
+    if fault:
+        with pytest.raises(ValueError): C.issue_selected(data, DAY, release_root=root)
+    else:
+        issued = C.issue_selected(data, DAY, release_root=root)
+        assert {row['family'] for row in issued} == set(C.FAMILIES)
+        original = {row['path']: (Path(row['path']).read_bytes(), Path(row['path']).stat().st_mtime_ns)
+                    for row in issued}
+        assert C.issue_selected(data, DAY, release_root=root) == issued
+        assert all((Path(path).read_bytes(), Path(path).stat().st_mtime_ns) == before
+                   for path, before in original.items())
+        for row in issued:
+            body = C._read(row['path'])
+            proof = C.verify(data, DAY, family=row['family'], policy_sha='policy', expected='expected',
+                             paths=body['paths'], actual=body['runtime_code_sha256'])
+            assert proof['actual_pid_consumed'] is False and proof['policy_effect'] == 'unchanged'
+    assert pp.read_bytes() == original_prepared
 
 
 @pytest.mark.parametrize('fault', [None, 'unselected', 'frozen_source', 'policy', 'origin', 'selection_race'])

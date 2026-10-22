@@ -1314,9 +1314,10 @@ def test_report_preflight_reuses_native_currentness_and_preserves_economic_gaps(
     assert seen==([] if fault=='code' else [(tmp_path/'candidate',source)])
 
 
-@pytest.mark.parametrize('failure', [False, True])
+@pytest.mark.parametrize('failure', [False, True, 'handoff'])
 def test_prepare_binds_native_source_window_before_start(monkeypatch, tmp_path, failure):
     from src.engine.monitoring import sentinel_source_window as window
+    from src.engine.automation import prepared_policy_code_handoff as code
     driver = object.__new__(D.Deployment)
     driver.workspace = tmp_path
     driver.candidate = tmp_path/'candidate'
@@ -1331,7 +1332,7 @@ def test_prepare_binds_native_source_window_before_start(monkeypatch, tmp_path, 
     def prepare(data):
         assert data == tmp_path/'data' and calls[-1].endswith('auxiliary_reader_readiness')
         calls.append('source_window')
-        if failure: raise ValueError('source_window_cache_unverified')
+        if failure is True: raise ValueError('source_window_cache_unverified')
         return proof
     monkeypatch.setattr(window, 'prepare', prepare)
     from src.engine import buy_funnel_sentinel as buy
@@ -1341,13 +1342,25 @@ def test_prepare_binds_native_source_window_before_start(monkeypatch, tmp_path, 
         calls.append('native_summary')
         return [], {'status':'ok'}
     monkeypatch.setattr(buy, 'load_pipeline_event_summaries', summary)
-    if failure:
+    handoffs = [{'family': 'main_stop', 'actual_pid_consumed': False}]
+    def issue(data, day, *, release_root):
+        assert data == tmp_path/'data' and day == driver.day
+        assert release_root == driver.candidate and calls[-1] == 'native_summary'
+        calls.append('prepared_code_handoffs')
+        if failure == 'handoff': raise ValueError('prepared_code_source_changed')
+        return handoffs
+    monkeypatch.setattr(code, 'issue_selected', issue, raising=False)
+    if failure is True:
         with pytest.raises(ValueError, match='source_window_cache_unverified'): driver.prepare()
         assert calls[-1] == 'source_window'
+    elif failure == 'handoff':
+        with pytest.raises(ValueError, match='prepared_code_source_changed'): driver.prepare()
+        assert calls[-1] == 'prepared_code_handoffs'
     else:
         driver.prepare()
         assert calls[-1] == ('prepared', {'sentinel_source_window':proof,
-                                        'sentinel_summary':{'status':'ok'}})
+                                        'sentinel_summary':{'status':'ok'},
+                                        'native_prepared_code_handoffs': handoffs})
 
 
 @pytest.mark.parametrize('damage', [None, 'pid', 'start', 'old_generation', 'stale'])
