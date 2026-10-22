@@ -189,7 +189,11 @@ def _declared_window_unchanged(original, current):
             day=row.get('trde_dt')
             if not isinstance(day,str) or not re.fullmatch(r'\d{8}',day):return False
             datetime.strptime(day,'%Y%m%d')
-            if not old_request['end_dt']<day<=new_request['end_dt']:return False
+            execution_day=row.get('cntr_dt')
+            if not isinstance(execution_day,str) or not re.fullmatch(r'\d{8}',execution_day):return False
+            datetime.strptime(execution_day,'%Y%m%d')
+            if (not old_request['end_dt']<day<=new_request['end_dt']
+                    or not original['source_date'].replace('-','')<execution_day<=day):return False
     return True
 
 

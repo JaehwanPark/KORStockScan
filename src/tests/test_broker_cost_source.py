@@ -46,7 +46,7 @@ def seal(source):
     source["source_sha256"] = digest({k: v for k, v in source.items() if k != "source_sha256"})
 
 
-@pytest.mark.parametrize('damage',[None,'missing_archive','archive_bytes','account','provider','clock','old_fact','old_settlement','removed_old_row','old_date_row','missing_date','request'])
+@pytest.mark.parametrize('damage',[None,'missing_archive','archive_bytes','account','provider','clock','old_fact','old_settlement','removed_old_row','old_date_row','late_original_execution','missing_date','request'])
 def test_declared_cost_window_uses_exact_history_but_live_generation_still_advances(tmp_path,damage):
     import hashlib
     source,_,transport,calls=broker_fixture(tmp_path)
@@ -61,7 +61,7 @@ def test_declared_cost_window_uses_exact_history_but_live_generation_still_advan
     declared=original['quantity_research_cost_generation']
     def later(api,payload):
         pages,meta=transport(api,payload)
-        if api=='kt00015':pages[0]['trst_ovrl_trde_prps_array']=[deepcopy(first_row),{'trde_dt':'20261009','cntr_dt':'20261007','cmsn':'1'}]
+        if api=='kt00015':pages[0]['trst_ovrl_trde_prps_array']=[deepcopy(first_row),{'trde_dt':'20261009','cntr_dt':'20261009','cmsn':'1'}]
         return pages,meta
     C.collect(tmp_path,DAY,transport=later,now=NOW+timedelta(days=2),refresh=True)
     archive=C.source_path(tmp_path,DAY).parent/'generations'/DAY/(source['source_sha256']+'.json')
@@ -76,6 +76,7 @@ def test_declared_cost_window_uses_exact_history_but_live_generation_still_advan
         elif damage=='old_settlement':current['observations']['kt00015_buy']['pages'][0]['trst_ovrl_trde_prps_array'][0]['cmsn']='2'
         elif damage=='removed_old_row':current['observations']['kt00015_buy']['pages'][0]['trst_ovrl_trde_prps_array'].pop(0)
         elif damage=='old_date_row':current['observations']['kt00015_buy']['pages'][0]['trst_ovrl_trde_prps_array'][1]['trde_dt']='20261008'
+        elif damage=='late_original_execution':current['observations']['kt00015_buy']['pages'][0]['trst_ovrl_trde_prps_array'][1]['cntr_dt']='20261008'
         elif damage=='missing_date':current['observations']['kt00015_buy']['pages'][0]['trst_ovrl_trde_prps_array'][1].pop('trde_dt')
         elif damage=='request':current['observations']['kt00015_buy']['request']['stk_cd']='005930'
         if damage:seal(current);C.atomic(C.source_path(tmp_path,DAY),current)
