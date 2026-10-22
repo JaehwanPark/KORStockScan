@@ -185,7 +185,8 @@ def test_added_lifecycle_receipt_invalidates_even_previously_empty_directory(tmp
         projection.read_verified(path, stage, read=_read, data_root=data)
 
 
-@pytest.mark.parametrize('name', ['initial_quantity_timeout.py', 'entry_split_order_plan.py', 'initial_quantity_legacy_reader.py'])
+@pytest.mark.parametrize('name', ['scalping/initial_quantity_timeout.py', 'scalping/entry_split_order_plan.py',
+    'scalping/initial_quantity_legacy_reader.py', 'lifecycle/main_stop_research_cost.py'])
 def test_transitive_native_helper_generation_changes_invalidate_proof(tmp_path, monkeypatch, name):
     data, path, stage, report, children = _fixture(tmp_path, monkeypatch)
     # Copy the actual native verifier closure and change a transitive helper's
@@ -198,7 +199,7 @@ def test_transitive_native_helper_generation_changes_invalidate_proof(tmp_path, 
         target.write_bytes((source_root/relative).read_bytes())
     monkeypatch.setattr(projection, '__file__', str(clone/'engine/scalping/initial_quantity_monitor_projection.py'))
     projection.publish(path, stage, report, data_root=data)
-    selected = clone/'engine/scalping'/name
+    selected = clone/'engine'/name
     selected.write_bytes(selected.read_bytes()+b'\n# private candidate correction\n')
     with pytest.raises(ValueError, match='manifest_invalid'):
         projection.read_verified(path, stage, read=_read, data_root=data)

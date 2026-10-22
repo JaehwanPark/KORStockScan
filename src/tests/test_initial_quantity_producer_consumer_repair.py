@@ -1893,6 +1893,103 @@ def test_original_stream_entry_seal_survives_preservation_then_compression(tmp_p
     assert facts._status_path(day).read_bytes()==original_status
 
 
+@pytest.mark.parametrize('legacy', [False, True])
+@pytest.mark.parametrize('fill_source', ['indexed', 'historical_window', 'missing', 'conflicting', 'guard'])
+def test_completion_cost_adapter_consumes_original_buy_without_changing_fact_bytes(
+        tmp_path, monkeypatch, legacy, fill_source):
+    from src.engine import sniper_trade_review_report as review
+    from src.engine import strategy_position_performance_report as facts
+    from src.engine.lifecycle import broker_cost_allocation as allocation
+    from src.engine.lifecycle import broker_cost_source as official
+    from src.engine.lifecycle import holding_window_generation as window
+    from src.engine.scalping import initial_quantity_source_cache as cache
+    from src.engine.automation import main_trailing_source_store as indexed
+    from src.tests.test_broker_cost_reconciliation import fixture
+    from src.tests.test_broker_cost_allocation import source, position
+    from src.tests.test_main_stop_research_cost import registry
+    from src.tests.test_main_trailing_source_store import append
+    day = '2026-10-08'
+    entry_day = '2026-10-07' if legacy and fill_source == 'indexed' else day
+    item = position(1)
+    observed = source(tmp_path)
+    official.atomic(official.source_path(tmp_path, day), observed)
+    registry(tmp_path, [item])
+    missing = {**item, 'buy_legs':[], 'execution_source_quality_reasons':['source_gap_buy_fill_missing']}
+    old = allocation.build_research_cost_allocations({day:observed}, [missing])
+    allocation.persist_research_costs(tmp_path, day, old, [day])
+    _, events, _, _, _ = fixture()
+    buy = events[0]
+    buy.fields.update(id='1', order_no='11', execution_no='101')
+    sell = events[-1]
+    sell.fields.update(id='1', order_no='12', execution_no='102',
+        main_lifecycle_exit_qty=2, cumulative_sell_qty=2)
+    sell = review.HoldingEvent(day+' 10:01:00', '', '005930', sell.stage, sell.fields, '')
+    identity = dict(rec_date=entry_day, buy_time=day+'T10:00:00+09:00', buy_price=10000,
+        buy_qty=2, sell_time=day+'T10:01:00+09:00', sell_price=10100,
+        buy_fill_legs=[], sell_fill_legs=item['sell_legs'], sell_quantity_conserved=False,
+        position_residual_qty=-2, exact_sell_fill_time=item['completed_at'],
+        terminal_decision_authority='broker_sell_fill_observation_only',
+        strict_completion_reasons=['source_gap_buy_fill_missing'], quantity_research_cost=old['1'],
+        timeline=[dict(stage=sell.stage, timestamp=sell.timestamp, fields=sell.fields)])
+    original, path = _quantity_completion_overlay_fixture(tmp_path, monkeypatch, identity=identity)
+    original.update(rec_date=entry_day, buy_time=day+'T10:00:00+09:00', buy_qty=2, buy_price=10000)
+    if legacy:
+        sidecar = path.with_suffix('.completed_projection.json')
+        projection = json.loads(sidecar.read_bytes())
+        window.seal_dependency_receipt(sidecar, projection)
+        path.with_suffix('.fact_projection.json').unlink()
+        native = facts._load_completion_fact_projection(day, path)
+        census = projection['meta']['completed_census_manifest']
+        facts._write_status(day,dict(status='valid_empty',consumer_ready=True,
+            completed_census_run_ids=[census['run_id']], completed_census_projection_sha256=[census['projection_sha256']],
+            actual_cost_source_generation=projection['meta']['actual_cost_source_generation'],
+            completion_snapshot_source=native['_native_source_proof']))
+    log = tmp_path/'pipeline_events'/f'pipeline_events_{day}.jsonl'
+    log.parent.mkdir(); log.touch()
+    monkeypatch.setattr(indexed, 'maintain', lambda *a:None)
+    append(tmp_path, log, dict(record_id=1, stock_code='005930', pipeline='ENTRY_PIPELINE',
+        stage='order_leg_sent', emitted_at=day+'T09:59:59', fields={}))
+    if fill_source != 'missing':
+        payload = dict(record_id=1, stock_code='005930', pipeline='HOLDING_PIPELINE',
+            stage=buy.stage, emitted_at=day+'T10:00:00', fields=buy.fields)
+        project = indexed.project
+        if fill_source == 'historical_window':
+            monkeypatch.setattr(indexed, 'project', lambda ns,row:None if row.get('stage') == buy.stage else project(ns,row))
+        append(tmp_path, log, payload)
+        if fill_source == 'conflicting':
+            append(tmp_path, log, dict(payload,fields={**buy.fields,'fill_price':10001}))
+        elif fill_source == 'guard':
+            # An identical execution ID cannot erase a forbidden broker guard.
+            append(tmp_path, log, dict(payload,fields={**buy.fields,'broker_order_forbidden':True}))
+        monkeypatch.setattr(indexed, 'project', project)
+    immutable = {p:p.read_bytes() for p in cache.completion_source_paths(tmp_path,day) if p.is_file()}
+    if fill_source == 'indexed':
+        raw_open = Path.open
+        def no_raw(self,*args,**kwargs):
+            if self == log: pytest.fail('indexed fill caused a historical raw scan')
+            return raw_open(self,*args,**kwargs)
+        monkeypatch.setattr(Path, 'open', no_raw)
+    for _ in range(2):
+        cache.prepare_completion_cost_revisions(tmp_path,day,day,validate_day=policy._quantity_original_fact_generation_issue)
+    # The second preparation must reuse native revision, not original windows.
+    monkeypatch.setattr(indexed,'read_order_fill_windows',lambda *a,**kw:pytest.fail('unchanged migration repeated'),raising=False)
+    cache.prepare_completion_cost_revisions(tmp_path,day,day,validate_day=policy._quantity_original_fact_generation_issue)
+    rows = _overlay_for_test(tmp_path,[original])
+    assert rows[0]['completion_source_date'] == day
+    receipt = policy._quantity_research_fact_cost(rows[0])
+    assert receipt['status'] == ('research_cost_invalid' if fill_source in {'missing','conflicting','guard'} else 'research_cost_allocated')
+    assert rows[0]['profit_rate'] is None and rows[0]['realized_pnl_krw'] is None
+    cache.verify_completion_overlay_generations(rows.completion_generations,data_dir=tmp_path)
+    cache.verify_completion_census_context(rows,dict(completion_overlay_generations=rows.completion_generations,
+        completion_overlay_summary=rows.completion_overlay_summary,persisted_fact_generations={day:{'issue':None}}),
+        as_of=day,data_dir=tmp_path,entry_on_or_after='2026-09-29')
+    assert {p:p.read_bytes() for p in immutable} == immutable
+    dependency=Path(str(path.with_suffix('.completed_projection.json'))+'.dependencies.json')
+    dependency.write_bytes(dependency.read_bytes()+b' ')
+    with pytest.raises(ValueError):
+        cache.verify_completion_overlay_generations(rows.completion_generations,data_dir=tmp_path)
+
+
 @pytest.mark.parametrize('missing_source', [False, True])
 def test_late_cost_revision_reallocates_without_resealing_original_facts(tmp_path, monkeypatch, missing_source):
     from copy import deepcopy

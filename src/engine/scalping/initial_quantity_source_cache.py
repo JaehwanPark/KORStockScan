@@ -366,6 +366,7 @@ def prepare_completion_cost_revisions(data_dir, first_day, as_of, *, validate_da
     from src.engine.lifecycle.holding_window_generation import MAX_METADATA_BYTES
     from src.engine.lifecycle.broker_cost_reconciliation import source_generation
     from src.engine.lifecycle.broker_cost_allocation import refresh_native_research_costs
+    from src.engine.lifecycle.broker_cost_source import source_path
     directory = Path(data_dir) / 'report/strategy_position_fact_sync'
     for path in sorted(directory.glob('strategy_position_fact_sync_*.status.json')):
         match = re.fullmatch(r'strategy_position_fact_sync_(\d{4}-\d{2}-\d{2})\.status\.json', path.name)
@@ -374,8 +375,14 @@ def prepare_completion_cost_revisions(data_dir, first_day, as_of, *, validate_da
         day = match[1]
         receipt, _ = _completion_json(path, MAX_METADATA_BYTES)
         proof = receipt.get('completion_snapshot_source') or {}
-        if (proof.get('source_basis') != 'native_bounded_fact_projection'
-                or receipt.get('actual_cost_source_generation') == source_generation(Path(data_dir), day)):
+        if proof.get('source_basis') not in {'native_bounded_fact_projection', 'native_original_snapshot_stream'}:
+            continue
+        # BUY source/index revisions matter even when official costs themselves
+        # did not change. Unavailable historical costs are not repair inputs.
+        if not receipt.get('completed_census_run_ids'):
+            continue
+        if (not source_path(Path(data_dir), day).exists()
+                and 'quantity_research_cost_generation' not in source_generation(Path(data_dir), day)):
             continue
         issue = validate_day(day)
         if issue is not None:
@@ -383,7 +390,23 @@ def prepare_completion_cost_revisions(data_dir, first_day, as_of, *, validate_da
         refresh_native_research_costs(Path(data_dir), day, completion_source=proof)
 
 
-def _completion_day(data_dir, day, *, read=None, expected=None):
+def _legacy_completion_rows(root, day, signature, cache):
+    """One native full validation per unchanged original stream generation.
+
+    Signature covers raw/archive/dependency/status identities. Retained compact
+    rows keep their existing native budget claims; no current scalar is made.
+    """
+    from src.engine.lifecycle.main_stop_research_cost import _native_projection
+    key = (str(Path(root).resolve()), day, signature)
+    if cache is not None and key in cache:
+        return cache[key]
+    rows, _, _ = _native_projection(Path(root), day)
+    if cache is not None:
+        cache[key] = rows
+    return rows
+
+
+def _completion_day(data_dir, day, *, read=None, expected=None, legacy_cache=None):
     """Join small native fact seals, without revisiting a historical timeline."""
     import re
     from src.engine import strategy_position_performance_report as facts
@@ -420,11 +443,43 @@ def _completion_day(data_dir, day, *, read=None, expected=None):
             or receipt.get('allowed_runtime_apply') is not False):
         raise ValueError('quantity_completion_fact_receipt_invalid')
     proof = receipt.get('completion_snapshot_source')
-    if not isinstance(proof, dict) or proof.get('source_basis') != 'native_bounded_fact_projection':
+    if not isinstance(proof, dict) or proof.get('source_basis') not in {
+            'native_bounded_fact_projection', 'native_original_snapshot_stream'}:
         return None
+    legacy = proof['source_basis'] == 'native_original_snapshot_stream'
+    if legacy and proof.get('legacy_original_validation') is not None:
+        # Earlier entry batches already retain a small native original-source
+        # proof. Reuse its full validation contract, including missing costs;
+        # never manufacture a dependency receipt or a current fact projection.
+        reference = proof['legacy_original_validation']
+        guarded = sources + [Path(reference.get('path', '')),
+            raw_path.parent/'manifests'/f'monitor_snapshot_manifest_{day}_postclose_exit.json']
+        original_guard = facts._completion_source_signature(guarded)
+        verified = {}
+        observed, issue = facts._legacy_original_generation_issue(day, receipt,
+            data_dir=data_dir, validated_proof=verified)
+        if not observed or issue is not None:
+            raise ValueError('quantity_completion_legacy_source_invalid:' + str(issue))
+        value = verified['scalar_projection']
+        completed = value['sections']['completed_trade_projection']
+        projected = facts._trade_fact_rows_from_report(day, dict(meta=value['meta'],
+            sections={'recent_trades':completed, 'completed_trade_projection':completed}))
+        if (original_guard != facts._completion_source_signature(guarded)
+                or before != facts._completion_source_signature(sources)):
+            raise ValueError('quantity_completion_source_changed')
+        return projected, dict(schema='initial_quantity_completion_generation_v1', source_date=day,
+            fact_receipt=status_ref, completion_snapshot_source=proof)
     dependency, dependency_ref = metadata(dependency_path, MAX_METADATA_BYTES,
         expected.get('dependency_receipt') if isinstance(expected, dict) else None)
-    if read is None:
+    if legacy:
+        if proof.get('fact_projection') is not None or dependency.get('fact_projection') is not None:
+            raise ValueError('quantity_completion_legacy_projection_conflict')
+        rows = _legacy_completion_rows(str(Path(data_dir).resolve()), day,
+            digest(before), legacy_cache)
+        value = dict(rows.native_header, sections={'completed_trade_projection':list(rows.values())})
+        scalar = None
+        original_identity = snapshot_identity(raw_path)
+    elif read is None:
         physical = scalar_path if scalar_path.exists() else Path(str(scalar_path) + '.gz')
         value, scalar_ref = _completion_json(physical, MAX_PROJECTION_BYTES)
         scalar = {**scalar_ref, 'path': scalar_path.name}
@@ -486,11 +541,12 @@ def _completion_day(data_dir, day, *, read=None, expected=None):
             or dependency.get('artifact_sha256') != digest({k:v for k,v in dependency.items() if k != 'artifact_sha256'})
             or identity != dependency.get('snapshot_identity') or identity != original_identity
             or proof.get('fact_projection') != scalar or dependency.get('fact_projection') != scalar
-            or not isinstance(value, dict) or value.get('schema') != 'trade_review_fact_projection_v1'
-            or value.get('source_scope') != 'entered' or value.get('date') != day
+            or not isinstance(value, dict) or value.get('date') != day
             or value.get('snapshot_identity') != identity
-            or value.get('artifact_sha256') != facts._canonical_sha256(body)
-            or proof.get('scalar_projection_sha256') != value.get('artifact_sha256')
+            or not legacy and (value.get('schema') != 'trade_review_fact_projection_v1'
+                or value.get('source_scope') != 'entered'
+                or value.get('artifact_sha256') != facts._canonical_sha256(body)
+                or proof.get('scalar_projection_sha256') != value.get('artifact_sha256'))
             or not isinstance(census, dict) or census.get('source_date') != day
             or census.get('schema') != 'trade_review_completed_census_v1'
             or digest(census) != dependency.get('census_sha256')
@@ -577,7 +633,7 @@ def _completion_day(data_dir, day, *, read=None, expected=None):
     return projected, native
 
 
-def verify_completion_overlay_generations(generations, *, data_dir, read=None):
+def verify_completion_overlay_generations(generations, *, data_dir, read=None, legacy_cache=None):
     """Bounded monitor/replay parity; native full validation stays separate."""
     if not isinstance(generations, dict):
         raise ValueError('quantity_completion_generations_invalid')
@@ -585,7 +641,7 @@ def verify_completion_overlay_generations(generations, *, data_dir, read=None):
     for day, expected in generations.items():
         if datetime.fromisoformat(day).date().isoformat() != day:
             raise ValueError('quantity_completion_date_invalid')
-        current = _completion_day(data_dir, day, read=read, expected=expected)
+        current = _completion_day(data_dir, day, read=read, expected=expected, legacy_cache=legacy_cache)
         if current is None or current[1] != expected:
             raise ValueError('quantity_completion_generation_changed')
         verified[day] = current[0]
@@ -627,7 +683,7 @@ def completion_overlay(rows, *, as_of, data_dir, entry_on_or_after, entry_genera
     original_counts = dict(Counter(str(row.get('original_fact_status', row.get('status'))) for row in original))
     # Reconstructing a pinned replay uses the same terminal join, with bounded
     # receipt/scalar reads. It does not repeat the native large-source hashes.
-    decoded = {}
+    decoded, legacy_cache = {}, {}
     # Pinned reconstruction validates an already admitted cohort. Keep only
     # this date's decoded documents; historical rows that differ from their
     # final version retain their document owners until a later observation
@@ -664,19 +720,21 @@ def completion_overlay(rows, *, as_of, data_dir, entry_on_or_after, entry_genera
             decoded.clear()
         receipt, _ = _completion_json(path, MAX_METADATA_BYTES)
         proof = receipt.get('completion_snapshot_source')
-        if proof is None or (isinstance(proof, dict) and proof.get('source_basis') == 'native_original_snapshot_stream'):
+        if proof is None:
             continue
-        if not isinstance(proof, dict) or proof.get('source_basis') != 'native_bounded_fact_projection':
+        if not isinstance(proof, dict) or proof.get('source_basis') not in {
+                'native_bounded_fact_projection', 'native_original_snapshot_stream'}:
             raise ValueError('quantity_completion_source_basis_invalid')
         if source_generations is not None and day not in source_generations:
             raise ValueError('quantity_completion_generation_changed')
         issue = (entry_generations.get(day, {}).get('issue') if day in entry_generations
                  else validate_day(day) if source_generations is None else None)
         if issue is not None:
-            raise ValueError('quantity_completion_native_source_invalid:' + str(issue))
+            raise ValueError('quantity_completion_native_source_invalid:' + day + ':' + str(issue))
         loaded = _completion_day(data_dir, day,
             read=bounded_read if source_generations is not None else None,
-            expected=source_generations.get(day) if source_generations is not None else None)
+            expected=source_generations.get(day) if source_generations is not None else None,
+            legacy_cache=legacy_cache)
         if loaded is None:
             raise ValueError('quantity_completion_projection_missing')
         completed, generation = loaded
@@ -776,11 +834,12 @@ def completion_overlay(rows, *, as_of, data_dir, entry_on_or_after, entry_genera
         historical_documents.clear()
         for day, expected in generations.items():
             decoded.clear()
-            verify_completion_overlay_generations({day: expected}, data_dir=data_dir, read=bounded_read)
+            verify_completion_overlay_generations({day: expected}, data_dir=data_dir, read=bounded_read,
+                legacy_cache=legacy_cache)
         decoded.clear()
         result = ResidentFacts(original, claim=rows.claim if isinstance(rows, ResidentFacts) else None)
     else:
-        verify_completion_overlay_generations(generations, data_dir=data_dir)
+        verify_completion_overlay_generations(generations, data_dir=data_dir, legacy_cache=legacy_cache)
         result = ResidentFacts(list(current.values()))
     if any('quantity_research_cost_generation' in (gen.get('cost_generation') or {})
            for gen in entry_generations.values() if isinstance(gen, dict)):

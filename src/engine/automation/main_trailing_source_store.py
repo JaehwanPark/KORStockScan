@@ -477,6 +477,15 @@ def project(namespace, row):
         value = dict(kind='entry_trace', identity=row.get('decision_trace_id'),
                      row={key: row[key] for key in TRACE_FIELDS if key in row})
     elif namespace == 'pipeline_events':
+        if (row.get('pipeline') == 'HOLDING_PIPELINE'
+                and row.get('stage') in {'position_rebased_after_fill', 'scale_in_executed'}):
+            # The cost producer needs original broker BUY observations, not
+            # only the preceding order intent. Keep the native envelope.
+            value = dict(kind='pipeline_fill_receipt', identity=str(row.get('record_id')), row=row)
+            if len(encode(value)) > MAX_ROW_BYTES:
+                return dict(kind='source_gap', reason='projection_record_budget_exceeded',
+                            identity=value['identity'])
+            return value
         delay=row.get('stage') in {'pre_submit_delay_committed','pre_submit_delay_quote_observed',
             'pre_submit_delay_intent_terminal','pre_submit_delay_recheck_observed'}
         if not delay and row.get('stage') not in {'order_leg_sent', 'entry_execution_sizing_plan',
@@ -915,6 +924,106 @@ def read_rows(data_root, path, *, kinds=None, identities=None, symbols=None, sta
                 verified_append_after_snapshot=end_generation != start_generation)
 
 
+def read_order_fill_windows(data_root, path, record_ids, *, expected_generation):
+    """Producer-only bounded migration of pre-index BUY fill observations.
+
+    Report readers never call this. Each cost revision is its own durable
+    checkpoint; its native source generation prevents unchanged rescans.
+    Original order anchors, raw bytes and source identity are all verified.
+    """
+    import gzip
+    from src.engine.lifecycle.research_input_budget import Claim
+    wanted = {str(record) for record in record_ids}
+    if not wanted or len(wanted) > 6:
+        raise ValueError('research_buy_window_population_budget')
+    logical = Path(path)
+    if generation(data_root, logical) != expected_generation:
+        raise ValueError('research_buy_window_generation_changed')
+    anchors = []
+    for value, reference in read_rows(data_root, logical, kinds=['pipeline_receipt'], stages=['order_leg_sent']):
+        if str(value['row'].get('record_id')) in wanted:
+            anchors.append((str(value['row']['record_id']), reference))
+    intervals = []
+    for record in wanted:
+        offsets = [ref['decoded_offset'] for rid, ref in anchors if rid == record]
+        if offsets:
+            start = min(offsets)
+            intervals.append((start, min(start + 4 * 1024 * 1024, expected_generation['size'])))
+    merged = []
+    for start, end in sorted(intervals):
+        if merged and start <= merged[-1][1]: merged[-1][1] = max(end, merged[-1][1])
+        else: merged.append([start, end])
+    physical = logical if logical.exists() else Path(str(logical) + '.gz')
+    if (sum(end-start for start,end in merged) > 24 * 1024 * 1024
+            or physical.suffix == '.gz' and merged and merged[-1][1] > 3_000_000_000):
+        raise ValueError('research_buy_window_byte_budget')
+    started = time.monotonic()
+    expected_anchors = {ref['decoded_offset']:ref for _,ref in anchors
+                        if any(start <= ref['decoded_offset'] < end for start,end in merged)}
+    seen, events, selected, retained = set(), [], 0, 0
+    row_limit = 256 * 1024
+    oversize = 0
+    physical_identity = signature(physical.lstat())
+    descriptor = os.open(physical, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(descriptor, 'rb') as packed, Claim(row_limit * 12):
+        if (not stat.S_ISREG(os.fstat(packed.fileno()).st_mode)
+                or signature(os.fstat(packed.fileno())) != physical_identity):
+            raise ValueError('research_buy_window_generation_changed')
+        stream = gzip.GzipFile(fileobj=packed) if physical.suffix == '.gz' else packed
+        try:
+            for start,end in merged:
+                if time.monotonic()-started > 90:
+                    raise ValueError('research_buy_window_time_budget')
+                stream.seek(start)
+                offset = start
+                while offset < end:
+                    line = stream.readline(min(row_limit + 1, end-offset))
+                    if not line: break
+                    size = len(line); raw_sha = hashlib.sha256(line)
+                    complete = line.endswith(b'\n')
+                    original = line if size <= row_limit else None
+                    while not complete and offset + size < end:
+                        chunk = stream.readline(min(row_limit + 1, end-offset-size))
+                        if not chunk: break
+                        raw_sha.update(chunk); size += len(chunk)
+                        complete = chunk.endswith(b'\n')
+                        original = None
+                    selected += size
+                    if not complete: break
+                    sha = raw_sha.hexdigest()
+                    anchor = expected_anchors.get(offset)
+                    if anchor is not None:
+                        if size != anchor['size'] or sha != anchor['sha256']:
+                            raise ValueError('research_buy_window_anchor_changed')
+                        seen.add(offset)
+                    if original is not None:
+                        row = json.loads(original)
+                        if (str(row.get('record_id')) in wanted and row.get('pipeline') == 'HOLDING_PIPELINE'
+                                and row.get('stage') in {'position_rebased_after_fill', 'scale_in_executed'}):
+                            retained += size
+                            if retained > 1024 * 1024:
+                                raise ValueError('research_buy_window_retained_budget')
+                            events.append((row, dict(path=str(logical), decoded_offset=offset,
+                                                     size=size, sha256=sha)))
+                    else:
+                        oversize += 1
+                    offset += size
+                if time.monotonic()-started > 90:
+                    raise ValueError('research_buy_window_time_budget')
+            physical_read = packed.tell()
+            if signature(os.fstat(packed.fileno())) != physical_identity:
+                raise ValueError('research_buy_window_generation_changed')
+        finally:
+            if stream is not packed: stream.close()
+    if (seen != set(expected_anchors) or signature(physical.lstat()) != physical_identity
+            or generation(data_root, logical) != expected_generation):
+        raise ValueError('research_buy_window_generation_changed')
+    return events, dict(selected_bytes=selected, physical_bytes_read=physical_read,
+                        decoded_prefix_bytes=merged[-1][1] if merged else 0,
+                        wall_seconds=time.monotonic()-started, recovered_events=len(events),
+                        oversize_rows_skipped=oversize)
+
+
 def generation(data_root, path):
     """O(1) native coverage/chain identity, explicitly not a full-file SHA."""
     with _database(data_root,path,readonly=True) as (db,path,namespace):
@@ -1269,7 +1378,8 @@ class IndexedReader:
             if value['kind']=='source_gap':
                 self.gaps[value['reason']]+=1
                 continue
-            if value['kind'] in {'delay_receipt','holding_payload','holding_prompt','holding_request'}:
+            if value['kind'] in {'delay_receipt','holding_payload','holding_prompt','holding_request',
+                                 'pipeline_fill_receipt'}:
                 continue
             raw=encode(value['row'])+b'\n'
             if len(raw)>limit:

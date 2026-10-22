@@ -46,6 +46,42 @@ def test_native_append_index_consumption_never_reads_the_raw_source(tmp_path,mon
     assert len(values[0][1]['sha256'])==64
 
 
+@pytest.mark.parametrize('historical', [False, True])
+@pytest.mark.parametrize('compressed', [False, True])
+def test_original_buy_observations_reach_cost_producer_without_entering_trailing_population(tmp_path,monkeypatch,historical,compressed):
+    from collections import Counter
+    path=tmp_path/'pipeline_events/pipeline_events_2026-10-19.jsonl'
+    path.parent.mkdir();path.touch()
+    anchor=dict(record_id=1,stock_code='005930',stage='order_leg_sent',
+        pipeline='ENTRY_PIPELINE',emitted_at='2026-10-19T10:00:00',fields={})
+    fill=dict(anchor,stage='position_rebased_after_fill',pipeline='HOLDING_PIPELINE',
+        fields={'order_no':'11','execution_no':'101','fill_qty':2})
+    append(tmp_path,path,anchor)
+    project=store.project
+    if historical:monkeypatch.setattr(store,'project',lambda ns,row:None if row['stage']==fill['stage'] else project(ns,row))
+    append(tmp_path,path,fill)
+    monkeypatch.setattr(store,'project',project)
+    logical_size=path.stat().st_size
+    if compressed:
+        from src.engine.compress_db_backfilled_files import _gzip_file
+        assert _gzip_file(path,dry_run=False)[0]
+    generation=store.generation(tmp_path,path)
+    if historical:
+        events,io=store.read_order_fill_windows(tmp_path,path,['1'],expected_generation=generation)
+        assert io['selected_bytes']==logical_size
+    else:
+        events=list(store.read_rows(tmp_path,path,kinds=['pipeline_fill_receipt'],identities=['1']))
+        events=[(value['row'],reference) for value,reference in events]
+    assert [payload for payload,_ in events]==[fill]
+    with store.IndexedReader(tmp_path,path,Counter()) as reader:
+        assert json.loads(reader.readline(1024))['stage']=='order_leg_sent'
+        assert reader.readline(1024)==b''
+    physical=Path(str(path)+'.gz') if compressed else path
+    physical.write_bytes(physical.read_bytes()+b'{}\n')
+    with pytest.raises(ValueError,match='trailing_index_|research_buy_window_'):
+        store.read_order_fill_windows(tmp_path,path,['1'],expected_generation=generation)
+
+
 @pytest.mark.parametrize("mode", ["verified_append", "strict_append", "missing_append", "rewrite"])
 @pytest.mark.parametrize("reuse_session", [False, True])
 def test_pinned_row_snapshot_admits_only_native_append_and_never_new_rows(tmp_path, mode, reuse_session):
