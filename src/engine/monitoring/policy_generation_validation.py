@@ -40,6 +40,100 @@ PLANS = {
 }
 AUTHORITY_FALSE = ('runtime_effect', 'allowed_runtime_apply', 'actual_pid_consumed',
                    'actual_profit_verified', 'policy_published')
+NATIVE_REPORT_LIMIT = 8 * 1024 * 1024
+NATIVE_REPORT_LOGICAL_LIMIT = 16 * 1024 * 1024
+
+
+def publish_native_report_projection(data, family, day):
+    """Preserve original JSON with its existing lossless native archive contract.
+
+    The warm physical read stays8MiB. This bounded migration verifies complete
+    original bytes, native source semantics and gzip CRC/hash before publication.
+    """
+    import gzip
+    import tempfile
+    from src.engine.lifecycle import snapshot_archive as archive
+    from src.engine.scalping import entry_split_monitor_projection as files
+    from src.utils.jsonl_io import json_artifact_generation_lock
+    path=native_report_path(Path(data).resolve(),family,day)
+    if path.resolve()!=path:
+        raise ValueError('native_report_canonical_path_required')
+    with json_artifact_generation_lock(path,exclusive=True):
+        before=archive.file_identity(path.lstat())
+        raw=file_bytes(path,NATIVE_REPORT_LOGICAL_LIMIT)
+        payload=json.loads(raw)
+        native=payload['holding_path_vote_replay'] if family=='holding_vote' else payload
+        observed=generation.inspect(native.get('policy_generation'),family=family,day=day,
+            payload=native,data_root=Path(data))
+        if (observed.get('status') not in {'verified','unverified'}
+                or not observed.get('observation_complete') or observed.get('missing_components')):
+            raise ValueError('native_report_source_contract_invalid')
+        encoded=gzip.compress(raw,mtime=0)
+        if len(encoded)>NATIVE_REPORT_LIMIT or gzip.decompress(encoded)!=raw:
+            raise ValueError('native_report_archive_budget_or_roundtrip_invalid')
+        destination=Path(str(path)+'.gz')
+        if destination.exists() or destination.is_symlink():
+            import io
+            existing=file_bytes(destination,NATIVE_REPORT_LIMIT)
+            with gzip.GzipFile(fileobj=io.BytesIO(existing)) as stream:
+                restored=stream.read(len(raw)+1)
+            if restored!=raw:
+                raise ValueError('native_report_existing_archive_preserved')
+            encoded=existing
+        else:
+            descriptor,temporary=tempfile.mkstemp(prefix=destination.name+'.',dir=path.parent)
+            try:
+                with os.fdopen(descriptor,'wb') as stream:
+                    stream.write(encoded);stream.flush();os.fsync(stream.fileno())
+                os.link(temporary,destination)
+            finally:
+                Path(temporary).unlink(missing_ok=True)
+        if archive.file_identity(path.lstat())!=before:
+            raise ValueError('native_report_source_changed_during_archive')
+        receipt=dict(schema=archive.SCHEMA,logical_path=str(path),
+            logical_content_sha256=hashlib.sha256(raw).hexdigest(),logical_size_bytes=len(raw),
+            original_identity=before,archive_generation=archive.file_identity(destination.lstat()),
+            archive_sha256=hashlib.sha256(encoded).hexdigest(),runtime_effect=False,allowed_runtime_apply=False)
+        receipt['artifact_content_sha256']=generation.digest(receipt)
+        files._write_atomic(Path(str(destination)+'.archive_receipt.json'),receipt,65536,immutable=True)
+        if read_native_report(data,family,day)[1]!=receipt['logical_content_sha256']:
+            raise ValueError('native_report_archive_publication_invalid')
+        return receipt
+
+
+def read_native_report(data, family, day):
+    """Read bounded physical bytes and verify the original native JSON identity."""
+    import gzip
+    import io
+    from src.engine.lifecycle import snapshot_archive as archive
+    path=native_report_path(Path(data).resolve(),family,day)
+    if path.resolve()!=path:
+        raise ValueError('native_report_canonical_path_required')
+    before=archive.file_identity(path.lstat())
+    if before['size']<=NATIVE_REPORT_LIMIT:
+        return bounded_object(path,NATIVE_REPORT_LIMIT)
+    if before['size']>NATIVE_REPORT_LOGICAL_LIMIT:
+        raise ValueError('native_report_logical_source_budget_exceeded')
+    archived=Path(str(path)+'.gz')
+    hint,_=bounded_object(Path(str(archived)+'.archive_receipt.json'),65536)
+    if hint.get('original_identity')!=before:
+        raise ValueError('native_report_original_generation_changed')
+    # Hash/decode the bounded compressed bytes first, then bind their actual
+    # logical generation through the existing archive verifier without a
+    # second unbounded physical hash if a concurrent writer changed the file.
+    encoded=file_bytes(archived,NATIVE_REPORT_LIMIT)
+    with gzip.GzipFile(fileobj=io.BytesIO(encoded)) as stream:
+        raw=stream.read(before['size']+1)
+    logical_sha=hashlib.sha256(raw).hexdigest()
+    receipt=archive.archived_receipt(path,bound_logical_generation=dict(
+        path=path.name,size=len(raw),sha256=logical_sha))
+    if (len(raw)!=before['size'] or hashlib.sha256(raw).hexdigest()!=receipt['logical_content_sha256']
+            or archive.file_identity(path.lstat())!=before
+            or hashlib.sha256(encoded).hexdigest()!=receipt['archive_sha256']):
+        raise ValueError('native_report_archive_source_changed')
+    payload=json.loads(raw)
+    if not isinstance(payload,dict):raise ValueError('native_report_object_required')
+    return payload,receipt['logical_content_sha256']
 
 
 def _file_blocks(path, limit):
@@ -159,7 +253,7 @@ def current_fixture_observation(observed, data):
         expected = native_report_path(data, family, observed['source_date'])
         if Path(observed['artifact']) != expected:
             raise ValueError('fixture_native_report_path_invalid')
-        payload, report_sha = bounded_object(Path(observed['artifact']), 8*1024*1024)
+        payload, report_sha = read_native_report(data, family, observed['source_date'])
         native_payload = payload['holding_path_vote_replay'] if family=='holding_vote' else payload
         contract = native_payload['policy_generation']
         if observed.get('binding_repair') is not None:
@@ -188,7 +282,7 @@ def current_fixture_observation(observed, data):
             raise ValueError('fixture_native_reader_unverified')
         # Recheck the authoritative source after projection; never close a
         # concurrently replaced generation using the preceding bytes.
-        if bounded_object(Path(observed['artifact']),8*1024*1024)[1] != report_sha:
+        if read_native_report(data,family,observed['source_date'])[1] != report_sha:
             raise ValueError('fixture_report_changed_during_validation')
         result = deepcopy(observed)
         result.update(status='verified', findings=[], native_validated=False,

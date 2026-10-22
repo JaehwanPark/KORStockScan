@@ -43,6 +43,7 @@
 ## 실행 항목
 
 - [ ] `[MainEntrySourceTerminalRepair1022] 사전 계좌자료 생산과 제출 종료 사유 전달 수리·실제 소비 확인` (`Due: 2026-10-22`, `Slot: IMPLEMENTATION`, `TimeWindow: 09:00~23:59`, `Track: RuntimeStability`)
+  - 12:12 통합70fc572f8/PID2146251·동일 정책 소비 PASS. 사전 deadline/terminal 수리와 초기 ENTRY_BUY receipt를 함께 반영했고, startup pending 대사 및 missing-order 초기화 방어를 보완했다. 원49445는 native 경로에서1주/198900/원09:19:24.621630으로 실제 복구됐다. 새 pre-AI/terminal 자연 생성 수용은 계속 확인한다. [통합 결과](../audits/postclose-root-cause-recovery-review-2026-10-19.md#integrated-entry-receipt-and-quantity-deployment-2026-10-22).
   - Source: [원 경보 대사와 수리 검토](../audits/postclose-root-cause-recovery-review-2026-10-19.md#main-entry-source-terminal-repair-2026-10-22).
   - 원 결손: 08:40·08:55 제출 모니터의 economic_producer_gap 8건과 source_or_submit_lineage_gap 2건. 기존 quantity completion/cost 후속 generation과 구분한다. 전용 현행 OPEN이 없던 두 producer/consumer의 이번 사용자 수리 지시를 이 단일 owner로 추적한다.
   - 코드 범위: AI 엔진의 원 EntryDeadline을 사전 계좌자료 관찰자에게 전달하고, 실제 return-site 사유를 call-local 완료 이벤트→Sentinel→submission_bottleneck_monitor로 연결한다. source 기준75e0fbbf7의 격리 작업본과 [검증 자료](../../tmp/pre-ai-capacity-terminal-repair-20261022/)를 사용한다.
@@ -50,6 +51,8 @@
   - 코드 검증과 배포·정확 PID 소비·자연 생성은 별도다. 현 Main75e0/PID1485693 및 정책 유지; 배포·재기동·실 API/provider/주문·threshold/수량/cap/guard 변경 권한 없음. 향후 승인된 배포에는 기존 native 정책 인계와 PID/observer/원 failing check 검증을 적용한다.
 
 - [ ] `[DirectFamilyPreopenPolicyHandoff] direct family 날짜별 정책·bootstrap 장전 소비 확인` (`Due: 2026-10-22`, `Slot: PREOPEN`, `TimeWindow: 07:35~08:05`, `Track: RuntimeStability`)
+  - 후속 승인: 정상 기동까지 수리/리뷰/배포/재기동 반복 및 결손 복원/정식 예외 처리, 반복 경고를 남기지 않는 범위를 명시 승인했다. 원4건은 기존 native 수량 예외로 현재 findings=[]를 확인했다. WS 종료 전 probe lease drain과 정책 코드 세대/대형 원 보고서의 lossless native gzip 소비를 보완한다. 정책/원 영수증·소유권/hard guard는 유지하며, 새 결손·변조는 예외로 덮지 않는다.
+  - 12:12 최종 통합70fc572f8/PID2146251/start28321947 ordered complete/pass, 원 bootstrap/정책 및19보호 원천 유지. P5 실제12consumer·격리0·child종료, 정책 인계4종·native parity 불일치0 PASS. 원49445의 정식 소비와 현재 observer2146251/28321947 발행을 확인했다. observer는 warning_pending/unmet=[]이며 전체 자연 관측/경제성 증명은 아니다.
   - 11:44 통합90bf2d11f/PID1986269의 ordered 전환·동일 정책 소비는 PASS다. 11:45 Sentinel 요약 승계32MiB 초과는 원 생산자 suffix60.46MB 처리 후11:51 현재 발행으로 해소했고 source-quality warning_pending은 유지한다. 원49445의 startup pending 미대사→missing-order timeout 초기화 결함을 추가 수리하며 후속 후보의 격리/정식 소비를 확인한다. [원인·보완·잔여 수용](../audits/postclose-root-cause-recovery-review-2026-10-19.md#integrated-entry-receipt-and-quantity-deployment-2026-10-22).
   - 10/22 통합 전환 승인: 사용자가 결함 보완 후 통합 배포·재기동을 명시 승인했다. 기존 source-only 재기동 제한을 이번 전환 범위에서 대체하며 정책값·provider·수량/cap·주문/수동/hard guard는 유지한다. [통합 수리·배포 검토](../audits/postclose-root-cause-recovery-review-2026-10-19.md#integrated-entry-receipt-and-quantity-deployment-2026-10-22), [전후 원 증거](../../tmp/integrated-repairs-deployment-20261022/).
   - Source: [runtime_approval_summary_2026-10-21.json](/home/ubuntu/KORStockScan/data/report/runtime_approval_summary/runtime_approval_summary_2026-10-21.json)
@@ -94,6 +97,7 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
 ## 미완료 원천 진단 인계
 
 - [ ] `[InitialQuantityProducerConsumerRepair1010] 매수수량 원천·fact·시간창·장후 소비 결손 수리와 자연 수용` (`Due: 2026-10-22`, `Slot: POSTCLOSE`, `TimeWindow: 16:30~23:59`, `Track: RuntimeStability`)
+  - 12:12 최종70fc572f8/PID2146251에 completion/cost reader 수리 통합·정책 소비 확인. source21 reader는27적격/원4제외·null, bounded_contract_validated/observation_complete이며 원 수량 정책을 유지한다. source22의 정식 장후 수량 generation에서 실제 후속 소비/현재 원천과 원4건의 역사적 결손을 구분해 확인한다.
   - 10/22 completion/cost adapter: 후보0a39494bd에서 정식31건 중27적격·복구7/7, 원4건 제외/null 및628회귀 PASS. 정식 경로에 reader 전용 prepared stage를 발행하고 native resolver/전체 검증을 통과했다. 운영75/원8067 committed/선택 수량 정책/PID는 유지하며 통합 release 인계·새 PID 소비는 OPEN이다. [원인·수리·실제 소비](../audits/postclose-root-cause-recovery-review-2026-10-19.md#quantity-completion-and-cost-adapter-repair-2026-10-22).
   - 최종 후보3b6cfb80b: native 후속 stage의 후보별 인계/양쪽 reader와 원 실패 currentness PASS. producer/consumer799·정책 인계48 PASS, trailing20,824scope·active/delay/stop/holding·capability4·parity 불일치0. 원 공용 stage/정책/ea68·epoch는 보존하며 자연 종료 후 실제 전환은 OPEN이다. [검토](../audits/postclose-root-cause-recovery-review-2026-10-19.md#수량-후속-stage의-후보별-인계--2026-10-21).
   - 이전436 준비 기록: source 후보4368954cd는 수량11건/private successor·정책 인계·trailing 현재성/parity PASS이나 운영 수량 stage 인계/currentness는 미완료다. 마지막 전체 운영 preflight 통과 후보b765와 구분하며 ea68/PID1724066을 유지한다. [최종 준비 상태](/home/ubuntu/KORStockScan/tmp/quantity-currentness-integration-20261021/readiness.json).

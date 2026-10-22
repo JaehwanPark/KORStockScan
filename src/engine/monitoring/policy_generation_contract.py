@@ -406,7 +406,8 @@ def observations(root, day, *, data_root=None):
         if not path.exists() and not path.is_symlink():
             continue
         try:
-            payload, report_sha = bounded_object(path, 8 * 1024 * 1024)
+            from src.engine.monitoring.policy_generation_validation import read_native_report
+            payload, report_sha = read_native_report(data,family,day)
             native_payload = (
                 payload.get("holding_path_vote_replay") or {}
                 if family == "holding_vote"

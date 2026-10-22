@@ -334,6 +334,7 @@ _ZERO_BASE_PROBE_EXECUTOR = ThreadPoolExecutor(
 _ZERO_BASE_PROBE_SLOTS = threading.BoundedSemaphore(MAX_CONCURRENT_PROBES)
 _ZERO_BASE_PROBE_IN_FLIGHT = set()
 _ZERO_BASE_PROBE_LOCK = threading.Lock()
+_ZERO_BASE_PROBE_CLOSING = threading.Event()
 _ZERO_BASE_HANDOFFS = {}
 _ZERO_BASE_CLEANUP_RETRIES = {}
 _ZERO_BASE_MAIN_INBOX = Queue(maxsize=MAX_CONCURRENT_PROBES)
@@ -8705,6 +8706,25 @@ def _retry_zero_base_cleanup():
             log_error('[ZERO_BASE_PROBE_RELEASE] retry:' + type(exc).__name__)
 
 
+def _drain_zero_base_probe_leases(*, timeout=45.0):
+    """Finish existing diagnostic leases while their native socket is live.
+
+    Admission closes first. Existing probe deadlines, exact REMOVE authority,
+    futures and retry receipts stay with their ordinary owners.
+    """
+    deadline = time.monotonic() + timeout
+    with _ZERO_BASE_PROBE_LOCK:
+        _ZERO_BASE_PROBE_CLOSING.set()
+    while True:
+        _retry_zero_base_cleanup()
+        with _ZERO_BASE_PROBE_LOCK:
+            if not _ZERO_BASE_PROBE_IN_FLIGHT:
+                return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(min(.05, max(0., deadline-time.monotonic())))
+
+
 def _zero_base_probe_observation_profile(session_regime):
     thin_session = session_regime in {
         session_contract.MARKET_SESSION_REGIME_LEGACY_PREMARKET,
@@ -8779,11 +8799,17 @@ def handle_zero_base_probe_requested(request):
         _zero_base_probe_result(request, "probe_capacity_deferred", "probe_worker_capacity")
         return
     with _ZERO_BASE_PROBE_LOCK:
-        if code in _ZERO_BASE_PROBE_IN_FLIGHT:
+        closing = _ZERO_BASE_PROBE_CLOSING.is_set()
+        if not closing and code in _ZERO_BASE_PROBE_IN_FLIGHT:
             _ZERO_BASE_PROBE_SLOTS.release()
             _zero_base_probe_result(request, "probe_capacity_deferred", "same_code_probe_in_flight")
             return
-        _ZERO_BASE_PROBE_IN_FLIGHT.add(code)
+        if not closing:
+            _ZERO_BASE_PROBE_IN_FLIGHT.add(code)
+    if closing:
+        _ZERO_BASE_PROBE_SLOTS.release()
+        _zero_base_probe_result(request, "probe_capacity_deferred", "probe_executor_unavailable")
+        return
 
     def worker():
         probe_lease_id = claim.get('physical_probe_lease_id') or uuid.uuid4().hex
@@ -15910,6 +15936,7 @@ def close_observation_sources():
 def run_sniper(is_test_mode=False):
     global KIWOOM_TOKEN, WS_MANAGER, ACTIVE_TARGETS, AI_ENGINE
     global _SCANNER_PROMOTION_INBOX
+    _ZERO_BASE_PROBE_CLOSING.clear()
 
     from src.utils.logger import log_error, log_info
 
@@ -16496,10 +16523,14 @@ def run_sniper(is_test_mode=False):
                     run_sniper.hot_path_ai_dispatcher = None
         finally:
             try:
-                if WS_MANAGER and WS_MANAGER.stop() is False:
-                    raise RuntimeError("main_collector_shutdown_incomplete")
+                if not _drain_zero_base_probe_leases():
+                    raise RuntimeError("zero_base_probe_shutdown_incomplete")
             finally:
-                close_observation_sources()
+                try:
+                    if WS_MANAGER and WS_MANAGER.stop() is False:
+                        raise RuntimeError("main_collector_shutdown_incomplete")
+                finally:
+                    close_observation_sources()
 
 
 if __name__ == "__main__":

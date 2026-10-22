@@ -60,6 +60,42 @@ def test_native_iteration_body_is_original_loop_including_nested_scopes_and_lite
         '_LOOP_METRICS_LAST_LOG_TS'}
 
 
+def test_shutdown_successor_preserves_consumed_native_loop_and_startup_body():
+    import subprocess
+    from pathlib import Path
+    source=subprocess.check_output(['git','show','70fc572f8:src/engine/kiwoom_sniper_v2.py'],
+        cwd=Path(main.__file__).resolve().parents[2],text=True)
+    old={n.name:n for n in ast.parse(source).body if isinstance(n,ast.FunctionDef)}
+    current=ast.parse(inspect.getsource(main._run_sniper_iterations)).body[0]
+    assert _digest(current)==_digest(old['_run_sniper_iterations'])
+    current=ast.parse(inspect.getsource(main.run_sniper)).body[0]
+    current.body=[n for n in current.body if not (isinstance(n,ast.Expr)
+        and isinstance(n.value,ast.Call) and ast.unparse(n.value)=='_ZERO_BASE_PROBE_CLOSING.clear()')]
+    parent=next(n for n in current.body if isinstance(n,ast.Try)
+        and any(isinstance(c,ast.For) for c in n.body))
+    close=parent.finalbody[0]
+    close.finalbody=[close.finalbody[0].finalbody[0]]
+    assert _digest(current)==_digest(old['run_sniper'])
+
+
+@pytest.mark.parametrize('drained',[False,True])
+def test_native_shutdown_executes_drain_then_socket_then_sources(drained):
+    function=ast.parse(inspect.getsource(main.run_sniper)).body[0]
+    parent=next(n for n in function.body if isinstance(n,ast.Try)
+        and any(isinstance(c,ast.For) for c in n.body))
+    cleanup=parent.finalbody[0].finalbody[0]
+    calls=[]
+    class Manager:
+        def stop(self):calls.append('socket');return True
+    context=dict(_drain_zero_base_probe_leases=lambda:calls.append('probe') or drained,
+        WS_MANAGER=Manager(),close_observation_sources=lambda:calls.append('sources'))
+    code=compile(ast.Module(body=[cleanup],type_ignores=[]),'<native-cleanup>','exec')
+    if drained:exec(code,context)
+    else:
+        with pytest.raises(RuntimeError,match='zero_base_probe_shutdown_incomplete'):exec(code,context)
+    assert calls==['probe','socket','sources']
+
+
 def test_live_startup_consumes_native_iterator_with_original_exception_and_cleanup_boundary():
     function = ast.parse(inspect.getsource(main.run_sniper)).body[0]
     parent = next(node for node in function.body if isinstance(node, ast.Try)
@@ -82,10 +118,16 @@ def test_live_startup_consumes_native_iterator_with_original_exception_and_clean
     # only that reviewed shutdown delta for the original trading-body parity.
     shutdown = parent.finalbody[0]
     assert len(parent.finalbody) == 1 and isinstance(shutdown, ast.Try)
-    source_close = shutdown.finalbody[0]
+    probe_close = shutdown.finalbody[0]
+    assert ast.unparse(probe_close.body[0].test) == 'not _drain_zero_base_probe_leases()'
+    source_close = probe_close.finalbody[0]
     assert isinstance(source_close, ast.Try)
     assert ast.unparse(source_close.finalbody[0]) == 'close_observation_sources()'
     assert ast.unparse(source_close.body[0].test) == 'WS_MANAGER and WS_MANAGER.stop() is False'
+    # Restore the sole startup admission reset before comparing native trading.
+    function.body = [node for node in function.body if not (
+        isinstance(node, ast.Expr) and isinstance(node.value, ast.Call)
+        and ast.unparse(node.value) == '_ZERO_BASE_PROBE_CLOSING.clear()')]
     parent.finalbody = shutdown.body + ast.parse("""
 close_observation_sources()
 if WS_MANAGER:

@@ -17,7 +17,48 @@ from src.trading.market import session_contract
 @pytest.fixture(autouse=True)
 def _isolate_cleanup_retries(monkeypatch):
     monkeypatch.setattr(main, '_ZERO_BASE_CLEANUP_RETRIES', {})
+    monkeypatch.setattr(main, '_ZERO_BASE_PROBE_CLOSING', threading.Event())
     monkeypatch.setattr(main, '_zero_base_consumer_readiness', lambda: {'ready': True, 'runtime_generation': 'fixture'})
+
+
+@pytest.mark.parametrize('complete', [False, True])
+def test_shutdown_drains_exact_lease_callbacks_before_socket_stop(monkeypatch, complete):
+    inflight={'123456'}
+    monkeypatch.setattr(main,'_ZERO_BASE_PROBE_IN_FLIGHT',inflight)
+    clock=iter([0.,0.,.1,.2,.3])
+    monkeypatch.setattr(main.time,'monotonic',lambda:next(clock))
+    monkeypatch.setattr(main.time,'sleep',lambda _:None)
+    def native_cleanup():
+        assert main._ZERO_BASE_PROBE_CLOSING.is_set()
+        if complete:inflight.clear()
+    monkeypatch.setattr(main,'_retry_zero_base_cleanup',native_cleanup)
+    assert main._drain_zero_base_probe_leases(timeout=.1) is complete
+    assert bool(inflight) is not complete
+
+
+def test_shutdown_admission_rejects_new_probe_without_holding_callback_lock(monkeypatch):
+    monkeypatch.setenv('KORSTOCKSCAN_ZERO_BASE_SCANNER_ENABLED','true')
+    monkeypatch.setattr(main,'ACTIVE_TARGETS',[])
+    monkeypatch.setattr(main,'_ZERO_BASE_PROBE_IN_FLIGHT',set())
+    slots=threading.BoundedSemaphore(1)
+    monkeypatch.setattr(main,'_ZERO_BASE_PROBE_SLOTS',slots)
+    monkeypatch.setattr(main,'evaluate_main_bot_control_exclusion',lambda _:SimpleNamespace(excluded=False))
+    monkeypatch.setattr(main,'scalping_session_venue_provenance',lambda _:dict(
+        market_session_regime=main.session_contract.MARKET_SESSION_REGIME_KRX_REGULAR))
+    monkeypatch.setattr(main,'_ZERO_BASE_PROBE_EXECUTOR',SimpleNamespace(
+        submit=lambda _:pytest.fail('new worker after shutdown admission closed')))
+    published=[]
+    def publish(topic,payload):
+        assert main._ZERO_BASE_PROBE_LOCK.acquire(blocking=False)
+        main._ZERO_BASE_PROBE_LOCK.release()
+        published.append(payload)
+    monkeypatch.setattr(main,'event_bus',SimpleNamespace(publish=publish))
+    assert main._drain_zero_base_probe_leases()
+    request={k:_result()[k] for k in ('claim','candidate')}
+    request['consumer_readiness']={'ready':True,'runtime_generation':'fixture'}
+    main.handle_zero_base_probe_requested(request)
+    assert published[-1]['reason']=='probe_executor_unavailable'
+    assert slots.acquire(blocking=False)
 
 
 class _Session:
@@ -861,9 +902,9 @@ def test_zero_base_uses_global_watch_cap_without_owner_quota_or_eviction(monkeyp
     assert allowed is False and replacements == []
 
 
-@pytest.mark.parametrize("remove_sent", [True, False])
+@pytest.mark.parametrize("remove_sent,shutdown", [(True,False),(False,False),(True,True)])
 def test_late_registration_keeps_same_code_probe_reserved_until_cleanup(
-    monkeypatch, remove_sent,
+    monkeypatch, remove_sent, shutdown,
 ):
     monkeypatch.setenv("KORSTOCKSCAN_ZERO_BASE_SCANNER_ENABLED", "true")
     monkeypatch.setattr(main, "ACTIVE_TARGETS", [])
@@ -908,7 +949,11 @@ def test_late_registration_keeps_same_code_probe_reserved_until_cleanup(
     assert slots.acquire(blocking=False)
     assert not slots.acquire(blocking=False)
     slots.release()
-    remove_completion.set_result(remove_sent)
+    if shutdown:
+        monkeypatch.setattr(main.time,'sleep',lambda _:remove_completion.set_result(True))
+        assert main._drain_zero_base_probe_leases(timeout=.2)
+    else:
+        remove_completion.set_result(remove_sent)
     assert ("123456" not in main._ZERO_BASE_PROBE_IN_FLIGHT) is remove_sent
     assert bool(errors) is not remove_sent
     if not remove_sent:

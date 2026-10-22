@@ -67,6 +67,54 @@ def test_current_fixture_closes_only_code_warning_without_rewriting_native_repor
     assert all(p.read_bytes()==raw for p,raw in before.items())
 
 
+@pytest.mark.parametrize('damage',[None,'original','compact','pointer','missing','symlink','logical','physical'])
+def test_lossless_native_report_projection_keeps_original_hash_and_budget(tmp_path,monkeypatch,damage):
+    data=tmp_path/'data';_,report,_,_,_,_=_fixture(data,'entry_cancel_wait')
+    payload=json.loads(report.read_text());report.write_text(json.dumps(payload,indent=12))
+    original=report.read_bytes()
+    import gzip
+    limit=len(gzip.compress(original,mtime=0))+32
+    assert len(original)>limit
+    monkeypatch.setattr(validation,'NATIVE_REPORT_LIMIT',limit)
+    receipt=validation.publish_native_report_projection(data,'entry_cancel_wait',DAY)
+    compact=Path(str(report)+'.gz')
+    pointer=Path(str(compact)+'.archive_receipt.json')
+    if damage=='original':report.write_bytes(original+b'\n')
+    elif damage=='compact':compact.write_text('{}')
+    elif damage=='pointer':pointer.write_text('{}')
+    elif damage=='missing':compact.unlink()
+    elif damage=='symlink':
+        other=tmp_path/'foreign.json';compact.rename(other);compact.symlink_to(other)
+    elif damage=='logical':
+        row=json.loads(pointer.read_text());row['logical_content_sha256']='a'*64
+        row['artifact_content_sha256']=generation.digest({k:v for k,v in row.items() if k!='artifact_content_sha256'})
+        pointer.write_text(json.dumps(row))
+    elif damage=='physical':monkeypatch.setattr(validation,'NATIVE_REPORT_LIMIT',1)
+    result=generation.observations(tmp_path,DAY,data_root=data)[0]
+    if damage:
+        assert result['status']=='unobservable'
+    else:
+        value,sha=validation.read_native_report(data,'entry_cancel_wait',DAY)
+        assert value==payload and sha==hashlib.sha256(original).hexdigest()
+        assert result['status']=='unverified' and result['report_sha256']==sha
+        assert validation.current_fixture_observation(result,data)['status']=='verified'
+        assert compact.stat().st_size<limit
+    if damage!='original':assert report.read_bytes()==original
+
+
+def test_projection_refuses_logically_oversized_source_and_invalid_native_contract(tmp_path,monkeypatch):
+    data=tmp_path/'data';_,report,_,_,_,_=_fixture(data,'entry_cancel_wait')
+    original=report.read_bytes()
+    monkeypatch.setattr(validation,'NATIVE_REPORT_LIMIT',64)
+    with pytest.raises(ValueError):validation.publish_native_report_projection(data,'entry_cancel_wait',DAY)
+    assert report.read_bytes()==original
+    payload=json.loads(original);payload['policy_generation']['contract_sha256']='a'*64
+    report.write_text(json.dumps(payload));changed=report.read_bytes()
+    with pytest.raises(ValueError,match='source_contract_invalid|policy_generation_contract_invalid'):
+        validation.publish_native_report_projection(data,'entry_cancel_wait',DAY)
+    assert report.read_bytes()==changed
+
+
 @pytest.mark.parametrize('damage',['code','family','schema','runtime','profit','provider','orders','protected',
     'plan','tests','count','log','xml','network','skipped','failed','missing_test_file','run_path','source',
     'report_hash','contract_hash','source_generation','projection_code','projection_state',
@@ -476,6 +524,9 @@ def test_post_aux_guard_successor_does_not_transitively_promote_older_reports(tm
     *[(family,'REVIEWED_FIXED_WAIT_SUCCESSORS') for family in ('rising_missed','holding_vote')],
     *[(family,'REVIEWED_ENTRY_COST_SOURCE_SUCCESSORS') for family in validation.PLANS],
     *[(family,'REVIEWED_ENTRY_COST_SUCCESSORS') for family in validation.PLANS],
+    *[(family,'REVIEWED_SHUTDOWN_SUCCESSORS') for family in validation.PLANS],
+    *[(family,'REVIEWED_SHUTDOWN_SOURCE_SUCCESSORS') for family in validation.PLANS],
+    *[(family,'REVIEWED_SHUTDOWN_CONSUMED_SUCCESSORS') for family in validation.PLANS],
     *[(family,'REVIEWED_QUANTITY_CAPTURE_SUCCESSORS') for family in ('rising_missed','holding_vote')],
     ('entry_cancel_wait','REVIEWED_BUY_IDENTITY_SUCCESSORS'),
     *[(family,'REVIEWED_ENTRY_RECEIPT_SUCCESSORS') for family in ('entry_cancel_wait','rising_missed','holding_vote')],
@@ -528,6 +579,12 @@ def test_successor_requires_preserved_prior_fixture_and_independent_current_fixt
 @pytest.mark.parametrize('family', list(validation.PLANS))
 def test_latest_capability_pair_is_current_and_keeps_original_source(family):
     from src.engine.monitoring import policy_generation_code_handoff as handoff
+    if family in handoff.REVIEWED_SHUTDOWN_SUCCESSORS:
+        old,current=handoff.REVIEWED_SHUTDOWN_SUCCESSORS[family]
+        assert current==generation.code_generation(family)
+        assert old==handoff.REVIEWED_ENTRY_COST_SUCCESSORS[family][0]
+        assert handoff.REVIEWED_SHUTDOWN_SOURCE_SUCCESSORS[family][0]==handoff.REVIEWED_ENTRY_COST_SOURCE_SUCCESSORS[family][0]
+        return
     if family in handoff.REVIEWED_ENTRY_COST_SUCCESSORS:
         old,current=handoff.REVIEWED_ENTRY_COST_SUCCESSORS[family]
         assert current==generation.code_generation(family)

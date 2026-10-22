@@ -327,6 +327,32 @@ REVIEWED_ENTRY_COST_SOURCE_SUCCESSORS = {'auxiliary': ('a2c47ec94d9ae8e1866af911
                    'b6d966e440e92d57a8874814c3fcc2dfe9c0eab54603d8c9c6f2e93734b240f7')}
 
 
+# Exact shutdown/normalization successor; retain original and consumed profiles.
+REVIEWED_SHUTDOWN_SUCCESSORS = {'auxiliary': ('4de7ce95386f5c05863e8e3fb56899c71ef16da99bdf75cd0e3aa426a150eeac',
+               '1927f855e079e75ce460568448233f873edaef8fd1c2f066007e5a588fe7784c'),
+ 'entry_cancel_wait': ('47eb1ef2e45d3c48e663f6b3df505bc95da07fc6bcd168394441840af4764fff',
+                       '2c7807836c1b0a76f2c44d16bea190d82243ef9abe672eaddac81fccb40e24d4'),
+ 'holding_vote': ('48b92485c831e215a1d7fe1ef8664113d68186e040a768087cbcb18ab0892ac3',
+                  '52a1ae1dd40b2d739f74ead84308148b5f0e5f800e0a93f0bd4c6ed6e2732202'),
+ 'rising_missed': ('8c2725f4e329c95b79a74df8167bc5bbab80d6e08fe80fb6d7e4aaaa4d4c6e8d',
+                   '45d8e54cc7dc029c9c5e20d888e00cc9997ea7e7d2c2ddaaa2b3d8a2983d3a59')}
+REVIEWED_SHUTDOWN_SOURCE_SUCCESSORS = {'auxiliary': ('a2c47ec94d9ae8e1866af911d9de2426cf04a394f41a5dca893e90e16fc12a93',
+               '1927f855e079e75ce460568448233f873edaef8fd1c2f066007e5a588fe7784c'),
+ 'entry_cancel_wait': ('2382694e568af306027b58857aa2b5dff6fa0093347f4c8220a8ae6be001adef',
+                       '2c7807836c1b0a76f2c44d16bea190d82243ef9abe672eaddac81fccb40e24d4'),
+ 'holding_vote': ('e51ef1e839e2bf60aa7ecb7dd4eaed2d701c01816dc37298402701de9b75a9cd',
+                  '52a1ae1dd40b2d739f74ead84308148b5f0e5f800e0a93f0bd4c6ed6e2732202'),
+ 'rising_missed': ('75040f633f59cdadf8302ea2e68efdc05b1174f92c3caa73780d71e8e37bcd7e',
+                   '45d8e54cc7dc029c9c5e20d888e00cc9997ea7e7d2c2ddaaa2b3d8a2983d3a59')}
+REVIEWED_SHUTDOWN_CONSUMED_SUCCESSORS = {'auxiliary': ('581c21738b7a098e1900fcec2063e257b7f8ab71cce046ef4a8eb0b6fe41e8bd',
+               '1927f855e079e75ce460568448233f873edaef8fd1c2f066007e5a588fe7784c'),
+ 'entry_cancel_wait': ('e289f5a37b37b84bf50e39cd8bdd3153f3fa54ef68d8545465507077f77eb402',
+                       '2c7807836c1b0a76f2c44d16bea190d82243ef9abe672eaddac81fccb40e24d4'),
+ 'holding_vote': ('68cfad9c0ac263930de8bbde42b3cdaf0d64994b23d3a593bfe8d955ab98ebe8',
+                  '52a1ae1dd40b2d739f74ead84308148b5f0e5f800e0a93f0bd4c6ed6e2732202'),
+ 'rising_missed': ('92427c4782da75ebe71bee3dde8923fa19e04e14c26e14b8a80d2a831fd2296c',
+                   '45d8e54cc7dc029c9c5e20d888e00cc9997ea7e7d2c2ddaaa2b3d8a2983d3a59')}
+
 def _historical_fixture(contract, data, family, *, late_report=None):
     """Preserve a prior fixture without using it to certify the successor."""
     reference = contract.get('fixture_receipt')
@@ -454,7 +480,10 @@ def current_fixture_observation(observed, data):
                     or actual_pair == REVIEWED_BUY_IDENTITY_SUCCESSORS.get(family)
                     or actual_pair == REVIEWED_QUANTITY_CAPTURE_SUCCESSORS.get(family)
                     or actual_pair == REVIEWED_ENTRY_COST_SUCCESSORS.get(family)
-                    or actual_pair == REVIEWED_ENTRY_COST_SOURCE_SUCCESSORS.get(family))
+                    or actual_pair == REVIEWED_ENTRY_COST_SOURCE_SUCCESSORS.get(family)
+                    or actual_pair == REVIEWED_SHUTDOWN_SUCCESSORS.get(family)
+                    or actual_pair == REVIEWED_SHUTDOWN_SOURCE_SUCCESSORS.get(family)
+                    or actual_pair == REVIEWED_SHUTDOWN_CONSUMED_SUCCESSORS.get(family))
     if reader_match:
         pair = actual_pair
     if not pair or actual_pair != pair:
@@ -469,7 +498,7 @@ def current_fixture_observation(observed, data):
         path = validation.native_report_path(data, family, observed['source_date'])
         if Path(observed['artifact']) != path:
             raise ValueError('successor_report_path_invalid')
-        payload, report_sha = validation.bounded_object(path, 8*1024*1024)
+        payload, report_sha = validation.read_native_report(data,family,observed['source_date'])
         native = payload['holding_path_vote_replay'] if family == 'holding_vote' else payload
         contract = native['policy_generation']
         if observed.get('binding_repair') is not None:
@@ -491,7 +520,9 @@ def current_fixture_observation(observed, data):
             for successors in (REVIEWED_HISTORICAL_RESOLUTION_SUCCESSORS,
                                REVIEWED_FIXED_WAIT_SUCCESSORS, REVIEWED_ENTRY_RECEIPT_SUCCESSORS,
                                REVIEWED_BUY_IDENTITY_SUCCESSORS, REVIEWED_QUANTITY_CAPTURE_SUCCESSORS,
-                               REVIEWED_ENTRY_COST_SUCCESSORS, REVIEWED_ENTRY_COST_SOURCE_SUCCESSORS)) else None)
+                               REVIEWED_ENTRY_COST_SUCCESSORS, REVIEWED_ENTRY_COST_SOURCE_SUCCESSORS,
+                               REVIEWED_SHUTDOWN_SUCCESSORS, REVIEWED_SHUTDOWN_SOURCE_SUCCESSORS,
+                               REVIEWED_SHUTDOWN_CONSUMED_SUCCESSORS)) else None)
         historical_fixture = _historical_fixture(contract, data, family, late_report=late_report)
         if (integrated_match or readonly_match or cleanup_match or custody_match or reader_match or frozen_match) and historical_fixture is None:
             raise ValueError('successor_integrated_historical_fixture_required')
@@ -501,7 +532,8 @@ def current_fixture_observation(observed, data):
         verified = generation.inspect(current, family=family, day=observed['source_date'], payload=native, data_root=data)
         if (verified['status'] != 'verified' or current['fixture_receipt'] != reference
                 or verified['source_generation'] != original['source_generation']
-                or current['code_sha256'] != pair[1] or validation.file_sha(path) != report_sha):
+                or current['code_sha256'] != pair[1]
+                or validation.read_native_report(data,family,observed['source_date'])[1] != report_sha):
             raise ValueError('successor_current_reader_unverified')
         if historical_fixture and validation.file_sha(historical_fixture['path']) != historical_fixture['sha256']:
             raise ValueError('successor_historical_fixture_changed')

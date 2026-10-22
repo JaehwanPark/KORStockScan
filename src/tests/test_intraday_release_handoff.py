@@ -2203,7 +2203,7 @@ def test_postclose_recovery_handoff_keeps_complete_reviewed_generation(tmp_path,
 
 @pytest.mark.parametrize('family',['main_stop','holding_vote','pre_submit_delay'])
 @pytest.mark.parametrize('fault',[None,'missing','dirty','committed_change','parent_mix'])
-@pytest.mark.parametrize('generation',['current','consumed_pre_startup'])
+@pytest.mark.parametrize('generation',['current','consumed_pre_startup','consumed_pre_shutdown'])
 def test_entry_cost_handoff_keeps_exact_complete_generation(tmp_path,family,fault,generation):
     import hashlib,os,subprocess
     from src.engine.scalping import main_stop_policy as stop, holding_vote_experiment as vote
@@ -2212,11 +2212,13 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(tmp_path,family,faul
     root=tmp_path/'candidate';root.mkdir()
     subprocess.run(['git','clone','-q','--shared','--no-checkout',str(canonical),str(root)],check=True)
     subprocess.run(['git','-C',str(root),'checkout','-q','75e0fbbf7'],check=True)
-    hashes=(handoff.REVIEWED_ENTRY_COST_HASHES if generation=='current'
-            else handoff.REVIEWED_ENTRY_COST_PRE_STARTUP_HASHES)
+    hashes=({'current':handoff.REVIEWED_ENTRY_COST_HASHES,
+        'consumed_pre_startup':handoff.REVIEWED_ENTRY_COST_PRE_STARTUP_HASHES,
+        'consumed_pre_shutdown':handoff.REVIEWED_ENTRY_COST_PRE_SHUTDOWN_HASHES}[generation])
     for name in hashes:
         content=((canonical/name).read_bytes() if generation=='current' else
-            subprocess.check_output(['git','-C',str(canonical),'show','90bf2d11f:'+name]))
+            subprocess.check_output(['git','-C',str(canonical),'show',
+                ('90bf2d11f' if generation=='consumed_pre_startup' else '70fc572f8')+':'+name]))
         (root/name).write_bytes(content)
     name='src/engine/automation/intraday_release_handoff.py'
     (root/name).write_bytes((canonical/name).read_bytes())

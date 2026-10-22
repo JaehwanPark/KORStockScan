@@ -8,7 +8,6 @@ import json
 import ast
 import hashlib
 import os
-import tempfile
 import math
 from collections import defaultdict
 from itertools import chain
@@ -287,15 +286,9 @@ def _object(value):
 
 
 def _atomic_json(path, value):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, name = tempfile.mkstemp(dir=path.parent, prefix=path.name+'.')
-    try:
-        with os.fdopen(fd, 'w') as handle:
-            json.dump(value, handle, ensure_ascii=False, indent=2, allow_nan=False)
-            handle.write('\n');handle.flush();os.fsync(handle.fileno())
-        os.replace(name,path)
-    finally:
-        if os.path.exists(name):os.unlink(name)
+    from src.utils.jsonl_io import write_json_object_generation_safe
+    write_json_object_generation_safe(path,value,ensure_ascii=False,indent=None,
+        allow_nan=False,trailing_newline=True)
 
 
 def _incumbent(target_date):
@@ -2242,6 +2235,10 @@ def write_report(target_date: str, *, effective_date=None, publication_date=None
     json_path, md_path = report_paths(target_date)
     json_path.parent.mkdir(parents=True, exist_ok=True)
     _atomic_json(json_path,payload)
+    from src.engine.monitoring.policy_generation_validation import (
+        NATIVE_REPORT_LIMIT, publish_native_report_projection)
+    if json_path.stat().st_size>NATIVE_REPORT_LIMIT:
+        publish_native_report_projection(DATA_DIR,'entry_cancel_wait',target_date)
     if target_date >= EXECUTABLE_EVIDENCE_DATE:
         from src.utils.market_day import next_krx_trading_date as _next_trading_date
         policy,path=prepare_policy(payload,effective_date or _next_trading_date(date.fromisoformat(publication_date or target_date)).isoformat(),publication_date=publication_date)
