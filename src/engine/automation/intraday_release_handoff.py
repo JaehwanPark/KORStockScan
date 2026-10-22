@@ -4343,12 +4343,16 @@ REVIEWED_ENTRY_COST_DEPENDENCY_VARIANTS = {
 # Preserve the native consumed70fc generation before the diagnostic closure.
 REVIEWED_ENTRY_COST_PRE_SHUTDOWN_HASHES = REVIEWED_ENTRY_COST_HASHES
 REVIEWED_ENTRY_COST_PRE_SHUTDOWN_VARIANTS = REVIEWED_ENTRY_COST_DEPENDENCY_VARIANTS
-REVIEWED_ENTRY_COST_HASHES = {**REVIEWED_ENTRY_COST_HASHES, **{'src/engine/automation/entry_cancel_wait_tuning.py': '38ba95d3965f11f4d31bee05c5a0e4ba28dd2fc7e05505104b491dbf390cd0fa',
+REVIEWED_ENTRY_COST_HASHES = {**REVIEWED_ENTRY_COST_HASHES, **{'src/engine/error_detectors/artifact_freshness.py': 'f64db72754c88c8bab262e275fe3ab68440b32656a5b74ab9c4f0f0044b94ebf',
+ 'src/engine/error_detector.py': '738601adc71f9c3ccddbfa8e290709eba44492bb743ffa6043264e04bc7b0a62',
+ 'src/engine/automation/entry_cancel_wait_tuning.py': '38ba95d3965f11f4d31bee05c5a0e4ba28dd2fc7e05505104b491dbf390cd0fa',
  'src/engine/kiwoom_sniper_v2.py': 'f88f16a8747ba64edc7594e5936dcf6d7e636fd07d852932635204c44384d4a8',
  'src/engine/monitoring/policy_generation_code_handoff.py': '64c1d33b10b5e3999f12825dbcb850ad7520c7c117d8542e6da6e127234192dc',
  'src/engine/monitoring/policy_generation_contract.py': 'ff28f004a26a287394d45c4bebfe14a22a144369e8354ea23df0a0c25f7b0028',
  'src/engine/monitoring/policy_generation_validation.py': 'bc67ecca967ae10c638ae92da1ecde21852ebe492c7d205ed0fe3181e6c26238'}}
-REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{'src/engine/automation/entry_cancel_wait_tuning.py': (('e3d227354e85ec9d2dc19cb96e533d1b9f4cb54c5cd2338f7c671eae84a91582',
+REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{'src/engine/error_detectors/artifact_freshness.py': (('09c1d34cc554ef68060125590e84545e75a335add5ed2b87043b4a6a6b2eafb9', 'f64db72754c88c8bab262e275fe3ab68440b32656a5b74ab9c4f0f0044b94ebf'),),
+ 'src/engine/error_detector.py': (('c4d2e89d6e257d4c9cd7d819a2592fd4e31a73fb3806662ab97911542c471f56', '738601adc71f9c3ccddbfa8e290709eba44492bb743ffa6043264e04bc7b0a62'),),
+ 'src/engine/automation/entry_cancel_wait_tuning.py': (('e3d227354e85ec9d2dc19cb96e533d1b9f4cb54c5cd2338f7c671eae84a91582',
                                                         '38ba95d3965f11f4d31bee05c5a0e4ba28dd2fc7e05505104b491dbf390cd0fa'),),
  'src/engine/kiwoom_sniper_v2.py': (('f0289f079fc3f193efe02a0ff3ee7542da5dc3b1689292277372ba526bc4eba7',
                                      'f88f16a8747ba64edc7594e5936dcf6d7e636fd07d852932635204c44384d4a8'),),

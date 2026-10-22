@@ -87,7 +87,9 @@ def iter_daemon_alert_events(results, state, *, target_date):
             if previous is None or previous["identity"] != identity:
                 yield "alert", result
                 state[did] = {"identity": identity, "target_date": target_date}
-        elif result.severity == "pass" and previous is not None:
+        elif (result.severity == "pass" and previous is not None
+                and not (did == 'artifact_freshness' and (result.details or {}).get(
+                    'submission_bottleneck_monitor_observation_exception'))):
             kind = ("recovered" if previous["target_date"] == target_date
                     else "current_date_pass")
             yield kind, result

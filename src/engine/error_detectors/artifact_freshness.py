@@ -3928,6 +3928,33 @@ class ArtifactFreshnessDetector(BaseDetector):
                     continue
                 if status_warning:
                     observation_health = details.get(f'{aid}_observation_health') or {}
+                    # An operator-accepted native guard/empty-window exception
+                    # is operationally expected only while every strict health
+                    # predicate, current actor and exact report still verify.
+                    # Preserve partial/UNKNOWN/source-gap facts and never use
+                    # the broader bounded-source-quality WARNING path here.
+                    if (aid == observer_id and 0 <= age_sec <= max_stale
+                            and not dimensions.get('closed_window')
+                            and observation_health.get('status') == 'warning_pending'
+                            and observation_health.get('reason') in {
+                                'recorded_guard_or_cohort_pending', 'bounded_no_applicable_observations'}
+                            and observation_health.get('unmet_conditions') == []
+                            and details.get(f'{aid}_observation_health_projection_match') is True
+                            and dimensions.get('generation', {}).get('current_generation_verified') is True
+                            and dimensions.get('current_main_actor', {}).get('status') == 'verified'
+                            and dimensions.get('freshness', {}).get('body_clock', {}).get('status') == 'fresh'):
+                        details[f'{aid}_status'] = 'pass_verified_observation_wait'
+                        details[f'{aid}_current_observation_verified'] = False
+                        details[f'{aid}_observation_exception'] = dict(
+                            disposition='accepted_verified_native_wait',
+                            owner='MainEntrySourceTerminalRepair1022', reason=observation_health['reason'],
+                            report_sha256=observer_snapshot[1], run_id=observer_snapshot[0]['run_id'],
+                            assessment_actor=observation_health['assessment_actor'],
+                            assessment_window_seconds=observation_health['assessment_window_seconds'],
+                            removal_trigger='report_generation_actor_or_health_condition_changed',
+                            current_observation_verified=False, full_coverage_proven=False,
+                            runtime_effect=False, allowed_runtime_apply=False)
+                        continue
                     if (aid == observer_id and dimensions.get('closed_window')
                             and observation_health.get('reason') == 'bounded_no_applicable_observations'
                             and observation_health.get('status') == 'warning_pending'
@@ -4180,6 +4207,8 @@ class ArtifactFreshnessDetector(BaseDetector):
                 runtime_effect=False, allowed_runtime_apply=False)
 
         severity, summary = self._classify(issues, warnings)
+        if severity == 'pass' and details.get(f'{observer_id}_observation_exception'):
+            summary = 'Required artifact contracts satisfied; verified observation wait exception retained; decision coverage remains partial.'
         if (severity == "warning" and not issues and len(warnings) == 1
                 and details.get("submission_bottleneck_monitor_status") in {
                     "pending_first_current_observer", "pending_no_applicable_observations", "pending_bounded_observation"}):

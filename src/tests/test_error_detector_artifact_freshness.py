@@ -3965,14 +3965,21 @@ def _quiet_current_observer_fixture(tmp_path, monkeypatch, *, payload_factory=No
     return mod,root,now,path,report,sp,selection,seal
 
 
-def test_exact_quiet_window_warns_without_pass_recovery_or_erasing_source_gaps(tmp_path,monkeypatch):
+def test_exact_quiet_window_exception_preserves_partial_and_source_gaps(tmp_path,monkeypatch):
     from src.engine.error_detector import iter_daemon_alert_events
     from src.engine.error_detectors.base import DetectionResult
-    mod,root,now,path,report,*_ = _quiet_current_observer_fixture(tmp_path,monkeypatch)
+    mod,root,now,path,report,_,_,seal = _quiet_current_observer_fixture(tmp_path,monkeypatch)
     before=path.read_bytes()
     result=mod.ArtifactFreshnessDetector(dry_run=True).check()
-    assert result.severity=='warning' and 'observation pending' in result.summary
-    assert result.details['submission_bottleneck_monitor_status']=='pending_no_applicable_observations'
+    assert result.severity=='pass'
+    assert result.details['submission_bottleneck_monitor_status']=='pass_verified_observation_wait'
+    exception=result.details['submission_bottleneck_monitor_observation_exception']
+    assert exception['reason']=='bounded_no_applicable_observations'
+    assert exception['report_sha256']==hashlib.sha256(before).hexdigest()
+    assert exception['run_id']==report['run_id']
+    assert exception['removal_trigger']=='report_generation_actor_or_health_condition_changed'
+    assert exception['owner']=='MainEntrySourceTerminalRepair1022'
+    assert exception['current_observation_verified'] is False
     assert result.details['submission_bottleneck_monitor_observation_health_projection_match'] is True
     assert result.details['submission_bottleneck_monitor_current_observation_verified'] is False
     assert result.details['submission_bottleneck_monitor_semantic_status']=='partial'
@@ -3991,6 +3998,11 @@ def test_exact_quiet_window_warns_without_pass_recovery_or_erasing_source_gaps(t
     assert len(list(iter_daemon_alert_events([prior],state,target_date='2026-10-14')))==1
     assert list(iter_daemon_alert_events([result],state,target_date='2026-10-14'))==[]
     assert 'artifact_freshness' in state
+    report['source_gap_semantics']['issues']={'new_current_loss':1};seal()
+    failed=mod.ArtifactFreshnessDetector(dry_run=True).check()
+    assert failed.severity=='fail'
+    assert 'submission_bottleneck_monitor_observation_exception' not in failed.details
+    assert [kind for kind,_ in iter_daemon_alert_events([failed],state,target_date='2026-10-14')]==['alert']
 
 
 def _market_closed_quiet_observer_fixture(tmp_path, monkeypatch, *, report_time='19:59:00'):
@@ -4163,9 +4175,9 @@ def test_closed_source_final_detector_uses_current_pid_observer_without_historic
     assert historical.read_text()=='{old pre-start report is not current evidence}'
     if damage=='nontrading':assert result.details['submission_bottleneck_monitor_status']=='skip_non_trading_day'
     else:
-        assert result.severity==('warning' if damage is None else 'fail'),result.summary
+        assert result.severity==('pass' if damage is None else 'fail'),result.summary
         if damage is None:
-            assert result.details['submission_bottleneck_monitor_status']=='pending_no_applicable_observations'
+            assert result.details['submission_bottleneck_monitor_status']=='pass_verified_observation_wait'
             assert result.details['submission_bottleneck_monitor_current_observation_verified'] is False
 
 
@@ -4187,18 +4199,18 @@ def test_current_health_cohort_uses_selected_actor_without_rewriting_old_pid_his
     report['machine_semantics']['reversal_provider_lineage']=old_lineage
     seal()
     outcome=mod.ArtifactFreshnessDetector(dry_run=True).check()
-    assert outcome.severity==('fail' if wrong_actor else 'warning')
+    assert outcome.severity==('fail' if wrong_actor else 'pass')
     assert report['machine_semantics']['reversal_provider_lineage']==old_lineage
     assert report['machine_semantics']['current_health_cohort']['view']==original_machine
     if wrong_actor:
         assert 'current_health_actor_not_selected_pid' in outcome.details['submission_bottleneck_monitor_observation_health']['unmet_conditions']
     else:
-        assert outcome.details['submission_bottleneck_monitor_status']=='pending_no_applicable_observations'
+        assert outcome.details['submission_bottleneck_monitor_status']=='pass_verified_observation_wait'
         assert outcome.details['submission_bottleneck_monitor_current_observation_verified'] is False
 
 
 @pytest.mark.parametrize('healthy',[False,True])
-def test_recorded_guard_and_healthy_fixed_nonentry_warn_without_fullpass_or_recovery(tmp_path,monkeypatch,healthy):
+def test_recorded_guard_and_healthy_fixed_nonentry_exception_without_fullpass_or_recovery(tmp_path,monkeypatch,healthy):
     from src.tests.test_submission_bottleneck_monitor import _recorded_guard_health_fixture
     from src.engine.error_detector import iter_daemon_alert_events
     from src.engine.error_detectors.base import DetectionResult
@@ -4206,9 +4218,9 @@ def test_recorded_guard_and_healthy_fixed_nonentry_warn_without_fullpass_or_reco
         payload_factory=lambda:_recorded_guard_health_fixture(healthy=healthy))
     before=path.read_bytes()
     outcome=mod.ArtifactFreshnessDetector(dry_run=True).check()
-    assert outcome.severity=='warning'
-    assert outcome.details['submission_bottleneck_monitor_status']=='pending_bounded_observation'
-    assert 'recorded_guard_or_cohort_pending' in outcome.summary
+    assert outcome.severity=='pass'
+    assert outcome.details['submission_bottleneck_monitor_status']=='pass_verified_observation_wait'
+    assert outcome.details['submission_bottleneck_monitor_observation_exception']['reason']=='recorded_guard_or_cohort_pending'
     assert outcome.details['submission_bottleneck_monitor_current_observation_verified'] is False
     assert outcome.details['submission_bottleneck_monitor_semantic_status']=='partial'
     assert report['status']=='unobservable' and path.read_bytes()==before
@@ -4543,7 +4555,7 @@ def test_current_health_birth_requires_independent_kernel_attestation(tmp_path, 
     path.write_text(json.dumps(report)); os.utime(path, (now.timestamp()-10,)*2)
     outcome = mod.ArtifactFreshnessDetector(dry_run=True).check()
     if tamper is None:
-        assert outcome.severity == 'warning'
+        assert outcome.severity == 'pass'
         assert calls == [(receipt, at)]
         assert outcome.details['submission_bottleneck_monitor_current_observation_verified'] is False
     else:
@@ -4613,7 +4625,7 @@ def test_observer_reads_publication_after_slow_semantics_with_current_clock(tmp_
         return dict(status='not_assessed', findings=[])
     monkeypatch.setattr(mod, '_initial_quantity_semantics', slow_semantics)
     outcome = mod.ArtifactFreshnessDetector(dry_run=True).check()
-    assert outcome.severity == 'warning', outcome.summary
+    assert outcome.severity == 'pass', outcome.summary
     assert reads == [path]
     boundary = outcome.details['submission_bottleneck_monitor_publication_recheck']
     assert boundary['stable'] and len(boundary['attempts']) == 1
@@ -4662,7 +4674,7 @@ def test_observer_final_recheck_never_inherits_replaced_verdict(tmp_path, monkey
     instance=detector(dry_run=True)
     if closed_source:instance.postclose_source_date='2026-10-13'
     outcome = instance.check()
-    assert outcome.severity == ('warning' if replacement == 'valid' else 'fail'), outcome.summary
+    assert outcome.severity == ('pass' if replacement == 'valid' else 'fail'), outcome.summary
     boundary = outcome.details['submission_bottleneck_monitor_publication_recheck']
     assert len(boundary['attempts']) == 2
     assert boundary['attempts'][0]['stable'] is False
@@ -4698,7 +4710,7 @@ def test_observer_recheck_preserves_other_artifact_failures(tmp_path, monkeypatc
     assert result.severity == 'fail'
     assert result.details['other_required_status'] == 'fail'
     assert 'other_required: missing.json missing' in result.summary
-    assert result.details['submission_bottleneck_monitor_status'] == 'pending_no_applicable_observations'
+    assert result.details['submission_bottleneck_monitor_status'] == 'pass_verified_observation_wait'
 
 
 def test_observer_late_check_uses_elapsed_wall_clock(tmp_path, monkeypatch):
