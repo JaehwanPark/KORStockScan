@@ -2242,10 +2242,11 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(tmp_path,family,faul
     elif fault=='parent_mix':
         # The immediate adapter predecessor is a valid complete issued profile.
         # Mix an earlier adapter instead to exercise an unreviewed combination.
-        mixed_origin = '7f2552aedde8fec6ef904a43105827907e50dfc8' if source == 'src/utils/kiwoom_utils.py' else '75e0fbbf7'
+        mixed_origin = ('336e0a79d' if source == 'deploy/run_threshold_cycle_postclose.sh' else
+            '7f2552aedde8fec6ef904a43105827907e50dfc8' if source == 'src/utils/kiwoom_utils.py' else '75e0fbbf7')
         path.write_bytes(subprocess.check_output(['git','-C',str(root),'show',mixed_origin+':'+source]))
     elif fault=='committed_change':path.write_bytes(path.read_bytes()+b'\nUNREVIEWED=True\n')
-    subprocess.run(['git','-C',str(root),'add','src'],check=True)
+    subprocess.run(['git','-C',str(root),'add','src','deploy'],check=True)
     subprocess.run(['git','-C',str(root),'commit','-qm','integrated source fixture'],check=True)
     commit=subprocess.check_output(['git','-C',str(root),'rev-parse','HEAD'],text=True).strip()
     if fault=='dirty':path.write_bytes(path.read_bytes()+b'\nUNREVIEWED=True\n')
@@ -2345,3 +2346,11 @@ def test_stopped_preparation_analysis_preserves_expired_launch_guard(fixture, mo
     if damage != 'consumed':
         assert not cp.exists()
         assert handoff.verify(DAY, NEW, now=expired)['findings'] == ['intraday_first_launch_window_expired']
+
+
+@pytest.mark.parametrize('family',['main_stop','holding_vote','pre_submit_delay'])
+@pytest.mark.parametrize('fault',[None,'missing','dirty','committed_change','parent_mix'])
+@pytest.mark.parametrize('generation',['current','consumed_pre_prepared_owner'])
+def test_postclose_workflow_review_retains_current_and_native_predecessor_closure(tmp_path,family,fault,generation):
+    test_entry_cost_handoff_keeps_exact_complete_generation(tmp_path,family,fault,generation,
+        dependency='deploy/run_threshold_cycle_postclose.sh')

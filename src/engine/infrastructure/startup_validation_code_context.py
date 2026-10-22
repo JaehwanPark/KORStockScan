@@ -127,6 +127,15 @@ REVIEWED_PREPARATION_HISTORY['src/engine/scalping/reversal_code_handoff.py'].upd
     ('c5c6edd558c15bd1067e018d2fa84e4670cd213183baa376cf223e1376ba0238', '54b9c0efc38700a0cb8722694cdf84b9df8aa478a28f529b2b618f5532559b5a'),
 })
 
+# Reviewed role-based native rollover ancestry for the identical future policy.
+REVIEWED_PREPARATION_HISTORY['src/engine/scalping/reversal_code_handoff.py'].update({
+    ('ab61f882f4c8bbaddc0576a5765f4f102e38fd824b44a25341ffc78d647741b5', '8681d10376f4228bbe5b9d1d012d3510e8abd89470036077c3c0bc69fad63471'),
+    ('b77b63fa5afe9b3dff59266cecce73f92880b5256b12c32343a70aeddba63aa9', '8681d10376f4228bbe5b9d1d012d3510e8abd89470036077c3c0bc69fad63471'),
+    ('54b9c0efc38700a0cb8722694cdf84b9df8aa478a28f529b2b618f5532559b5a', '8681d10376f4228bbe5b9d1d012d3510e8abd89470036077c3c0bc69fad63471'),
+})
+
+REVIEWED_PREPARATION_HISTORY['deploy/run_threshold_cycle_postclose.sh'] = {('c5e60200a9cf27839204a8fd7d46733f0c10c1a4a0ddeef5bfae35f683b29470', 'dde8ede993e00f022654534a93c9b54c9b38227b9c151bde6288b8782d096067')}
+
 def reviewed_preparation_pair(relative, old, current):
     return (REVIEWED_PREPARATION_SOURCES.get(relative) == (old, current)
             or (old, current) in REVIEWED_PREPARATION_HISTORY.get(relative, ()))

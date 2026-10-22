@@ -116,17 +116,19 @@ def audit(event,args):
     if root not in p.parents or not p.is_file():return
     st=p.stat();opened.setdefault(str(p),(st.st_dev,st.st_ino,st.st_size,st.st_mtime_ns))
 sys.addaudithook(audit)
-try:
-    b=N._load_current_uncached(root,day)
-except ValueError as exc:
-    # A dated code handoff can expire while the next day's issued code-refresh
-    # candidate already attests the same active parent in its original release.
-    # Use that immutable, fully validated ancestry only for this source handoff.
-    if not str(exc).startswith('v4_contract_code_changed:'):
-        raise
+# A still-closed session has an explicit native code-refresh preparation.
+# Authenticate that frozen generation and active parent by role, rather than
+# guessing the policy backend from a live-loader exception string.
+current=N._read(N.root(root)/'current.json')
+candidate_path=N.root(root)/'candidates'/('policy_'+day+'.json')
+candidate=N._read(candidate_path) if current.get('effective_date','')<day and candidate_path.is_file() else {}
+f=candidate.get('continuous_reversal') or {}
+proof=f.get('code_refresh') or {}
+prepared_parent=(current.get('effective_date','')<day
+    and f.get('effective_date')==day and f.get('effective_mode')=='next_session'
+    and proof.get('authority')=='reviewed_identical_policy_code_refresh')
+if prepared_parent:
     from src.engine.scalping import continuous_reversal_policy_v6 as V
-    candidate_path=N.root(root)/'candidates'/('policy_'+day+'.json')
-    candidate=N._read(candidate_path)
     N.validate(candidate,target_date=day)
     f=candidate.get('continuous_reversal') or {}
     proof=f.get('code_refresh') or {}
@@ -147,6 +149,8 @@ except ValueError as exc:
     # The mutable preparation alias is observed, not an immutable policy input.
     # The identical frozen generation and its full source receipts remain bound.
     opened.pop(str(candidate_path.absolute()),None)
+else:
+    b=N._load_current_uncached(root,day)
 refs={}
 for name,identity in list(opened.items()):
     p=Path(name);st=p.stat()

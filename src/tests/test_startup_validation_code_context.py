@@ -1309,3 +1309,14 @@ def test_main_preparation_uses_reviewed_stopped_origin_code(name):
             with pytest.raises(ValueError,match='unreviewed'):
                 C._pairs({name:'0'*64},{name:new})
     assert any(new==current for old,new in pairs)
+
+
+@pytest.mark.parametrize('damage',[None,'unreviewed','wrong_origin'])
+def test_main_preparation_independently_binds_postclose_workflow_revision(damage):
+    import hashlib,subprocess
+    relative='deploy/run_threshold_cycle_postclose.sh'
+    old=hashlib.sha256(subprocess.check_output(['git','-C',str(ROOT),'show','d346aa3af:'+relative])).hexdigest()
+    new=hashlib.sha256((ROOT/relative).read_bytes()).hexdigest()
+    if damage=='unreviewed':new='0'*64
+    if damage=='wrong_origin':old='0'*64
+    assert C.reviewed_preparation_pair(relative,old,new) is (damage is None)

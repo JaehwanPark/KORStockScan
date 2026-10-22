@@ -881,3 +881,61 @@ def test_source_wait_never_resets_original_deadline_or_waits_through_generation(
     assert clock[0]<=(118 if case=='generation' else 110.01 if case=='empty' else 115.01)
     assert obs['residence_wait_applied'] is (case=='generation')
     if case=='generation':assert reason=='consumer_readiness_generation_changed'
+
+
+@pytest.mark.parametrize('damage',[None,'missing_candidate','wrong_day','wrong_schema','wrong_publication','wrong_authority','frozen_changed','source_invalid','parent_mismatch','active_same_day','active_same_day_corrupt_candidate'])
+def test_native_origin_rollover_uses_frozen_preparation_role_not_backend_error(tmp_path,damage):
+    import subprocess,sys,json
+    from pathlib import Path
+    from src.engine.scalping import reversal_code_handoff as H
+    data=tmp_path/'data';policy=data/'policy';(policy/'candidates').mkdir(parents=True);(policy/'generations').mkdir()
+    day='2026-10-23';pointer=dict(bundle_sha256='parent',effective_date=day if damage in {'active_same_day','active_same_day_corrupt_candidate'} else '2026-10-22')
+    (policy/'current.json').write_text(json.dumps(pointer))
+    family=dict(schema='continuous_reversal_policy_v6',effective_date=day,effective_mode='next_session',
+        publication_date='2026-10-22',parent_bundle_sha256='parent',code_refresh=dict(
+        authority='reviewed_identical_policy_code_refresh',activation_parent_origin_root=str(tmp_path/'origin'),activation_parent_origin_commit='a'*40))
+    if damage=='wrong_day':family['effective_date']='2026-10-24'
+    if damage=='wrong_schema':family['schema']='unknown'
+    if damage=='wrong_publication':family['publication_date']=day
+    if damage=='wrong_authority':family['code_refresh']['authority']='unapproved'
+    candidate=dict(bundle_sha256='prepared',target_date=day,continuous_reversal=family)
+    alias=policy/'candidates'/('policy_'+day+'.json')
+    if damage!='missing_candidate':alias.write_text(json.dumps(candidate))
+    if damage=='active_same_day_corrupt_candidate':alias.write_text('{invalid-json')
+    frozen=policy/'generations/prepared.json';frozen.write_text(json.dumps(dict(candidate,changed=True) if damage=='frozen_changed' else candidate))
+    # Execute the actual producer program in a child. Only native validator
+    # boundaries are mocked; role/date/generation/parent checks remain real.
+    runner='''
+import sys,json,hashlib
+from pathlib import Path
+from src.engine.scalping import mechanistic_entry_runtime_policy as N,continuous_reversal_policy_v6 as V
+calls=[];damage=sys.argv.pop(3)
+N.root=lambda root:Path(root)/'policy'
+N._read=lambda path:json.loads(Path(path).read_text())
+N.validate=lambda value,**kwargs:None
+N._signature=lambda path:None
+N._source_hash=lambda name,signature:hashlib.sha256(Path(name).read_bytes()).hexdigest()
+def live(*args):
+ calls.append('live')
+ if damage in {'active_same_day','active_same_day_corrupt_candidate'}:return dict(bundle_sha256='live')
+ raise ValueError('v6_contract_code_changed:reversal_code_handoff.py')
+def sources(*args):
+ calls.append('native_sources')
+ if damage=='source_invalid':raise ValueError('native_source_invalid')
+def parent(*args,**kwargs):
+ calls.append('native_parent')
+ assert kwargs['origin_commit']=='a'*40
+ return dict(bundle_sha256='different' if damage=='parent_mismatch' else 'parent')
+N._load_current_uncached=live;N._validate_bundle_sources=sources;V._attested_activation_parent=parent
+'''+H._ORIGIN_SCRIPT+"\nprint('ORIGIN_CALLS='+json.dumps(calls))\n"
+    result=subprocess.run([sys.executable,'-B','-c',runner,str(data),day,damage or 'valid'],capture_output=True,text=True)
+    if damage not in {None,'active_same_day','active_same_day_corrupt_candidate'}:
+        assert result.returncode!=0
+        assert 'ValueError' in result.stderr
+    else:
+        assert result.returncode==0,result.stderr
+        lines=result.stdout.splitlines();refs=json.loads(lines[0]);calls=json.loads(lines[1].split('=',1)[1])
+        assert refs['bundle_sha256']==('live' if damage in {'active_same_day','active_same_day_corrupt_candidate'} else 'parent')
+        assert calls==(['live'] if damage in {'active_same_day','active_same_day_corrupt_candidate'} else ['native_sources','native_parent'])
+        assert str(alias) not in refs['source_hashes']
+        if damage is None:assert str(frozen) in refs['source_hashes']
