@@ -2314,7 +2314,9 @@ def test_stopped_preparation_analysis_preserves_expired_launch_guard(fixture, mo
     monkeypatch.setattr(D, '_stopped_intraday_predecessor', lambda *a: dict(
         frozen_files={str(source):handoff._sha(source)}))
     monkeypatch.setattr(R, 'git', lambda *a:'c'*40)
-    monkeypatch.setattr(R, 'validate_release', lambda *a:None)
+    def validate(workspace, value):
+        assert value['workspace'] == str(workspace)
+    monkeypatch.setattr(R, 'validate_release', validate)
     assert handoff.verify(DAY, NEW, now=expired)['findings'] == ['intraday_first_launch_window_expired']
     if damage == 'consumed':cp.write_text('{}')
     if damage in {'consumed','origin'}:

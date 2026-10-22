@@ -425,7 +425,7 @@ def stopped_preparation_review(day):
         raise ValueError('intraday_stopped_review_requires_clean_successor')
     candidate_commit = R.git(candidate, 'rev-parse', 'HEAD')
     R.validate_release(driver.workspace, dict(schema='runtime_release_selection_v1',
-        release_root=str(candidate), git_commit=candidate_commit))
+        workspace=str(driver.workspace), release_root=str(candidate), git_commit=candidate_commit))
     if origin['selected'].get('native_predecessor_path'):
         native = _native_predecessor(day, commit, driver.previous, driver.previous_commit,
             driver.identity, origin['selected']['native_predecessor_path'],
@@ -4671,7 +4671,7 @@ REVIEWED_ENTRY_COST_DEPENDENCY_VARIANTS = {
 # report; effective auxiliary registry research remains report-only.
 REVIEWED_ENTRY_COST_PRE_PRESTART_HASHES = REVIEWED_ENTRY_COST_HASHES
 REVIEWED_ENTRY_COST_PRE_PRESTART_VARIANTS = REVIEWED_ENTRY_COST_DEPENDENCY_VARIANTS
-REVIEWED_PRESTART_INTEGRATION_HASHES = {'src/engine/automation/ordered_intraday_deploy.py': 'd56d407f1515ee8a8bfd307f469b175b794f490120aec2b2fe2f98165d5488af', 'src/engine/automation/main_market_weakness_research.py': 'e78122825224eee72bb3301fd2df7c22230645c5b88103fd32009a186316909b', 'src/engine/automation/main_startup_validation.py': '7382a1c8f757cc99f836e0a754ffff5f7aa04432cd058b41d292e6b10e8da304', 'src/engine/infrastructure/startup_validation_code_context.py': '05fcf283be9c125f9262277eaf0ff2ef5f26b174e034e01113c8ebdec426a4a8'}
+REVIEWED_PRESTART_INTEGRATION_HASHES = {'src/engine/automation/ordered_intraday_deploy.py': 'd56d407f1515ee8a8bfd307f469b175b794f490120aec2b2fe2f98165d5488af', 'src/engine/automation/main_market_weakness_research.py': 'e78122825224eee72bb3301fd2df7c22230645c5b88103fd32009a186316909b', 'src/engine/automation/main_startup_validation.py': 'fcf33f73c9b4831339c3215732c5364c9cd11f30147273c30c172fa3f611fd0c', 'src/engine/infrastructure/startup_validation_code_context.py': '05fcf283be9c125f9262277eaf0ff2ef5f26b174e034e01113c8ebdec426a4a8'}
 REVIEWED_ENTRY_COST_HASHES = {**REVIEWED_ENTRY_COST_HASHES, **REVIEWED_PRESTART_INTEGRATION_HASHES}
 REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
     name: REVIEWED_ENTRY_COST_PAIRS.get(name, ()) + tuple((old, current) for old in sorted(

@@ -198,13 +198,16 @@ def _native_preparation_check(selected_root, target_date, source_date, capture_m
         if not closed:
             try:
                 selected = H._read(H.DATA_DIR/'runtime/runtime_release_selection.json')
-                if selected.get('release_root') != str(selected_root):
-                    raise ValueError('startup_stopped_preparation_selection_mismatch')
+            except (OSError, ValueError, TypeError, KeyError):
+                selected = {}
+            if (selected.get('release_root') == str(selected_root)
+                    and selected.get('actual_pid_consumed') is False
+                    and selected.get('deployment_transition')):
+                # An applicable failed preparation must authenticate. Do not
+                # hide its invocation/source defect behind the old launch TTL.
                 with H.stopped_preparation_review(target_date) as proof:
                     stopped_preparation = proof
                 execution_root = ROOT
-            except (OSError, ValueError, TypeError, KeyError):
-                pass
         if not closed and stopped_preparation is None:
             try:
                 selection = H._read(H.DATA_DIR/'runtime/runtime_release_selection.json')

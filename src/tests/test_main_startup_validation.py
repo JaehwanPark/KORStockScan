@@ -1056,7 +1056,7 @@ def test_stopped_preparation_native_reader_binds_original_analysis_only_proof(na
         runtime_effect=False,source_hashes={'immutable-native-failure':'a'*64})
     monkeypatch.setattr(validation,'ROOT',code)
     monkeypatch.setattr(validation,'_git',lambda *a:'a'*40)
-    monkeypatch.setattr(H,'_read',lambda *a:dict(release_root=str(selected)))
+    monkeypatch.setattr(H,'_read',lambda *a:dict(release_root=str(selected),actual_pid_consumed=False,deployment_transition='original failed attempt'))
     monkeypatch.setattr(H,'closed_consumption_observation',lambda day: (_ for _ in ()).throw(ValueError('not consumed')))
     @contextmanager
     def review(day):yield proof
