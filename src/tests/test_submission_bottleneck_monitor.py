@@ -3412,6 +3412,24 @@ def test_exact_recomputed_route_coverage_quality_preserves_issue_and_domain_aler
     assert json.dumps(result,sort_keys=True)==before
 
 
+@pytest.mark.parametrize('diagnostic', ['reversal_first_signal_invalidated', 'unknown_cancellation'])
+def test_first_turn_cancellation_does_not_hide_remaining_route_coverage(diagnostic):
+    result, gap = _derived_coverage_health_fixture()
+    gap['observed'].update(probe_results=33, probe_native_invalidated=1)
+    gap.update(probe_route_counts={'krx_nxt_integrated': 32},
+               probe_route_source_covered_counts={'krx_nxt_integrated': 6},
+               diagnostics={'machine_probe:'+diagnostic: 1},
+               diagnostics_by_scope={'route:krx_nxt_integrated|machine_probe:'+diagnostic: 1})
+    before = json.dumps(result, sort_keys=True)
+    health = monitor.observation_health_projection(result)
+    assert health['status'] == ('warning_pending' if diagnostic == 'reversal_first_signal_invalidated'
+                               else 'not_eligible')
+    assert gap['issues'] == {'machine_probe:coverage_degraded:krx_nxt_integrated': 1}
+    assert result['notification_pending'] == ['machine_auxiliary_intraday_source_gap']
+    assert not health['full_coverage_proven'] and not health['current_observation_verified']
+    assert json.dumps(result, sort_keys=True) == before
+
+
 @pytest.mark.parametrize('bad',['issue_bool','issue_count','scope_bool','scope_count','wrong_scope','unknown_route',
     'below_floor','healthy_coverage','denominator_bool','numerator_negative','numerator_string','partial_reader',
     'extra_contract_issue','machine_issue','execution_issue','cross_route_overcount','unknown_extra','orphan',

@@ -356,6 +356,8 @@ The observer computes observation_health only from the final publication diction
 
 ### 원천 커버리지 품질 집계와 보고서 건강
 
+The FIRST cancellation successor binds the rejected probe reference producer and observer reader as one exact reviewed group, retaining the issued predecessor generation. Consume an original native ready selection for an issued empty reference only with exact root, actor, scope, sequence, source and deadline agreement. Verified cancellation is diagnostic; recompute remaining route coverage over its eligible population and retain low coverage and unknown/current loss. Candidate P5 includes the independent Main preparation inventory; the unchanged ordered execute sequence and failure paths must pass offline before drain.
+
 알려진 route별 원 건수/유효 원천 건수와 원 coverage floor에서 정확히 재계산한 coverage_degraded issue/scope는 source quality 경고로 보존한다. 유효 보고서의 제한 관측 건강을 이 집계만으로 장애로 분류하지 않는다. 원 partial·domain 알림·AI/Main 미검증·거래 guard는 유지하며 타입/route/집계 불일치나 다른 계약/읽기 오류는 실패다. 실제 정규 run/hash와 그 보고서를 읽은 daemon에서 별도 수용한다.
 
 ### 전체 관측과 Main provider 적격 모집단

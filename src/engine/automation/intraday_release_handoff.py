@@ -4527,6 +4527,29 @@ REVIEWED_ENTRY_COST_DEPENDENCY_VARIANTS = {
 }
 
 
+
+# Bind the FIRST cancellation reader and rejected-probe reference producer as
+# one exact group; retain the already consumed e9ee generation separately.
+REVIEWED_ENTRY_COST_PRE_FIRST_TURN_HASHES = REVIEWED_ENTRY_COST_HASHES
+REVIEWED_ENTRY_COST_PRE_FIRST_TURN_VARIANTS = REVIEWED_ENTRY_COST_DEPENDENCY_VARIANTS
+REVIEWED_FIRST_TURN_HASHES = {'src/engine/monitoring/submission_bottleneck_monitor.py': '00e5a75bdbf7fa812145212820094baa7e04638d5a9c18d4e8011b3b7165abae',
+ 'src/engine/scalping/zero_base_probe.py': '104746b1f9a2144bc6c6955c022e9ad925cba688300e715392554ec2c81e097c'}
+REVIEWED_FIRST_TURN_ORIGINS = {'src/engine/monitoring/submission_bottleneck_monitor.py': ('6e1588b8e5709563f15cdea0705babe7357fed62a27061365ec5ac2425fc2085',),
+ 'src/engine/scalping/zero_base_probe.py': ('c8e671c81375910971a7b8f75d1e2d6162a3411906cfbd3a3a2e076c99837fc7',)}
+REVIEWED_ENTRY_COST_HASHES = {**REVIEWED_ENTRY_COST_HASHES, **REVIEWED_FIRST_TURN_HASHES}
+REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
+    name: REVIEWED_ENTRY_COST_PAIRS.get(name, ()) + tuple((old, current) for old in sorted(
+        {pair[0] for pair in REVIEWED_ENTRY_COST_PAIRS.get(name, ())}
+        | set(REVIEWED_FIRST_TURN_ORIGINS[name])))
+    for name, current in REVIEWED_FIRST_TURN_HASHES.items()}}
+REVIEWED_ENTRY_COST_DEPENDENCY_VARIANTS = {
+    key: {**value, 'dependencies': {**value['dependencies'], **REVIEWED_FIRST_TURN_HASHES},
+        'contract_extensions': {origin: {name: REVIEWED_FIRST_TURN_HASHES.get(os.path.normpath(name), sha)
+            for name, sha in paths.items()} for origin, paths in value['contract_extensions'].items()},
+    } for key, value in REVIEWED_ENTRY_COST_PRE_FIRST_TURN_VARIANTS.items()
+}
+
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -4669,14 +4692,19 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     prepared_start_present = any((root / name).is_file()
         and hashlib.sha256(candidate_bytes(name)).hexdigest() == sha
         for name, sha in REVIEWED_PREPARED_START_HASHES.items())
-    entry_cost_hashes = (REVIEWED_ENTRY_COST_HASHES if prepared_start_present
+    first_turn_present = any((root / name).is_file()
+        and hashlib.sha256(candidate_bytes(name)).hexdigest() == sha
+        for name, sha in REVIEWED_FIRST_TURN_HASHES.items())
+    entry_cost_hashes = (REVIEWED_ENTRY_COST_HASHES if first_turn_present
+        else REVIEWED_ENTRY_COST_PRE_FIRST_TURN_HASHES if prepared_start_present
         else REVIEWED_ENTRY_COST_PRE_PREPARED_START_HASHES if main_preparation_present
         else REVIEWED_ENTRY_COST_PRE_MAIN_PREPARATION_HASHES if prepared_repair_present
         else REVIEWED_ENTRY_COST_PRE_PREPARED_REPAIR_HASHES if prepared_validation_present
         else REVIEWED_ENTRY_COST_PRE_PREPARED_VALIDATION_HASHES if coordination_present
         else REVIEWED_ENTRY_COST_PRE_COORDINATION_HASHES if native_label_present
         else REVIEWED_ENTRY_COST_PRE_NATIVE_LABEL_HASHES)
-    entry_cost_variants = (REVIEWED_ENTRY_COST_DEPENDENCY_VARIANTS if prepared_start_present
+    entry_cost_variants = (REVIEWED_ENTRY_COST_DEPENDENCY_VARIANTS if first_turn_present
+        else REVIEWED_ENTRY_COST_PRE_FIRST_TURN_VARIANTS if prepared_start_present
         else REVIEWED_ENTRY_COST_PRE_PREPARED_START_VARIANTS if main_preparation_present
         else REVIEWED_ENTRY_COST_PRE_MAIN_PREPARATION_VARIANTS if prepared_repair_present
         else REVIEWED_ENTRY_COST_PRE_PREPARED_REPAIR_VARIANTS if prepared_validation_present
