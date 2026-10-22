@@ -1974,3 +1974,10 @@ Replacement/removal: 기존 code-generation 선택 분기는 보존된 incumbent
 기존 ordered owner가 Main drain 전에 같은 생산자 잠금을 확보하고 준비 완료까지 유지하며 새 Main 시작 전에 해제하도록 수리했다. 원 코드에서 회귀2건이 실제 잠금 미보호로 실패하고 수리본의 배포/중단 복구 회귀265건이 통과했다. legacy selected/EAGAIN 복구는 실제 성공한3개 native 명령의 날짜·status·바이트 hash, 정지한 원 PID와 consumed ancestry, 원 hold/selection/source의 CAS를 함께 검증한다. 완료/활성 상태를 수동 수정하거나 시작 hold를 삭제하지 않는다. 새 code generation은 기존 정책 인계 owner에 정확히 결속하고 이미 검토·발행된3dd 세대는 독립 보존한다. 추가 guard 완화·타임아웃 증대·cron 변경은 없다.
 
 Replacement/removal: 뒤늦은 summary-only 잠금은 pre-drain→source-window→summary의 단일 기존 생산자 잠금으로 **consolidated**; 과거 정지 복구와 native 검증·이미 발행된 코드 세대는 실제 소비가 있어 **retained**다. 새 module/CLI/wrapper/worker0, 중복 deferred0. baseline3dd9f1bf5 대비 source3파일 +90/-18, tests2파일 +55/-3다. 운영 계약과 기존 audit/checklist를 함께 기록하며 마지막 소비·관측은 복구 후 별도 수용한다.
+
+
+후속 P5는 미소비 selected3dd를 consumed-only 경로로 해석해 `prepared_code_intraday_custody_invalid`, 이어 `startup_preserved_native_identity_invalid`를 검출했다. 기존 native issuer로 준비 정책3종 code handoff를 발급했으며 원 selector/hold/실패·정책은 유지했다. 원3dd first-launch 기한은 연장하지 않는다. 새 복구 후보의 준비 후 새 원15분 기한 내에 P5를 실행한 뒤 Main을 시작한다.
+
+기존 startup validation context에 `same_invocation_selected_prepared_intraday_native_validation`를 추가한다. 같은 호출의 full native Handoff 검증, 현재 선택된 미소비 준비본의 정확한 원 정책·준비 receipt·모든 frozen source/hash, 원 전체 bootstrap, isolated child를 함께 검증한다. 원 `intraday_preserved_historical_generation`/actual_pid_consumed=false를 유지하고, 소비 영수증을 만들거나 consumed 상태를 대체하지 않는다. 기존 코드에서 새 정상 상태가 거부된 원 로그와 fixture 보완 실패를 보존한다. 기존 격리 경로185와 새 상태/음성16, exact handoff generation102회귀가 통과했다. 새 정책·Main logging·provider/order/guard 변경은 없다.
+
+Replacement/removal: prepared/consumed를 구분하지 않은 소비 전용 분기는 같은 native context의 별도 정확한 준비 근거로 **consolidated**한다. 기존 full/consumed/closed 소비자는 실제 발행된 receipt가 있어 **retained**이며 deferred0이다. 새 module/CLI/worker0. baseline bf330ae92 대비 source2파일 +69/-7, tests2파일 +36/-5다. 준비→P5→기동은 기존 ordered owner의 embedding-only 정지 복구로 수행하고 원 실패 상태를 남긴다.

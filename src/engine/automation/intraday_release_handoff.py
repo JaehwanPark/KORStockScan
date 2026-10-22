@@ -4467,6 +4467,21 @@ REVIEWED_ENTRY_COST_DEPENDENCY_VARIANTS = {
 }
 
 
+# The read-only prepared-intraday closure has its own complete reviewed profile.
+REVIEWED_ENTRY_COST_PRE_PREPARED_VALIDATION_HASHES = REVIEWED_ENTRY_COST_HASHES
+REVIEWED_ENTRY_COST_PRE_PREPARED_VALIDATION_VARIANTS = REVIEWED_ENTRY_COST_DEPENDENCY_VARIANTS
+REVIEWED_PREPARED_VALIDATION_HASHES = {'src/engine/infrastructure/startup_validation_code_context.py': '27cc959c3a18217d2e312a7a04b4c7160ab2a55bbc0ee6dbd4eb56c684138212'}
+REVIEWED_ENTRY_COST_HASHES = {**REVIEWED_ENTRY_COST_HASHES, **REVIEWED_PREPARED_VALIDATION_HASHES}
+REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS,
+    'src/engine/infrastructure/startup_validation_code_context.py': (('6366e821e8af94ff9b9ce582593a5c317f608b93a826e8d1951d8214e0b4922c', '27cc959c3a18217d2e312a7a04b4c7160ab2a55bbc0ee6dbd4eb56c684138212'), ('a3d24175cc87b1e0d67963191bc34e1910595e7fd5e967707543ed0f45b747be', '27cc959c3a18217d2e312a7a04b4c7160ab2a55bbc0ee6dbd4eb56c684138212'))}
+REVIEWED_ENTRY_COST_DEPENDENCY_VARIANTS = {
+    key: {**value, 'dependencies': {**value['dependencies'], **REVIEWED_PREPARED_VALIDATION_HASHES},
+        'contract_extensions': {origin: {name: REVIEWED_PREPARED_VALIDATION_HASHES.get(os.path.normpath(name), sha)
+            for name, sha in paths.items()} for origin, paths in value['contract_extensions'].items()},
+    } for key, value in REVIEWED_ENTRY_COST_PRE_PREPARED_VALIDATION_VARIANTS.items()
+}
+
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -4597,10 +4612,15 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     coordination_present = any((root / name).is_file()
         and hashlib.sha256(candidate_bytes(name)).hexdigest() == sha
         for name, sha in REVIEWED_COORDINATION_HASHES.items())
-    entry_cost_hashes = (REVIEWED_ENTRY_COST_HASHES if coordination_present
+    prepared_validation_present = any((root / name).is_file()
+        and hashlib.sha256(candidate_bytes(name)).hexdigest() == sha
+        for name, sha in REVIEWED_PREPARED_VALIDATION_HASHES.items())
+    entry_cost_hashes = (REVIEWED_ENTRY_COST_HASHES if prepared_validation_present
+        else REVIEWED_ENTRY_COST_PRE_PREPARED_VALIDATION_HASHES if coordination_present
         else REVIEWED_ENTRY_COST_PRE_COORDINATION_HASHES if native_label_present
         else REVIEWED_ENTRY_COST_PRE_NATIVE_LABEL_HASHES)
-    entry_cost_variants = (REVIEWED_ENTRY_COST_DEPENDENCY_VARIANTS if coordination_present
+    entry_cost_variants = (REVIEWED_ENTRY_COST_DEPENDENCY_VARIANTS if prepared_validation_present
+        else REVIEWED_ENTRY_COST_PRE_PREPARED_VALIDATION_VARIANTS if coordination_present
         else REVIEWED_ENTRY_COST_PRE_COORDINATION_VARIANTS if native_label_present
         else REVIEWED_ENTRY_COST_PRE_NATIVE_LABEL_VARIANTS
         if any((root / name).is_file() and hashlib.sha256(candidate_bytes(name)).hexdigest() == sha

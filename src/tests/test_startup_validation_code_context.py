@@ -1130,11 +1130,11 @@ assert_no_forbidden_attempts()
 @pytest.mark.parametrize('fault', [None,'missing','scope','date','release','full','source',
     'bootstrap','activation','source_date','native_pid','prepared_manifest','index','authority',
     'extra_generation','schema'])
-@pytest.mark.parametrize('consumed_ancestry', [False, True, 'native'])
+@pytest.mark.parametrize('consumed_ancestry', [False, True, 'native', 'prepared_intraday'])
 def test_isolated_prepared_native_closure_keeps_full_bootstrap_and_exact_sources(request_fixture,monkeypatch,fault,consumed_ancestry):
     f=request_fixture;main=_main_fixture(f,monkeypatch);proof=main['proof'];request=f['request']
     data=Path(request['data_root']);commit=f['original_commit'];native=proof['native_verification']
-    prepared_commit='a'*40 if consumed_ancestry is True else commit
+    prepared_commit='a'*40 if consumed_ancestry is True or consumed_ancestry=='prepared_intraday' else commit
     closure=proof['closure'];closure['manifests']={};proof['historical_semantic_code_sources']={}
     directory=data/'runtime/policy_bootstrap/prepared'/DAY/'original';directory.mkdir(parents=True)
     prepared=directory/'readiness.json'
@@ -1181,6 +1181,29 @@ def test_isolated_prepared_native_closure_keeps_full_bootstrap_and_exact_sources
             target_date=DAY,selected_release_commit=commit,handoff_path=str(path),consumed_path=str(consumed),
             manifest_sha256='d'*64,prepared_manifest_sha256='b'*64,full_bootstrap=record['full_bootstrap'],
             sources={**handoff['frozen_files'],str(path):live_sha,str(consumed):C._sha(consumed)})
+    if consumed_ancestry == 'prepared_intraday':
+        native.update(validation_scope='intraday_preserved_historical_generation',actual_pid_consumed=False,
+            handoff_basis='intraday_preserved_preopen_generation_current_postclose_resealed',
+            preserved_preopen_commit=prepared_commit)
+        request['manifest']['selected_release_sha']=prepared_commit
+        path=data/'runtime/policy_bootstrap/intraday_handoff'/DAY/(commit+'.json')
+        path.parent.mkdir(parents=True)
+        handoff=dict(schema='intraday_policy_preserving_release_handoff_v1',status='prepared_verified',
+            authority='APPROVED_INTRADAY_POLICY_PRESERVING_RELEASE_HANDOFF',policy_effect='unchanged',
+            target_date=DAY,selected_release_commit=commit,release_root=str(f['selected']),
+            actual_pid_consumed=False,manifest_sha256='b'*64,prepared_receipt_path=str(prepared),
+            prepared_receipt_sha256=sha,frozen_files={**refs,str(index):C._sha(index)})
+        path.write_text(json.dumps(handoff))
+        native['prepared_intraday_handoff']=dict(path=str(path),sha256=C._sha(path),
+            sources={**handoff['frozen_files'],str(path):C._sha(path)},full_native_validation=True)
+        proof['delegation_basis']=C._native_main_basis(native)
+        (data/'runtime/runtime_release_selection.json').write_text(json.dumps(dict(schema='runtime_release_selection_v1',
+            release_root=str(f['selected']),git_commit=commit,actual_pid_consumed=False)))
+        selection=data/'runtime/runtime_release_selection.json'
+        for consumer in request['candidate_code_handoffs'].values():
+            consumer['source_hashes'][str(selection)]=C._sha(selection)
+            if str(selection) in consumer['origin']['sources']:
+                consumer['origin']['sources'][str(selection)]=C._sha(selection)
     if consumed_ancestry == 'native':
         request['manifest']['selected_release_sha']=commit
         identity=dict(pid=123,start_ticks='456',cwd=str(f['selected']/'src'))

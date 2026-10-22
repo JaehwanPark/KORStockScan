@@ -602,7 +602,9 @@ def _native_main_basis(native):
             and native.get('handoff_basis') in {'intraday_preserved_preopen_generation',
                 'intraday_preserved_preopen_generation_current_postclose_resealed'}
             and _hex(native.get('preserved_preopen_commit'), 40)):
-        return 'same_invocation_selected_intraday_native_validation'
+        return ('same_invocation_selected_prepared_intraday_native_validation'
+                if native.get('prepared_intraday_handoff')
+                else 'same_invocation_selected_intraday_native_validation')
     return None
 
 
@@ -619,7 +621,11 @@ def _preserved_native_sources(proof):
         return {}
     native_consumed = (_native_main_basis(native) ==
         'same_invocation_selected_consumed_preopen_native_validation')
-    if native.get('validation_scope')=='current_full_contract' or native_consumed:
+    native_prepared = (_native_main_basis(native) ==
+        'same_invocation_selected_prepared_intraday_native_validation')
+    prepared_commit = (native.get('preserved_preopen_commit') if native_prepared
+                       else proof['selected_release_commit'])
+    if native.get('validation_scope')=='current_full_contract' or native_consumed or native_prepared:
         if not isinstance(records,dict) or len(records)!=1:
             raise ValueError('startup_prepared_native_scope_invalid')
         data=Path(proof['policy_path']).parents[3];day=proof['target_date']
@@ -637,8 +643,8 @@ def _preserved_native_sources(proof):
                 or value.get('status')!='prepared_verified'
                 or value.get('runtime_effect') is not False or value.get('actual_pid_consumed') is not False
                 or value.get('source_date')!=native.get('source_date')
-                or value.get('selected_release_commit')!=proof['selected_release_commit']
-                or record.get('selected_release_commit')!=proof['selected_release_commit']
+                or value.get('selected_release_commit')!=prepared_commit
+                or record.get('selected_release_commit')!=prepared_commit
                 or (value.get('activation_candidate') or {}).get('bundle_sha256')!=proof['policy_sha256']):
             raise ValueError('startup_prepared_native_identity_invalid')
         refs={str(prepared):sha}
@@ -661,9 +667,34 @@ def _preserved_native_sources(proof):
                 or record.get('prepared_manifest_sha256')!=value['manifest_content_sha256']
                 or manifest.get('manifest_sha256')!=value['manifest_content_sha256']
                 or manifest.get('target_date')!=day
-                or manifest.get('selected_release_sha')!=proof['selected_release_commit']):
+                or manifest.get('selected_release_sha')!=prepared_commit):
             raise ValueError('startup_prepared_full_bootstrap_unbound')
         refs[str(index)]=_sha(index)
+        if native_prepared:
+            binding = native['prepared_intraday_handoff']
+            path = data/'runtime/policy_bootstrap/intraday_handoff'/day/(proof['selected_release_commit']+'.json')
+            handoff = _json(path)
+            expected_sources = {**handoff.get('frozen_files', {}), str(path): _sha(path)}
+            selected = _json(data/'runtime/runtime_release_selection.json')
+            if (binding.get('path') != str(path) or binding.get('sha256') != _sha(path)
+                    or binding.get('sources') != expected_sources or binding.get('full_native_validation') is not True
+                    or native.get('actual_pid_consumed') is not False
+                    or handoff.get('schema') != 'intraday_policy_preserving_release_handoff_v1'
+                    or handoff.get('authority') != 'APPROVED_INTRADAY_POLICY_PRESERVING_RELEASE_HANDOFF'
+                    or handoff.get('status') != 'prepared_verified' or handoff.get('target_date') != day
+                    or handoff.get('selected_release_commit') != proof['selected_release_commit']
+                    or handoff.get('release_root') != proof['selected_release_root']
+                    or handoff.get('actual_pid_consumed') is not False or handoff.get('policy_effect') != 'unchanged'
+                    or handoff.get('prepared_receipt_path') != str(prepared)
+                    or handoff.get('prepared_receipt_sha256') != sha
+                    or handoff.get('manifest_sha256') != value['manifest_content_sha256']
+                    or selected.get('git_commit') != proof['selected_release_commit']
+                    or selected.get('release_root') != proof['selected_release_root']
+                    or selected.get('actual_pid_consumed') is not False):
+                raise ValueError('startup_prepared_intraday_handoff_invalid')
+            _check_sources(expected_sources)
+            refs.update(expected_sources)
+            refs[str(data/'runtime/runtime_release_selection.json')] = _sha(data/'runtime/runtime_release_selection.json')
         if native_consumed:
             consumed=native['native_predecessor_consumption']
             selection=data/'runtime/runtime_release_selection.json';selected=_json(selection)
@@ -762,6 +793,17 @@ def bind_main_preparation(root, commit, data_root, intake):
     native = intake['native_verification']
     closure = native.get('native_machine_closure')
     day = intake['manifest']['target_date']
+    if (native.get('validation_scope') == 'intraday_preserved_historical_generation'
+            and native.get('actual_pid_consumed') is False):
+        from src.engine.automation import intraday_release_handoff as H
+        path, consumed = H._paths(day, original_commit)
+        if not consumed.exists():
+            checked = H._verify_handoff(day, original_commit)
+            if checked.get('status') != 'pass':
+                raise ValueError('startup_prepared_intraday_native_validation_failed')
+            handoff = checked['handoff']
+            native = dict(native, prepared_intraday_handoff=dict(path=str(path), sha256=_sha(path),
+                sources={**handoff['frozen_files'], str(path): _sha(path)}, full_native_validation=True))
     if (native.get('status') != 'pass' or native.get('findings')
             or _native_main_basis(native) is None
             or native.get('target_date') != day or native.get('selected_release_commit') != original_commit
