@@ -12411,12 +12411,31 @@ def handle_real_execution(exec_data):
                     code, reason="scale_in_buy_receipt_order_identity_blocked"
                 )
             else:
-                # Native registry receipt custody may precede the REST return
-                # and residual staging. Carry that exact accepted order into
-                # the same entry ledger before its cumulative-fill validation.
+                # Native registry custody can precede local REST staging for
+                # both the initial BUY and residual. Project only that exact
+                # accepted owner/order; never infer a leg from quantity alone.
                 residual_prefix = f"main_scalping:{target_id}:{target_id}:ENTRY_RESIDUAL_BUY:"
-                if (isinstance(owner_row, dict)
-                        and str(owner_row.get("client_intent_id") or "").startswith(residual_prefix)
+                cycle = str(target_stock.get("position_cycle_id") or target_id).strip()
+                initial_prefix = f"main_scalping:{target_id}:{cycle}:ENTRY_BUY:"
+                client = str((owner_row or {}).get("client_intent_id") or "")
+                prefix = residual_prefix
+                entry_scope = bool(target_stock.get("entry_split_probe_bundle_id")
+                    and str(target_stock.get("entry_split_probe_phase") or "") in {
+                        "residual_claimed", "residual_submitting", "residual_submitted",
+                        "residual_partial_submitted"})
+                if client.startswith(initial_prefix):
+                    prefix = initial_prefix
+                    entry_scope = str(target_stock.get("status") or "").strip().upper() in {
+                        "WATCHING", "BUY_ORDERED", "HOLDING"}
+                tag = client[len(prefix):].rsplit(":", 1)[0]
+                if prefix == initial_prefix:
+                    tag, separator, ordinal = tag.rpartition(":")
+                    nonce = client.rsplit(":", 1)[-1]
+                    entry_scope = bool(entry_scope and tag and separator and ordinal.isascii() and ordinal.isdecimal()
+                        and int(ordinal) > 0 and len(nonce) == 32
+                        and all(c in "0123456789abcdef" for c in nonce))
+                if (isinstance(owner_row, dict) and entry_scope
+                        and client.startswith(prefix)
                         and owner_row.get("owner_type") == "main_scalping"
                         and owner_row.get("owner_id") == f"main_scalping:{target_id}"
                         and owner_row.get("position_id") == f"main_scalping:{target_id}"
@@ -12424,19 +12443,16 @@ def handle_real_execution(exec_data):
                         and owner_row.get("side") == "BUY" and owner_row.get("action") == "NEW"
                         and owner_row.get("order_date") == received_at.date().isoformat()
                         and owner_row.get("broker_order_no") == order_no
-                        and owner_row.get("quantity") == order_qty
-                        and target_stock.get("entry_split_probe_bundle_id")
-                        and str(target_stock.get("entry_split_probe_phase") or "") in {
-                            "residual_claimed", "residual_submitting", "residual_submitted",
-                            "residual_partial_submitted"}):
+                        and owner_row.get("quantity") == order_qty):
                     pending = target_stock.get("pending_entry_orders") or []
                     if (isinstance(pending, list) and all(isinstance(item, dict) for item in pending)
+                            and not any(not str(item.get("ord_no") or "").strip() for item in pending)
                             and not any(str(item.get("ord_no") or "").strip() == order_no for item in pending)):
                         target_stock["pending_entry_orders"] = pending
                         pending.append(dict(ord_no=order_no, qty=order_qty, filled_qty=0,
                             status="OPEN", broker_route=owner_row.get("route"),
                             owner_registry_intent_id=owner_row.get("intent_id"),
-                            tag=str(owner_row["client_intent_id"])[len(residual_prefix):].rsplit(":", 1)[0]))
+                            tag=tag))
                 _handle_entry_buy_execution(
                     target_id=target_id,
                     target_stock=target_stock,

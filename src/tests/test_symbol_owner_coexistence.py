@@ -693,24 +693,39 @@ def test_registry_event_binds_exact_policy_provenance(tmp_path):
     assert owner["authority_policy_hash"] == "f" * 64
 
 
-@pytest.mark.parametrize('fault', [None, 'unbound', 'other_target', 'quantity', 'other_action'])
-def test_registered_residual_fill_reaches_native_entry_ledger_before_rest_staging(tmp_path, monkeypatch, fault):
+@pytest.mark.parametrize('fault', [None, 'unbound', 'other_target', 'quantity', 'other_action', 'cycle', 'date', 'blank_ambiguous'])
+@pytest.mark.parametrize('operation', ['ENTRY_RESIDUAL_BUY', 'ENTRY_BUY'])
+def test_registered_entry_fill_reaches_native_ledger_before_rest_staging(tmp_path, monkeypatch, fault, operation, native=False):
     from types import SimpleNamespace
     from src.engine import sniper_execution_receipts as receipts
     day = datetime.now(receipts._KST).date()
     registry = OrderOwnerRegistry(tmp_path/'registry.jsonl')
     target = '102' if fault == 'other_target' else '101'
-    action = 'AVG_DOWN' if fault == 'other_action' else 'ENTRY_RESIDUAL_BUY'
+    action = 'AVG_DOWN' if fault == 'other_action' else operation
     owner = OwnerOrderContext('main_scalping', 'main_scalping:'+target, 'main_scalping:'+target,
         f'main_scalping:{target}:{target}:{action}:entry_split_probe_residual_1:unique')
+    if operation == 'ENTRY_BUY':
+        from src.trading.order.owner_custody_registry import main_owner_context
+        owner = main_owner_context({'id':target, 'position_cycle_id':'prior-cycle' if fault=='cycle' else target},
+            action=action, ordinal='entry_split_probe_0:1')
+    elif fault == 'cycle':
+        owner = OwnerOrderContext('main_scalping','main_scalping:'+target,'main_scalping:'+target,
+            f'main_scalping:{target}:prior-cycle:{action}:entry_split_probe_residual_1:unique')
+    order_day = day - timedelta(days=1) if fault == 'date' else day
     if fault != 'unbound':
         intent = registry.reserve(context=owner, symbol=SYMBOL, side='BUY', quantity=1,
-                                  route='SOR', order_date=day)
+                                  route='SOR', order_date=order_day)
         registry.transition(intent,state='ORDER_BOUND',broker_order_no='0023803')
-    stock = dict(id=101, code=SYMBOL, status='BUY_ORDERED', strategy='SCALPING',
+    stock = dict(id=101, name='fixture', code=SYMBOL, status='BUY_ORDERED', strategy='SCALPING',
         buy_qty=1, buy_price=10000, entry_filled_qty=1, entry_requested_qty=3,
         entry_split_probe_phase='residual_submitting', entry_split_probe_bundle_id='bundle-101',
         odno='0023795', pending_entry_orders=[dict(ord_no='0023795',qty=1,filled_qty=1,status='FILLED')])
+    if operation == 'ENTRY_BUY':
+        stock.update(status='WATCHING', buy_qty=0, buy_price=0, entry_filled_qty=0, entry_requested_qty=2,
+            odno='', pending_entry_orders=[])
+        stock.pop('entry_split_probe_bundle_id');stock.pop('entry_split_probe_phase')
+    if fault == 'blank_ambiguous':
+        stock['pending_entry_orders'] = [dict(ord_no='',qty=1,tag='unidentified') for _ in range(2)]
     monkeypatch.setattr(receipts, 'ACTIVE_TARGETS', [stock])
     monkeypatch.setattr(receipts, '_get_fast_state', lambda _:None)
     monkeypatch.setattr(receipts, 'resolve_symbol_owner_policy', lambda *a, **k:SimpleNamespace(coexistence_enabled=False))
@@ -718,7 +733,21 @@ def test_registered_residual_fill_reaches_native_entry_ledger_before_rest_stagin
     monkeypatch.setattr(receipts, 'log_info', lambda *a:None)
     monkeypatch.setattr(receipts, 'log_error', lambda *a:None)
     observed=[]
+    native_consume = receipts._handle_entry_buy_execution
+    if native:
+        from src.tests.test_sniper_scale_in import _DummyDB
+        class NoThread:
+            def __init__(self, *a, **k): pass
+            def start(self): pass
+        monkeypatch.setattr(receipts, 'DB', _DummyDB())
+        monkeypatch.setattr(receipts, 'highest_prices', {})
+        monkeypatch.setattr(receipts, 'threading', SimpleNamespace(
+            Thread=NoThread, get_ident=receipts.threading.get_ident))
+        monkeypatch.setattr(receipts, 'event_bus', SimpleNamespace(publish=lambda *a: None))
+        monkeypatch.setattr(receipts.kiwoom_utils, 'get_target_price_up', lambda *a: 10350)
     def consume(**kwargs):
+        if native:
+            return native_consume(**kwargs)
         observed.append(receipts._resolve_entry_effective_fill_qty(**{
             k:v for k,v in kwargs.items() if k not in {'target_id','now'}}))
     monkeypatch.setattr(receipts, '_handle_entry_buy_execution', consume)
@@ -726,6 +755,21 @@ def test_registered_residual_fill_reaches_native_entry_ledger_before_rest_stagin
         order_qty=2 if fault=='quantity' else 1,remaining_qty=0,cumulative_exec_amount=10000,
         execution_no='8752',unit_exec_price=10000,unit_exec_qty=1)
     receipts.handle_real_execution(event)
+    if native:
+        from src.engine import sniper_state_handlers as handlers
+        assert stock['buy_qty'] == 1 and stock['buy_price'] == 10000
+        assert stock['entry_filled_qty'] == 1 and stock['pending_entry_orders'][0]['status'] == 'FILLED'
+        assert stock['pending_entry_orders'][0]['tag'] == 'entry_split_probe_0'
+        receipts.handle_real_execution(event)
+        assert stock['buy_qty'] == 1
+        # Late REST staging must preserve the already consumed WS fill and
+        # must leave no open leg for the cancellation loop to retry.
+        handlers._stage_buy_order_submission(stock, SYMBOL, 10000, 2, 'fixture',
+            [dict(ord_no='0023803', qty=1, filled_qty=0, status='OPEN', tag='entry_split_probe_0')])
+        assert handlers._open_entry_split_orders(stock) == []
+        assert handlers._resolve_post_submit_db_state(stock, curr_price=10000, requested_qty=2)[:3] == (
+            'HOLDING', 1, 10000)
+        return
     if fault is None:
         assert observed[0]['status']=='final', observed
         assert stock['_entry_receipt_filled_by_order_no']['0023803']==1
@@ -856,3 +900,9 @@ def test_allocation_gap_never_becomes_phantom_sell_cancel(monkeypatch):
         lambda *a:pytest.fail('allocation conflict must not initiate cancel reconciliation'))
     assert handlers._sell_cancel_reconciliation_blocks_holding(stock,SYMBOL,now_ts=1000) is True
     assert stock==before
+
+
+
+def test_initial_registry_receipt_survives_native_consumer_and_late_rest_staging(tmp_path, monkeypatch):
+    test_registered_entry_fill_reaches_native_ledger_before_rest_staging(
+        tmp_path, monkeypatch, None, 'ENTRY_BUY', native=True)
