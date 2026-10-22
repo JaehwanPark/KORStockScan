@@ -664,6 +664,16 @@ def test_registered_claim_expiry_retains_native_rejection_and_exact_source(monke
         assert result['issues'] == {} and result['diagnostics'] == {'machine_trace:reversal_signal_expired': 1}
     else:
         assert result['issues'] == {'machine_trace:reversal_signal_generation_changed': 1}
+    # The health consumer must preserve the native producer's exact terminal
+    # classification, including cleaned-up claims; unproved loss stays failed.
+    from src.engine.monitoring.submission_bottleneck_monitor import observation_health_projection
+    from src.tests.test_submission_bottleneck_monitor import _bounded_outcome_health_fixture
+    health_input, gap, *_ = _bounded_outcome_health_fixture(partial=False)
+    gap.update(status='gap_observed', issues=result['issues'], issues_by_scope=result['issues_by_scope'],
+        diagnostics=result['diagnostics'], diagnostics_by_scope=result['diagnostics_by_scope'])
+    health = observation_health_projection(health_input)
+    assert health['status'] == ('warning_pending' if damage is None else 'not_eligible'), health
+    assert health['full_coverage_proven'] is False
 
 
 def test_registration_telemetry_failure_preserves_native_admission(monkeypatch):

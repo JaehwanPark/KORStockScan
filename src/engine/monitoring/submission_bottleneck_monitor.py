@@ -4113,13 +4113,16 @@ def observation_health_projection(result):
             and result.get('issues', {}) == {} and result.get('diagnostics', {}) == {}
             and result.get('notification_pending') == [], 'current_failure_or_diagnostic_present')
     gap, machine, execution = stages
+    # Share the native terminal contract with the closed-PASS guard consumer
+    # below; source semantics already verifies the exact rejection receipt.
+    native_invalidation = {'reversal_signal_expired', 'reversal_signal_generation_changed',
+                           'reversal_first_signal_invalidated'}
     allowed_diagnostics = {'machine_probe:' + reason for reason in
         ('route_snapshot_missing', '0B_missing', '0B_age_exceeded', '0D_missing', '0D_age_exceeded')}
     allowed_diagnostics.update('machine_trace:' + reason for reason in
         ('source_quality_blocked_before_assessment', 'required_feature_blocked_before_assessment'))
     allowed_diagnostics.update('machine_trace:' + reason for reason in
-        ('reversal_first_signal_invalidated', 'reversal_signal_generation_changed',
-         'entry_machine_input_deadline_expired'))
+        native_invalidation | {'entry_machine_input_deadline_expired'})
     allowed_diagnostics.update(stage + ':reversal_first_price_hold_invalidated'
                                for stage in ('machine_probe', 'machine_trace'))
     allowed_diagnostics.add('machine_probe:reversal_first_signal_invalidated')
@@ -4365,8 +4368,6 @@ def observation_health_projection(result):
                 break
             async_groups[key].append(item)
 
-    native_invalidation = {'reversal_signal_expired', 'reversal_signal_generation_changed',
-                           'reversal_first_signal_invalidated'}
     rejection_guards = native_invalidation | {'result_deadline_expired', 'generation_superseded',
         'target_not_watching', 'state_version_changed', 'position_or_pending_order_present', 'cooldown_active'}
     nonexecution_guards = {'generation_invalidated', 'coordinator_shutdown', 'result_retention_overflow'}

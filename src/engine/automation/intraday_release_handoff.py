@@ -4550,6 +4550,24 @@ REVIEWED_ENTRY_COST_DEPENDENCY_VARIANTS = {
 }
 
 
+# Keep the consumed FIRST generation while consolidating native expiry health.
+REVIEWED_ENTRY_COST_PRE_EXPIRY_HEALTH_HASHES = REVIEWED_ENTRY_COST_HASHES
+REVIEWED_ENTRY_COST_PRE_EXPIRY_HEALTH_VARIANTS = REVIEWED_ENTRY_COST_DEPENDENCY_VARIANTS
+REVIEWED_EXPIRY_HEALTH_HASHES = {'src/engine/monitoring/submission_bottleneck_monitor.py': '0cacfa688b336befe533f2010b3bfaea40d5d2fe778e4ca48d7347071114527e'}
+REVIEWED_ENTRY_COST_HASHES = {**REVIEWED_ENTRY_COST_HASHES, **REVIEWED_EXPIRY_HEALTH_HASHES}
+REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
+    name: REVIEWED_ENTRY_COST_PAIRS[name] + tuple((old, current) for old in sorted(
+        {pair[0] for pair in REVIEWED_ENTRY_COST_PAIRS[name]}
+        | {REVIEWED_ENTRY_COST_PRE_EXPIRY_HEALTH_HASHES[name]}))
+    for name, current in REVIEWED_EXPIRY_HEALTH_HASHES.items()}}
+REVIEWED_ENTRY_COST_DEPENDENCY_VARIANTS = {
+    key: {**value, 'dependencies': {**value['dependencies'], **REVIEWED_EXPIRY_HEALTH_HASHES},
+        'contract_extensions': {origin: {name: REVIEWED_EXPIRY_HEALTH_HASHES.get(os.path.normpath(name), sha)
+            for name, sha in paths.items()} for origin, paths in value['contract_extensions'].items()},
+    } for key, value in REVIEWED_ENTRY_COST_PRE_EXPIRY_HEALTH_VARIANTS.items()
+}
+
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -4695,7 +4713,11 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     first_turn_present = any((root / name).is_file()
         and hashlib.sha256(candidate_bytes(name)).hexdigest() == sha
         for name, sha in REVIEWED_FIRST_TURN_HASHES.items())
-    entry_cost_hashes = (REVIEWED_ENTRY_COST_HASHES if first_turn_present
+    expiry_health_present = any((root / name).is_file()
+        and hashlib.sha256(candidate_bytes(name)).hexdigest() == sha
+        for name, sha in REVIEWED_EXPIRY_HEALTH_HASHES.items())
+    entry_cost_hashes = (REVIEWED_ENTRY_COST_HASHES if expiry_health_present
+        else REVIEWED_ENTRY_COST_PRE_EXPIRY_HEALTH_HASHES if first_turn_present
         else REVIEWED_ENTRY_COST_PRE_FIRST_TURN_HASHES if prepared_start_present
         else REVIEWED_ENTRY_COST_PRE_PREPARED_START_HASHES if main_preparation_present
         else REVIEWED_ENTRY_COST_PRE_MAIN_PREPARATION_HASHES if prepared_repair_present
@@ -4703,7 +4725,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         else REVIEWED_ENTRY_COST_PRE_PREPARED_VALIDATION_HASHES if coordination_present
         else REVIEWED_ENTRY_COST_PRE_COORDINATION_HASHES if native_label_present
         else REVIEWED_ENTRY_COST_PRE_NATIVE_LABEL_HASHES)
-    entry_cost_variants = (REVIEWED_ENTRY_COST_DEPENDENCY_VARIANTS if first_turn_present
+    entry_cost_variants = (REVIEWED_ENTRY_COST_DEPENDENCY_VARIANTS if expiry_health_present
+        else REVIEWED_ENTRY_COST_PRE_EXPIRY_HEALTH_VARIANTS if first_turn_present
         else REVIEWED_ENTRY_COST_PRE_FIRST_TURN_VARIANTS if prepared_start_present
         else REVIEWED_ENTRY_COST_PRE_PREPARED_START_VARIANTS if main_preparation_present
         else REVIEWED_ENTRY_COST_PRE_MAIN_PREPARATION_VARIANTS if prepared_repair_present
