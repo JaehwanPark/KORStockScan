@@ -4725,15 +4725,22 @@ REVIEWED_ENTRY_COST_DEPENDENCY_VARIANTS = {
 
 # Native prepared-code issuance belongs to the ordered producer. Preserve the
 # actually consumed predecessor as a complete immutable dependency generation.
-REVIEWED_ENTRY_COST_PRE_PREPARED_OWNER_HASHES = REVIEWED_ENTRY_COST_HASHES
-REVIEWED_ENTRY_COST_PRE_PREPARED_OWNER_VARIANTS = REVIEWED_ENTRY_COST_DEPENDENCY_VARIANTS
-REVIEWED_PREPARED_OWNER_HASHES = {'deploy/run_threshold_cycle_postclose.sh': 'dde8ede993e00f022654534a93c9b54c9b38227b9c151bde6288b8782d096067', 'src/engine/automation/ordered_intraday_deploy.py': 'afa9ca5839c59670f4c38f6898089cd8c743157b87ead058e393d5f78d4e07ab', 'src/engine/automation/prepared_policy_code_handoff.py': '5bf1ed07810e5beeba889493c83bdd5b8eaa913b1710fc534c8a20246e1422e3', 'src/engine/infrastructure/runtime_release_router.py': 'ab16b27904d4d9b2b680a27219844d76bb692bc257385b23e4abed5abe93d962', 'src/engine/automation/entry_cancel_wait_tuning.py': 'bdfaaeaac7768f703d181314be45afaf2ecfc983001a6364a60a41ae54882c4e', 'src/engine/lifecycle/broker_cost_source.py': '4ee127feb84ac4d0cea4eaed80a7813308f434983bba3d99f9e359fb07c6cad4', 'src/engine/lifecycle/broker_cost_reconciliation.py': '3d0baf2c711f47a23c453ca78587f849391906a31d6fa1866968408b645be34f', 'src/engine/scalping/initial_quantity_monitor_projection.py': 'c0ac0738df35657d770b4c7a1a7c0490a0ab4bc8756aa1c19215ad2661dead8b', 'src/engine/automation/main_trailing_source_reuse.py': '88faf62cd0e01d4b32f5f36ca96b37fdf3a4bd2432e0adcab8ca1c9d8cfd8ac5', 'src/engine/automation/main_trailing_source_assembler.py': '947171df074a8074ebb3d9bcca5710a2b001ccc00a211c58d99113ab5317e77b', 'src/engine/lifecycle/holding_research_cost.py': '25ba4b953775e2248a6d83cacb256a50af5b639472c18c4ab759c88413610016', 'src/engine/scalping/ai_action_outcome_calibration.py': 'a300563f9c78eb6365a24eb1c2afa67872aaf2fc287ac7d4c8aad69907bb5aed', 'src/engine/scalping/continuous_reversal_operating_postclose.py': '2fc75be21c110341ac4596f08f8a3bcdb42adfd4e3ba8322f601337b84ab8441', 'src/engine/scalping/continuous_reversal_policy_v6.py': 'b2be4fe8fe3080bc8e7de9a42c76a8d00985c6ad257a8b1da052fa6a3a108bf2', 'src/engine/automation/main_market_weakness_research.py': '9e704cce559ff4d7cc714feece733ca64380b440a7c3490a219170412656bce8', 'src/engine/infrastructure/startup_validation_code_context.py': '741f502aeb6c210fa59a7e1b5a5d5e0264fc1d3cc045a7717a8e403016e8ba3e', 'src/engine/scalping/reversal_code_handoff.py': '852d31cba14cfcb68cfb73603de07b30643969c5e476ddca6dde1f2d3a6fc589', 'src/engine/scalping/reversal_auxiliary_tuning.py': '0e8f31ed349a6ef17f5f588f8b4bf4180b2f819ab85077a1d51641662611a40a', 'src/engine/automation/postclose_finalization_generation.py': 'ddc559621e47b8069a4f46b44746e659884e08a3a875dbe03564dde6bbc84513'}
+REVIEWED_ENTRY_COST_PRE_PREPARED_OWNER_HASHES = {**REVIEWED_ENTRY_COST_HASHES,
+    'src/engine/automation/postclose_summary_handoff.py': 'f3b4559530defabadbdd1e0efcfb6112069ae98c001cc17ab49a2ba6e8676a06'}
+REVIEWED_ENTRY_COST_PRE_PREPARED_OWNER_VARIANTS = {
+    key: {**value, 'dependencies': {**value['dependencies'],
+        'src/engine/automation/postclose_summary_handoff.py': 'f3b4559530defabadbdd1e0efcfb6112069ae98c001cc17ab49a2ba6e8676a06'}}
+    for key, value in REVIEWED_ENTRY_COST_DEPENDENCY_VARIANTS.items()
+}
+REVIEWED_PREPARED_OWNER_HASHES = {'deploy/run_threshold_cycle_postclose.sh': 'dde8ede993e00f022654534a93c9b54c9b38227b9c151bde6288b8782d096067', 'src/engine/automation/ordered_intraday_deploy.py': 'afa9ca5839c59670f4c38f6898089cd8c743157b87ead058e393d5f78d4e07ab', 'src/engine/automation/prepared_policy_code_handoff.py': '5bf1ed07810e5beeba889493c83bdd5b8eaa913b1710fc534c8a20246e1422e3', 'src/engine/infrastructure/runtime_release_router.py': 'ab16b27904d4d9b2b680a27219844d76bb692bc257385b23e4abed5abe93d962', 'src/engine/automation/entry_cancel_wait_tuning.py': 'bdfaaeaac7768f703d181314be45afaf2ecfc983001a6364a60a41ae54882c4e', 'src/engine/lifecycle/broker_cost_source.py': '4ee127feb84ac4d0cea4eaed80a7813308f434983bba3d99f9e359fb07c6cad4', 'src/engine/lifecycle/broker_cost_reconciliation.py': '3d0baf2c711f47a23c453ca78587f849391906a31d6fa1866968408b645be34f', 'src/engine/scalping/initial_quantity_monitor_projection.py': 'c0ac0738df35657d770b4c7a1a7c0490a0ab4bc8756aa1c19215ad2661dead8b', 'src/engine/automation/main_trailing_source_reuse.py': '88faf62cd0e01d4b32f5f36ca96b37fdf3a4bd2432e0adcab8ca1c9d8cfd8ac5', 'src/engine/automation/main_trailing_source_assembler.py': '947171df074a8074ebb3d9bcca5710a2b001ccc00a211c58d99113ab5317e77b', 'src/engine/lifecycle/holding_research_cost.py': '25ba4b953775e2248a6d83cacb256a50af5b639472c18c4ab759c88413610016', 'src/engine/scalping/ai_action_outcome_calibration.py': 'a300563f9c78eb6365a24eb1c2afa67872aaf2fc287ac7d4c8aad69907bb5aed', 'src/engine/scalping/continuous_reversal_operating_postclose.py': '2fc75be21c110341ac4596f08f8a3bcdb42adfd4e3ba8322f601337b84ab8441', 'src/engine/scalping/continuous_reversal_policy_v6.py': 'b2be4fe8fe3080bc8e7de9a42c76a8d00985c6ad257a8b1da052fa6a3a108bf2', 'src/engine/automation/main_market_weakness_research.py': '9e704cce559ff4d7cc714feece733ca64380b440a7c3490a219170412656bce8', 'src/engine/infrastructure/startup_validation_code_context.py': '5f6b4ccc8c4ea74d5b4012dd02b4607c437587402fdbb325752fe53fc0080947', 'src/engine/scalping/reversal_code_handoff.py': '852d31cba14cfcb68cfb73603de07b30643969c5e476ddca6dde1f2d3a6fc589', 'src/engine/scalping/reversal_auxiliary_tuning.py': '0e8f31ed349a6ef17f5f588f8b4bf4180b2f819ab85077a1d51641662611a40a', 'src/engine/automation/postclose_finalization_generation.py': 'ba7533068261dadc984418175d3dcb5e7bba70110e359de4aba488a52cc8c0e3', 'src/engine/error_detectors/artifact_freshness.py': '3a58f8ac3220ea8d64247cf17a756d2658c7815cd3d57744303f80bc40d34dcc', 'src/engine/automation/postclose_summary_handoff.py': 'af1cf8a403d0f48ade6038c2a58a32bb962d6a6a9617acbb76882bacd9f62b06'}
 REVIEWED_ENTRY_COST_HASHES = {**REVIEWED_ENTRY_COST_HASHES, **REVIEWED_PREPARED_OWNER_HASHES}
 REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
     name: REVIEWED_ENTRY_COST_PAIRS.get(name, ()) + tuple((old, current) for old in sorted(
         {pair[0] for pair in REVIEWED_ENTRY_COST_PAIRS.get(name, ())}
-        | {REVIEWED_ENTRY_COST_PRE_PREPARED_OWNER_HASHES.get(name, {'src/engine/infrastructure/runtime_release_router.py': '58daee5eebdc8f02bf4fc86477929b0a05cc14438c5251c7e52d12b4d2a7f308', 'src/engine/scalping/continuous_reversal_policy_v6.py': 'eca7f2f2a46d2b4e8f1739e53e6c59d19fd70951c1e2fd786dd8c712201f2460', 'src/engine/lifecycle/broker_cost_source.py': '62a88c219868754055c8754a43fb5976c453aa70c81422fd97e410a8ae995c86', 'src/engine/automation/postclose_finalization_generation.py': 'add8eaa8de08300a3da458e880ecf24884da4d0467b2ab0c6da0eb09c8349fa7'}.get(name, '00d78a00a10ad6c3d4cdc68083b659a6e5d4b0230ff38b87d7c2d52648f47a0c'))}))
+        | {REVIEWED_ENTRY_COST_PRE_PREPARED_OWNER_HASHES.get(name, {'src/engine/infrastructure/runtime_release_router.py': '58daee5eebdc8f02bf4fc86477929b0a05cc14438c5251c7e52d12b4d2a7f308', 'src/engine/scalping/continuous_reversal_policy_v6.py': 'eca7f2f2a46d2b4e8f1739e53e6c59d19fd70951c1e2fd786dd8c712201f2460', 'src/engine/lifecycle/broker_cost_source.py': '62a88c219868754055c8754a43fb5976c453aa70c81422fd97e410a8ae995c86', 'src/engine/automation/postclose_finalization_generation.py': 'add8eaa8de08300a3da458e880ecf24884da4d0467b2ab0c6da0eb09c8349fa7', 'src/engine/error_detectors/artifact_freshness.py': 'f64db72754c88c8bab262e275fe3ab68440b32656a5b74ab9c4f0f0044b94ebf', 'src/engine/automation/postclose_summary_handoff.py': 'f3b4559530defabadbdd1e0efcfb6112069ae98c001cc17ab49a2ba6e8676a06'}.get(name, '00d78a00a10ad6c3d4cdc68083b659a6e5d4b0230ff38b87d7c2d52648f47a0c'))}))
     for name, current in REVIEWED_PREPARED_OWNER_HASHES.items()}}
+REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS,
+    'src/engine/infrastructure/startup_validation_code_context.py': REVIEWED_ENTRY_COST_PAIRS['src/engine/infrastructure/startup_validation_code_context.py'] + (('741f502aeb6c210fa59a7e1b5a5d5e0264fc1d3cc045a7717a8e403016e8ba3e', '5f6b4ccc8c4ea74d5b4012dd02b4607c437587402fdbb325752fe53fc0080947'),)}
 REVIEWED_ENTRY_COST_DEPENDENCY_VARIANTS = {
     (key[0], REVIEWED_PREPARED_OWNER_HASHES.get(key[0], key[1])): {
         **value, 'dependencies': {**value['dependencies'], **REVIEWED_PREPARED_OWNER_HASHES},
@@ -4747,7 +4754,10 @@ REVIEWED_ENTRY_COST_DEPENDENCY_VARIANTS = {
 # predecessor. Only this exact finalizer owner selects that old profile.
 REVIEWED_PRE_FINALIZATION_HASHES = {**REVIEWED_ENTRY_COST_HASHES,
     'src/engine/automation/postclose_finalization_generation.py':
-        'add8eaa8de08300a3da458e880ecf24884da4d0467b2ab0c6da0eb09c8349fa7'}
+        'add8eaa8de08300a3da458e880ecf24884da4d0467b2ab0c6da0eb09c8349fa7',
+    'src/engine/error_detectors/artifact_freshness.py': 'f64db72754c88c8bab262e275fe3ab68440b32656a5b74ab9c4f0f0044b94ebf',
+    'src/engine/automation/postclose_summary_handoff.py': 'f3b4559530defabadbdd1e0efcfb6112069ae98c001cc17ab49a2ba6e8676a06',
+    'src/engine/infrastructure/startup_validation_code_context.py': '741f502aeb6c210fa59a7e1b5a5d5e0264fc1d3cc045a7717a8e403016e8ba3e'}
 REVIEWED_PRE_FINALIZATION_VARIANTS = {
     key: {**value,
         'dependencies': {**value['dependencies'], **REVIEWED_PRE_FINALIZATION_HASHES},
@@ -4757,6 +4767,20 @@ REVIEWED_PRE_FINALIZATION_VARIANTS = {
 }
 
 
+# Native PREOPEN consumed this complete generation without an intraday handoff.
+REVIEWED_NATIVE_PREOPEN_HASHES = {**REVIEWED_ENTRY_COST_HASHES,
+    'src/engine/automation/postclose_finalization_generation.py': 'ddc559621e47b8069a4f46b44746e659884e08a3a875dbe03564dde6bbc84513',
+    'src/engine/error_detectors/artifact_freshness.py': 'f64db72754c88c8bab262e275fe3ab68440b32656a5b74ab9c4f0f0044b94ebf',
+    'src/engine/automation/postclose_summary_handoff.py': 'f3b4559530defabadbdd1e0efcfb6112069ae98c001cc17ab49a2ba6e8676a06',
+    'src/engine/infrastructure/startup_validation_code_context.py': '741f502aeb6c210fa59a7e1b5a5d5e0264fc1d3cc045a7717a8e403016e8ba3e'}
+REVIEWED_NATIVE_PREOPEN_VARIANTS = {
+    key: {**value,
+        'dependencies': {**value['dependencies'], **REVIEWED_NATIVE_PREOPEN_HASHES},
+        'contract_extensions': {origin: {name: REVIEWED_NATIVE_PREOPEN_HASHES.get(os.path.normpath(name), sha)
+            for name, sha in paths.items()} for origin, paths in value['contract_extensions'].items()},
+    } for key, value in REVIEWED_ENTRY_COST_DEPENDENCY_VARIANTS.items()
+}
+
 
 # Exact sentinel scope/972 integration. Preserve the complete consumed9a8
 # profile; selecting any new member requires the entire reviewed successor.
@@ -4765,7 +4789,7 @@ REVIEWED_ENTRY_COST_PRE_SENTINEL_SCOPE_HASHES = REVIEWED_ENTRY_COST_HASHES
 REVIEWED_ENTRY_COST_PRE_SENTINEL_SCOPE_VARIANTS = REVIEWED_ENTRY_COST_DEPENDENCY_VARIANTS
 REVIEWED_SENTINEL_SCOPE_HASHES = {'src/engine/buy_funnel_sentinel.py': '173cc88ba7cf28bfdccec1dc53404b2b3506ca5f34527c0a064f2576e10aef6f',
  'src/engine/holding_exit_sentinel.py': '7ae845b51d16bf425337e4758d1f83047f1f4e1c3479d39875523f0e2748012a',
- 'src/engine/infrastructure/startup_validation_code_context.py': '97ee0c1a9e45131d610d6ac0760a08d7266824d1765a7eb071dbfd94438a6032',
+ 'src/engine/infrastructure/startup_validation_code_context.py': '235f8561c934dbcee52e2b629e0c1a272f1bbfba23bc0c3faf34801d64a8b02a',
  'src/engine/kiwoom_sniper_v2.py': '02ecf7b4a55042fbcd2a7b4f59bf8602bed6020730f0a8bb326b41d5d6418866',
  'src/engine/kiwoom_websocket.py': 'ef70d8fc0fd74416fc1e7a9c27dca68663a1f057b7e2b14041b255a66a9af377',
  'src/engine/monitoring/sentinel_event_scope.py': '5a06206336713a85bbf28e479ae39482cd77549ee9296b9a92b90ef7f61aa559',
@@ -4971,15 +4995,18 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     consumed_finalization = ((root / finalization_owner).is_file()
         and hashlib.sha256(candidate_bytes(finalization_owner)).hexdigest()
             == REVIEWED_PRE_FINALIZATION_HASHES[finalization_owner])
+    native_preopen = ((root / finalization_owner).is_file()
+        and hashlib.sha256(candidate_bytes(finalization_owner)).hexdigest()
+            == REVIEWED_NATIVE_PREOPEN_HASHES[finalization_owner])
     sentinel_scope_present = ((root / 'src/engine/monitoring/sentinel_event_scope.py').exists()
         or any((root / name).is_file() and hashlib.sha256(candidate_bytes(name)).hexdigest() == sha
                for name, sha in REVIEWED_SENTINEL_SCOPE_HASHES.items()))
-    prepared_hashes = REVIEWED_PRE_FINALIZATION_HASHES if consumed_finalization else REVIEWED_ENTRY_COST_HASHES
-    if not sentinel_scope_present and not consumed_finalization:
-        prepared_hashes = REVIEWED_ENTRY_COST_PRE_SENTINEL_SCOPE_HASHES
-    prepared_variants = REVIEWED_PRE_FINALIZATION_VARIANTS if consumed_finalization else REVIEWED_ENTRY_COST_DEPENDENCY_VARIANTS
-    if not sentinel_scope_present and not consumed_finalization:
-        prepared_variants = REVIEWED_ENTRY_COST_PRE_SENTINEL_SCOPE_VARIANTS
+    prepared_hashes = (REVIEWED_ENTRY_COST_HASHES if sentinel_scope_present else
+        REVIEWED_PRE_FINALIZATION_HASHES if consumed_finalization else
+        REVIEWED_NATIVE_PREOPEN_HASHES if native_preopen else REVIEWED_ENTRY_COST_PRE_SENTINEL_SCOPE_HASHES)
+    prepared_variants = (REVIEWED_ENTRY_COST_DEPENDENCY_VARIANTS if sentinel_scope_present else
+        REVIEWED_PRE_FINALIZATION_VARIANTS if consumed_finalization else
+        REVIEWED_NATIVE_PREOPEN_VARIANTS if native_preopen else REVIEWED_ENTRY_COST_PRE_SENTINEL_SCOPE_VARIANTS)
     entry_cost_hashes = (prepared_hashes if prepared_owner_present
         else REVIEWED_ENTRY_COST_PRE_PREPARED_OWNER_HASHES if prestart_integration_present
         else REVIEWED_ENTRY_COST_PRE_PRESTART_HASHES if preassessment_present

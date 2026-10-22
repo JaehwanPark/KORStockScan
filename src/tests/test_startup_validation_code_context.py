@@ -1246,6 +1246,17 @@ def test_isolated_prepared_native_closure_keeps_full_bootstrap_and_exact_sources
         active.write_text(json.dumps(dict(manifest_sha256='d'*64)))
         active.with_suffix('.env').write_text('native environment fixture')
     proof['source_hashes'].update(C._preserved_native_sources(proof));request['source_hashes'].update(proof['source_hashes'])
+    if consumed_ancestry == 'native' and fault is None:
+        from src.engine.automation import intraday_release_handoff as H
+        monkeypatch.setattr(H, '_verify_handoff', lambda *a, **kw:
+            (_ for _ in ()).throw(AssertionError('native_preopen_has_no_intraday_handoff')))
+        monkeypatch.setattr(C, 'REVIEWED_PREPARATION_SOURCES', {})
+        monkeypatch.setattr(C, 'ROOT', f['root'])
+        intake = dict(selected_root=f['selected'],selected_commit=commit,
+            manifest=request['manifest'],receipt=dict(activation_candidate=dict(bundle_sha256=proof['policy_sha256'])),
+            native_verification=dict(native,native_machine_closure=closure))
+        bound = C.bind_main_preparation(f['root'],f['commit'],data,intake)
+        assert bound['delegation_basis'] == 'same_invocation_selected_consumed_preopen_native_validation'
     if fault=='missing':closure['preserved_generations']={}
     elif fault=='scope':native['validation_scope']='current_full_contract' if consumed_ancestry else 'intraday_preserved_historical_generation'
     elif fault=='date':record['target_date']='2026-10-20'

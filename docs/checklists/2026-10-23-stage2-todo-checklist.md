@@ -70,6 +70,7 @@
   - 판정 기준: source_date=`2026-10-22`, apply_date=`2026-10-23`, preopen_state=`pending`, due_policy_receipts=`compact_auxiliary(valid=True, handoff=incumbent_preserved); entry_cancel_wait(valid=True, handoff=blocked); entry_split(valid=True, handoff=blocked); main_mechanistic_entry(valid=True, handoff=incumbent_preserved); pre_submit_delay(valid=True, handoff=initial_quote_timing_policy_published); rising_missed(valid=True, handoff=not_applicable); scale_in_split(valid=True, handoff=not_applicable); main_stop_confirmation(policy=4c2b8eef73e329a7c0b124f581e600f6088598d87e0cb53a256652d74039dd84, pid_unobserved)`의 schema·semantic hash·scope와 bootstrap accepted/rejected 결과를 확인한다.
   - incumbent 정책은 runtime override가 0이어야 하고 validated edge는 단일축 allowlist·operator lock·retired OFF·same-stage guard를 통과해야 한다.
   - 금지: bootstrap 생성·선택을 실제 PID 소비, 자연 행동 또는 비용 후 EV 개선으로 보고하지 않는다.
+  - 10/23 source-only 인계: 사용자 지시로 이 세션의 배포·재기동을 종료하고 검토된 코드만 전달한다. 원 선택9a8e59bfc/Main1134876 소비와 후보 코드 소비는 별개다. 봉인 checklist reader·단계 code origin·native PREOPEN 부모 준비 분기 수리를 포함한다. 다음 배포 세션에서 exact candidate P5→native ordered execute/prepared P5→새 PID/observer/full health/WS를 검증한다. source23 장후→10/26 Main의 무개입 첫 완주는 같은 owner에서 OPEN이다. [코드·검증·잔여 기동 게이트](../audits/postclose-root-cause-recovery-review-2026-10-19.md#2026-10-23-postclose-alert-source-only-handoff).
 
 - [ ] `[DirectFamilySourceRepairEntryCancelWait] entry_cancel_wait 직접 family 원천·경제성 계약 수리` (`Due: 2026-10-23`, `Slot: POSTCLOSE`, `TimeWindow: 16:30~21:40`, `Track: RuntimeStability`)
   - Source: [runtime_approval_summary_2026-10-22.json](/home/ubuntu/KORStockScan/data/report/runtime_approval_summary/runtime_approval_summary_2026-10-22.json)
@@ -89,11 +90,22 @@
 
 ## 보조입력 후속 연구
 
-- [ ] `[AuxiliaryResearchRefresh1022] 단독 목표거리 결합 인용·검증된 bid/ask 진전 보조연구` (`Due: 2026-10-23`, `Slot: ADHOC`, `TimeWindow: 연구 실행부터 비교 검증까지`, `Track: RuntimeStability`)
+- [x] `[AuxiliaryResearchRefresh1022] 단독 목표거리 결합 인용·검증된 bid/ask 진전 보조연구` (`Due: 2026-10-23`, `Slot: ADHOC`, `TimeWindow: 연구 실행부터 비교 검증까지`, `Track: RuntimeStability`)
   - Source: 사용자 추가 호출/연구 승인, [계획 §24](../proposals/main-auxiliary-prompt-research-and-intraday-adoption-plan-2026-10-08.md#24-결합-위험-인용과-검증된-bidask-진전-연구--2026-10-23). 22일 같은ID의 완료단계/원응답은 보존하고 이번 새단계를 오늘 단일owner로 수행한다.
   - Scope: source22까지287234catalog/6161현재확인점·source13검증catalog참조. 오늘기계11scope변경/보조128정의동일을반영해개발32A/B최대128회→새24triplet최대72회를동결한다. 기존2963/scoped64보존·신규200(shared3163/승인계보3227)만추가하며정기/운영한도는변경하지않는다.
   - 동일분모 B 보충: 실제178회/절약22회를같은현행검증22점의B호출에만사용한다. 현재/v2캐시·기존후보/소스/표본유지, A/B의개발32+검증22 공통54점누적을비교한다. 기존200회상한안이며가상추가2점은B미호출, A선택/초기결과는보존한다.
   - Acceptance: exactnative/원수신순서·quote age와quote/거래진전분리·null/빈/불완전·모든판정유지/PASS강제0를리뷰/수리/회귀후실제호출한다. 실제provider/projection/누적예산과동일후보의삼성/비삼성시장·유형·route별승리복원/손실·실패PASS감소/증가·현재/가상/새source22/겹친창을대사·보고한다. 원라벨30분/net+0.4/soft−3/비용0.0023고정, 신규운영등록·발행·배포/재기동·주문없음. strict-bound원문91d9874a…보존 완료.
+
+
+  - 완료: 신규200회/누적3163(shared3163)·현재54/가상2의실제응답/projection330참조대사. 현행22/39→A34/52·B30/48, A승리12복원/0손실이나실패PASS17→18·양후보STOP4전부PASS다. B는A대비승리1복원/5손실·실패1제거/1추가로동시개선미달. [시장/유형/route·원인·처분](../audits/main-auxiliary-weak-rebound-research-review-2026-10-22.md#결합-인용호가-진전-보조연구--2026-10-23).
+  - 검증/경계: 격리1ed39bed5·입력98포함관련320회귀/compile/diff·원천/quote/null/세판정/미래배제PASS, oldscoped64·strict원문91d9874a보존. 마감기존selected9a8e59bfc/PID1134876/start35426396/parent128정확소비true와연구후보미적용을분리했다. 신규등록/발행/배포/재기동/주문0,후속가설미실행.
+
+## 기계판정 자연 수용
+
+- [ ] `[MachineSpreadNaturalAcceptance1023] 프리마켓 관찰·정규장 SOR registered/bid spread 표시 수용` (`Due: 2026-10-23`, `Slot: INTRADAY`, `TimeWindow: 08:15~정규장 첫 적격 probe 확인까지`, `Track: RuntimeStability`)
+  - Source: 사용자 프리마켓 모니터링·정규장 자연 probe 검증 지시, [기존 연구·NXT 첫 수용 기록](../audits/main-machine-pattern-dual-track-research-review-2026-10-21.md#배포-뒤-첫-자연-probe의-spread-표시-수용--2026-10-23).
+  - 상태/다음 조건: PID1134876/start35426396·선택9a8e59bfc·bundle1d9e5b09를 고정해 증분 관찰 중이다. 프리마켓 결과/AI/최초 submit terminal을 분리하고, 09:00 이후 `other_non_fixed|REGULAR|LT_20000`·SOR의 `G4` 자연 prefix를 확인한다. 장전·동시호가 대기를 정규장 실패나 성공으로 바꾸지 않는다.
+  - Acceptance: 실제 PID/root/start·정책 scope/registry·lease·native epoch/sequence·feature identity를 원천 호가와 결속한다. registered/bid 산식과 표시값 일치·유효 호가의 spread 미준비 해소·FALSE/UNKNOWN 및 실제 결손 차단 유지를 검증한다. 재발이면 기존 owner의 source-only 원인 수리·리뷰·보완·회귀를 반복하고, 코드 수리와 실제 PID 반영을 분리한다. 표본 생성용 provider/실주문·정책/시간창/guard 변경은 하지 않는다.
 
 ## Project/Calendar 동기화
 
@@ -176,6 +188,7 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
 
 
 - [ ] `[MainMarketWeaknessPostcloseObservation1008] 갱신 원천·label·누적 비교·알림 판정 수용` (`Due: 2026-10-23`, `Slot: POSTCLOSE`, `TimeWindow: 21:40~익일 05:40; 06:30 종료; EOD 우선`, `Track: RuntimeStability`)
+  - 10/23 사용자 승인15거래일(9/29~10/22) 단회 복구 진행: 판정 전 거부148행과 probe17행의 의미 분류, 과거 exact-reader 증빙7조합의 실제 native 검증·592회귀 PASS. 현재 실행 guard는 유지하며 기존600초·단계60초·worker1/512MiB·nice19 아래 daily→누적→알림 판정을 대사한다. 정기9회/540초 예산·Main/장중 logging·주문·시험발송 변경0. source23→10/24 자연 수용은 OPEN이다.
   - 최신일의 durable checkpoint를 정상 야간 예약이 재개하지 못한 selector 결함은 원 b085 코드로 재현했고, 보완13cbdb0de는243개+native 인계68개 회귀를 통과했다. 9회/600초·06:30·EOD 우선·provider/매매 권한은 유지한다. code-only 후보의 P5/선택/native optional code binding과 다음 source23→10/24의 최신/과거 교대 실제 수용은 OPEN이다. 이미 소진한 source22 야간 budget은 재설정하지 않고04:39 원 계산/generation과 migration을 보존한다. [원인·수리·수용](../audits/postclose-root-cause-recovery-review-2026-10-19.md#2026-10-23-weakness-latest-source-checkpoint-scheduling-repair).
   - source22 지정일 native 계산은10/23 04:39 완료(67fe9062, 누적c906dba1),24763행 W5436/F8715/U10612이며 결손을 보존했다. 9회/예약540초로 기존 야간 상한을 유지했다. 마지막 소비/알림 판정과 이후 보조 source generation 변경에 따른 유효성을06:30까지 확인하며 다음 자연 source23→10/24 회차 수용은 OPEN이다. 경제성 승격/매매 권한이 아니다.
   - source10/22의 신규 normalized 의존성4개가 기존 원천 U 보고서를 무효화했다. 10/23 01:18 회차는 60초 예산 종료이며 원 projection26개/라벨 loaded0 상태를 보존했다. 기존 색인의 partition별 원자적 진행·시간 제한·재개를 수리하고 source22 daily의 실제 label 결속과 누적/알림 세대 소비를 10/23 06:30까지 대사한다. 예산600초/회차 수와 과거 null·이전 코드의 migration pending은 유지한다. [원 계약](../proposals/main-market-weakness-postclose-source-binding-and-candidate-repair-plan-2026-10-13.md#라벨-색인의-제한-시간과-진행-보존).

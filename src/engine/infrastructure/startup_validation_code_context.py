@@ -899,7 +899,7 @@ def bind_main_preparation(root, commit, data_root, intake):
     native = intake['native_verification']
     closure = native.get('native_machine_closure')
     day = intake['manifest']['target_date']
-    if (native.get('validation_scope') == 'intraday_preserved_historical_generation'
+    if (_native_main_basis(native) == 'same_invocation_selected_intraday_native_validation'
             and native.get('actual_pid_consumed') is False):
         from src.engine.automation import intraday_release_handoff as H
         path, consumed = H._paths(day, original_commit)
