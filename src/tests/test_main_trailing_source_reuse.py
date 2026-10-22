@@ -18,7 +18,17 @@ from src.tests.test_main_trailing_source_assembler import fixture, DAY, TARGET, 
 def approved(tmp_path, *, cost=False):
     data = tmp_path/'data'
     fixture(data)
-    if cost:
+    if cost in ('official','invalid_official'):
+        from src.tests.test_broker_cost_source import broker_fixture
+        from src.tests.test_broker_cost_allocation import position
+        from src.engine.lifecycle import broker_cost_allocation as allocation
+        source,_,_,_=broker_fixture(data)
+        receipts=allocation.build_research_cost_allocations({DAY:source},[position(1)])
+        allocation.persist_research_costs(data,DAY,receipts,[DAY])
+        if cost == 'invalid_official':
+            from src.engine.lifecycle.broker_cost_source import source_path
+            source_path(data,DAY).write_text('{"status":"source_invalid"}')
+    elif cost:
         from src.engine.lifecycle.broker_cost_allocation import persist_research_costs
         persist_research_costs(data, DAY, {'1': dict(record_id='1',
             schema='initial_quantity_broker_total_allocated_cost_v1',
@@ -37,6 +47,67 @@ def approved(tmp_path, *, cost=False):
     write(holding, dict(date=DAY, meta=dict(snapshot_profile='postclose_exit'),
         all_scope_trailing_research=extension))
     return data, origin, holding, result
+
+
+@pytest.mark.parametrize('damage',[None,'old_fact','late_original_execution','missing_archive','archive_bytes'])
+def test_frozen_replay_and_native_cost_reader_preserve_only_verified_later_window_append(tmp_path,damage):
+    from datetime import timedelta
+    from src.tests.test_broker_cost_source import broker_fixture,NOW,seal
+    from src.engine.lifecycle import broker_cost_source as official
+    from src.engine.lifecycle.broker_cost_reconciliation import source_generation
+    from src.engine.lifecycle.holding_research_cost import Source
+    data,origin,holding,original=approved(tmp_path,cost='official')
+    old=official.load_source(data,DAY); raw=official.source_path(data,DAY).read_bytes()
+    _,_,transport,_=broker_fixture(tmp_path/'unused')
+    def later(api,payload):
+        pages,meta=transport(api,payload)
+        if api=='kt00015':
+            pages[0]['trst_ovrl_trde_prps_array']=[{'trde_dt':'20261009','cntr_dt':'20261009','cmsn':'1'}]
+        return pages,meta
+    official.collect(data,DAY,transport=later,now=NOW+timedelta(days=2),refresh=True)
+    archive=official.source_path(data,DAY).parent/'generations'/DAY/(old['source_sha256']+'.json')
+    if damage=='missing_archive':archive.unlink()
+    elif damage=='archive_bytes':archive.write_text('{}')
+    elif damage:
+        current=official.load_source(data,DAY)
+        if damage=='old_fact':current['observations']['ka10170']['pages'][0]['tdy_trde_diary'][0]['cmsn_alm_tax']='11'
+        else:current['observations']['kt00015_buy']['pages'][0]['trst_ovrl_trde_prps_array'][0]['cntr_dt']='20261008'
+        seal(current);official.atomic(official.source_path(data,DAY),current)
+    current=official.source_path(data,DAY).read_bytes(); holding_before=holding.read_bytes()
+    manifest=reuse.prepare(data,origin,tmp_path/'reused')
+    def validate():
+        result=research.run(manifest,input_root=manifest.parent,output_root=tmp_path/'new-report',dry_run=False)
+        value,_=reuse.sealed(manifest)
+        with reuse.replay_session(value,manifest.parent):
+            bound=reuse.frozen_official_source(data,official.source_path(data,DAY))
+            assert bound[0].read_bytes()==raw
+            assert assembler.source_generation_matches(data,DAY,official.source_path(data,DAY),bound[1])
+            with Source(data) as costs:
+                assert costs._read(official.source_path(data,DAY),official.MAX_BYTES)==old
+                assert costs._read(official.source_path(data,DAY),official.MAX_BYTES)==old
+                assert costs.sources[str(official.source_path(data,DAY))]==bound[1]
+            generation=source_generation(data,DAY)
+            assert generation['official_source_sha256']==hashlib.sha256(raw).hexdigest()
+        return result
+    if damage:
+        with pytest.raises((ValueError,OSError,KeyError,reuse.InputPending)):validate()
+    else:
+        result=validate()
+        assert result['initial_policy']==original['initial_policy']
+        assert result['assembly_census']==original['assembly_census']
+    assert holding.read_bytes()==holding_before
+    assert official.source_path(data,DAY).read_bytes()==current
+    assert source_generation(data,DAY)['official_source_sha256']==hashlib.sha256(current).hexdigest()
+
+
+def test_frozen_unchanged_invalid_cost_source_retains_its_original_gap(tmp_path):
+    data,origin,holding,original=approved(tmp_path,cost='invalid_official')
+    before=holding.read_bytes()
+    manifest=reuse.prepare(data,origin,tmp_path/'reused')
+    result=research.run(manifest,input_root=manifest.parent,output_root=tmp_path/'new-report',dry_run=False)
+    assert result['initial_policy']==original['initial_policy']
+    assert result['assembly_census']==original['assembly_census']
+    assert holding.read_bytes()==before
 
 
 @pytest.mark.parametrize('cost_revision', [False, True, 'added'])

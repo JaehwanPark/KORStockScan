@@ -225,16 +225,22 @@ class Source:
         if self.closed:
             raise ValueError('holding_research_cost_source_closed')
         path = Path(path)
+        from src.engine.automation.main_trailing_source_reuse import frozen_official_source
+        frozen = frozen_official_source(self.cost_root,path)
+        physical = frozen[0] if frozen is not None else path
+        def signature():
+            current = source_stat(path.stat())
+            return (current,source_stat(physical.stat())) if frozen is not None else current
         if path in self.cache:
-            value, claim, signature, validated = self.cache[path]
-            if path.is_symlink() or any(p.is_symlink() for p in path.parents) or source_stat(path.stat()) != signature:
+            value, claim, observed, validated = self.cache[path]
+            if path.is_symlink() or any(p.is_symlink() for p in path.parents) or signature() != observed:
                 self.cache.pop(path)
                 claim.close()
                 raise ValueError('holding_research_cost_source_changed')
             self.cache.move_to_end(path)
             return value
-        before = path.stat()
-        if path.is_symlink() or any(p.is_symlink() for p in path.parents) or not stat.S_ISREG(before.st_mode) or before.st_size > maximum:
+        before = physical.stat(); observed = signature()
+        if physical.is_symlink() or any(p.is_symlink() for p in physical.parents) or not stat.S_ISREG(before.st_mode) or before.st_size > maximum:
             raise ValueError('holding_research_cost_partition_required')
         while len(self.cache) >= 4:
             _, (_, claim, _, _) = self.cache.popitem(last=False)
@@ -249,14 +255,14 @@ class Source:
                 _, (_, claim, _, _) = self.cache.popitem(last=False)
                 claim.close()
         try:
-            value = _json(path, before, maximum)
-            generation = byte_generation(path)
-            if source_stat(path.stat()) != source_stat(before):
+            value = _json(physical, before, maximum)
+            generation = frozen[1] if frozen is not None else byte_generation(path)
+            if signature() != observed:
                 raise ValueError('holding_research_cost_source_changed')
         except BaseException:
             claim.close()
             raise
-        self.cache[path] = (value, claim, source_stat(before), False)
+        self.cache[path] = (value, claim, observed, False)
         self.sources[str(path)] = generation
         return value
 

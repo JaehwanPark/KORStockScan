@@ -441,8 +441,89 @@ def frozen_cost_declaration(data_root, day):
         return False
     from src.engine.lifecycle.holding_research_cost import frozen_index
     body = frozen_index(root,path,generation)
-    return dict(source_dates=[dict(source_date=d) for d in body['source_dates']],
+    return dict(source_dates=[frozen_official_source(root,
+        root/'runtime/holding_broker_cost_sources'/(d+'.json'))[2] for d in body['source_dates']],
         receipts=[dict(record_id=record,content_sha256=sha) for record,sha in body['receipts'].items()])
+
+
+def frozen_official_source(data_root, path):
+    """Resolve the exact approved cost bytes after a proven later-window append."""
+    active = _REPLAY.get()
+    if active is None:
+        return None
+    manifest, assembly_root, cache = active
+    root = Path(data_root).resolve(); path = Path(path)
+    if (root != Path(manifest.get('holding_research_cost_data_root') or manifest['source_data_root']).resolve()
+            or path.parent != root/'runtime/holding_broker_cost_sources'):
+        return None
+    if 'official_original_inventory' not in cache:
+        cache['official_original_inventory'] = {row['path']:row['generation']
+            for row in storage.iter_tree(assembly_root,manifest['assembly_inventory_ref'])}
+    generation = cache['official_original_inventory'].get(str(path))
+    if generation is None:
+        raise InputPending('trailing_reuse_official_source_unbound')
+    prior = cache.get(('official_source',str(path)))
+    if prior is not None and prior[0] == (file_stat(path),file_stat(prior[1][0])):
+        return prior[1]
+    from src.engine.lifecycle import broker_cost_source as official
+    def charge(size):
+        total = cache.get('official_source_bytes',0)+size
+        if total > MAX_UNPROVED_BYTES:
+            raise InputPending('trailing_reuse_official_source_read_budget')
+        from src.engine.infrastructure.validation_digest_session import ACTIVE
+        session = ACTIVE.get()
+        if session is not None and session.native_read_budget is not None:
+            if size > session.native_read_budget['remaining']:
+                raise InputPending('trailing_reuse_official_source_read_budget')
+            session.native_read_budget['remaining'] -= size
+        cache['official_source_bytes'] = total
+    raw = official._source_raw(path,account_read=charge)
+    if hashlib.sha256(raw).hexdigest() == generation['sha256']:
+        try:
+            source = json.loads(raw)
+        except (ValueError,UnicodeError):
+            source = {}
+        if not isinstance(source,dict):
+            source = {}
+        physical = path
+    else:
+        from src.engine.lifecycle.holding_research_cost import frozen_index
+        candidates = set()
+        for name, gen in cache['official_original_inventory'].items():
+            index = Path(name)
+            if index.name != 'index.json' or index.parent.parent != root/'runtime/initial_quantity_research_costs':
+                continue
+            body = frozen_index(root,index,gen)
+            if path.stem not in body['source_dates']:
+                continue
+            for sha in body['receipts'].values():
+                receipt_path = index.parent/'generations'/(sha+'.json')
+                charge(file_stat(receipt_path)[2])
+                receipt,_ = read_json(receipt_path)
+                if digest(receipt) != sha:
+                    raise InputPending('trailing_reuse_original_cost_receipt_changed')
+                candidates.update(part['source_sha256'] for part in receipt.get('sources',[])
+                    if part.get('source_date') == path.stem)
+        matches = []
+        for logical in candidates:
+            if re.fullmatch('[0-9a-f]{64}',str(logical)) is None:
+                raise InputPending('trailing_reuse_original_cost_reference_invalid')
+            archive = path.parent/'generations'/path.stem/(logical+'.json')
+            if not archive.exists():
+                continue
+            old_raw = official._source_raw(archive,account_read=charge)
+            if hashlib.sha256(old_raw).hexdigest() == generation['sha256']:
+                matches.append((archive,official.validate(json.loads(old_raw),path.stem)))
+        if len(matches) != 1:
+            raise InputPending('trailing_reuse_original_cost_bytes_missing')
+        physical, source = matches[0]
+    reference = dict(source_date=path.stem,sha256=generation['sha256'],source_sha256=source.get('source_sha256'))
+    old_raw = official.declared_source_bytes(root,reference,account_read=charge)
+    if len(old_raw) != generation['size']:
+        raise InputPending('trailing_reuse_original_cost_size_changed')
+    result = (physical,generation,reference)
+    cache[('official_source',str(path))] = ((file_stat(path),file_stat(physical)),result)
+    return result
 
 
 def verify_frozen_inventory(manifest, assembly_root):

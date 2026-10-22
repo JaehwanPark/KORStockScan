@@ -111,8 +111,14 @@ def source_generation(data_root: Path, completion_date: str, *, additional_sourc
     if official.exists():
         if official.is_symlink() or official.parent.is_symlink() or official.stat().st_size > SOURCE_MAX_BYTES:
             raise ValueError("broker_cost_source_path_or_size_invalid")
-        with official.open("rb") as handle:
-            raw = handle.read(SOURCE_MAX_BYTES + 1)
+        declared_official = next((row for row in declared_research.get('source_dates', [])
+            if isinstance(row,dict) and row.get('source_date') == completion_date),None) if isinstance(declared_research,dict) else None
+        if declared_official is not None:
+            from .broker_cost_source import declared_source_bytes
+            raw = declared_source_bytes(data_root,declared_official,account_read=account_read)
+        else:
+            with official.open("rb") as handle:
+                raw = handle.read(SOURCE_MAX_BYTES + 1)
         if len(raw) > SOURCE_MAX_BYTES:
             raise ValueError("broker_cost_source_size_limit")
         result["official_source_sha256"] = hashlib.sha256(raw).hexdigest()
