@@ -127,8 +127,10 @@ proof=f.get('code_refresh') or {}
 prepared_parent=(current.get('effective_date','')<day
     and f.get('effective_date')==day and f.get('effective_mode')=='next_session'
     and proof.get('authority')=='reviewed_identical_policy_code_refresh')
+prepared_refs=None
 if prepared_parent:
     from src.engine.scalping import continuous_reversal_policy_v6 as V
+    from src.engine.scalping import reversal_code_handoff as H
     N.validate(candidate,target_date=day)
     f=candidate.get('continuous_reversal') or {}
     proof=f.get('code_refresh') or {}
@@ -146,13 +148,21 @@ if prepared_parent:
     current=N._read(N.root(root)/'current.json')
     if b is None or b['bundle_sha256']!=current['bundle_sha256'] or b['bundle_sha256']!=f['parent_bundle_sha256']:
         raise ValueError('active_policy_code_handoff_rollover_parent_changed')
-    # The mutable preparation alias is observed, not an immutable policy input.
-    # The identical frozen generation and its full source receipts remain bound.
-    opened.pop(str(candidate_path.absolute()),None)
+    # The native parent validator runs in the original immutable release.
+    # Export its verified closure explicitly: auditing this process cannot
+    # observe that child, and future evaluation caches are not parent inputs.
+    pointer=N.root(root)/'current.json'
+    anchored=H._validated_origin_receipt(root,b['target_date'],
+        Path(proof['activation_parent_origin_root']),proof['activation_parent_origin_commit'],
+        b['bundle_sha256'],H.P.file_hash(pointer))
+    if anchored is None:raise ValueError('active_policy_code_handoff_rollover_parent_receipt_missing')
+    generation=N.root(root)/'generations'/(candidate['bundle_sha256']+'.json')
+    prepared_refs={**anchored['source_hashes'],str(generation):H.P.file_hash(generation),str(pointer):H.P.file_hash(pointer)}
+    if N._read(generation)!=candidate:raise ValueError('active_policy_code_handoff_rollover_generation_changed')
 else:
     b=N._load_current_uncached(root,day)
-refs={}
-for name,identity in list(opened.items()):
+refs={} if prepared_refs is None else prepared_refs
+for name,identity in (list(opened.items()) if prepared_refs is None else []):
     p=Path(name);st=p.stat()
     if identity!=(st.st_dev,st.st_ino,st.st_size,st.st_mtime_ns):raise ValueError('origin_source_changed_during_validation')
     refs[name]=N._source_hash(name,N._signature(p))
@@ -406,3 +416,113 @@ def issue(data_root,day,*,origin_root,release_root,parity_path,confirm,recover_s
     if dest.exists() and N._read(dest)!=r:raise ValueError('active_policy_code_handoff_receipt_conflict')
     N._atomic_write_json(dest,r)
     return r
+
+
+LEGACY_PREPARED_PARENT_SCOPE_CODE = '8681d10376f4228bbe5b9d1d012d3510e8abd89470036077c3c0bc69fad63471'
+
+
+def repair_prepared_parent_scope(data_root, day, *, consumer_root,
+                                 expected_receipt_sha256, confirm):
+    """Migrate the exact unconsumed legacy receipt to its native parent scope.
+
+    The reviewed immutable workflow is separate from unchanged consumer code.
+    Preserve the original receipt and all observations; no policy, selector,
+    PID or future preparation is published by this metadata producer.
+    """
+    import hashlib
+    from src.engine.infrastructure import runtime_release_router as R
+    from src.engine.infrastructure import research_release_transition as T
+    from src.engine.automation import ordered_intraday_deploy as D
+    from src.engine.scalping import mechanistic_entry_runtime_policy as N
+    from src.engine.scalping import continuous_reversal_policy_v6 as V
+    data=Path(data_root).resolve();workspace=data.parent;consumer=Path(consumer_root).resolve()
+    workflow=Path(__file__).resolve().parents[3]
+    sha=lambda raw:hashlib.sha256(raw).hexdigest()
+    def require(ok,reason):
+        if not ok:raise ValueError('active_parent_scope_repair_'+reason)
+    require(confirm==AUTHORITY,'authority_required')
+    workflow_commit=R.git(workflow,'rev-parse','HEAD')
+    R.validate_release(workspace,dict(schema='runtime_release_selection_v1',workspace=str(workspace),release_root=str(workflow),git_commit=workflow_commit))
+    pointer=N.root(data)/'current.json';selector=data/'runtime/runtime_release_selection.json'
+    with R.runtime_release_set_lock(workspace), (N.root(data)/'publisher.lock').open('a') as lock:
+        import fcntl
+        fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+        selection,selection_raw,_=D._owned_metadata(selector)
+        ptr,pointer_raw,_=D._owned_metadata(pointer);source=ptr['effective_date'];bundle=ptr['bundle_sha256']
+        selected,commit=R.selected_release(workspace)
+        def stopped():
+            require(selected==consumer and R.selected_release(workspace)==(consumer,commit),'selection_changed')
+            require(not D._main_pids() and D._session_absent(),'main_or_supervisor_present')
+            require(not (data/'runtime/operator_startup_hold.json').exists() and not (data/'runtime/operator_startup_hold.json').is_symlink(),'startup_hold_present')
+            require(not (workspace/'restart.flag').exists() and not (workspace/'restart.flag').is_symlink(),'restart_present')
+            require(selector.read_bytes()==selection_raw and pointer.read_bytes()==pointer_raw,'protected_generation_changed')
+            require(day==datetime.now(P.KST).date().isoformat(),'target_date_invalid')
+            V._require_closed_postclose_window(data,source,day,datetime.now(P.KST))
+        stopped()
+        require(selection.get('approved_by')=='user' and selection.get('approval_scope')=='after_postclose_deploy_for_next_regular_start'
+            and selection.get('actual_pid_consumed') is False and not selection.get('actual_pid_receipt')
+            and not selection.get('deployment_transition') and selection.get('source_date')==source
+            and selection.get('next_operating_date')==day,'stopped_cold_selection_required')
+        require(P.file_hash(consumer/'src/engine/scalping/reversal_code_handoff.py')==LEGACY_PREPARED_PARENT_SCOPE_CODE,'legacy_producer_required')
+        current_path=path(data,day,commit,bundle);old,old_raw,_=D._owned_metadata(current_path)
+        require(sha(old_raw)==expected_receipt_sha256,'receipt_changed')
+        validate_receipt(old,day=day,commit=commit,root=consumer,bundle_sha=bundle,pointer_sha=sha(pointer_raw))
+        actual={str(consumer/Path(name).relative_to(workflow)):P.file_hash(consumer/Path(name).relative_to(workflow)) for name in code_hashes()}
+        require(old['code_hashes']==actual,'consumer_code_changed')
+        backup=Path(selection.get('previous_selection_backup',''));directory=backup.parent
+        require(backup.is_absolute() and directory.parent==data/'runtime/research_release_transition'
+            and directory.resolve()==directory and not backup.is_symlink(),'transition_path_invalid')
+        transition_path=directory/'transition.json';transition_raw=D._owned_metadata(transition_path)[1];transition=T._record(transition_path)
+        entries=transition.get('entries') or []
+        require(transition.get('state')=='verified' and transition.get('transition_id')==directory.name and len(entries)==1
+            and transition.get('written')==[str(selector)],'verified_transition_required')
+        entry=entries[0];prior,prior_raw,_=D._owned_metadata(backup)
+        after=directory/str(entry.get('after_snapshot',''));after_raw=D._owned_metadata(after)[1]
+        require(entry.get('path')==str(selector) and entry.get('before_snapshot')==backup.name
+            and entry.get('before_sha256')==sha(prior_raw)==selection.get('predecessor_selection_sha256')
+            and set(entry.get('accepted_sha256') or [entry.get('before_sha256'),entry.get('after_sha256')])=={sha(prior_raw),sha(selection_raw)}
+            and entry.get('after_sha256')==sha(selection_raw) and after.parent==directory
+            and after.name=='after-'+sha(selection_raw)+'.bytes'
+            and after_raw==selection_raw and transition_path.read_bytes()==transition_raw,'transition_binding_invalid')
+        origin=Path(prior['release_root']);origin_commit=prior['git_commit']
+        require(old.get('origin_root')==str(origin) and old.get('origin_commit')==origin_commit
+            and old.get('origin_selection_sha256')==sha(prior_raw),'origin_binding_invalid')
+        R.validate_release(workspace,prior)
+        p5_path=Path(selection.get('candidate_p5_path',''));p5,p5_raw,_=D._owned_metadata(p5_path)
+        import re
+        require(p5_path.parent.parent==data/'report/main_startup_validation'/day and p5_path.name=='final.json'
+            and re.fullmatch('[0-9a-f]{32}',p5_path.parent.name) is not None
+            and sha(p5_raw)==selection.get('candidate_p5_sha256') and p5.get('schema')=='main_policy_load_exit_validation_v1'
+            and p5.get('status')=='passed' and p5.get('findings')==[] and p5.get('target_date')==day
+            and p5.get('execution_release_root')==str(consumer) and p5.get('execution_release_commit')==commit
+            and all(p5.get(k) is True for k in ('child_terminated','load_check_passed','protected_sources_unchanged')),'historical_candidate_p5_invalid')
+        # Revalidate the actual active parent in its original native release.
+        # The failed future cache is neither repaired nor granted authority.
+        parent=V._attested_activation_parent(data,day,origin_root=origin,origin_commit=origin_commit)
+        require(parent is not None and parent['bundle_sha256']==bundle and parent['target_date']==source,'parent_changed')
+        checked=_validated_origin_receipt(data,source,origin,origin_commit,bundle,sha(pointer_raw))
+        require(checked is not None,'native_parent_receipt_missing')
+        stopped();require(current_path.read_bytes()==old_raw,'receipt_changed')
+        snapshots=current_path.with_suffix('')/'attempts';snapshots.mkdir(parents=True,exist_ok=True)
+        require(not snapshots.is_symlink() and not any(p.is_symlink() for p in snapshots.parents),'snapshot_alias')
+        original=snapshots/('before-parent-scope-'+sha(old_raw)+'.json')
+        require(not original.is_symlink(),'snapshot_alias')
+        if original.exists():require(original.read_bytes()==old_raw,'snapshot_changed')
+        else:
+            with original.open('xb') as out:out.write(old_raw)
+        refs={**checked['source_hashes'],**{str(p):P.file_hash(p) for p in (original,transition_path,backup,after,p5_path,Path(__file__).resolve())}}
+        repaired=P.seal(dict(old,source_hashes=refs,origin_verification_basis='native_parent_scope_repaired',
+            pipeline_source_reference_count=sum(N.is_pipeline_source_reference(p,data_root=data) for p in refs),
+            source_scope_repair=dict(schema='main_active_parent_source_scope_repair_v1',authority=confirm,
+                workflow_root=str(workflow),workflow_commit=workflow_commit,
+                original_receipt=dict(path=str(original),sha256=sha(old_raw)),
+                native_parent_receipt=str(path(data,source,origin_commit,bundle)),
+                historical_candidate_p5=str(p5_path),future_policy_validated=False,
+                policy_reselected=False,actual_pid_consumed=False)))
+        for name,expected in refs.items():
+            require(N.source_receipt_matches(dict(path=name,sha256=expected),data_root=data),'parent_source_changed')
+        stopped();require(current_path.read_bytes()==old_raw,'receipt_changed')
+        N._atomic_write_json(current_path,repaired)
+        require(N._read(current_path)==repaired,'publication_readback_changed')
+        stopped()
+        return repaired

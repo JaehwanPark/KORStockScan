@@ -503,3 +503,33 @@ def test_contract_repair_changed_native_pointer_after_preparation_has_no_publica
             confirm=I.CONTRACT_REPAIR_AUTHORITY,now=clock)
     assert not (I.root(root)/'current.json').exists()
     assert not (I.root(root)/'contract_repairs').exists()
+
+
+@pytest.mark.parametrize('kind',['evaluations','resolutions'])
+def test_repeated_evaluation_preserves_content_addressed_original_bytes(setup,kind):
+    root,b,m,sid,v=setup
+    T.prepare(root,'2026-10-07',m,b);T.calls(root,'2026-10-07',transport=transport)
+    first=T.evaluate(root,'2026-10-07')
+    identity=first['artifact_content_sha256'] if kind=='evaluations' else first['resolution_sha256']
+    path=T.directory(root,'2026-10-07')/kind/(identity+'.json')
+    body=json.loads(path.read_bytes())
+    original=(json.dumps(body,sort_keys=True,indent=7)+'\n').encode();path.write_bytes(original)
+    with S.Store(root) as store:budget=store.db.execute('SELECT * FROM attempt_budgets ORDER BY 1,2').fetchall()
+    T.evaluate(root,'2026-10-07')
+    assert path.read_bytes()==original
+    with S.Store(root) as store:assert store.db.execute('SELECT * FROM attempt_budgets ORDER BY 1,2').fetchall()==budget
+
+
+def test_evaluation_snapshot_conflict_and_alias_are_not_overwritten(setup):
+    root,b,m,sid,v=setup
+    T.prepare(root,'2026-10-07',m,b);T.calls(root,'2026-10-07',transport=transport)
+    first=T.evaluate(root,'2026-10-07')
+    path=T.directory(root,'2026-10-07')/'evaluations'/(first['artifact_content_sha256']+'.json')
+    original=json.loads(path.read_bytes())
+    from src.engine.scalping import continuous_reversal_postclose as P
+    path.write_text(json.dumps(P.seal(dict(original,comparison_complete=not original['comparison_complete']))));before=path.read_bytes()
+    with pytest.raises(ValueError,match='immutable_conflict'):T.evaluate(root,'2026-10-07')
+    assert path.read_bytes()==before
+    target=path.with_suffix('.preserved');path.rename(target);path.symlink_to(target)
+    with pytest.raises(ValueError,match='snapshot_alias'):T.evaluate(root,'2026-10-07')
+    assert path.is_symlink() and target.read_bytes()==before

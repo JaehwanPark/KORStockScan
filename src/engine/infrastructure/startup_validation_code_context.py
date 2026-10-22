@@ -136,6 +136,10 @@ REVIEWED_PREPARATION_HISTORY['src/engine/scalping/reversal_code_handoff.py'].upd
 
 REVIEWED_PREPARATION_HISTORY['deploy/run_threshold_cycle_postclose.sh'] = {('c5e60200a9cf27839204a8fd7d46733f0c10c1a4a0ddeef5bfae35f683b29470', 'dde8ede993e00f022654534a93c9b54c9b38227b9c151bde6288b8782d096067')}
 
+# Reviewed immutable auxiliary snapshots and explicit native active-parent source closure.
+REVIEWED_PREPARATION_HISTORY.setdefault('src/engine/scalping/reversal_code_handoff.py', set()).update({('b77b63fa5afe9b3dff59266cecce73f92880b5256b12c32343a70aeddba63aa9', '852d31cba14cfcb68cfb73603de07b30643969c5e476ddca6dde1f2d3a6fc589'), ('54b9c0efc38700a0cb8722694cdf84b9df8aa478a28f529b2b618f5532559b5a', '852d31cba14cfcb68cfb73603de07b30643969c5e476ddca6dde1f2d3a6fc589'), ('8681d10376f4228bbe5b9d1d012d3510e8abd89470036077c3c0bc69fad63471', '852d31cba14cfcb68cfb73603de07b30643969c5e476ddca6dde1f2d3a6fc589')})
+REVIEWED_PREPARATION_HISTORY.setdefault('src/engine/scalping/reversal_auxiliary_tuning.py', set()).update({('a8ac3de954b2d6e89e3a46bb49501edc0d35df47621900a1d22b6d8492672412', '0e8f31ed349a6ef17f5f588f8b4bf4180b2f819ab85077a1d51641662611a40a')})
+
 def reviewed_preparation_pair(relative, old, current):
     return (REVIEWED_PREPARATION_SOURCES.get(relative) == (old, current)
             or (old, current) in REVIEWED_PREPARATION_HISTORY.get(relative, ()))
