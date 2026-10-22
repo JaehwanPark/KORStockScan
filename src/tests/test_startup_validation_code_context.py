@@ -1320,3 +1320,17 @@ def test_main_preparation_independently_binds_postclose_workflow_revision(damage
     if damage=='unreviewed':new='0'*64
     if damage=='wrong_origin':old='0'*64
     assert C.reviewed_preparation_pair(relative,old,new) is (damage is None)
+
+
+@pytest.mark.parametrize('relative', ['src/engine/kiwoom_sniper_v2.py',
+    'src/engine/kiwoom_websocket.py','src/engine/sniper_state_handlers.py',
+    'src/engine/scalping/pre_submit_delay_observation.py',
+    'src/engine/monitoring/submission_bottleneck_monitor.py'])
+@pytest.mark.parametrize('damage', [None,'unreviewed','wrong_origin'])
+def test_main_preparation_independently_reviews_sentinel_route_sources(relative,damage):
+    import subprocess
+    old=hashlib.sha256(subprocess.check_output(['git','-C',str(ROOT),'show','9a8e59bfc:'+relative])).hexdigest()
+    new=hashlib.sha256((ROOT/relative).read_bytes()).hexdigest()
+    if damage=='unreviewed':new='0'*64
+    if damage=='wrong_origin':old='0'*64
+    assert C.reviewed_preparation_pair(relative,old,new) is (damage is None)

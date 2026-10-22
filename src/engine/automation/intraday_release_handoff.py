@@ -4757,6 +4757,56 @@ REVIEWED_PRE_FINALIZATION_VARIANTS = {
 }
 
 
+
+# Exact sentinel scope/972 integration. Preserve the complete consumed9a8
+# profile; selecting any new member requires the entire reviewed successor.
+# Review: postclose-root-cause-recovery-review-2026-10-19.md,2026-10-23.
+REVIEWED_ENTRY_COST_PRE_SENTINEL_SCOPE_HASHES = REVIEWED_ENTRY_COST_HASHES
+REVIEWED_ENTRY_COST_PRE_SENTINEL_SCOPE_VARIANTS = REVIEWED_ENTRY_COST_DEPENDENCY_VARIANTS
+REVIEWED_SENTINEL_SCOPE_HASHES = {'src/engine/buy_funnel_sentinel.py': '173cc88ba7cf28bfdccec1dc53404b2b3506ca5f34527c0a064f2576e10aef6f',
+ 'src/engine/holding_exit_sentinel.py': '7ae845b51d16bf425337e4758d1f83047f1f4e1c3479d39875523f0e2748012a',
+ 'src/engine/infrastructure/startup_validation_code_context.py': '97ee0c1a9e45131d610d6ac0760a08d7266824d1765a7eb071dbfd94438a6032',
+ 'src/engine/kiwoom_sniper_v2.py': '02ecf7b4a55042fbcd2a7b4f59bf8602bed6020730f0a8bb326b41d5d6418866',
+ 'src/engine/kiwoom_websocket.py': 'ef70d8fc0fd74416fc1e7a9c27dca68663a1f057b7e2b14041b255a66a9af377',
+ 'src/engine/monitoring/sentinel_event_scope.py': '5a06206336713a85bbf28e479ae39482cd77549ee9296b9a92b90ef7f61aa559',
+ 'src/engine/monitoring/sentinel_summary_contract.py': 'f2e03fcc1b20d1b9e172fe268ef5de64a9137c0d73696a945f9dde6271e21403',
+ 'src/engine/monitoring/submission_bottleneck_monitor.py': 'a5a8b7be30b63d0e7990a5761a60a6e0225a563272b15a24c8ccf9fc013f21d8',
+ 'src/engine/scalping/pre_submit_delay_observation.py': '225bf41983835e7ab53febd50d0cb42d13ce5b296322887a519a53e24281e8ff',
+ 'src/engine/sniper_state_handlers.py': 'b3b2965f65f33e5e5bf52fd960757d6bdbe6b5a63e6844bd95f5dc1d5353ea1d'}
+REVIEWED_ENTRY_COST_HASHES = {**REVIEWED_ENTRY_COST_HASHES, **REVIEWED_SENTINEL_SCOPE_HASHES}
+REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
+    name: REVIEWED_ENTRY_COST_PAIRS.get(name, ()) + tuple((old, REVIEWED_SENTINEL_SCOPE_HASHES[name])
+        for old in origins)
+    for name, origins in {'src/engine/buy_funnel_sentinel.py': ['4918513346f28c8908b0fe18085663ef662ba2dc03349b4b7822ff1656b908d1',
+                                       '6c41ee5823caa738bdc40c6da07e8b5fe4714976a9efc7668e90dac33a325993',
+                                       'b1836d21a079e7164d3c04629b1bb83e5f9475dda917c34b97802c2e2e3a95b7'],
+ 'src/engine/holding_exit_sentinel.py': ['a02066a6f6538f7b4f855c5cc93ed3b5b4e661f4516c6191cd4859542cc5afdb'],
+ 'src/engine/kiwoom_sniper_v2.py': ['f0289f079fc3f193efe02a0ff3ee7542da5dc3b1689292277372ba526bc4eba7',
+                                    'f88f16a8747ba64edc7594e5936dcf6d7e636fd07d852932635204c44384d4a8'],
+ 'src/engine/kiwoom_websocket.py': ['215a0e3d6388df5938a4d70e8e5afad689fa8087280a3a53b81619a2295e35e3'],
+ 'src/engine/monitoring/sentinel_event_scope.py': [],
+ 'src/engine/monitoring/sentinel_summary_contract.py': ['06fb351581ad704aae6374589f6b4db288c802dc030e3dcde036ac217c5b8a80',
+                                                        '15a789219cfaca8ec81f611b01a1d15456f64c40201e26ef8bb320f607dc8a3c',
+                                                        '28e0a5f8a32283c0f9503e1bae045ac2f9129c8bb00a291d3da40c22a9e9d565',
+                                                        'c4c20df27d61239aa45d0f2447c5cda85edc2bcb4fff508230cedf14f28a2117'],
+ 'src/engine/monitoring/submission_bottleneck_monitor.py': ['00e5a75bdbf7fa812145212820094baa7e04638d5a9c18d4e8011b3b7165abae',
+                                                            '0cacfa688b336befe533f2010b3bfaea40d5d2fe778e4ca48d7347071114527e',
+                                                            '6e1588b8e5709563f15cdea0705babe7357fed62a27061365ec5ac2425fc2085',
+                                                            '9c51124b5c07b8ae9039e2e70d1f36da0e3b542136dd24d2ff66ccab642b4ccb'],
+ 'src/engine/scalping/pre_submit_delay_observation.py': ['99d7b8d5e57ad886433747cee55f8f12c9a71d539577d94adff03543a8ff724d'],
+ 'src/engine/sniper_state_handlers.py': ['2e69e440301dbc3bf4ec7020abc29b4a37b0dfd5dd624480378c7eab491c45d9',
+                                         '8a0c18d2c097b063a8349907f39e6057d43b7ad9ef173e5f6c4e1be48f8b21f9',
+                                         'bd2c589431b0f507b2bbbba31cfc700a22dcab07b914313dc101add2cc9c9686',
+                                         'eaca4d2d23d2764c42e3f7cc2f73d04db0b29bb8115cabac4f10cf48e89d57aa',
+                                         'edfd4af04194182dff2a3ced3952dbfc5dc989d85906409c0172fabadb381419']}.items()}}
+REVIEWED_ENTRY_COST_DEPENDENCY_VARIANTS = {
+    (key[0], REVIEWED_SENTINEL_SCOPE_HASHES.get(key[0], key[1])): {
+        **value, 'dependencies': {**value['dependencies'], **REVIEWED_SENTINEL_SCOPE_HASHES},
+        'contract_extensions': {origin: {name: REVIEWED_SENTINEL_SCOPE_HASHES.get(os.path.normpath(name), sha)
+            for name, sha in paths.items()} for origin, paths in value['contract_extensions'].items()},
+    } for key, value in REVIEWED_ENTRY_COST_PRE_SENTINEL_SCOPE_VARIANTS.items()
+}
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -4921,8 +4971,15 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     consumed_finalization = ((root / finalization_owner).is_file()
         and hashlib.sha256(candidate_bytes(finalization_owner)).hexdigest()
             == REVIEWED_PRE_FINALIZATION_HASHES[finalization_owner])
+    sentinel_scope_present = ((root / 'src/engine/monitoring/sentinel_event_scope.py').exists()
+        or any((root / name).is_file() and hashlib.sha256(candidate_bytes(name)).hexdigest() == sha
+               for name, sha in REVIEWED_SENTINEL_SCOPE_HASHES.items()))
     prepared_hashes = REVIEWED_PRE_FINALIZATION_HASHES if consumed_finalization else REVIEWED_ENTRY_COST_HASHES
+    if not sentinel_scope_present and not consumed_finalization:
+        prepared_hashes = REVIEWED_ENTRY_COST_PRE_SENTINEL_SCOPE_HASHES
     prepared_variants = REVIEWED_PRE_FINALIZATION_VARIANTS if consumed_finalization else REVIEWED_ENTRY_COST_DEPENDENCY_VARIANTS
+    if not sentinel_scope_present and not consumed_finalization:
+        prepared_variants = REVIEWED_ENTRY_COST_PRE_SENTINEL_SCOPE_VARIANTS
     entry_cost_hashes = (prepared_hashes if prepared_owner_present
         else REVIEWED_ENTRY_COST_PRE_PREPARED_OWNER_HASHES if prestart_integration_present
         else REVIEWED_ENTRY_COST_PRE_PRESTART_HASHES if preassessment_present

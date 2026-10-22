@@ -2358,3 +2358,20 @@ def test_stopped_preparation_analysis_preserves_expired_launch_guard(fixture, mo
 def test_postclose_workflow_review_retains_current_and_native_predecessor_closure(tmp_path,family,fault,generation,dependency):
     test_entry_cost_handoff_keeps_exact_complete_generation(tmp_path,family,fault,generation,
         dependency=dependency)
+
+
+@pytest.mark.parametrize('family', ['pre_submit_delay','main_stop','holding_vote'])
+@pytest.mark.parametrize('dependency,fault', [
+    ('src/engine/monitoring/sentinel_event_scope.py',None),
+    ('src/engine/monitoring/sentinel_event_scope.py','missing'),
+    ('src/engine/monitoring/sentinel_event_scope.py','dirty'),
+    ('src/engine/monitoring/sentinel_event_scope.py','committed_change'),
+    ('src/engine/monitoring/submission_bottleneck_monitor.py','parent_mix'),
+    ('src/engine/sniper_state_handlers.py','parent_mix'),
+    ('src/engine/kiwoom_sniper_v2.py','missing'),
+    ('src/engine/kiwoom_websocket.py','committed_change'),
+    ('src/engine/scalping/pre_submit_delay_observation.py','parent_mix'),
+])
+def test_sentinel_route_successor_keeps_complete_reviewed_source_group(tmp_path,family,dependency,fault):
+    test_entry_cost_handoff_keeps_exact_complete_generation(
+        tmp_path,family,fault,'current',dependency=dependency)

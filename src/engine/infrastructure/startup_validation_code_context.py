@@ -140,6 +140,50 @@ REVIEWED_PREPARATION_HISTORY['deploy/run_threshold_cycle_postclose.sh'] = {('c5e
 REVIEWED_PREPARATION_HISTORY.setdefault('src/engine/scalping/reversal_code_handoff.py', set()).update({('b77b63fa5afe9b3dff59266cecce73f92880b5256b12c32343a70aeddba63aa9', '852d31cba14cfcb68cfb73603de07b30643969c5e476ddca6dde1f2d3a6fc589'), ('54b9c0efc38700a0cb8722694cdf84b9df8aa478a28f529b2b618f5532559b5a', '852d31cba14cfcb68cfb73603de07b30643969c5e476ddca6dde1f2d3a6fc589'), ('8681d10376f4228bbe5b9d1d012d3510e8abd89470036077c3c0bc69fad63471', '852d31cba14cfcb68cfb73603de07b30643969c5e476ddca6dde1f2d3a6fc589')})
 REVIEWED_PREPARATION_HISTORY.setdefault('src/engine/scalping/reversal_auxiliary_tuning.py', set()).update({('a8ac3de954b2d6e89e3a46bb49501edc0d35df47621900a1d22b6d8492672412', '0e8f31ed349a6ef17f5f588f8b4bf4180b2f819ab85077a1d51641662611a40a')})
 
+# Reviewed9a8 -> sentinel/972 source-contract integration; no policy changes.
+REVIEWED_PREPARATION_HISTORY.setdefault('src/engine/buy_funnel_sentinel.py', set()).update({('4918513346f28c8908b0fe18085663ef662ba2dc03349b4b7822ff1656b908d1',
+  '173cc88ba7cf28bfdccec1dc53404b2b3506ca5f34527c0a064f2576e10aef6f'),
+ ('6c41ee5823caa738bdc40c6da07e8b5fe4714976a9efc7668e90dac33a325993',
+  '173cc88ba7cf28bfdccec1dc53404b2b3506ca5f34527c0a064f2576e10aef6f'),
+ ('b1836d21a079e7164d3c04629b1bb83e5f9475dda917c34b97802c2e2e3a95b7',
+  '173cc88ba7cf28bfdccec1dc53404b2b3506ca5f34527c0a064f2576e10aef6f')})
+REVIEWED_PREPARATION_HISTORY.setdefault('src/engine/holding_exit_sentinel.py', set()).update({('a02066a6f6538f7b4f855c5cc93ed3b5b4e661f4516c6191cd4859542cc5afdb',
+  '7ae845b51d16bf425337e4758d1f83047f1f4e1c3479d39875523f0e2748012a')})
+REVIEWED_PREPARATION_HISTORY.setdefault('src/engine/monitoring/submission_bottleneck_monitor.py', set()).update({('00e5a75bdbf7fa812145212820094baa7e04638d5a9c18d4e8011b3b7165abae',
+  'a5a8b7be30b63d0e7990a5761a60a6e0225a563272b15a24c8ccf9fc013f21d8'),
+ ('0cacfa688b336befe533f2010b3bfaea40d5d2fe778e4ca48d7347071114527e',
+  'a5a8b7be30b63d0e7990a5761a60a6e0225a563272b15a24c8ccf9fc013f21d8'),
+ ('6e1588b8e5709563f15cdea0705babe7357fed62a27061365ec5ac2425fc2085',
+  'a5a8b7be30b63d0e7990a5761a60a6e0225a563272b15a24c8ccf9fc013f21d8'),
+ ('9c51124b5c07b8ae9039e2e70d1f36da0e3b542136dd24d2ff66ccab642b4ccb',
+  'a5a8b7be30b63d0e7990a5761a60a6e0225a563272b15a24c8ccf9fc013f21d8')})
+REVIEWED_PREPARATION_HISTORY.setdefault('src/engine/monitoring/sentinel_summary_contract.py', set()).update({('06fb351581ad704aae6374589f6b4db288c802dc030e3dcde036ac217c5b8a80',
+  'f2e03fcc1b20d1b9e172fe268ef5de64a9137c0d73696a945f9dde6271e21403'),
+ ('15a789219cfaca8ec81f611b01a1d15456f64c40201e26ef8bb320f607dc8a3c',
+  'f2e03fcc1b20d1b9e172fe268ef5de64a9137c0d73696a945f9dde6271e21403'),
+ ('28e0a5f8a32283c0f9503e1bae045ac2f9129c8bb00a291d3da40c22a9e9d565',
+  'f2e03fcc1b20d1b9e172fe268ef5de64a9137c0d73696a945f9dde6271e21403'),
+ ('c4c20df27d61239aa45d0f2447c5cda85edc2bcb4fff508230cedf14f28a2117',
+  'f2e03fcc1b20d1b9e172fe268ef5de64a9137c0d73696a945f9dde6271e21403')})
+REVIEWED_PREPARATION_HISTORY.setdefault('src/engine/kiwoom_sniper_v2.py', set()).update({('f0289f079fc3f193efe02a0ff3ee7542da5dc3b1689292277372ba526bc4eba7',
+  '02ecf7b4a55042fbcd2a7b4f59bf8602bed6020730f0a8bb326b41d5d6418866'),
+ ('f88f16a8747ba64edc7594e5936dcf6d7e636fd07d852932635204c44384d4a8',
+  '02ecf7b4a55042fbcd2a7b4f59bf8602bed6020730f0a8bb326b41d5d6418866')})
+REVIEWED_PREPARATION_HISTORY.setdefault('src/engine/kiwoom_websocket.py', set()).update({('215a0e3d6388df5938a4d70e8e5afad689fa8087280a3a53b81619a2295e35e3',
+  'ef70d8fc0fd74416fc1e7a9c27dca68663a1f057b7e2b14041b255a66a9af377')})
+REVIEWED_PREPARATION_HISTORY.setdefault('src/engine/sniper_state_handlers.py', set()).update({('2e69e440301dbc3bf4ec7020abc29b4a37b0dfd5dd624480378c7eab491c45d9',
+  'b3b2965f65f33e5e5bf52fd960757d6bdbe6b5a63e6844bd95f5dc1d5353ea1d'),
+ ('8a0c18d2c097b063a8349907f39e6057d43b7ad9ef173e5f6c4e1be48f8b21f9',
+  'b3b2965f65f33e5e5bf52fd960757d6bdbe6b5a63e6844bd95f5dc1d5353ea1d'),
+ ('bd2c589431b0f507b2bbbba31cfc700a22dcab07b914313dc101add2cc9c9686',
+  'b3b2965f65f33e5e5bf52fd960757d6bdbe6b5a63e6844bd95f5dc1d5353ea1d'),
+ ('eaca4d2d23d2764c42e3f7cc2f73d04db0b29bb8115cabac4f10cf48e89d57aa',
+  'b3b2965f65f33e5e5bf52fd960757d6bdbe6b5a63e6844bd95f5dc1d5353ea1d'),
+ ('edfd4af04194182dff2a3ced3952dbfc5dc989d85906409c0172fabadb381419',
+  'b3b2965f65f33e5e5bf52fd960757d6bdbe6b5a63e6844bd95f5dc1d5353ea1d')})
+REVIEWED_PREPARATION_HISTORY.setdefault('src/engine/scalping/pre_submit_delay_observation.py', set()).update({('99d7b8d5e57ad886433747cee55f8f12c9a71d539577d94adff03543a8ff724d',
+  '225bf41983835e7ab53febd50d0cb42d13ce5b296322887a519a53e24281e8ff')})
+
 def reviewed_preparation_pair(relative, old, current):
     return (REVIEWED_PREPARATION_SOURCES.get(relative) == (old, current)
             or (old, current) in REVIEWED_PREPARATION_HISTORY.get(relative, ()))
