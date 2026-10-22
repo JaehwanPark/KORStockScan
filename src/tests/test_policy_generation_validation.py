@@ -582,6 +582,15 @@ def test_successor_requires_preserved_prior_fixture_and_independent_current_fixt
 @pytest.mark.parametrize('family', list(validation.PLANS))
 def test_latest_capability_pair_is_current_and_keeps_original_source(family):
     from src.engine.monitoring import policy_generation_code_handoff as handoff
+    if family in handoff.REVIEWED_NATIVE_SELECTION_SUCCESSORS:
+        old,current=handoff.REVIEWED_NATIVE_SELECTION_SUCCESSORS[family]
+        assert current==generation.code_generation(family)
+        assert old==handoff.REVIEWED_SHUTDOWN_SUCCESSORS[family][0]
+        assert handoff.REVIEWED_NATIVE_SELECTION_SOURCE_SUCCESSORS[family]==(
+            handoff.REVIEWED_SHUTDOWN_SOURCE_SUCCESSORS[family][0],current)
+        assert handoff.REVIEWED_NATIVE_SELECTION_CONSUMED_SUCCESSORS[family]==(
+            handoff.REVIEWED_SHUTDOWN_SUCCESSORS[family][1],current)
+        return
     if family in handoff.REVIEWED_SHUTDOWN_SUCCESSORS:
         old,current=handoff.REVIEWED_SHUTDOWN_SUCCESSORS[family]
         assert current==generation.code_generation(family)
