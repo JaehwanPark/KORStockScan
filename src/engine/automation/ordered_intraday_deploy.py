@@ -350,12 +350,22 @@ def sentinel_preparation_lock(driver):
             driver._sentinel_preparation_owned = False
 
 
-def selected_preparation_lock_failure(failed, failed_path):
+def stopped_preparation_failure_sources(failed, failed_path):
     """Authenticate the completed native preparation before a legacy lock error."""
-    if (failed.get('failed_phase') != 'selected' or failed.get('phase') != 'failed'
-            or failed.get('status') != 'fail'
-            or failed.get('error') != '[Errno 11] Resource temporarily unavailable'):
+    phase_error = failed.get('failed_phase'), failed.get('error')
+    if (failed.get('phase') != 'failed' or failed.get('status') != 'fail'
+            or phase_error not in {
+                ('selected', '[Errno 11] Resource temporarily unavailable'),
+                ('prepared', 'tuple indices must be integers or slices, not str')}):
         return {}
+    if phase_error[0] == 'prepared':
+        window = failed.get('sentinel_source_window') or {}
+        summary = failed.get('sentinel_summary') or {}
+        if (window.get('schema') != 'sentinel_source_window_preparation_v1'
+                or window.get('target_date') != failed.get('target_date')
+                or window.get('runtime_effect') is not False or summary.get('status') != 'ok'
+                or summary.get('runtime_effect') is not False):
+            raise ValueError('deployment_prepared_stage_proof_invalid')
     sources = {}
     for module in ('intraday_release_handoff', 'runtime_policy_bootstrap', 'auxiliary_reader_readiness'):
         path = Path(failed_path).with_name('selected-' + module + '.log')
@@ -1037,9 +1047,29 @@ class Deployment:
                         recovery='inspect_transition_and_preserve_startup_hold')
 
 
-def _stopped_intraday_predecessor(day, previous, previous_commit, identity, failed_path):
+def _stopped_intraday_predecessor(day, previous, previous_commit, identity, failed_path, *, _depth=0):
     """Recheck the genuine same-day consumption, without inventing a native PID."""
     proof_path = Path(failed_path).with_name('preflight-intraday_release_handoff.log')
+    if not proof_path.exists():
+        failed, failed_raw, _ = _owned_metadata(failed_path)
+        parent = failed.get('failed_hold_adoption') or {}
+        origin = Path(parent.get('failed_transition_path') or '')
+        expected = Path(failed_path).parent.parent/(parent.get('failed_selected_commit') or '')/'status.json'
+        if (_depth != 0 or origin != expected or origin == Path(failed_path)
+                or not parent.get('intraday_predecessor_proof_sha256')
+                or parent.get('transfer_status') != 'transferred_exact_owned_hold'):
+            raise ValueError('deployment_stopped_predecessor_ancestry_invalid')
+        original, raw, _ = _owned_metadata(origin)
+        if (_digest(raw) != parent.get('failed_transition_sha256')
+                or original.get('predecessor_identity') != identity
+                or original.get('previous_commit') != previous_commit
+                or original.get('candidate_commit') != parent.get('failed_selected_commit')):
+            raise ValueError('deployment_stopped_predecessor_ancestry_changed')
+        proof = _stopped_intraday_predecessor(day,previous,previous_commit,identity,origin,_depth=1)
+        if proof['sha256'] != parent['intraday_predecessor_proof_sha256']:
+            raise ValueError('deployment_stopped_predecessor_proof_changed')
+        proof['frozen_files'].update({str(origin):_digest(raw),str(failed_path):_digest(failed_raw)})
+        return proof
     proof, proof_raw, _ = _owned_metadata(proof_path)
     handoff_path, consumed_path = H._paths(day, previous_commit)
     handoff, handoff_raw, _ = _owned_metadata(handoff_path)
@@ -1099,7 +1129,7 @@ class StoppedDeploymentRecovery(Deployment):
         prior_path = failed_path.with_name('selection-before.json')
         prior, prior_raw, prior_sig = _owned_metadata(prior_path)
         identity = failed.get('predecessor_identity') or {}
-        preparation_sources = selected_preparation_lock_failure(failed, failed_path)
+        preparation_sources = stopped_preparation_failure_sources(failed, failed_path)
         if (selected.get('deployment_transition') != str(failed_path)
                 or selected.get('actual_pid_consumed') is not False
                 or selected.get('approval_scope') != 'ordered_intraday_deploy_and_restart'

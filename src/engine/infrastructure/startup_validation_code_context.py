@@ -676,6 +676,8 @@ def _preserved_native_sources(proof):
             handoff = _json(path)
             expected_sources = {**handoff.get('frozen_files', {}), str(path): _sha(path)}
             selected = _json(data/'runtime/runtime_release_selection.json')
+            active = data/'runtime/policy_bootstrap'/('runtime_policy_bootstrap_'+day+'.json')
+            active_body = _json(active)
             if (binding.get('path') != str(path) or binding.get('sha256') != _sha(path)
                     or binding.get('sources') != expected_sources or binding.get('full_native_validation') is not True
                     or native.get('actual_pid_consumed') is not False
@@ -687,7 +689,9 @@ def _preserved_native_sources(proof):
                     or handoff.get('actual_pid_consumed') is not False or handoff.get('policy_effect') != 'unchanged'
                     or handoff.get('prepared_receipt_path') != str(prepared)
                     or handoff.get('prepared_receipt_sha256') != sha
-                    or handoff.get('manifest_sha256') != value['manifest_content_sha256']
+                    or handoff.get('manifest_sha256') != active_body.get('manifest_sha256')
+                    or active_body.get('target_date') != day
+                    or expected_sources.get(str(active)) != _sha(active)
                     or selected.get('git_commit') != proof['selected_release_commit']
                     or selected.get('release_root') != proof['selected_release_root']
                     or selected.get('actual_pid_consumed') is not False):

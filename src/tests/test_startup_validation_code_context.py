@@ -1191,8 +1191,12 @@ def test_isolated_prepared_native_closure_keeps_full_bootstrap_and_exact_sources
         handoff=dict(schema='intraday_policy_preserving_release_handoff_v1',status='prepared_verified',
             authority='APPROVED_INTRADAY_POLICY_PRESERVING_RELEASE_HANDOFF',policy_effect='unchanged',
             target_date=DAY,selected_release_commit=commit,release_root=str(f['selected']),
-            actual_pid_consumed=False,manifest_sha256='b'*64,prepared_receipt_path=str(prepared),
+            actual_pid_consumed=False,manifest_sha256='d'*64,prepared_receipt_path=str(prepared),
             prepared_receipt_sha256=sha,frozen_files={**refs,str(index):C._sha(index)})
+        active=data/'runtime/policy_bootstrap'/('runtime_policy_bootstrap_'+DAY+'.json')
+        active.parent.mkdir(parents=True,exist_ok=True)
+        active.write_text(json.dumps(dict(manifest_sha256='d'*64,target_date=DAY)))
+        handoff['frozen_files'][str(active)]=C._sha(active)
         path.write_text(json.dumps(handoff))
         native['prepared_intraday_handoff']=dict(path=str(path),sha256=C._sha(path),
             sources={**handoff['frozen_files'],str(path):C._sha(path)},full_native_validation=True)

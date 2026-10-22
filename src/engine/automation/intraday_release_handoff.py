@@ -4482,6 +4482,21 @@ REVIEWED_ENTRY_COST_DEPENDENCY_VARIANTS = {
 }
 
 
+# Keep the issued prepared-validation generation while repairing its manifest binding.
+REVIEWED_ENTRY_COST_PRE_PREPARED_REPAIR_HASHES = REVIEWED_ENTRY_COST_HASHES
+REVIEWED_ENTRY_COST_PRE_PREPARED_REPAIR_VARIANTS = REVIEWED_ENTRY_COST_DEPENDENCY_VARIANTS
+REVIEWED_PREPARED_REPAIR_HASHES = {'src/engine/automation/ordered_intraday_deploy.py': 'e01bfae9c239223c409da878d2e45a66bccbe6c5b37684f9951badfb4d12c5ae', 'src/engine/scalping/reversal_code_handoff.py': 'c5c6edd558c15bd1067e018d2fa84e4670cd213183baa376cf223e1376ba0238', 'src/engine/infrastructure/startup_validation_code_context.py': '2c0b95c995c3f4db749dd40a7522a2e78a59c79ad244869a57b0295a8b7b2f0b'}
+REVIEWED_ENTRY_COST_HASHES = {**REVIEWED_ENTRY_COST_HASHES, **REVIEWED_PREPARED_REPAIR_HASHES}
+REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
+    name: REVIEWED_ENTRY_COST_PAIRS.get(name, ()) + pairs for name, pairs in {'src/engine/automation/ordered_intraday_deploy.py': (('404b870046364da476c4df9abb0007312123ea4b4331459f67da6d3c53e183e6', 'e01bfae9c239223c409da878d2e45a66bccbe6c5b37684f9951badfb4d12c5ae'), ('92d30c0ec38266d9fe1cc7abd144c71b7d0227b88fb42d4beb384096bbeb31ab', 'e01bfae9c239223c409da878d2e45a66bccbe6c5b37684f9951badfb4d12c5ae'), ('a6cdc6bebdf22f47a6736d0b7201fd988ad69ffacfe81ee5b40d77bbae5218ed', 'e01bfae9c239223c409da878d2e45a66bccbe6c5b37684f9951badfb4d12c5ae')), 'src/engine/scalping/reversal_code_handoff.py': (('16776a22b99bff4054ba99914cd8f7c96e87f6ca9fb1ac041e6a8191723b929d', 'c5c6edd558c15bd1067e018d2fa84e4670cd213183baa376cf223e1376ba0238'), ('ab61f882f4c8bbaddc0576a5765f4f102e38fd824b44a25341ffc78d647741b5', 'c5c6edd558c15bd1067e018d2fa84e4670cd213183baa376cf223e1376ba0238')), 'src/engine/infrastructure/startup_validation_code_context.py': (('27cc959c3a18217d2e312a7a04b4c7160ab2a55bbc0ee6dbd4eb56c684138212', '2c0b95c995c3f4db749dd40a7522a2e78a59c79ad244869a57b0295a8b7b2f0b'), ('6366e821e8af94ff9b9ce582593a5c317f608b93a826e8d1951d8214e0b4922c', '2c0b95c995c3f4db749dd40a7522a2e78a59c79ad244869a57b0295a8b7b2f0b'), ('a3d24175cc87b1e0d67963191bc34e1910595e7fd5e967707543ed0f45b747be', '2c0b95c995c3f4db749dd40a7522a2e78a59c79ad244869a57b0295a8b7b2f0b'))}.items()}}
+REVIEWED_ENTRY_COST_DEPENDENCY_VARIANTS = {
+    key: {**value, 'dependencies': {**value['dependencies'], **REVIEWED_PREPARED_REPAIR_HASHES},
+        'contract_extensions': {origin: {name: REVIEWED_PREPARED_REPAIR_HASHES.get(os.path.normpath(name), sha)
+            for name, sha in paths.items()} for origin, paths in value['contract_extensions'].items()},
+    } for key, value in REVIEWED_ENTRY_COST_PRE_PREPARED_REPAIR_VARIANTS.items()
+}
+
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -4615,11 +4630,16 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     prepared_validation_present = any((root / name).is_file()
         and hashlib.sha256(candidate_bytes(name)).hexdigest() == sha
         for name, sha in REVIEWED_PREPARED_VALIDATION_HASHES.items())
-    entry_cost_hashes = (REVIEWED_ENTRY_COST_HASHES if prepared_validation_present
+    prepared_repair_present = any((root / name).is_file()
+        and hashlib.sha256(candidate_bytes(name)).hexdigest() == sha
+        for name, sha in REVIEWED_PREPARED_REPAIR_HASHES.items())
+    entry_cost_hashes = (REVIEWED_ENTRY_COST_HASHES if prepared_repair_present
+        else REVIEWED_ENTRY_COST_PRE_PREPARED_REPAIR_HASHES if prepared_validation_present
         else REVIEWED_ENTRY_COST_PRE_PREPARED_VALIDATION_HASHES if coordination_present
         else REVIEWED_ENTRY_COST_PRE_COORDINATION_HASHES if native_label_present
         else REVIEWED_ENTRY_COST_PRE_NATIVE_LABEL_HASHES)
-    entry_cost_variants = (REVIEWED_ENTRY_COST_DEPENDENCY_VARIANTS if prepared_validation_present
+    entry_cost_variants = (REVIEWED_ENTRY_COST_DEPENDENCY_VARIANTS if prepared_repair_present
+        else REVIEWED_ENTRY_COST_PRE_PREPARED_REPAIR_VARIANTS if prepared_validation_present
         else REVIEWED_ENTRY_COST_PRE_PREPARED_VALIDATION_VARIANTS if coordination_present
         else REVIEWED_ENTRY_COST_PRE_COORDINATION_VARIANTS if native_label_present
         else REVIEWED_ENTRY_COST_PRE_NATIVE_LABEL_VARIANTS

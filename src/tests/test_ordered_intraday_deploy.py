@@ -148,14 +148,18 @@ def _assert_detector_lock_held(workspace):
             fcntl.flock(other, fcntl.LOCK_EX | fcntl.LOCK_NB)
 
 
-@pytest.mark.parametrize('damage', [None, 'proof_pid', 'proof_basis', 'consumed', 'handoff', 'policy', 'preopen', 'manifest'])
-def test_stopped_intraday_recovery_requires_original_consumption_and_every_frozen_byte(tmp_path, monkeypatch, damage):
+@pytest.mark.parametrize('chain',[False,True])
+@pytest.mark.parametrize('damage', [None, 'proof_pid', 'proof_basis', 'consumed', 'handoff', 'policy', 'preopen', 'manifest','parent_hash','parent_path','parent_proof','depth'])
+def test_stopped_intraday_recovery_requires_original_consumption_and_every_frozen_byte(tmp_path, monkeypatch, damage,chain):
+    if not chain and damage in ('parent_hash','parent_path','parent_proof','depth'):return
     day, commit = '2026-10-16', 'a'*40
     old = tmp_path/'old';identity=dict(pid=2147483601,start_ticks='123',cwd=str(old/'src'))
     policy=tmp_path/'policy.json';policy.write_text('original')
     preopen=tmp_path/'preopen.json';preopen.write_text('original preopen')
     manifest=tmp_path/'manifest.json';manifest.write_text(json.dumps({'manifest_sha256':'b'*64}))
-    proof_path=tmp_path/'preflight-intraday_release_handoff.log'
+    origin=tmp_path/('b'*40)/'status.json' if chain else tmp_path/'status.json'
+    origin.parent.mkdir(parents=True,exist_ok=True)
+    proof_path=origin.with_name('preflight-intraday_release_handoff.log')
     proof=dict(schema='intraday_pid_consumption_verification_v1',status='pass',findings=[],
         basis='intraday_policy_preserving_handoff',actual_pid_consumed=True,target_date=day,
         selected_release_commit=commit,release_root=str(old),pid_identity=identity,manifest_sha256='b'*64)
@@ -175,15 +179,28 @@ def test_stopped_intraday_recovery_requires_original_consumption_and_every_froze
     elif damage=='preopen':preopen.write_text('changed')
     elif damage=='manifest':manifest.write_text(json.dumps({'manifest_sha256':'c'*64}))
     proof_path.write_bytes(D._json_bytes(proof));consumed_path.write_bytes(D._json_bytes(consumed))
+    failed_path=origin
+    depth=0
+    if chain:
+        origin.write_bytes(D._json_bytes(dict(predecessor_identity=identity,previous_commit=commit,candidate_commit='b'*40)))
+        parent=dict(failed_transition_path=str(origin),failed_selected_commit='b'*40,
+            failed_transition_sha256=D.H._sha(origin),intraday_predecessor_proof_sha256=D.H._sha(proof_path),
+            transfer_status='transferred_exact_owned_hold')
+        if damage=='parent_hash':parent['failed_transition_sha256']='0'*64
+        if damage=='parent_path':parent['failed_transition_path']=str(tmp_path/'foreign.json')
+        if damage=='parent_proof':parent['intraday_predecessor_proof_sha256']='0'*64
+        if damage=='depth':depth=1
+        failed_path=tmp_path/('c'*40)/'status.json';failed_path.parent.mkdir()
+        failed_path.write_bytes(D._json_bytes(dict(failed_hold_adoption=parent)))
     monkeypatch.setattr(D.H,'_paths',lambda *a:(handoff_path,consumed_path))
     monkeypatch.setattr(D.H,'_preopen_path',lambda *a:preopen)
     monkeypatch.setattr(D.H.bootstrap,'manifest_path',lambda *a:manifest)
     before={p:p.read_bytes() for p in (proof_path,handoff_path,consumed_path,policy,preopen,manifest)}
     if damage:
-        with pytest.raises(ValueError,match='stopped_intraday_predecessor_invalid'):
-            D._stopped_intraday_predecessor(day,old,commit,identity,tmp_path/'status.json')
+        with pytest.raises(ValueError,match='stopped_(intraday_predecessor|predecessor)_'):
+            D._stopped_intraday_predecessor(day,old,commit,identity,failed_path,_depth=depth)
     else:
-        result=D._stopped_intraday_predecessor(day,old,commit,identity,tmp_path/'status.json')
+        result=D._stopped_intraday_predecessor(day,old,commit,identity,failed_path,_depth=depth)
         assert result['frozen_files'][str(consumed_path)]==D.H._sha(consumed_path)
         assert result['frozen_files'][str(proof_path)]==D.H._sha(proof_path)
     assert all(p.read_bytes()==raw for p,raw in before.items())
@@ -1484,10 +1501,19 @@ def test_execute_reserves_sentinel_before_drain_releases_before_start(tmp_path,f
         fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
 
 
-@pytest.mark.parametrize('damage',[None,'missing','status','date','pid','changed_after_preflight'])
-def test_stopped_lock_recovery_requires_all_native_preparations(stopped_recovery,damage):
+@pytest.mark.parametrize('prepared',[False,True])
+@pytest.mark.parametrize('damage',[None,'missing','status','date','pid','changed_after_preflight','window','summary'])
+def test_stopped_lock_recovery_requires_all_native_preparations(stopped_recovery,damage,prepared):
     d,path,_=stopped_recovery;value=D.H._read(path)
-    value['error']='[Errno 11] Resource temporarily unavailable';path.write_bytes(D._json_bytes(value))
+    value['error']='[Errno 11] Resource temporarily unavailable'
+    if prepared:
+        value.update(failed_phase='prepared',error='tuple indices must be integers or slices, not str',
+            sentinel_source_window=dict(schema='sentinel_source_window_preparation_v1',target_date=d.day,runtime_effect=False),
+            sentinel_summary=dict(status='ok',runtime_effect=False))
+    if damage in ('window','summary'):
+        if not prepared:return
+        value['sentinel_source_window' if damage=='window' else 'sentinel_summary']['runtime_effect']=True
+    path.write_bytes(D._json_bytes(value))
     logs=[]
     for module in ('intraday_release_handoff','runtime_policy_bootstrap','auxiliary_reader_readiness'):
         p=path.with_name('selected-'+module+'.log');logs.append(p)
@@ -1498,7 +1524,7 @@ def test_stopped_lock_recovery_requires_all_native_preparations(stopped_recovery
         body=D.H._read(last);body[{'status':'status','date':'target_date','pid':'actual_pid_consumed'}[damage]]={
             'status':'fail','date':'2020-01-01','pid':True}[damage];last.write_bytes(D._json_bytes(body))
     original=path.read_bytes(),d.hold.read_bytes()
-    if damage in ('missing','status','date','pid'):
+    if damage in ('missing','status','date','pid','window','summary'):
         with pytest.raises((OSError,ValueError)):d.preflight()
     else:
         d.preflight();assert all(d.frozen[str(p)]==D.H._sha(p) for p in logs)

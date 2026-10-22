@@ -172,7 +172,7 @@ def _stopped_origin_receipt(data_root, day, origin_root, origin_commit, bundle_s
     prior, prior_raw, _ = D._owned_metadata(prior_path)
     hold, hold_raw, _ = D._owned_metadata(Path(data_root)/'runtime/operator_startup_hold.json')
     identity = failed.get('predecessor_identity')
-    preparation_sources = D.selected_preparation_lock_failure(failed, failed_path)
+    preparation_sources = D.stopped_preparation_failure_sources(failed, failed_path)
     expected_hold = dict(schema='ordered_deployment_startup_hold_v1',authority=D.CONFIRM,
         transition=str(failed_path),target_date=day,candidate_commit=origin_commit,old_pid_identity=identity)
     if (selected.get('actual_pid_consumed') is not False
@@ -182,7 +182,7 @@ def _stopped_origin_receipt(data_root, day, origin_root, origin_commit, bundle_s
             or selected.get('approved_by') != 'user' or hold != expected_hold
             or failed.get('schema') != 'ordered_intraday_deployment_v1' or failed.get('authority') != D.CONFIRM
             or failed.get('phase') != 'failed' or failed.get('status') != 'fail'
-            or failed.get('failed_phase') != 'selected' or failed.get('target_date') != day
+            or (failed.get('failed_phase') != 'selected' and not preparation_sources) or failed.get('target_date') != day
             or failed.get('candidate_commit') != origin_commit or failed.get('candidate_root') != str(origin_root)
             or (failed.get('error') != 'deployment_validation_failed:src.engine.automation.intraday_release_handoff'
                 and not preparation_sources)
