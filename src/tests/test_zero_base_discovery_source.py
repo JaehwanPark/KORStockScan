@@ -227,6 +227,38 @@ def test_activity_adapter_keeps_source_only_contract_and_equity_filter(monkeypat
     assert calls[0]["use_continuous"] is False
 
 
+@pytest.mark.parametrize('quantity,expected,admitted', [
+    ('-5000', -5000, False), ('-5,000', -5000, False),
+    ('+5,000', 5000, True), ('5000', 5000, True),
+    ('0', 0, False), ('', 0, False), ('invalid', 0, False),
+])
+def test_activity_signed_surge_reaches_panel_admission(monkeypatch, quantity, expected, admitted):
+    """A falling minute-volume window must not become a positive activity seed."""
+    calls = []
+    def transport(**kwargs):
+        calls.append(kwargs)
+        rows = ([dict(stk_cd='123450_AL', stk_nm='TEST', cur_prc='+10000',
+                      flu_rt='+1.20', now_trde_qty='6000', sdnin_qty=quantity,
+                      pred_pre_sig='2')] if kwargs['payload']['mrkt_tp'] == '001' else [])
+        pages = [dict(return_code=0, trde_qty_sdnin=rows)]
+        meta = dict(read_rate_control_status='admitted', rest_received_ts_ms=int((T0+1)*1000))
+        return (pages, meta) if kwargs.get('return_meta') else pages
+    monkeypatch.setattr(kiwoom_utils, 'fetch_kiwoom_api_continuous', transport)
+    rows, _ = kiwoom_utils.get_zero_base_volume_surge_ka10023(
+        'fixture', mrkt_tp='001', stex_tp='3')
+    assert rows[0]['SurgeQty'] == expected
+    result = fetch_discovery_panels('fixture', now_epoch=T0, fetcher=empty_activity)
+    assert [row['code'] for row in result['observations']] == (['123450'] if admitted else [])
+    assert result['panels'][0]['eligible_count'] == int(admitted)
+    assert result['panels'][0]['rejected_count'] == int(not admitted)
+    assert all(call['request_class'] == REQUEST_CLASS_SOURCE_ONLY
+               and call['use_continuous'] is False
+               and call['payload']['tm_tp'] == '1' and call['payload']['tm'] == '1'
+               and call['payload']['stex_tp'] == '3' for call in calls)
+    legacy = kiwoom_utils.scan_volume_spike_ka10023('fixture', mrkt_tp='001')
+    assert legacy[0]['SurgeQty'] == expected
+
+
 def test_transition_does_not_fetch_panels():
     epoch = datetime(2026, 9, 28, 15, 40,
                      tzinfo=ZoneInfo("Asia/Seoul")).timestamp()

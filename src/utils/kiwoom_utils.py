@@ -4215,7 +4215,7 @@ def get_zero_base_volume_surge_ka10023(
                     **code_fields, "Name": name, "Price": price,
                     "ChangeRate": _scanner_to_signed_float(item.get("flu_rt")),
                     "Volume": _scanner_to_int(item.get("now_trde_qty")),
-                    "SurgeQty": _scanner_to_int(item.get("sdnin_qty")),
+                    "SurgeQty": _scanner_to_signed_int(item.get("sdnin_qty")),
                     "PreSig": item.get("pred_pre_sig"),
                     "SourceRank": source_rank,
                 })
@@ -4275,7 +4275,7 @@ def scan_volume_spike_ka10023(token, mrkt_tp="000", trde_qty_tp=None, pric_tp=No
                     "cur_prc": curr_price,  # 하위 호환성 유지
                     "TradeQty": _scanner_to_int(item.get("now_trde_qty")),
                     "PreviousTradeQty": _scanner_to_int(item.get("prev_trde_qty")),
-                    "SurgeQty": _scanner_to_int(item.get("sdnin_qty")),
+                    "SurgeQty": _scanner_to_signed_int(item.get("sdnin_qty")),
                     "PreSig": item.get("pred_pre_sig", ""),
                     "PreSigDirection": _pred_pre_signal_direction(
                         item.get("pred_pre_sig")
