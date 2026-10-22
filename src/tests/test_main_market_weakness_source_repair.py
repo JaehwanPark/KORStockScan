@@ -2308,3 +2308,548 @@ def test_early_night_defer_publishes_latest_without_reservation_or_source_reads(
     assert (root / "last_completed_computation.json").read_bytes() == original
     assert not (root / "schedule_cursor.json").exists()
     assert not list((root / "attempts").glob("*.json"))
+
+
+def effective_registry_capture(data, monkeypatch, *, compact=True, inherited=False):
+    """Real registry/wire/overlay owners and the original native receipt."""
+
+    from src.engine.scalping import reversal_auxiliary_intraday as I
+    from src.engine.scalping import reversal_auxiliary_registry as G
+    from src.engine.scalping import reversal_auxiliary_research_wire as W
+    from src.engine.scalping import continuous_reversal_policy_v6 as V
+    from src.tests.test_reversal_extended_policy import FIXTURES
+    from src.utils import constants
+
+    monkeypatch.setattr(constants, "DATA_DIR", data)
+    old = G.definition(
+        G.A.V1.ARMS[1], input_version="continuous_reversal_union_auxiliary_v3"
+    )
+    G.register(data, old)
+    definition = (
+        G.compact_definition(old, research_wire_contract=W.contract())
+        if compact
+        else old
+    )
+    G.register(data, definition)
+    inp, prompt, schema = G.production_request(
+        tuple(next(iter(FIXTURES.values()))[k] for k in ("event", "source")), definition
+    )
+    bundle, _ = source_bundle(data)
+    f = bundle["continuous_reversal"]
+    f.update(
+        schema=V.SCHEMA,
+        auxiliary_report_sha256="a" * 64,
+        report_file_sha256={},
+        operating_manifest={"detector_manifest_hash": "d" * 64},
+    )
+    f["machine_cells"]["samsung|REGULAR|ALL"]["routes"]["SOR"]["backend"] = "union_v6"
+    p = f["auxiliary_cells"]["samsung|REGULAR|ALL"]["routes"]["SOR"]
+    p["payload"] = dict(
+        arm=old["base_arm"],
+        binding=G.projector(old["input_version"]).binding(old["base_arm"]),
+    )
+    p["payload_sha256"] = R.digest(p["payload"])
+    f.pop("family_sha256")
+    f["family_sha256"] = R.digest(f)
+    bundle.pop("bundle_sha256")
+    bundle["bundle_sha256"] = R.digest(bundle)
+    A.atomic(
+        data
+        / "runtime/mechanistic_entry_policy/generations"
+        / (bundle["bundle_sha256"] + ".json"),
+        bundle,
+    )
+    sid = "samsung|REGULAR|ALL|SOR"
+    if inherited:
+        report = R.seal(
+            dict(
+                auxiliary_registry_bindings={sid: definition["registry_sha256"]},
+                auxiliary_reader_code_hashes=I.code_hashes(),
+            )
+        )
+        path = (
+            data
+            / "runtime/mechanistic_entry_policy/sources"
+            / ("reversal-" + "a" * 64 + ".json")
+        )
+        A.atomic(path, report)
+        f["report_file_sha256"]["auxiliary"] = A.file_hash(path)
+        f.pop("family_sha256")
+        f["family_sha256"] = R.digest(f)
+        bundle.pop("bundle_sha256")
+        bundle["bundle_sha256"] = R.digest(bundle)
+        A.atomic(
+            data
+            / "runtime/mechanistic_entry_policy/generations"
+            / (bundle["bundle_sha256"] + ".json"),
+            bundle,
+        )
+    overlay = R.seal(
+        dict(
+            schema=I.SCHEMA,
+            authority=I.AUTHORITY,
+            day=DAY,
+            effective_from=DAY + "T09:00:00+09:00",
+            base_bundle_sha256=bundle["bundle_sha256"],
+            base_family_sha256=f["family_sha256"],
+            detector_manifest_hash="d" * 64,
+            bindings={sid: definition["registry_sha256"]},
+            code_hashes=I.code_hashes(),
+        )
+    )
+    A.atomic(
+        I.root(data) / "generations" / (overlay["artifact_content_sha256"] + ".json"),
+        overlay,
+    )
+    body, t = native_capture()
+    a = body["source"]["assessment"]
+    a.update(
+        route="SOR",
+        auxiliary_registry_sha256=definition["registry_sha256"],
+        auxiliary_binding=G.binding(definition),
+    )
+    if not inherited:
+        a["auxiliary_overlay_sha256"] = overlay["artifact_content_sha256"]
+    if compact:
+        env = G.envelope(inp, definition)
+        a.update(
+            auxiliary_wire_contract=env["contract"], auxiliary_wire_hashes=env["hashes"]
+        )
+    body["source"]["auxiliary_request"] = dict(
+        input=inp, prompt=prompt, response_schema=schema
+    )
+    body["bundle_sha256"] = bundle["bundle_sha256"]
+    body["runtime_consumption"]["bundle_sha256"] = bundle["bundle_sha256"]
+    native = body["runtime_consumption"]["continuous_reversal"]
+    native.update(
+        bundle_sha256=bundle["bundle_sha256"],
+        family_sha256=f["family_sha256"],
+        machine_component_sha256=R.digest(f["machine_cells"]),
+        auxiliary_component_sha256=R.digest(f["auxiliary_cells"]),
+        **{
+            k + "_sha256": R.digest(v)
+            for k, v in body["source"]["auxiliary_request"].items()
+        },
+    )
+    rehash_native(body)
+    t.update(
+        machine_bundle_sha256=bundle["bundle_sha256"],
+        entry_ai_component_sha256=native["auxiliary_component_sha256"],
+        provider_called=True,
+        decision_evaluation_status="evaluated",
+        result_source="live",
+        entry_ai_risk_verdict="PASS",
+        prompt_version=G.binding(definition)["prompt_version"],
+        machine_observation_sha256=body["machine_observation_sha256"],
+        entry_auxiliary_response_contract_valid=True,
+        entry_auxiliary_response_contract_errors=[],
+        entry_ai_contract_valid=True,
+    )
+    return body, t, definition, bundle, overlay
+
+
+def bind_effective_capture(data, body, t):
+    path = data / "native.jsonl"
+    path.write_text(json.dumps(body) + "\n")
+    chunks = list(
+        A.native_records(dict(path=str(path)), DAY, data, stop_at=time.monotonic() + 10)
+    )
+    native = chunks[0][0][0]
+    projected = R.project_trace(t, DAY, "KOSPI")[0]
+    R.bind_native(projected, native)
+    return projected, native
+
+
+@pytest.mark.parametrize(
+    "compact,inherited", [(False, False), (True, False), (True, True)]
+)
+def test_effective_registry_native_producer_to_selection(
+    tmp_path, monkeypatch, compact, inherited
+):
+    from src.engine.scalping import reversal_auxiliary_registry as G
+
+    body, t, definition, *_ = effective_registry_capture(
+        tmp_path, monkeypatch, compact=compact, inherited=inherited
+    )
+    before = copy.deepcopy(body)
+    projected, native = bind_effective_capture(tmp_path, body, t)
+    assert (
+        projected["native_binding_status"]
+        == projected["auxiliary_binding_status"]
+        == "verified"
+    )
+    assert projected["auxiliary_binding"] == G.binding(definition)
+    assert native["auxiliary_source_refs"] and A.receipts_current(
+        native["auxiliary_source_refs"]
+    )
+    candidate = registry(row())["scopes"][row()["scope_key"]]["candidates"][0]
+    assert R.selection(projected, candidate, dict(grade="B", state="RECOVERY")) is True
+    assert body == before
+
+
+@pytest.mark.parametrize(
+    "defect",
+    [
+        "registry_missing",
+        "overlay_identity",
+        "declaration_missing",
+        "binding",
+        "prompt",
+        "schema",
+        "wire",
+        "future",
+        "scope",
+        "component",
+        "response",
+        "version",
+        "request_hash",
+        "machine_component",
+    ],
+)
+def test_effective_registry_invalid_proof_never_falls_back(
+    tmp_path, monkeypatch, defect
+):
+    from src.engine.scalping import reversal_auxiliary_intraday as I
+    from src.engine.scalping import reversal_auxiliary_registry as G
+    from src.engine.scalping import continuous_reversal_policy_v6 as V
+
+    body, t, value, bundle, overlay = effective_registry_capture(tmp_path, monkeypatch)
+    a = body["source"]["assessment"]
+    if defect == "overlay_identity":
+        a["auxiliary_overlay_sha256"] = "../invalid"
+    elif defect == "registry_missing":
+        (G.directory(tmp_path) / (value["registry_sha256"] + ".json")).unlink()
+    elif defect == "declaration_missing":
+        a.pop("auxiliary_registry_sha256")
+    elif defect == "binding":
+        a["auxiliary_binding"]["prompt_version"] = "other"
+    elif defect in {"prompt", "schema"}:
+        body["source"]["auxiliary_request"][
+            "prompt" if defect == "prompt" else "response_schema"
+        ] = "changed"
+    elif defect == "wire":
+        a["auxiliary_wire_hashes"] = {}
+    elif defect in {"future", "scope"}:
+        if defect == "future":
+            overlay["effective_from"] = DAY + "T10:00:00+09:00"
+        else:
+            overlay["bindings"] = {}
+        overlay = R.seal(overlay)
+        A.atomic(
+            I.root(tmp_path)
+            / "generations"
+            / (overlay["artifact_content_sha256"] + ".json"),
+            overlay,
+        )
+        a["auxiliary_overlay_sha256"] = overlay["artifact_content_sha256"]
+    elif defect == "component":
+        body["runtime_consumption"]["continuous_reversal"][
+            "auxiliary_component_sha256"
+        ] = ("x" * 64)
+    elif defect == "response":
+        t["entry_auxiliary_response_contract_valid"] = False
+    elif defect == "version":
+        t["prompt_version"] = "other"
+    elif defect == "request_hash":
+        body["runtime_consumption"]["continuous_reversal"]["input_sha256"] = "x" * 64
+    elif defect == "machine_component":
+        body["runtime_consumption"]["continuous_reversal"][
+            "machine_component_sha256"
+        ] = ("x" * 64)
+    rehash_native(body)
+    t["machine_observation_sha256"] = body["machine_observation_sha256"]
+    projected, native = bind_effective_capture(tmp_path, body, t)
+    assert projected.get("auxiliary_binding_status") != "verified"
+    if defect != "component":
+        assert (
+            projected["auxiliary_binding"]["registry_sha256"]
+            == value["registry_sha256"]
+        )
+    candidate = registry(row())["scopes"][row()["scope_key"]]["candidates"][0]
+    assert R.selection(projected, candidate, dict(grade="B", state="RECOVERY")) is None
+
+
+def test_effective_registry_report_separates_binding_labels_and_machine(
+    tmp_path, monkeypatch
+):
+    body, t, *_ = effective_registry_capture(tmp_path, monkeypatch)
+    projected, _ = bind_effective_capture(tmp_path, body, t)
+    projected = R.attach_joins(projected, [observation()])
+    projected.update(
+        outcome="U",
+        outcome_reason="native_label_source_contract_missing",
+        machine_axes=[],
+    )
+    agg = R.Aggregator()
+    agg.add(projected)
+    report = agg.comparison("fixture")
+    agg.close()
+    counts = next(iter(report["scope_observations"].values()))["counts"]
+    assert (
+        counts["auxiliary_binding_verified"]
+        == counts["outcome_U_reason_native_label_source_contract_missing"]
+        == 1
+    )
+    assert (
+        next(iter(report["capability_by_scope"].values()))["machine"]
+        == "role_unverified"
+    )
+    assert (
+        projected["outcome"] == "U"
+    )  # A valid request does not repair missing price paths.
+
+
+def test_bounded_cumulative_keeps_older_sources_outside_verified_range(
+    tmp_path, monkeypatch
+):
+    from src.tests.test_main_market_weakness_research_automation import setup_sources
+
+    data, *_ = setup_sources(tmp_path, monkeypatch)
+    A.process_date(data, DAY, stop_at=time.monotonic() + 10)
+    original = A.discover_dates
+    older = "2026-09-30"
+    monkeypatch.setattr(
+        A,
+        "discover_dates",
+        lambda *args, **kwargs: sorted(set(original(*args, **kwargs) + [older])),
+    )
+    # Discovery is independently bounded as well as its declared start.
+    comparison = A.cumulative(
+        data, stop_at=time.monotonic() + 10, from_date=DAY, through_date=DAY
+    )
+    assert comparison["source_scope"]["source_dates"] == [DAY]
+    assert A.comparison_current(data, comparison)
+    assert (
+        not comparison["pending_source_dates"]
+        and not comparison["invalidated_source_dates"]
+    )
+    assert older in A.research_source_scope(data, through_date=DAY)["source_dates"]
+    with pytest.raises(ValueError, match="range_invalid"):
+        A.research_source_scope(data, from_date="2026-12-01", through_date=DAY)
+
+
+@pytest.mark.parametrize(
+    "defect", [None, "different_registry", "missing_registry", "overlay_race"]
+)
+def test_notifier_compares_current_effective_registry(tmp_path, monkeypatch, defect):
+    from src.engine.scalping import reversal_auxiliary_intraday as I
+    from src.engine.scalping import reversal_auxiliary_registry as G
+    from src.engine.scalping import mechanistic_entry_runtime_policy as P
+
+    body, t, value, bundle, overlay = effective_registry_capture(tmp_path, monkeypatch)
+    scope = A.scope_contract(
+        tmp_path, bundle["bundle_sha256"], "samsung|REGULAR|ALL", "SOR", cache={}
+    )
+    candidate = dict(
+        definition=dict(
+            kind="post_auxiliary_withhold_cf",
+            policy_scope=scope["policy_scope"],
+            scope_parent_machine_payload_sha256=scope[
+                "scope_parent_machine_payload_sha256"
+            ],
+            cohort_contract=scope["cohort_contract"],
+            auxiliary_binding=G.binding(value),
+            auxiliary_hash=R.digest(G.binding(value)),
+        )
+    )
+    monkeypatch.setattr(P, "load_effective", lambda **kwargs: bundle)
+    pointer = I.root(tmp_path) / "current.json"
+    A.atomic(pointer, overlay)
+
+    def current(*args):
+        if defect == "overlay_race":
+            A.atomic(pointer, R.seal(dict(overlay, changed=True)))
+        return dict(
+            overlay,
+            bindings={} if defect == "different_registry" else overlay["bindings"],
+        )
+
+    monkeypatch.setattr(I, "at_confirmation", current)
+    if defect == "missing_registry":
+        (G.directory(tmp_path) / (value["registry_sha256"] + ".json")).unlink()
+    assert N.current_parent_matches(tmp_path, candidate) is (defect is None)
+
+
+def test_registry_trace_without_native_cannot_bypass_selection():
+    t = trace()
+    t.update(
+        provider_called=True,
+        decision_evaluation_status="evaluated",
+        result_source="live",
+        entry_ai_risk_verdict="PASS",
+        prompt_version="main_auxiliary_prompt_registry_v2:" + "a" * 64,
+        entry_ai_component_sha256="b" * 64,
+    )
+    projected = R.project_trace(t, DAY, "KOSPI")[0]
+    projected["identity_grade"] = "canonical"
+    candidate = registry(row())["scopes"][row()["scope_key"]]["candidates"][0]
+    assert R.selection(projected, candidate, dict(grade="B", state="RECOVERY")) is None
+
+
+def test_unverified_registry_does_not_seed_or_merge_verified_scope(
+    tmp_path, monkeypatch
+):
+    body, t, *_ = effective_registry_capture(tmp_path, monkeypatch)
+    valid, _ = bind_effective_capture(tmp_path, body, t)
+    valid = R.attach_joins(valid, [observation()])
+    bad = R.attach_joins(
+        dict(valid, auxiliary_binding_status="request_or_component_binding_unverified"),
+        [observation()],
+    )
+    assert bad["scope_key"] != valid["scope_key"]
+    a = R.Aggregator()
+    a.add(bad)
+    daily = a.daily(DAY)
+    a.close()
+    assert not next(iter(daily["scopes"].values()))["feature_histograms"]
+    assert not next(iter(R.freeze_candidates(daily, "g")["scopes"].values()))[
+        "candidates"
+    ]
+
+
+@pytest.mark.parametrize("missing", [True, False])
+def test_failed_registry_dependency_repair_invalidates_projection(
+    tmp_path, monkeypatch, missing
+):
+    from src.engine.scalping import reversal_auxiliary_intraday as I
+    from src.engine.scalping import reversal_auxiliary_registry as G
+
+    body, t, value, _, overlay = effective_registry_capture(tmp_path, monkeypatch)
+    path = (
+        G.directory(tmp_path) / (value["registry_sha256"] + ".json")
+        if missing
+        else I.root(tmp_path)
+        / "generations"
+        / (overlay["artifact_content_sha256"] + ".json")
+    )
+    original = path.read_bytes()
+    if missing:
+        path.unlink()
+    else:
+        path.write_text("{}")
+    projected, native = bind_effective_capture(tmp_path, body, t)
+    assert projected["auxiliary_binding_status"] != "verified"
+    assert A.receipts_current(native["auxiliary_source_refs"])
+    path.write_bytes(original)
+    assert not A.receipts_current(native["auxiliary_source_refs"])
+    assert (
+        bind_effective_capture(tmp_path, body, t)[0]["auxiliary_binding_status"]
+        == "verified"
+    )
+
+
+@pytest.mark.parametrize("changed", [None, "request", "registry"])
+def test_effective_registry_cache_reuses_only_immutable_provenance(
+    tmp_path, monkeypatch, changed
+):
+    from src.engine.scalping import reversal_auxiliary_intraday as I
+    from src.engine.scalping import reversal_auxiliary_registry as G
+
+    body, t, value, *_ = effective_registry_capture(tmp_path, monkeypatch)
+    second = copy.deepcopy(body)
+    if changed == "request":
+        second["source"]["auxiliary_request"]["prompt"] += " changed"
+        second["runtime_consumption"]["continuous_reversal"]["prompt_sha256"] = (
+            R.digest(second["source"]["auxiliary_request"]["prompt"])
+        )
+        rehash_native(second)
+    path = tmp_path / "native-pair.jsonl"
+    path.write_text(json.dumps(body) + "\n" + json.dumps(second) + "\n")
+    original = I.validate_record
+    calls = []
+
+    def validate(*args, **kwargs):
+        calls.append(True)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(I, "validate_record", validate)
+    monkeypatch.setattr(A, "CHUNK_ROWS", 1)
+    stream = A.native_records(
+        dict(path=str(path)), DAY, tmp_path, stop_at=time.monotonic() + 10
+    )
+    first = next(stream)[0][0]
+    assert first["effective_auxiliary_status"] == "verified"
+    if changed == "registry":
+        (G.directory(tmp_path) / (value["registry_sha256"] + ".json")).write_text("{}")
+    later = next(stream)[0][0]
+    stream.close()
+    assert (later["effective_auxiliary_status"] == "verified") is (changed is None)
+    assert len(calls) == 1
+
+
+def test_overlay_ancestry_stays_in_cursor_input_not_repeated_projection(tmp_path, monkeypatch):
+    body, t, *_ = effective_registry_capture(tmp_path, monkeypatch)
+    _, native = bind_effective_capture(tmp_path, body, t)
+    native["auxiliary_source_refs"] = [dict(path="/source/" + str(i) + "x" * 1024, status="missing") for i in range(100)]
+    expected_refs = copy.deepcopy(native["auxiliary_source_refs"])
+    db = A.native_index(tmp_path, dict(source_date=DAY, generation="bounded"))
+    try:
+        A.index_native_rows(db, [native], "fixture")
+        projected = R.project_trace(t, DAY, "KOSPI")[0]
+        A.bind_trace_native(projected, db)
+        assert projected["auxiliary_binding_status"] == "verified"
+        part = A.write_partition(tmp_path, [R.attach_joins(projected, [observation()])] * 10)
+        # The same reader limit that rejected the original duplicated ancestry
+        # is scaled down here; production MAX_JSON is unchanged.
+        value = A.check_seal(A.read_json(part["path"], limit=200000))
+        assert len(value["rows"]) == 10
+        assert native["auxiliary_source_refs"] == expected_refs  # Still available to the cursor writer.
+        assert "auxiliary_source_refs" not in json.loads(db.execute("SELECT row FROM native").fetchone()[0])
+    finally:
+        db.close()
+
+
+def test_valid_response_and_registry_are_separate_from_existing_execution_rejection(tmp_path, monkeypatch):
+    body, t, *_ = effective_registry_capture(tmp_path, monkeypatch)
+    t.update(entry_ai_contract_valid=False, entry_post_response_execution_valid=False,
+             entry_ai_contract_errors=['reversal_signal_expired_or_changed'],
+             entry_ai_effective_assessment=dict(effective_verdict='INSUFFICIENT', contract_valid=False))
+    projected, _ = bind_effective_capture(tmp_path, body, t)
+    assert projected['auxiliary_verdict'] == 'PASS'
+    assert projected['auxiliary_response_contract_verified'] is True
+    assert projected['auxiliary_binding_status'] == 'verified'
+    assert projected['auxiliary_execution_status'] == 'rejected'
+    candidate = registry(row())['scopes'][row()['scope_key']]['candidates'][0]
+    assert R.selection(projected, candidate, dict(grade='B', state='RECOVERY')) is None
+    projected = R.attach_joins(projected, [observation()])
+    fixed = registry(projected)
+    agg = R.Aggregator(fixed)
+    agg.add(projected)
+    report = agg.comparison('rejected')
+    agg.close()
+    counts = next(iter(report['scope_observations'].values()))['counts']
+    assert counts['existing_execution_rejected'] == counts['execution_rejected'] == 1
+    assert counts.get('candidate_common_range_gap', 0) == 0
+    assert report['comparisons'][0]['baseline']['W'] == report['comparisons'][0]['baseline']['F'] == 0
+
+
+@pytest.mark.parametrize('effective', [None, 'invalid', []])
+def test_missing_execution_proof_is_not_a_registry_failure_or_baseline(tmp_path, monkeypatch, effective):
+    body, t, *_ = effective_registry_capture(tmp_path, monkeypatch)
+    t.pop('entry_ai_contract_valid')
+    t['entry_ai_effective_assessment'] = effective
+    projected, _ = bind_effective_capture(tmp_path, body, t)
+    assert projected['auxiliary_binding_status'] == 'verified'
+    assert projected['auxiliary_execution_status'] == 'unverified'
+    candidate = registry(row())['scopes'][row()['scope_key']]['candidates'][0]
+    assert R.selection(projected, candidate, dict(grade='B', state='RECOVERY')) is None
+
+
+def test_missing_historical_reader_proof_is_distinct_from_price_source_loss(tmp_path, monkeypatch):
+    import errno
+    from src.engine.scalping import reversal_auxiliary_intraday as I
+    body, t, *_ = effective_registry_capture(tmp_path, monkeypatch)
+    missing = I.root(tmp_path) / 'compatibility' / ('a' * 64 + '.json')
+    def unavailable(*args, **kwargs):
+        raise FileNotFoundError(errno.ENOENT, 'missing', str(missing))
+    monkeypatch.setattr(I, 'validate_record', unavailable)
+    projected, native = bind_effective_capture(tmp_path, body, t)
+    assert projected['auxiliary_binding_status'] != 'verified'
+    assert projected['auxiliary_binding_reason'] == 'historical_reader_compatibility_missing'
+    assert dict(path=str(missing), status='missing') in native['auxiliary_source_refs']
+    projected = R.attach_joins(projected, [observation()])
+    projected.update(outcome='U', outcome_reason='native_label_source_contract_missing')
+    agg = R.Aggregator();agg.add(projected)
+    counts = next(iter(agg.daily(DAY)['scopes'].values()))['counts'];agg.close()
+    assert counts['auxiliary_binding_reason_historical_reader_compatibility_missing'] == 1
+    assert counts['outcome_U_reason_native_label_source_contract_missing'] == 1

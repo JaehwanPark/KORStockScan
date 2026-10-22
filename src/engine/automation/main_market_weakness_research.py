@@ -308,6 +308,23 @@ def code_hash(code_root=None):
         Path(R.__file__).parent / "continuous_reversal_source.py",
         Path(R.__file__).parents[1] / "lifecycle/research_json_stream.py",
     ]
+    # These existing owners validate the effective registry, wire and native
+    # request. Changing one invalidates research without changing live capture.
+    modules.extend(
+        Path(R.__file__).parent / (name + ".py")
+        for name in (
+            "reversal_auxiliary_intraday",
+            "reversal_auxiliary_registry",
+            "reversal_auxiliary_wire",
+            "reversal_auxiliary_compatibility",
+            "reversal_auxiliary_transition",
+            "reversal_auxiliary_production_input",
+            "reversal_auxiliary_risk_role_experiment",
+            "reversal_operating_auxiliary",
+            "reversal_extended_union",
+            "continuous_reversal_policy_v5",
+        )
+    )
     if code_root is not None:
         executing_root = Path(__file__).resolve().parents[3]
         modules = [
@@ -1299,7 +1316,6 @@ def index_native_path_labels(data_root, root, cursor, db, *, stop_at):
         db.execute("INSERT INTO loaded VALUES(?)", (complete,))
 
 
-
 def native_key(row):
     native = (
         row.get("native_receipt") or row.get("continuous_reversal_consumption") or {}
@@ -1341,8 +1357,10 @@ def native_index(root, cursor):
 
 
 def scope_contract(data_root, bundle_hash, cell_key, route, *, cache):
+    if len(cache) >= 256:
+        cache.clear()
     key = (bundle_hash, cell_key, route)
-    if key in cache:
+    if key in cache and "bundle:" + str(bundle_hash) in cache:
         return cache[key]
     result = {}
     if not re.fullmatch(r"[0-9a-f]{64}", str(bundle_hash)):
@@ -1436,10 +1454,162 @@ def scope_contract(data_root, bundle_hash, cell_key, route, *, cache):
             ]
     except (OSError, ValueError, TypeError, KeyError):
         result = {}
-    if len(cache) >= 256:
-        cache.clear()
     cache[key] = result
     return result
+
+
+def effective_auxiliary_contract(data_root, record, row, *, cache):
+    """Bind the actual request through existing registry/overlay owners only."""
+
+    ident = row.get("auxiliary_registry_sha256")
+    if not row.get("auxiliary_registry_declared"):
+        return
+    row.update(
+        auxiliary_binding=row.get("effective_auxiliary_binding")
+        or {"registry_sha256": ident},
+        effective_auxiliary_status="unverified",
+        auxiliary_source_refs=[],
+    )
+    from src.engine.scalping import reversal_auxiliary_intraday as I
+    from src.engine.scalping import reversal_auxiliary_registry as G
+
+    # Missing dependencies remain row-local gaps; their appearance invalidates
+    # the existing cursor through receipts_current, just like repaired files.
+    try:
+        if not re.fullmatch(r"[0-9a-f]{64}", str(ident)):
+            raise ValueError("auxiliary_registry_identity_missing_or_invalid")
+        path = G.directory(data_root) / (ident + ".json")
+        row["auxiliary_source_refs"].append(
+            stat_receipt(path)
+            if path.exists()
+            else dict(path=str(path), status="missing")
+        )
+        if (
+            not row.get("cohort_contract")
+            or row.get("request_binding_verified") is not True
+        ):
+            raise ValueError("auxiliary_native_scope_or_request_unverified")
+        bundle = cache["bundle:" + row["native_receipt"]["bundle_sha256"]][1]
+        assessment = record["source"]["assessment"]
+        overlay_id = assessment.get("auxiliary_overlay_sha256")
+        if overlay_id and not re.fullmatch(r"[0-9a-f]{64}", str(overlay_id)):
+            raise ValueError("auxiliary_overlay_identity_invalid")
+        path = (
+            I.root(data_root) / "generations" / (overlay_id + ".json")
+            if overlay_id
+            else Path(data_root)
+            / "runtime/mechanistic_entry_policy/sources"
+            / (
+                "reversal-"
+                + bundle["continuous_reversal"]["auxiliary_report_sha256"]
+                + ".json"
+            )
+        )
+        row["auxiliary_source_refs"].append(
+            stat_receipt(path)
+            if path.exists()
+            else dict(path=str(path), status="missing")
+        )
+        key = ("auxiliary_sources", bundle["bundle_sha256"], ident, overlay_id)
+        proof = cache.get(key)
+        if not proof or not receipts_current(proof[0]):
+            value = G.load(data_root, ident)
+            overlay = I.read(path) if overlay_id else None
+            if overlay:
+                I.validate_record(data_root, overlay, bundle)
+                bindings = overlay["bindings"]
+            else:
+                bindings = I.inherited(data_root, bundle)
+            sources = I.lineage_sources(data_root, bundle, overlay)
+            refs = row["auxiliary_source_refs"] + [
+                stat_receipt(s["path"]) for s in sources
+            ]
+            if overlay and overlay.get("code_hashes") != I.code_hashes():
+                from src.engine.scalping import reversal_auxiliary_compatibility as C
+
+                receipt = C.validate(
+                    data_root, bundle, path, overlay.get("code_hashes"), I.code_hashes()
+                )
+                refs.extend(
+                    stat_receipt(p)
+                    for p in [
+                        C.path(data_root, bundle, path, I.code_hashes()),
+                        receipt["evidence_path"],
+                        *[r["path"] for r in receipt["frozen_readers"]],
+                    ]
+                )
+            current = value
+            while True:
+                refs.append(
+                    stat_receipt(
+                        G.directory(data_root) / (current["registry_sha256"] + ".json")
+                    )
+                )
+                if current.get("research_registry_sha256"):
+                    refs.append(
+                        stat_receipt(
+                            G.directory(data_root)
+                            / (current["research_registry_sha256"] + ".json")
+                        )
+                    )
+                parent = current.get("production_parent_registry_sha256")
+                if not parent:
+                    break
+                current = G.load(data_root, parent)
+            if not receipts_current(refs):
+                raise ValueError("auxiliary_source_changed_during_audit")
+            proof = (refs, value, G.binding(value), bindings, overlay)
+            cache[key] = proof
+        refs, value, binding, bindings, overlay = proof
+        # Cache immutable provenance only. Every row still proves its request,
+        # dynamic schema/wire, scope and original confirmation-time activation.
+        row["auxiliary_source_refs"] = refs
+        request = record["source"]["auxiliary_request"]
+        if (
+            request["prompt"] != value["prompt"]
+            or assessment.get("auxiliary_binding") != binding
+        ):
+            raise ValueError("auxiliary_observation_registry_changed")
+        envelope = G.envelope(request["input"], value)
+        if request["response_schema"] != envelope["logical_schema"]:
+            raise ValueError("auxiliary_observation_response_schema_changed")
+        if value["schema"] == G.SCHEMA_V2 and (
+            assessment.get("auxiliary_wire_contract") != envelope["contract"]
+            or assessment.get("auxiliary_wire_hashes") != envelope["hashes"]
+        ):
+            raise ValueError("auxiliary_observation_wire_changed")
+        scope = str(row["cell_key"]) + "|" + str(row["event"]["venue"])
+        if bindings.get(scope) != ident:
+            raise ValueError("auxiliary_observation_scope_changed")
+        if (
+            overlay
+            and datetime.fromisoformat(overlay["effective_from"]).timestamp()
+            > row["event"]["epoch"]
+        ):
+            raise ValueError("auxiliary_observation_before_effective_time")
+        if not receipts_current(refs):
+            raise ValueError("auxiliary_source_changed_during_audit")
+        row.update(auxiliary_binding=binding, effective_auxiliary_status="verified")
+    except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+        reason = str(exc).split(":", 1)[0][:160]
+        if isinstance(exc, OSError) and exc.filename:
+            path = Path(exc.filename)
+            row["auxiliary_source_refs"].append(
+                stat_receipt(path)
+                if path.exists()
+                else dict(path=str(path), status="missing")
+            )
+            if isinstance(exc, FileNotFoundError):
+                reason = (
+                    "historical_reader_compatibility_missing"
+                    if path.is_relative_to(I.root(data_root) / "compatibility")
+                    else (
+                        "auxiliary_registry_source_missing"
+                        if path.is_relative_to(G.directory(data_root))
+                        else "auxiliary_dependency_missing"
+                    )
+                )
+        row["effective_auxiliary_reason"] = reason
 
 
 def native_records(source, source_date, data_root, start=0, *, stop_at):
@@ -1510,6 +1680,7 @@ def native_records(source, source_date, data_root, start=0, *, stop_at):
                                 }
                             }
                         )
+                    effective_auxiliary_contract(data_root, record, row, cache=cache)
                     row["source_ref"] = dict(
                         path=str(path),
                         offset=offset,
@@ -1528,7 +1699,12 @@ def native_records(source, source_date, data_root, start=0, *, stop_at):
 
 def index_native_rows(db, rows, source):
     for row in rows:
-        key, raw = native_key(row), json.dumps(R.seal(row), sort_keys=True)
+        # The cursor owns the deduplicated dependency receipts. Repeating the
+        # same overlay ancestry in every indexed/projected row is unbounded.
+        key, raw = native_key(row), json.dumps(
+            R.seal({k: v for k, v in row.items() if k != "auxiliary_source_refs"}),
+            sort_keys=True,
+        )
         old = db.execute("SELECT row FROM native WHERE key=?", (key,)).fetchone()
         if old:
             if json.loads(old[0]).get("observation_sha256") != row.get(
@@ -2147,6 +2323,8 @@ def process_date(data_root, source_date, *, stop_at, clock=time.monotonic):
                         dependencies_by_path[r["policy_source_ref"]["path"]] = r[
                             "policy_source_ref"
                         ]
+                    for ref in r.get("auxiliary_source_refs", []):
+                        dependencies_by_path[ref["path"]] = ref
                 cursor["source_dependency_receipts"] = list(
                     dependencies_by_path.values()
                 )
@@ -2401,7 +2579,7 @@ def coverage(daily):
     for summary in daily.get("scopes", {}).values():
         for key, value in summary["counts"].items():
             if key == "rows" or key.startswith(
-                ("join_", "outcome_", "native_binding_")
+                ("join_", "outcome_", "native_binding_", "auxiliary_binding_")
             ):
                 counts.add(key, value)
     return dict(counts)
@@ -2435,7 +2613,7 @@ def phase_receipt(data_root, day, daily_generation, phase, **refs):
     )
 
 
-def research_source_scope(data_root, *, through_date=None):
+def research_source_scope(data_root, *, through_date=None, from_date=None):
     """Bound discovery, pending and currentness to the same closed source dates."""
     config = read_json(namespace(data_root) / "installation.json", {})
     if config:
@@ -2449,18 +2627,30 @@ def research_source_scope(data_root, *, through_date=None):
         baseline.get("policy_refresh_start_date", "2026-09-29"),
         config.get("evidence_start_date", "2026-09-29"),
     )
+    configured_start = start
     through = through_date or datetime.now(R.KST).date().isoformat()
+    if from_date is not None:
+        date.fromisoformat(from_date)
+        start = max(start, from_date)
     date.fromisoformat(start)
     date.fromisoformat(through)
-    return dict(
+    if start > through:
+        raise ValueError("research_source_range_invalid")
+    result = dict(
         evidence_start_date=start,
         through_date=through,
         source_dates=[
             d
             for d in discover_dates(data_root, dict(evidence_start_date=start))
-            if d <= through
+            if start <= d <= through
         ],
     )
+    if from_date is not None:
+        result.update(
+            recovery_from_date=from_date,
+            configured_evidence_start_date=configured_start,
+        )
+    return result
 
 
 def source_cursor_states(root, source_dates):
@@ -2479,9 +2669,13 @@ def source_cursor_states(root, source_dates):
     return states
 
 
-def cumulative(data_root, *, stop_at, clock=time.monotonic, through_date=None):
+def cumulative(
+    data_root, *, stop_at, clock=time.monotonic, through_date=None, from_date=None
+):
     root = namespace(data_root)
-    source_scope = research_source_scope(data_root, through_date=through_date)
+    source_scope = research_source_scope(
+        data_root, through_date=through_date, from_date=from_date
+    )
     cursor_states = source_cursor_states(root, source_scope["source_dates"])
     registry = read_json(root / "fixed_candidates.json", {})
     if registry:
@@ -2575,7 +2769,11 @@ def cumulative(data_root, *, stop_at, clock=time.monotonic, through_date=None):
         ):
             raise ValueError("cumulative_comparison_binding_invalid")
         if (
-            research_source_scope(data_root, through_date=source_scope["through_date"])
+            research_source_scope(
+                data_root,
+                through_date=source_scope["through_date"],
+                from_date=source_scope.get("recovery_from_date"),
+            )
             != source_scope
         ):
             raise Deferred("cumulative_source_inventory_changed_before_seal")
@@ -2706,7 +2904,14 @@ def comparison_current(data_root, comparison):
     scope = comparison.get("source_scope")
     if not isinstance(scope, dict) or not scope.get("through_date"):
         return False
-    if research_source_scope(data_root, through_date=scope["through_date"]) != scope:
+    if (
+        research_source_scope(
+            data_root,
+            through_date=scope["through_date"],
+            from_date=scope.get("recovery_from_date"),
+        )
+        != scope
+    ):
         return False
     if comparison.get("source_cursor_states") != source_cursor_states(
         namespace(data_root), scope["source_dates"]

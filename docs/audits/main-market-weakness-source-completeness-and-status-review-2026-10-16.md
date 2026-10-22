@@ -120,3 +120,43 @@ native notification f569c0b602a61ba37a502e2c6169b624a893cbc3673f898219e72a4a5290
 이 수용은 사용자 승인 단회 실행의 코드·자료·누적·알림 판정 수용이다. 실제 Main/정기 wrapper는 여전히selected b1519a2d4/설치 a19fb4dd다. 새 수리 code의 정기 채택·native optional installer 재결속과 다음 야간 소비는 미실행이며 통합 배포 owner에 남긴다. 설치를 손으로 고치거나 active selector/cron을 바꾸어 완료를 만들지 않는다. 정기 incumbent 코드가 새 연구 generation을 자기 코드로 해석할 수 없으므로 다음21:40 전에 통합 배포 세션이 이 차이를 확인해야 한다. Main 정책/PREOPEN·자연 주문·비용 후 경제성의 새 완료 주장도 없다.
 
 Git scope baseline b1519a2d4433401a5f969149789abfe3f1b76306: source 2files +356/-19 (net 337); tests 2files +433/-2 (net 431); docs 3files +66/-0 (net 66). Moves0/new module·worker·entrypoint0이며 공용 reader는 기존3개 consumer를 유지한다. 실제 native path label·원 제외/경로 보존·chunk checkpoint와 서로 다른 부정 회귀에 필요한 순증이다. 별도 dirty 문서/런타임 변경은 포함하지 않는다.
+
+
+## Effective registry 결속 수리와 7거래일 제한 복구 — 2026-10-22
+
+판단: 실제 요청의 registry를 family 기본 binding으로 덮던 연결 결함을 수리했다. **검증 사례32건의 요청·응답 결속은32/32 verified이고, 그중 기존 실행 guard 거부15건은 조정 효과 분모에서 제외한다.** 닫힌7거래일의 daily→terminal→누적→notification→attempt/summary 수용은 완료했으나, 과거 reader 호환 증빙 누락425 PASS와 약세 경로 U 및 기계 수치 미지원은 남는다. 모든 원천이 복구됐거나 매매 조정 수치를 찾았다는 판정이 아니다.
+
+### 원인과 기존 owner 수리
+
+- `A.native_records`가 `G.load/binding/envelope`와 `I.validate_record/inherited/lineage_sources`를 소비해 실제 registry·원 prompt/input/schema·v2 wire/decoder·scope·확인 시점·component를 검증한다. `R.bind_native`는 기본 binding을 registry 선언에 대입하지 않는다. registry 선언의 미검증·변조·누락·미래 적용·component 불일치는 계속 거부한다. 미호출/실제 raw 보조판정·응답 후 실행 guard 상태를 구분하며, 유효 raw PASS라도 기존 실행 거부/결측 증거를 추가 보류의 이익으로 세지 않는다.
+- 실제 request/response contract와 실행 contract를 분리했다. `entry_auxiliary_response_contract_valid=true`인데 `entry_ai_contract_valid=false`인 신호 만료/경로 변경은 registry 결속 실패가 아니다. 원 raw PASS는 보존하고 `auxiliary_execution_status`/이유로 기록하며, rejected 또는 증거가 없는 registry 판정은 post-auxiliary 비교에서 제외한다. 공용 `project_trace`의 장후 trailing reader도 회귀 검증했다. 기존 보조평가·기계평가·Main의 장중 request/capture/logger는 변경하지 않았다. 행별 helper는 기존 A.native_records 소유이며, bundle/cell/route만 캐시하는 scope_contract에는 실제 요청이 없어서 그 기본 계약을 변형하지 않았다. 기존 G/I 검증을 소비하는 연결부이고 별도 정책 validator/producer를 추가하지 않았다.
+- 첫 제한 복구에서 전체 native machine 감사가 같은 immutable source를 행마다 재해시하는 비용을 발견해 worker를 중단했다. 연구는 기존 registry/overlay validator를 재사용하며 파일 identity가 유지된 provenance만 cache한다. 요청/schema/wire/scope/시점은 행마다 검사한다.10/14 rchar는 약13.0GB→최종 약93MB로 줄었다.20일에는 공통 ancestry를 각 index/projection 행에 복제해 `research_json_size_limit`에 도달한 원인을 수리했다. 기존 cursor의 경로별 dependency receipt만 보관하고 행의 중복 목록은 제거했다. MAX_JSON/시간/메모리/guard를 늘려 통과시키지 않았다. 초기 실패 로그·세대·oversize object·원 알림은 보존했다.
+
+### 실제 제한 복구와 마지막 소비
+
+범위는10/13·14·15·16·19·20·21이다. 이전9/29~10/12의7일 cursor/원본은 바꾸지 않았고22일 미종료 원천도 처리하지 않았다. `source_scope.recovery_from_date=2026-10-13`과 configured 시작일을 함께 봉인해 **새 코드로 검증한7일 누적**임을 표시한다.14일 전체가 새 코드로 current라는 주장은 하지 않는다. 후보 repair version을 갱신해 잘못된 기본 binding의 기존184후보를 재사용하지 않았으며, 원 manifest는 보존했다. 현재50후보/11scope는 모두post_auxiliary_withhold_cf이고 원천22일까지를 과거로 고정했다. 이 재처리를 새 전향 자료로 바꾸지 않는다.
+
+| 검증 축 | 실제 결과 | 의미/잔여 |
+| --- | --- | --- |
+| 과거 원32 PASS 사례 | 결속32 verified; 실행 verified17/rejected15 | 기존 실행 거부를 새 보류 이익으로 계산하지 않음 |
+| 7일 natural projection |4,879행; raw PASS556행 | 주문/독립 거래/실현 PnL 수가 아님 |
+| raw PASS 결속 |verified131 / 과거 호환 증빙 미검증425 | 아래 missing receipt7개가 우선 장벽; 다른 검증 완료를 대신 주장하지 않음 |
+| 약세 raw PASS |191행 모두U | 원 epoch/path/valid/horizon 결손을 W/F/0수익으로 바꾸지 않음 |
+| 기계 수치 capability |438scope 모두role_unverified | numeric 역할·정의·before와 full confirmation/FSM producer 미지원; 기다리기만 해서 기계 후보가 생기는 상태가 아님 |
+| 누적 비교·알림 |50 uncertainty_unresolved; 전향/유효 bootstrap0; 적격0/not_eligible | Telegram 발송0, 수치 조정 추천 없음 |
+
+W/F는 원 비용.0023·목표 순+.4%/soft stop-3%/1800초의 CF 경로 라벨이며 실현 손익이 아니다.
+
+10/13~10/19의5일에서 exact reader compatibility receipt7개가 없다(압축 alias도 없음). 해당 registry 관측1,236행 중 PASS425행은 `historical_reader_compatibility_missing`으로 별도 기록한다. 이는 시장 raw/경로 원천 결손이나 숫자 조정 미지원과 다르며, source의 원 request/registry를 잘못된 기본 binding으로 대체하는 근거도 아니다. 원 bundle/source/reader SHA에 대응하는 검증된 호환 증빙 또는 원 frozen reader 증거를 native owner에서 확보한 뒤 해당5일을 재검증해야 한다. 호환 PASS를 손으로 만들거나 guard를 생략하지 않았다. missing 파일의 출현/수정은 기존 cursor를 무효화하므로 실패가 영구 cache되지 않는다.
+
+최종 code `e1ad38d4b460a90e4634f44092ae3b0d54b05fa95955518a425dc6c6f6a9ad33`, 누적 `9fe065264658ff3794327909b3ac545ba3c53ae396584e91ccd7ee7ff0a767ac`, comparison `9c97d9867f7917559c956b5fa26d1d58a772252a71de63bca2655e13833edacd`, notification `f1b1ac3a831f590b72a908e4228b87d5aa69171938152b8065f20113f2362810`이다. 같은 generation·source scope·candidate manifest·phase·attempt/summary를 마지막 consumer에서 대사했다. current=true, migration/pending/invalidated0은 위7일 범위의 수용이다. 최종 단일 nice19 worker 복구 93.990초, peak 158.4MiB였고 독립 projection 검증은 109,928,106B를 한 번 읽었다. source census가 복구 전과 일치하며 이전7일 cursor·설치/cron순환·outbox·manual veto·bootstrap/PREOPEN·selector hash를 보존했다. Main은selected fc51a179b/PID3913010/start30436408 그대로다.
+
+### 리뷰·교체·남은 수용
+
+baseline `fc51a179bfa63ff35390f5dbd3cbb7191229d0f3`에서 기존 source3파일과 test2파일을 고쳤다. 새 production module/worker/entrypoint/cron/provider0, moves0이다. 실제 registry/provenance·원 응답/실행 구분·bounded recovery scope와 큰 ancestry/음성 회귀가 순증 이유다. 최종 source +362/-20(net342), tests +561/-1(net560); docs3파일 +52/-0(net52)은 본 audit/운영계획/current checklist의 추가 기록이다.
+
+교체/제거: registry의 기본 binding 대입과 notifier의 기본 parent-only 비교는 **consolidated**(실제 registry/parent 경로로 단일화); introduced 전체 machine 재감사 호출 및 index/projection의 반복 ancestry는 **removed/consolidated**(의존성 소유자는 기존 cursor). 기본 binding reader는 registry 미선언 자료와 원 replay consumer 때문에 **retained**다. 원 `I.audit_observation`은 submission_bottleneck_monitor의 native 감사 consumer가 있어 **retained**이며 변경하지 않았다. R의 selection·cost/label/epoch·typed machine role guard와 원 역사 자료/후보/배송 영수증도 **retained**다. 퇴역 consumer 복원이나 임시 wrapper·중복 dispatcher는 없다.
+
+관련416회귀(공용 trailing reader와 원 보존 사례 포함)+기존 registry/wire/transition85회귀 PASS, compile/diff와 문서 link/owner/print-only parser를 검증한다. 검증 범위에 남은 코드 finding은0이며, 위 과거 호환 증빙/경로 원천/기계 capability와 후속 자연 전향 수용은 별도 OPEN이다. **Main 배포/재기동·정기 installer/code 재결속은 하지 않았다.** 설치/selected는 기존 code이므로 통합 배포 owner가21:40 전 새 커밋 채택 및 optional native 설치 재결속을 확인해야 한다. 새코드의 단회 결과를 정기 채택이나 Main PID 소비로 전용하지 않는다.
+
+근거: [최종 소비·분모](../../tmp/weakness-effective-registry-repair-20261022/final-consumer-verification.json), [최종 복구](../../tmp/weakness-effective-registry-repair-20261022/reviewed-recovery/effective-registry-recovery-result.json), [과거 호환 증빙 결손](../../tmp/weakness-effective-registry-repair-20261022/historical-compatibility-diagnostics.json), [원 응답/실행 구분](../../tmp/weakness-effective-registry-repair-20261022/response-binding-failure-examples.json), [회귀](../../tmp/weakness-effective-registry-repair-20261022/reviewed-typed-regression-tests.log), [첫 실패](../../tmp/weakness-effective-registry-repair-20261022/recovery.log), [크기 제한 원인](../../tmp/weakness-effective-registry-repair-20261022/optimized-recovery.log).
