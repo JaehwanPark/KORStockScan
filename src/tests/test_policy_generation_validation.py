@@ -437,6 +437,7 @@ def test_post_aux_guard_successor_does_not_transitively_promote_older_reports(tm
     ('holding_vote','REVIEWED_HISTORICAL_RESOLUTION_SUCCESSORS'),
     *[(family,'REVIEWED_HOLDING_REPUBLICATION_SUCCESSORS') for family in ('entry_cancel_wait','auxiliary')],
     *[(family,'REVIEWED_FIXED_WAIT_SUCCESSORS') for family in ('rising_missed','holding_vote')],
+    *[(family,'REVIEWED_ENTRY_COST_SOURCE_SUCCESSORS') for family in validation.PLANS],
     *[(family,'REVIEWED_ENTRY_COST_SUCCESSORS') for family in validation.PLANS],
     *[(family,'REVIEWED_QUANTITY_CAPTURE_SUCCESSORS') for family in ('rising_missed','holding_vote')],
     ('entry_cancel_wait','REVIEWED_BUY_IDENTITY_SUCCESSORS'),
