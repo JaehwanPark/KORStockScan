@@ -111,6 +111,8 @@ REVIEWED_PREPARATION_HISTORY = {
 # Reviewed stopped-origin custody/source recovery; original runtime guards stay unchanged.
 REVIEWED_PREPARATION_HISTORY['src/engine/scalping/reversal_code_handoff.py'].update({('ab61f882f4c8bbaddc0576a5765f4f102e38fd824b44a25341ffc78d647741b5', 'c5c6edd558c15bd1067e018d2fa84e4670cd213183baa376cf223e1376ba0238'), ('16776a22b99bff4054ba99914cd8f7c96e87f6ca9fb1ac041e6a8191723b929d', 'c5c6edd558c15bd1067e018d2fa84e4670cd213183baa376cf223e1376ba0238')})
 
+REVIEWED_PREPARATION_HISTORY['src/engine/scalping/reversal_code_handoff.py'].update({('6c5b8f3013e055ef54774c1e89be66fda93988aa5792e775bb82bac86636cbf0', 'b77b63fa5afe9b3dff59266cecce73f92880b5256b12c32343a70aeddba63aa9'), ('c5c6edd558c15bd1067e018d2fa84e4670cd213183baa376cf223e1376ba0238', 'b77b63fa5afe9b3dff59266cecce73f92880b5256b12c32343a70aeddba63aa9'), ('ab61f882f4c8bbaddc0576a5765f4f102e38fd824b44a25341ffc78d647741b5', 'b77b63fa5afe9b3dff59266cecce73f92880b5256b12c32343a70aeddba63aa9'), ('16776a22b99bff4054ba99914cd8f7c96e87f6ca9fb1ac041e6a8191723b929d', 'b77b63fa5afe9b3dff59266cecce73f92880b5256b12c32343a70aeddba63aa9')})
+
 
 def reviewed_preparation_pair(relative, old, current):
     return (REVIEWED_PREPARATION_SOURCES.get(relative) == (old, current)

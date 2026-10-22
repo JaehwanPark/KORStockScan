@@ -411,6 +411,27 @@ def consumed_observation_scope(*, data_root=None):
         _OBSERVER_CUSTODY.reset(token)
 
 
+def predecessor_review_matches(review, day, root, commit, code_root):
+    """One custody predicate for live, closed and failed-preparation readers."""
+    if (not review or review.get('day') != day or review.get('root') != root
+            or review.get('commit') != commit or review.get('code_root') != code_root):
+        return False
+    observation = review.get('prepared_observation')
+    if observation is not None:
+        return (observation.get('target_date') == day
+            and observation.get('release_commit') == commit
+            and all(observation.get(k) is False for k in
+                    ('runtime_effect','actual_pid_consumed','allowed_runtime_apply'))
+            and bool(observation.get('source_hashes'))
+            and all(_sha(path) == sha for path, sha in observation['source_hashes'].items()))
+    identity = review.get('identity') or {}
+    if identity.get('cwd') != str(root/'src'):
+        return False
+    if review.get('closed_observation'):
+        return closed_consumption_observation(day) == review['closed_observation']
+    return _identity(identity['pid']) == identity
+
+
 @contextmanager
 def stopped_preparation_review(day):
     """Read sealed failed-preparation sources, without renewing launch expiry."""
@@ -547,12 +568,7 @@ def verify_entry_consumer_code(day, *, family, policy_sha, expected, paths, actu
     code_root, code_commit = root, commit
     if Path(__file__).resolve().parents[3] != root:
         review = _PREDECESSOR_REVIEW.get()
-        if (not review or review['day'] != day or review['root'] != root
-                or review['commit'] != commit or review['code_root'] != Path(__file__).resolve().parents[3]
-                or (closed_consumption_observation(day) != review['closed_observation']
-                    if review.get('closed_observation') else
-                    any(_sha(p) != sha for p, sha in review['prepared_observation']['source_hashes'].items())
-                    if review.get('prepared_observation') else _identity(review['identity']['pid']) != review['identity'])):
+        if not predecessor_review_matches(review, day, root, commit, Path(__file__).resolve().parents[3]):
             raise ValueError('entry_consumer_release_mismatch')
         code_root, code_commit = review['code_root'], review['code_commit']
     manifest = _read(bootstrap.manifest_path(day))
@@ -4671,7 +4687,7 @@ REVIEWED_ENTRY_COST_DEPENDENCY_VARIANTS = {
 # report; effective auxiliary registry research remains report-only.
 REVIEWED_ENTRY_COST_PRE_PRESTART_HASHES = REVIEWED_ENTRY_COST_HASHES
 REVIEWED_ENTRY_COST_PRE_PRESTART_VARIANTS = REVIEWED_ENTRY_COST_DEPENDENCY_VARIANTS
-REVIEWED_PRESTART_INTEGRATION_HASHES = {'src/engine/automation/ordered_intraday_deploy.py': 'd56d407f1515ee8a8bfd307f469b175b794f490120aec2b2fe2f98165d5488af', 'src/engine/automation/main_market_weakness_research.py': 'e78122825224eee72bb3301fd2df7c22230645c5b88103fd32009a186316909b', 'src/engine/automation/main_startup_validation.py': 'fcf33f73c9b4831339c3215732c5364c9cd11f30147273c30c172fa3f611fd0c', 'src/engine/infrastructure/startup_validation_code_context.py': '05fcf283be9c125f9262277eaf0ff2ef5f26b174e034e01113c8ebdec426a4a8'}
+REVIEWED_PRESTART_INTEGRATION_HASHES = {'src/engine/automation/ordered_intraday_deploy.py': 'd56d407f1515ee8a8bfd307f469b175b794f490120aec2b2fe2f98165d5488af', 'src/engine/automation/main_market_weakness_research.py': 'e78122825224eee72bb3301fd2df7c22230645c5b88103fd32009a186316909b', 'src/engine/automation/main_startup_validation.py': 'fcf33f73c9b4831339c3215732c5364c9cd11f30147273c30c172fa3f611fd0c', 'src/engine/infrastructure/startup_validation_code_context.py': 'b999b1fb1e2ff40dc112cfd88a97ac0e2ecb62975fcbd95ac0c78a1899ad3ea2', 'src/engine/scalping/reversal_code_handoff.py': 'b77b63fa5afe9b3dff59266cecce73f92880b5256b12c32343a70aeddba63aa9'}
 REVIEWED_ENTRY_COST_HASHES = {**REVIEWED_ENTRY_COST_HASHES, **REVIEWED_PRESTART_INTEGRATION_HASHES}
 REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
     name: REVIEWED_ENTRY_COST_PAIRS.get(name, ()) + tuple((old, current) for old in sorted(
