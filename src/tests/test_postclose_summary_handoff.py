@@ -1632,3 +1632,86 @@ def test_initial_quantity_resume_binds_native_prefix_and_rejects_changed_artifac
     artifact.write_text('{"changed":true}')
     with pytest.raises(ValueError,match='resume_artifact_changed'):
         mod.validate_initial_quantity_resume(tmp_path,day)
+
+
+@pytest.mark.parametrize('locator,damage', [(locator,damage)
+    for locator in ('selected','strict','receipt','preopen')
+    for damage in (None,'code','output','missing_origin','alias','foreign')]
+    + [('preopen','preopen_date'),('preopen','preopen_failed')])
+def test_stage_code_origin_survives_release_inventory_growth(stage_environment, monkeypatch, locator, damage):
+    h, day, report, run, _produce = stage_environment
+    value = run('legacy_machine_report')
+    value.pop('stage_code_root', None)
+    managed = report.parent.parent/'KORStockScan-runtime-releases'
+    managed.mkdir()
+    selected, origin = managed/'selected', managed/'original'
+    for root in (selected, origin):
+        (root/'src/engine/automation').mkdir(parents=True)
+        (root/'.git').write_text('gitdir: immutable')
+        (root/'src/engine/automation/postclose_summary_handoff.py').write_text('original')
+    for i in range(300):
+        root = managed/f'old-{i:03d}';root.mkdir();(root/'.git').write_text('gitdir: immutable')
+    selector = report.parent/'runtime/runtime_release_selection.json'
+    selector.parent.mkdir(parents=True, exist_ok=True)
+    selector.write_text(json.dumps(dict(schema='runtime_release_selection_v1',
+        release_root=str(selected), git_commit='a'*40)))
+    strict = report/'threshold_cycle_postclose_verification'/f'threshold_cycle_postclose_verification_{day}.json'
+    strict.parent.mkdir(parents=True, exist_ok=True)
+    strict.write_text(json.dumps(dict(date=day, code_commit=('c' if locator == 'preopen' else 'b')*40)))
+    if locator == 'preopen':
+        from src.engine.build_next_stage2_checklist import _next_krx_trading_day
+        target = _next_krx_trading_day(day)
+        preopen = report/'threshold_cycle_preopen_status'/f'threshold_cycle_preopen_{target}.status.json'
+        preopen.parent.mkdir(parents=True)
+        preopen.write_text(json.dumps(dict(target_date=day if damage == 'preopen_date' else target,
+            status='failed' if damage == 'preopen_failed' else 'succeeded',selected_release_commit='b'*40)))
+    if locator == 'selected': origin = selected
+    if locator == 'receipt': value['stage_code_root'] = str(origin)
+    if damage == 'missing_origin': (origin/'src/engine/automation/postclose_summary_handoff.py').unlink()
+    elif damage == 'alias':
+        alias = managed/'alias';alias.symlink_to(origin,target_is_directory=True)
+        if locator == 'receipt': value['stage_code_root'] = str(alias)
+        else: origin = alias
+    elif damage == 'foreign':
+        foreign = managed.parent/'foreign';foreign.mkdir()
+        if locator == 'receipt': value['stage_code_root'] = str(foreign)
+        else: origin = foreign
+    native_iterdir = Path.iterdir
+    ordered_roots = [managed/f'old-{i:03d}' for i in range(300)] + [origin, selected]
+    monkeypatch.setattr(Path, 'iterdir', lambda path: iter(ordered_roots)
+        if path == managed else native_iterdir(path))
+    calls=[]
+    def code(stage, commands, root, **kwargs):
+        calls.append(root)
+        return 'sealed-producer-code' if root == origin and damage != 'code' else 'different-code'
+    monkeypatch.setattr(h, '_stage_code', code)
+    monkeypatch.setattr(h.subprocess, 'check_output', lambda *a, **kw:
+        f'worktree {origin}\nHEAD {"b"*40}\n\n')
+    value['stage_code_sha256'] = 'sealed-producer-code'
+    if damage == 'output':
+        output = next(iter(h.stage_artifacts(report, day, 'legacy_machine_report').values()))
+        output.write_text(output.read_text()+' changed')
+    h._stage_write(h.stage_path(report, day, 'legacy_machine_report'), value)
+    result = h.stage_receipt_issues(report, day, 'legacy_machine_report', code_hash='current-code')
+    if damage is None:
+        assert result == []
+        assert len(calls) <= 2
+    else:
+        assert result
+    assert len(calls) <= 258
+
+
+def test_native_stage_writer_binds_root_for_the_later_code_consumer(stage_environment, monkeypatch):
+    h, day, report, _run, produce = stage_environment
+    root = report.parent.parent/'KORStockScan-runtime-releases'/'producer'
+    (root/'src/engine/automation').mkdir(parents=True)
+    (root/'.git').write_text('gitdir: immutable')
+    (root/'src/engine/automation/postclose_summary_handoff.py').write_text('reviewed')
+    result = h.run_stage('legacy_machine_report', day, report_dir=report, project=root, runner=produce)
+    assert result['status'] == 'succeeded' and result['stage_code_root'] == str(root)
+    selector = report.parent/'runtime/runtime_release_selection.json'
+    selector.parent.mkdir(parents=True,exist_ok=True)
+    selector.write_text(json.dumps(dict(schema='runtime_release_selection_v1',
+        release_root=str(root),git_commit='a'*40)))
+    monkeypatch.setattr(h,'_stage_code',lambda stage,commands,project,**kw: result['stage_code_sha256'])
+    assert h.stage_receipt_issues(report,day,'legacy_machine_report',code_hash='later-consumer') == []

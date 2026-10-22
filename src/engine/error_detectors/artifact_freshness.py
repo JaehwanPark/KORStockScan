@@ -2555,9 +2555,9 @@ def _postclose_handoff_semantics(root, source_date, now):
                                                      generation_only=True)
                 result["validation_scope"] = "sealed_generation_not_new_full_chain_verification"
                 if 'strict_checklist_generation_stale' in errors:
-                    from src.engine.automation.intraday_release_handoff import historical_checklist_for_observer
+                    from src.engine.automation.postclose_finalization_generation import strict_bound_checklist_for_observer
                     try:
-                        preserved = historical_checklist_for_observer(root, source_date, now=now)
+                        preserved = strict_bound_checklist_for_observer(root, source_date, now=now)
                         errors = done_terminal_receipt_issues(
                             controller_path, source_date, started_after_ns=0, generation_only=True,
                             checklist_snapshot=Path(preserved['path']))

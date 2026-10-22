@@ -77,7 +77,6 @@ def _snapshot_date(path: Path, *, compressed: bool) -> str | None:
 def capture_finalization_generation(project: Path, target_date: str, *, consumed_checklist: bool = False) -> dict:
     """Bind the current controller generation and postclose exit source bytes."""
     if consumed_checklist:
-        from src.engine.automation.intraday_release_handoff import historical_checklist_for_observer
         from src.engine.automation.postclose_done_controller import done_terminal_receipt_issues
         snapshot = None
         try:
@@ -85,7 +84,7 @@ def capture_finalization_generation(project: Path, target_date: str, *, consumed
         except FinalizationGenerationError as exc:
             if str(exc) != 'strict_checklist_generation_stale':
                 raise
-            proof = historical_checklist_for_observer(project, target_date)
+            proof = strict_bound_checklist_for_observer(project, target_date)
             snapshot = Path(proof['path'])
             generation = _capture_finalization_generation(project, target_date, checklist_snapshot=snapshot)
         controller = Path(project)/'data/report/postclose_done_controller'/f'postclose_done_controller_{target_date}.json'
@@ -247,6 +246,33 @@ def _capture_finalization_generation(project: Path, target_date: str, *,
     }
 
 
+def strict_bound_checklist_for_observer(project: Path, target_date: str, *, now=None) -> dict:
+    """Resolve original strict bytes without requiring a later trading PID.
+
+    Callers must still validate the native controller and all other source
+    bindings. An archived checklist proves no current policy/PID consumption.
+    """
+    strict = _load(Path(project)/'data/report/threshold_cycle_postclose_verification'/
+        f'threshold_cycle_postclose_verification_{target_date}.json', 'strict_current_missing_or_invalid')
+    expected = (strict.get('generation_binding') or {}).get('checklist_sha256')
+    if not isinstance(expected, str) or not re.fullmatch(r'[0-9a-f]{64}', expected):
+        raise FinalizationGenerationError('strict_checklist_generation_stale')
+    data_root = (Path(project)/'data').resolve(strict=True)
+    snapshot = data_root/'runtime/policy_bootstrap/historical_checklists'/(expected+'.md')
+    if snapshot.exists() or snapshot.is_symlink():
+        if (not snapshot.is_file() or snapshot.is_symlink()
+                or any(p.is_symlink() for p in snapshot.parents if p.is_relative_to(data_root))
+                or not 0 < snapshot.stat().st_size <= 2*1024*1024
+                or _sha(snapshot) != expected):
+            raise FinalizationGenerationError('historical_checklist_snapshot_invalid')
+        return dict(path=str(snapshot), sha256=expected,
+            basis='preserved_strict_bound_checklist', source_date=target_date,
+            runtime_effect=False, new_finalization_claimed=False)
+    # Older consumed handoffs may predate the native SHA snapshot.
+    from src.engine.automation.intraday_release_handoff import historical_checklist_for_observer
+    return historical_checklist_for_observer(project, target_date, **({'now': now} if now is not None else {}))
+
+
 def finalization_marker_issues(
     project: Path, target_date: str, chain_sha256: str, snapshot_sha256: str,
     *, validation_details: dict | None = None,
@@ -259,28 +285,7 @@ def finalization_marker_issues(
         if str(exc) != 'strict_checklist_generation_stale':
             return [str(exc)]
         try:
-            strict = _load(Path(project)/'data/report/threshold_cycle_postclose_verification'/
-                f'threshold_cycle_postclose_verification_{target_date}.json', 'strict_current_missing_or_invalid')
-            expected = (strict.get('generation_binding') or {}).get('checklist_sha256')
-            if not isinstance(expected, str) or not re.fullmatch(r'[0-9a-f]{64}', expected):
-                raise FinalizationGenerationError('strict_checklist_generation_stale')
-            data_root = (Path(project)/'data').resolve(strict=True)
-            snapshot = data_root/'runtime/policy_bootstrap/historical_checklists'/(expected+'.md')
-            if snapshot.exists() or snapshot.is_symlink():
-                # Completed-marker observation binds the original strict bytes.
-                # Later native costs belong to new research, not this old run.
-                if (not snapshot.is_file() or snapshot.is_symlink()
-                        or any(p.is_symlink() for p in snapshot.parents if p.is_relative_to(data_root))
-                        or not 0 < snapshot.stat().st_size <= 2*1024*1024
-                        or _sha(snapshot) != expected):
-                    raise FinalizationGenerationError('historical_checklist_snapshot_invalid')
-                preserved = dict(path=str(snapshot), sha256=expected,
-                    basis='preserved_strict_bound_checklist', source_date=target_date,
-                    runtime_effect=False, new_finalization_claimed=False)
-            else:
-                # Older consumed handoffs may predate the native SHA snapshot.
-                from src.engine.automation.intraday_release_handoff import historical_checklist_for_observer
-                preserved = historical_checklist_for_observer(project, target_date)
+            preserved = strict_bound_checklist_for_observer(project, target_date)
             current = _capture_finalization_generation(
                 project, target_date, checklist_snapshot=Path(preserved['path']))
             if validation_details is not None:

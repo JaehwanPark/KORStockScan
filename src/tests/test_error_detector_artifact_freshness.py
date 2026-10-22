@@ -439,15 +439,33 @@ def test_current_morning_source_does_not_relabel_previous_prepared_failure(tmp_p
     assert result['findings']==[] and result['prepared']['reason']=='source_not_before_target'
 
 
-@pytest.mark.parametrize('damage', [None, 'handoff', 'other_generation'])
-def test_postclose_observer_uses_consumed_snapshot_and_rechecks_other_sources(tmp_path, monkeypatch, damage):
+@pytest.mark.parametrize('profile,damage', [('legacy', None), ('legacy', 'handoff'),
+    ('legacy', 'other_generation'), ('sealed', None), ('sealed', 'other_generation'),
+    ('sealed', 'missing'), ('sealed', 'tamper'), ('sealed', 'symlink'),
+    ('sealed', 'oversize'), ('sealed', 'binding')])
+def test_postclose_observer_uses_consumed_snapshot_and_rechecks_other_sources(tmp_path, monkeypatch, profile, damage):
     from src.engine.automation import intraday_release_handoff as handoff
     from src.engine.automation import postclose_done_controller as controller
     import src.engine.error_detectors.artifact_freshness as detector
     day = '2026-10-06'
     path = tmp_path/f'data/report/postclose_done_controller/postclose_done_controller_{day}.json'
     path.parent.mkdir(parents=True); path.write_text(json.dumps(dict(date=day, status='done')))
-    snapshot = tmp_path/'historical-checklist.md'; snapshot.write_text('original generation')
+    import hashlib
+    expected = hashlib.sha256(b'original generation').hexdigest()
+    snapshot = (tmp_path/'historical-checklist.md' if profile == 'legacy' else
+        tmp_path/'data/runtime/policy_bootstrap/historical_checklists'/(expected+'.md'))
+    snapshot.parent.mkdir(parents=True, exist_ok=True)
+    snapshot.write_bytes(b'original generation')
+    strict = tmp_path/'data/report/threshold_cycle_postclose_verification'/f'threshold_cycle_postclose_verification_{day}.json'
+    strict.parent.mkdir(parents=True)
+    strict.write_text(json.dumps(dict(date=day, generation_binding=dict(source_date=day,
+        checklist_sha256='f'*64 if damage == 'binding' else expected))))
+    if damage == 'missing': snapshot.unlink()
+    elif damage == 'tamper': snapshot.write_text('tampered')
+    elif damage == 'oversize': snapshot.write_bytes(b'x'*(2*1024*1024+1))
+    elif damage == 'symlink':
+        original = tmp_path/'outside.md'; original.write_bytes(snapshot.read_bytes())
+        snapshot.unlink(); snapshot.symlink_to(original)
     monkeypatch.setattr(detector, '_semantic_stage_binding', lambda *a, **kw: {'status': 'off'})
     calls = []
     def verify(path, source_date, **kwargs):
@@ -460,13 +478,17 @@ def test_postclose_observer_uses_consumed_snapshot_and_rechecks_other_sources(tm
     monkeypatch.setattr(controller, 'done_terminal_receipt_issues', verify)
     def historical(project, source_date, **kwargs):
         assert project == tmp_path and source_date == day
-        if damage == 'handoff': raise ValueError('intraday_observer_current_pid_not_bound')
+        if damage == 'handoff' or profile == 'sealed':
+            raise ValueError('native_preopen_has_no_intraday_handoff')
         return dict(path=str(snapshot), basis='consumed_intraday_preserved_historical_generation', runtime_effect=False)
     monkeypatch.setattr(handoff, 'historical_checklist_for_observer', historical)
     result = _postclose_handoff_semantics(tmp_path, day, datetime(2026, 10, 7, 13, tzinfo=ZoneInfo('Asia/Seoul')))
     if damage is None:
         assert result['status'] == 'done' and result['findings'] == []
         assert len(calls) == 2 and result['historical_generation_validation']['runtime_effect'] is False
+        assert result['historical_generation_validation']['basis'] == (
+            'preserved_strict_bound_checklist' if profile == 'sealed' else
+            'consumed_intraday_preserved_historical_generation')
     else:
         assert result['findings'] == ['postclose_handoff_generation_invalid']
         if damage == 'other_generation':
