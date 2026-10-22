@@ -2203,7 +2203,7 @@ def test_postclose_recovery_handoff_keeps_complete_reviewed_generation(tmp_path,
 
 @pytest.mark.parametrize('family',['main_stop','holding_vote','pre_submit_delay'])
 @pytest.mark.parametrize('fault',[None,'missing','dirty','committed_change','parent_mix'])
-@pytest.mark.parametrize('generation',['current','consumed_pre_startup','consumed_pre_shutdown','consumed_pre_native_label','consumed_pre_coordination','consumed_pre_prepared_validation','consumed_pre_prepared_repair','consumed_pre_main_preparation','consumed_pre_prepared_start','consumed_pre_first_turn','consumed_pre_expiry_health','consumed_pre_signed_surge','consumed_pre_preassessment','consumed_pre_prestart'])
+@pytest.mark.parametrize('generation',['current','consumed_pre_startup','consumed_pre_shutdown','consumed_pre_native_label','consumed_pre_coordination','consumed_pre_prepared_validation','consumed_pre_prepared_repair','consumed_pre_main_preparation','consumed_pre_prepared_start','consumed_pre_first_turn','consumed_pre_expiry_health','consumed_pre_signed_surge','consumed_pre_preassessment','consumed_pre_prestart','consumed_pre_prepared_owner'])
 def test_entry_cost_handoff_keeps_exact_complete_generation(tmp_path,family,fault,generation,
         dependency='src/engine/monitoring/entry_attempt_identity.py'):
     import hashlib,os,subprocess
@@ -2226,12 +2226,13 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(tmp_path,family,faul
         'consumed_pre_expiry_health':handoff.REVIEWED_ENTRY_COST_PRE_EXPIRY_HEALTH_HASHES,
         'consumed_pre_signed_surge':handoff.REVIEWED_ENTRY_COST_PRE_SIGNED_SURGE_HASHES,
         'consumed_pre_preassessment':handoff.REVIEWED_ENTRY_COST_PRE_PREASSESSMENT_HASHES,
-        'consumed_pre_prestart':handoff.REVIEWED_ENTRY_COST_PRE_PRESTART_HASHES}[generation])
+        'consumed_pre_prestart':handoff.REVIEWED_ENTRY_COST_PRE_PRESTART_HASHES,
+        'consumed_pre_prepared_owner':handoff.REVIEWED_ENTRY_COST_PRE_PREPARED_OWNER_HASHES}[generation])
     for name in hashes:
         content=((canonical/name).read_bytes() if generation=='current' else
             subprocess.check_output(['git','-C',str(canonical),'show',
                 {'consumed_pre_startup':'90bf2d11f','consumed_pre_shutdown':'70fc572f8',
-                 'consumed_pre_native_label':'b1519a2d4','consumed_pre_coordination':'3dd9f1bf5','consumed_pre_prepared_validation':'bf330ae92','consumed_pre_prepared_repair':'81f43b8ba','consumed_pre_main_preparation':'8644e15fc','consumed_pre_prepared_start':'3b951f1f1','consumed_pre_first_turn':'e9ee2c8ea','consumed_pre_expiry_health':'9476e9ecd','consumed_pre_signed_surge':'bf26ddf0e','consumed_pre_preassessment':'fc51a179b','consumed_pre_prestart':'64ec63a87'}[generation]+':'+name]))
+                 'consumed_pre_native_label':'b1519a2d4','consumed_pre_coordination':'3dd9f1bf5','consumed_pre_prepared_validation':'bf330ae92','consumed_pre_prepared_repair':'81f43b8ba','consumed_pre_main_preparation':'8644e15fc','consumed_pre_prepared_start':'3b951f1f1','consumed_pre_first_turn':'e9ee2c8ea','consumed_pre_expiry_health':'9476e9ecd','consumed_pre_signed_surge':'bf26ddf0e','consumed_pre_preassessment':'fc51a179b','consumed_pre_prestart':'64ec63a87','consumed_pre_prepared_owner':'d346aa3af'}[generation]+':'+name]))
         (root/name).write_bytes(content)
     name='src/engine/automation/intraday_release_handoff.py'
     (root/name).write_bytes((canonical/name).read_bytes())
@@ -2274,6 +2275,7 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(tmp_path,family,faul
     'src/engine/scalping/continuous_reversal_source.py',
     'src/engine/automation/main_market_weakness_research.py',
     'src/engine/automation/ordered_intraday_deploy.py',
+    'src/engine/automation/prepared_policy_code_handoff.py',
     'src/engine/scalping/reversal_code_handoff.py',
     'src/engine/monitoring/submission_bottleneck_monitor.py',
     'src/engine/scalping/zero_base_probe.py',
@@ -2289,3 +2291,49 @@ def test_native_selection_label_handoff_rejects_incomplete_generation(tmp_path,f
 def test_prepared_validation_handoff_rejects_changed_context(tmp_path,family,fault):
     test_entry_cost_handoff_keeps_exact_complete_generation(tmp_path,family,fault,'current',
         'src/engine/infrastructure/startup_validation_code_context.py')
+
+@pytest.mark.parametrize('damage', [None, 'changed_source', 'consumed', 'origin'])
+def test_stopped_preparation_analysis_preserves_expired_launch_guard(fixture, monkeypatch, damage):
+    from types import SimpleNamespace
+    from src.engine.automation import ordered_intraday_deploy as D
+    from src.engine.infrastructure import runtime_release_router as R
+    data, previous, selected, prepare = fixture
+    assert prepare()['status'] == 'pass'
+    expired = NOW + timedelta(minutes=16)
+    monkeypatch.setattr(handoff, '_today', lambda *a: expired)
+    hp, cp = handoff._paths(DAY, NEW)
+    original = hp.read_bytes()
+    source = data/'original-stopped-proof.json';source.write_text('native original')
+    driver = SimpleNamespace(workspace=data.parent, previous=previous, previous_commit=OLD,
+        identity={'pid':1}, selection=source, hold=source)
+    origin = dict(failed_root=selected, failed_commit=NEW, selected={},
+        failed_path=source, prior_path=source, preparation_sources={})
+    def inspect():
+        if damage == 'origin': raise ValueError('unknown failed origin')
+        return origin
+    driver.inspect_stopped_origin = inspect
+    monkeypatch.setattr(D, 'StoppedDeploymentRecovery', lambda *a: driver)
+    monkeypatch.setattr(D, '_stopped_intraday_predecessor', lambda *a: dict(
+        frozen_files={str(source):handoff._sha(source)}))
+    monkeypatch.setattr(R, 'git', lambda *a:'c'*40)
+    def validate(workspace, value):
+        assert value['workspace'] == str(workspace)
+    monkeypatch.setattr(R, 'validate_release', validate)
+    assert handoff.verify(DAY, NEW, now=expired)['findings'] == ['intraday_first_launch_window_expired']
+    if damage == 'consumed':cp.write_text('{}')
+    if damage in {'consumed','origin'}:
+        with pytest.raises(ValueError):
+            with handoff.stopped_preparation_review(DAY): pass
+    else:
+        with pytest.raises(ValueError) if damage else __import__('contextlib').nullcontext():
+            with handoff.stopped_preparation_review(DAY) as proof:
+                assert proof['original_first_launch_before'] == json.loads(original)['first_launch_before']
+                assert proof['actual_pid_consumed'] is False and proof['allowed_runtime_apply'] is False
+                assert handoff.verify(DAY, NEW, now=expired)['status'] == 'pass'
+                with pytest.raises(ValueError, match='not_launch_authority'):
+                    handoff.consume(DAY, pid=2, now=expired)
+                if damage:source.write_text('changed native generation')
+    assert hp.read_bytes() == original
+    if damage != 'consumed':
+        assert not cp.exists()
+        assert handoff.verify(DAY, NEW, now=expired)['findings'] == ['intraday_first_launch_window_expired']

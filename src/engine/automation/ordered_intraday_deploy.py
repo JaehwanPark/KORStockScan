@@ -1170,7 +1170,8 @@ class StoppedDeploymentRecovery(Deployment):
                 or Path('/proc', str(self.launcher)).exists()):
             raise ValueError('deployment_recovery_requires_stopped_main_and_supervisor')
 
-    def preflight(self):
+    def inspect_stopped_origin(self):
+        """Read-only original custody inspection shared with isolated P5."""
         self.before = self.selection.read_bytes()
         selected = json.loads(self.before)
         failed_root, failed_commit = R.selected_release(self.workspace)
@@ -1222,6 +1223,26 @@ class StoppedDeploymentRecovery(Deployment):
         self.launcher = failed['predecessor_launcher']['pid']
         self.assert_stopped()
         self.previous, self.previous_commit = R.validate_release(self.workspace, prior)
+        return dict(selected=selected, failed_root=failed_root, failed_commit=failed_commit, failed_path=failed_path, hold=hold, hold_raw=hold_raw, hold_sig=hold_sig, failed=failed, failed_raw=failed_raw, failed_sig=failed_sig, prior_path=prior_path, prior=prior, prior_raw=prior_raw, prior_sig=prior_sig, identity=identity, preparation_sources=preparation_sources)
+
+    def preflight(self):
+        origin = self.inspect_stopped_origin()
+        selected = origin['selected']
+        failed_root = origin['failed_root']
+        failed_commit = origin['failed_commit']
+        failed_path = origin['failed_path']
+        hold = origin['hold']
+        hold_raw = origin['hold_raw']
+        hold_sig = origin['hold_sig']
+        failed = origin['failed']
+        failed_raw = origin['failed_raw']
+        failed_sig = origin['failed_sig']
+        prior_path = origin['prior_path']
+        prior = origin['prior']
+        prior_raw = origin['prior_raw']
+        prior_sig = origin['prior_sig']
+        identity = origin['identity']
+        preparation_sources = origin['preparation_sources']
         commit = R.git(self.candidate, 'rev-parse', 'HEAD')
         self.candidate, self.commit = R.validate_release(self.workspace, dict(
             schema='runtime_release_selection_v1', workspace=str(self.workspace),

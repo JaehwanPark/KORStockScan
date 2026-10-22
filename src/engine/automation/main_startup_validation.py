@@ -180,6 +180,7 @@ def _native_preparation_check(selected_root, target_date, source_date, capture_m
             or re.fullmatch('[0-9a-f]{32}', capture_machine) is None):
         raise ValueError('startup_native_preparation_run_id_invalid')
     execution_root, closed, native_pid = selected_root, False, None
+    stopped_preparation = None
     if ROOT != selected_root:
         from src.engine.automation import intraday_release_handoff as H
         try:
@@ -195,6 +196,19 @@ def _native_preparation_check(selected_root, target_date, source_date, capture_m
                 release_root=str(ROOT), git_commit=_git(ROOT, 'rev-parse', 'HEAD')))
             execution_root, closed = ROOT, True
         if not closed:
+            try:
+                selected = H._read(H.DATA_DIR/'runtime/runtime_release_selection.json')
+            except (OSError, ValueError, TypeError, KeyError):
+                selected = {}
+            if (selected.get('release_root') == str(selected_root)
+                    and selected.get('actual_pid_consumed') is False
+                    and selected.get('deployment_transition')):
+                # An applicable failed preparation must authenticate. Do not
+                # hide its invocation/source defect behind the old launch TTL.
+                with H.stopped_preparation_review(target_date) as proof:
+                    stopped_preparation = proof
+                execution_root = ROOT
+        if not closed and stopped_preparation is None:
             try:
                 selection = H._read(H.DATA_DIR/'runtime/runtime_release_selection.json')
                 live_pid = (selection.get('actual_pid_receipt') or {}).get('pid')
@@ -215,6 +229,7 @@ source_date=sys.argv.pop(1)
 run_id=sys.argv.pop(1)
 mode=sys.argv.pop(1)
 closed=mode=='1'
+stopped_preparation=mode=='prepared'
 native_pid=int(mode.split(':',1)[1]) if mode.startswith('native:') else None
 capture=run_id!='0'
 from src.engine.infrastructure.validation_digest_session import postclose_session
@@ -421,9 +436,14 @@ try:
                 from src.engine.automation.intraday_release_handoff import closed_predecessor_review
             if native_pid is not None:
                 from src.engine.automation.intraday_release_handoff import predecessor_review
+            if stopped_preparation:
+                from src.engine.automation.intraday_release_handoff import stopped_preparation_review
             scope = (closed_predecessor_review(sys.argv[-1]) if closed else
-                predecessor_review(sys.argv[-1],pid=native_pid) if native_pid is not None else nullcontext())
-            with scope:
+                predecessor_review(sys.argv[-1],pid=native_pid) if native_pid is not None else
+                stopped_preparation_review(sys.argv[-1]) if stopped_preparation else nullcontext())
+            with scope as custody:
+                if stopped_preparation:
+                    print('P5_NATIVE_STOPPED_PREPARATION='+json.dumps(custody,sort_keys=True),file=sys.stderr)
                 runpy.run_module('src.engine.automation.next_preopen_readiness',run_name='__main__')
         finally:
             if capture:
@@ -438,7 +458,7 @@ finally:
             stats=session.stats,remaining_entries=len(session.entries)),sort_keys=True),file=sys.stderr)
 '''
     command = [str(execution_root / '.venv/bin/python'), '-I', '-B', '-c',
-               script, str(execution_root), source_date, capture_machine or '0', 'native:'+str(native_pid) if native_pid is not None else str(int(closed)), '--verify',
+               script, str(execution_root), source_date, capture_machine or '0', 'native:'+str(native_pid) if native_pid is not None else 'prepared' if stopped_preparation is not None else str(int(closed)), '--verify',
                '--target-date', target_date]
     env = _safe_process_environment()
     diagnostic_receipt = dict(source_date=source_date, target_date=target_date,
@@ -529,6 +549,13 @@ finally:
                 or closure.get('digest_binding', {}).get('pid') != diagnostics['stats']['pid']):
             fail('startup_native_machine_closure_invalid')
         value = {**value, 'native_machine_closure': closure}
+    if stopped_preparation is not None:
+        rows = [line.removeprefix('P5_NATIVE_STOPPED_PREPARATION=')
+                for line in result.stderr.splitlines() if line.startswith('P5_NATIVE_STOPPED_PREPARATION=')]
+        if (len(rows) != 1 or len(rows[0].encode()) > MAX_JSON
+                or json.loads(rows[0]) != stopped_preparation):
+            fail('startup_stopped_preparation_proof_changed')
+        value = {**value, 'stopped_preparation_observation': stopped_preparation}
     return {**value, 'verification_code_root': str(execution_root),
             'verification_code_commit': (_git(execution_root, 'rev-parse', 'HEAD')
                 if execution_root != selected_root else value.get('selected_release_commit')),

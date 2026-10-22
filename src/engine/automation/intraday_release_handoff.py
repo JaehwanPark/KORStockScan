@@ -411,6 +411,77 @@ def consumed_observation_scope(*, data_root=None):
         _OBSERVER_CUSTODY.reset(token)
 
 
+def predecessor_review_matches(review, day, root, commit, code_root):
+    """One custody predicate for live, closed and failed-preparation readers."""
+    if (not review or review.get('day') != day or review.get('root') != root
+            or review.get('commit') != commit or review.get('code_root') != code_root):
+        return False
+    observation = review.get('prepared_observation')
+    if observation is not None:
+        return (observation.get('target_date') == day
+            and observation.get('release_commit') == commit
+            and all(observation.get(k) is False for k in
+                    ('runtime_effect','actual_pid_consumed','allowed_runtime_apply'))
+            and bool(observation.get('source_hashes'))
+            and all(_sha(path) == sha for path, sha in observation['source_hashes'].items()))
+    identity = review.get('identity') or {}
+    if identity.get('cwd') != str(root/'src'):
+        return False
+    if review.get('closed_observation'):
+        return closed_consumption_observation(day) == review['closed_observation']
+    return _identity(identity['pid']) == identity
+
+
+@contextmanager
+def stopped_preparation_review(day):
+    """Read sealed failed-preparation sources, without renewing launch expiry."""
+    from src.engine.automation import ordered_intraday_deploy as D
+    from src.engine.infrastructure import runtime_release_router as R
+    _today(day, None)
+    candidate = Path(__file__).resolve().parents[3]
+    driver = D.StoppedDeploymentRecovery(DATA_DIR.resolve().parent, candidate, day, D.CONFIRM)
+    origin = driver.inspect_stopped_origin()
+    root, commit = origin['failed_root'], origin['failed_commit']
+    if candidate == root:
+        raise ValueError('intraday_stopped_review_requires_clean_successor')
+    candidate_commit = R.git(candidate, 'rev-parse', 'HEAD')
+    R.validate_release(driver.workspace, dict(schema='runtime_release_selection_v1',
+        workspace=str(driver.workspace), release_root=str(candidate), git_commit=candidate_commit))
+    if origin['selected'].get('native_predecessor_path'):
+        native = _native_predecessor(day, commit, driver.previous, driver.previous_commit,
+            driver.identity, origin['selected']['native_predecessor_path'],
+            origin['selected']['native_predecessor_sha256'])
+    else:
+        native = D._stopped_intraday_predecessor(day, driver.previous, driver.previous_commit,
+            driver.identity, origin['failed_path'])
+    paths = [driver.selection, driver.hold, origin['failed_path'], origin['prior_path']]
+    sources = {**native['frozen_files'], **origin['preparation_sources'],
+               **{str(path): _sha(path) for path in paths}}
+    handoff_path, consumed = _paths(day, commit)
+    if consumed.exists() or consumed.is_symlink():
+        raise ValueError('intraday_stopped_review_consumed_selection')
+    body = _read(handoff_path)
+    sources.update(body['frozen_files'])
+    sources[str(handoff_path)] = _sha(handoff_path)
+    proof = dict(target_date=day, release_commit=commit, source_hashes=sources,
+        original_first_launch_before=body['first_launch_before'],
+        runtime_effect=False, actual_pid_consumed=False, allowed_runtime_apply=False)
+    review = dict(day=day, root=root, commit=commit, code_root=candidate,
+        code_commit=candidate_commit, identity=driver.identity, prepared_observation=proof)
+    token = _PREDECESSOR_REVIEW.set(review)
+    try:
+        checked = _verify_handoff(day, commit)
+        if checked['status'] != 'pass':
+            raise ValueError('intraday_stopped_review_source_invalid')
+        yield proof
+        driver.inspect_stopped_origin()
+        if (any(_sha(path) != sha for path, sha in sources.items())
+                or consumed.exists() or consumed.is_symlink()):
+            raise ValueError('intraday_stopped_review_generation_changed')
+    finally:
+        _PREDECESSOR_REVIEW.reset(token)
+
+
 @contextmanager
 def closed_predecessor_review(day):
     """A clean candidate revalidates the closed origin without claiming a PID."""
@@ -497,10 +568,7 @@ def verify_entry_consumer_code(day, *, family, policy_sha, expected, paths, actu
     code_root, code_commit = root, commit
     if Path(__file__).resolve().parents[3] != root:
         review = _PREDECESSOR_REVIEW.get()
-        if (not review or review['day'] != day or review['root'] != root
-                or review['commit'] != commit or review['code_root'] != Path(__file__).resolve().parents[3]
-                or (closed_consumption_observation(day) != review['closed_observation']
-                    if review.get('closed_observation') else _identity(review['identity']['pid']) != review['identity'])):
+        if not predecessor_review_matches(review, day, root, commit, Path(__file__).resolve().parents[3]):
             raise ValueError('entry_consumer_release_mismatch')
         code_root, code_commit = review['code_root'], review['code_commit']
     manifest = _read(bootstrap.manifest_path(day))
@@ -4619,7 +4687,7 @@ REVIEWED_ENTRY_COST_DEPENDENCY_VARIANTS = {
 # report; effective auxiliary registry research remains report-only.
 REVIEWED_ENTRY_COST_PRE_PRESTART_HASHES = REVIEWED_ENTRY_COST_HASHES
 REVIEWED_ENTRY_COST_PRE_PRESTART_VARIANTS = REVIEWED_ENTRY_COST_DEPENDENCY_VARIANTS
-REVIEWED_PRESTART_INTEGRATION_HASHES = {'src/engine/automation/ordered_intraday_deploy.py': 'a457eeaf5a1572368751126986eed24a215282dbf79449d5779241fd2fea737d', 'src/engine/automation/main_market_weakness_research.py': 'e78122825224eee72bb3301fd2df7c22230645c5b88103fd32009a186316909b'}
+REVIEWED_PRESTART_INTEGRATION_HASHES = {'src/engine/automation/ordered_intraday_deploy.py': 'd56d407f1515ee8a8bfd307f469b175b794f490120aec2b2fe2f98165d5488af', 'src/engine/automation/main_market_weakness_research.py': 'e78122825224eee72bb3301fd2df7c22230645c5b88103fd32009a186316909b', 'src/engine/automation/main_startup_validation.py': 'fcf33f73c9b4831339c3215732c5364c9cd11f30147273c30c172fa3f611fd0c', 'src/engine/infrastructure/startup_validation_code_context.py': 'b999b1fb1e2ff40dc112cfd88a97ac0e2ecb62975fcbd95ac0c78a1899ad3ea2', 'src/engine/scalping/reversal_code_handoff.py': 'b77b63fa5afe9b3dff59266cecce73f92880b5256b12c32343a70aeddba63aa9'}
 REVIEWED_ENTRY_COST_HASHES = {**REVIEWED_ENTRY_COST_HASHES, **REVIEWED_PRESTART_INTEGRATION_HASHES}
 REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
     name: REVIEWED_ENTRY_COST_PAIRS.get(name, ()) + tuple((old, current) for old in sorted(
@@ -4632,6 +4700,26 @@ REVIEWED_ENTRY_COST_DEPENDENCY_VARIANTS = {
         'contract_extensions': {origin: {name: REVIEWED_PRESTART_INTEGRATION_HASHES.get(os.path.normpath(name), sha)
             for name, sha in paths.items()} for origin, paths in value['contract_extensions'].items()},
     } for key, value in REVIEWED_ENTRY_COST_PRE_PRESTART_VARIANTS.items()
+}
+
+
+# Native prepared-code issuance belongs to the ordered producer. Preserve the
+# actually consumed predecessor as a complete immutable dependency generation.
+REVIEWED_ENTRY_COST_PRE_PREPARED_OWNER_HASHES = REVIEWED_ENTRY_COST_HASHES
+REVIEWED_ENTRY_COST_PRE_PREPARED_OWNER_VARIANTS = REVIEWED_ENTRY_COST_DEPENDENCY_VARIANTS
+REVIEWED_PREPARED_OWNER_HASHES = {'src/engine/automation/ordered_intraday_deploy.py': '452cdd78fa11316066391c4b40cde75d44ad74361dd5aef795f8c77dc8e2c695', 'src/engine/automation/prepared_policy_code_handoff.py': '5bf1ed07810e5beeba889493c83bdd5b8eaa913b1710fc534c8a20246e1422e3'}
+REVIEWED_ENTRY_COST_HASHES = {**REVIEWED_ENTRY_COST_HASHES, **REVIEWED_PREPARED_OWNER_HASHES}
+REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
+    name: REVIEWED_ENTRY_COST_PAIRS.get(name, ()) + tuple((old, current) for old in sorted(
+        {pair[0] for pair in REVIEWED_ENTRY_COST_PAIRS.get(name, ())}
+        | {REVIEWED_ENTRY_COST_PRE_PREPARED_OWNER_HASHES.get(name, '00d78a00a10ad6c3d4cdc68083b659a6e5d4b0230ff38b87d7c2d52648f47a0c')}))
+    for name, current in REVIEWED_PREPARED_OWNER_HASHES.items()}}
+REVIEWED_ENTRY_COST_DEPENDENCY_VARIANTS = {
+    (key[0], REVIEWED_PREPARED_OWNER_HASHES.get(key[0], key[1])): {
+        **value, 'dependencies': {**value['dependencies'], **REVIEWED_PREPARED_OWNER_HASHES},
+        'contract_extensions': {origin: {name: REVIEWED_PREPARED_OWNER_HASHES.get(os.path.normpath(name), sha)
+            for name, sha in paths.items()} for origin, paths in value['contract_extensions'].items()},
+    } for key, value in REVIEWED_ENTRY_COST_PRE_PREPARED_OWNER_VARIANTS.items()
 }
 
 
@@ -4792,7 +4880,11 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     preassessment_present = any((root / name).is_file()
         and hashlib.sha256(candidate_bytes(name)).hexdigest() == sha
         for name, sha in REVIEWED_PREASSESSMENT_HASHES.items())
-    entry_cost_hashes = (REVIEWED_ENTRY_COST_HASHES if prestart_integration_present
+    prepared_owner_present = any((root / name).is_file()
+        and hashlib.sha256(candidate_bytes(name)).hexdigest() == sha
+        for name, sha in REVIEWED_PREPARED_OWNER_HASHES.items())
+    entry_cost_hashes = (REVIEWED_ENTRY_COST_HASHES if prepared_owner_present
+        else REVIEWED_ENTRY_COST_PRE_PREPARED_OWNER_HASHES if prestart_integration_present
         else REVIEWED_ENTRY_COST_PRE_PRESTART_HASHES if preassessment_present
         else REVIEWED_ENTRY_COST_PRE_PREASSESSMENT_HASHES if signed_surge_present
         else REVIEWED_ENTRY_COST_PRE_SIGNED_SURGE_HASHES if expiry_health_present
@@ -4804,7 +4896,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         else REVIEWED_ENTRY_COST_PRE_PREPARED_VALIDATION_HASHES if coordination_present
         else REVIEWED_ENTRY_COST_PRE_COORDINATION_HASHES if native_label_present
         else REVIEWED_ENTRY_COST_PRE_NATIVE_LABEL_HASHES)
-    entry_cost_variants = (REVIEWED_ENTRY_COST_DEPENDENCY_VARIANTS if prestart_integration_present
+    entry_cost_variants = (REVIEWED_ENTRY_COST_DEPENDENCY_VARIANTS if prepared_owner_present
+        else REVIEWED_ENTRY_COST_PRE_PREPARED_OWNER_VARIANTS if prestart_integration_present
         else REVIEWED_ENTRY_COST_PRE_PRESTART_VARIANTS if preassessment_present
         else REVIEWED_ENTRY_COST_PRE_PREASSESSMENT_VARIANTS if signed_surge_present
         else REVIEWED_ENTRY_COST_PRE_SIGNED_SURGE_VARIANTS if expiry_health_present
@@ -5643,7 +5736,17 @@ def _verify_handoff(day, commit, *, now=None, historical_observer=False):
                     or consumed.get("release_root") != str(root)):
                 raise ValueError("intraday_consumption_invalid")
         elif current > deadline:
-            raise ValueError("intraday_first_launch_window_expired")
+            review = _PREDECESSOR_REVIEW.get() or {}
+            observation = review.get('prepared_observation') or {}
+            if (review.get('day') != day or review.get('root') != root
+                    or review.get('commit') != commit
+                    or observation.get('original_first_launch_before') != payload['first_launch_before']
+                    or observation.get('runtime_effect') is not False
+                    or observation.get('actual_pid_consumed') is not False
+                    or observation.get('allowed_runtime_apply') is not False
+                    or not observation.get('source_hashes')
+                    or any(_sha(path) != sha for path, sha in observation['source_hashes'].items())):
+                raise ValueError("intraday_first_launch_window_expired")
     except (OSError, ValueError, KeyError, TypeError, subprocess.CalledProcessError) as exc:
         findings.append(str(exc))
     return {"status": "pass" if not findings else "fail", "target_date": day,
@@ -5761,6 +5864,8 @@ def verify_predecessor_consumption(day, *, pid):
 
 
 def consume(day, *, pid, now=None):
+    if (_PREDECESSOR_REVIEW.get() or {}).get('prepared_observation') is not None:
+        raise ValueError('intraday_preparation_review_not_launch_authority')
     _, commit = _selection()
     path, consumed_path = _paths(day, commit)
     if not path.exists():

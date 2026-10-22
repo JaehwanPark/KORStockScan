@@ -1045,3 +1045,31 @@ def test_parent_native_delegation_binds_authenticated_scope(scope, fault):
             validation._validate_native_delegation(delegation,proof,request)
     else:
         validation._validate_native_delegation(delegation,proof,request)
+
+
+@pytest.mark.parametrize('changed', [False, True])
+def test_stopped_preparation_native_reader_binds_original_analysis_only_proof(native_preparation_cli, monkeypatch, changed):
+    from contextlib import contextmanager
+    from src.engine.automation import intraday_release_handoff as H
+    code,data=native_preparation_cli;selected=code.parent/'failed-selected'
+    proof=dict(target_date=DAY,actual_pid_consumed=False,allowed_runtime_apply=False,
+        runtime_effect=False,source_hashes={'immutable-native-failure':'a'*64})
+    monkeypatch.setattr(validation,'ROOT',code)
+    monkeypatch.setattr(validation,'_git',lambda *a:'a'*40)
+    monkeypatch.setattr(H,'_read',lambda *a:dict(release_root=str(selected),actual_pid_consumed=False,deployment_transition='original failed attempt'))
+    monkeypatch.setattr(H,'closed_consumption_observation',lambda day: (_ for _ in ()).throw(ValueError('not consumed')))
+    @contextmanager
+    def review(day):yield proof
+    monkeypatch.setattr(H,'stopped_preparation_review',review)
+    native_proof=dict(proof,actual_pid_consumed=True) if changed else proof
+    (code/'src/engine/automation/intraday_release_handoff.py').write_text(
+        'from contextlib import contextmanager\n@contextmanager\ndef stopped_preparation_review(day):\n'
+        f'    assert day=={DAY!r}\n    yield {native_proof!r}\n')
+    if changed:
+        with pytest.raises(ValueError,match='stopped_preparation_proof_changed'):
+            validation._native_preparation_check(selected,DAY,'2026-10-16')
+    else:
+        result=validation._native_preparation_check(selected,DAY,'2026-10-16')
+        assert result['stopped_preparation_observation']==proof
+        assert result['actual_pid_consumed'] is False
+        assert result['native_process_lifecycle']['child_terminated'] is True

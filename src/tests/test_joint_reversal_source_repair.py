@@ -595,9 +595,9 @@ def test_registration_exact_delta_native_publisher_and_dated_handoff(tmp_path,mo
 
 
 @pytest.mark.parametrize('predecessor_review,damage',
-    [(review,damage) for review in (False,True,'closed') for damage in
+    [(review,damage) for review in (False,True,'closed','prepared') for damage in
      (None,'code','source','pointer','date','authority','members','seal','selector','absent')]
-    + [(review,damage) for review in (True,'closed') for damage in ('review_missing','review_day','review_origin','review_pid','review_race','review_consumed')])
+    + [(review,damage) for review in (True,'closed','prepared') for damage in ('review_missing','review_day','review_origin','review_pid','review_race','review_consumed')])
 def test_active_code_handoff_is_exact_and_never_reselects_policy(tmp_path,monkeypatch,damage,predecessor_review):
     from pathlib import Path
     from src.engine.scalping import reversal_code_handoff as H, continuous_reversal_policy_v6 as V
@@ -635,9 +635,23 @@ def test_active_code_handoff_is_exact_and_never_reselects_policy(tmp_path,monkey
                 return {} if damage=='review_pid' or damage=='review_race' and len(calls)>1 else closed
             monkeypatch.setattr(IH,'closed_consumption_observation',closed_observation)
             monkeypatch.setattr(IH,'_identity',lambda pid: (_ for _ in ()).throw(AssertionError('closed origin is not live')))
+        if predecessor_review=='prepared':
+            IH._PREDECESSOR_REVIEW.get()['identity']=dict(identity,cwd=str(tmp_path/'previously-consumed/src'))
+            observation=dict(target_date=day,release_commit=old_commit,runtime_effect=False,
+                actual_pid_consumed=False,allowed_runtime_apply=False,
+                source_hashes={str(old):P.file_hash(old)})
+            IH._PREDECESSOR_REVIEW.get()['prepared_observation']=observation
+            monkeypatch.setattr(IH,'_identity',lambda pid: (_ for _ in ()).throw(AssertionError('prepared origin has no live PID')))
+            if damage=='review_pid':observation['actual_pid_consumed']=True
+            if damage=='review_race':
+                visits=[];original_sha=IH._sha
+                def changed(path):
+                    visits.append(path)
+                    return original_sha(path) if len(visits)==1 else 'changed'
+                monkeypatch.setattr(IH,'_sha',changed)
         if damage == 'review_missing': IH._PREDECESSOR_REVIEW.set(None)
         if damage == 'review_day': IH._PREDECESSOR_REVIEW.get()['day'] = '2026-10-01'
-        if predecessor_review!='closed' and damage in ('review_pid','review_race'):
+        if predecessor_review not in {'closed','prepared'} and damage in ('review_pid','review_race'):
             visits=[]
             def observed(pid):
                 visits.append(pid)
