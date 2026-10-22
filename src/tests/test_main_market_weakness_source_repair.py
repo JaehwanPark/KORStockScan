@@ -2906,3 +2906,54 @@ def test_missing_historical_reader_proof_is_distinct_from_price_source_loss(tmp_
     counts = next(iter(agg.daily(DAY)['scopes'].values()))['counts'];agg.close()
     assert counts['auxiliary_binding_reason_historical_reader_compatibility_missing'] == 1
     assert counts['outcome_U_reason_native_label_source_contract_missing'] == 1
+
+
+def test_latest_progress_resumes_after_backlog_using_actual_committed_label_index(tmp_path,monkeypatch):
+    days=[(datetime.fromisoformat(DAY)-timedelta(days=n)).date().isoformat() for n in (3,2,1,0)]
+    root=A.namespace(tmp_path);parts=[A.write_partition(root,[dict(row(identity=name,origin='confirmation_replay'),auxiliary_hash=None)]) for name in ('a','b')]
+    cursor=dict(source_date=DAY,status='in_progress',generation='a'*64,source_index=3,offset=0,partitions=parts,native_indexed_rows=0)
+    A.atomic(root/DAY/'cursor.json',cursor)
+    monkeypatch.setattr(A,'cursor_current',lambda data,c:c.get('source_date')==DAY)
+    choose=lambda:A.select_source_date(tmp_path,days,night=DAY,check_preflight=lambda:None)
+    assert choose()==DAY
+    db=A.label_index(root,dict(cursor,partitions=parts[:1]));db.close()
+    assert choose()==days[0]
+    assert choose()==DAY, 'committed first partition must receive a resume slot'
+    db=A.label_index(root,cursor);db.close()
+    assert choose()==days[1]
+    assert choose()==DAY, 'committed label progress counts even when cursor offsets are unchanged'
+    assert choose()==days[2]
+    assert choose()==days[0], 'unchanged progress must yield to backlog'
+    saved=A.read_json(root/'schedule_cursor.json');assert saved['last_source_date']==days[0]
+    assert saved['latest_checkpoint_before']['position'][-1]==2
+
+
+@pytest.mark.parametrize('damage',['stale_source','new_generation_no_progress','index_alias','index_invalid'])
+def test_latest_resume_rejects_invalid_or_unchanged_generation_progress(tmp_path,monkeypatch,damage):
+    days=[(datetime.fromisoformat(DAY)-timedelta(days=n)).date().isoformat() for n in (2,1,0)];root=A.namespace(tmp_path)
+    cursor=dict(source_date=DAY,status='in_progress',generation='a'*64,source_index=0,offset=0,partitions=[],native_indexed_rows=0)
+    A.atomic(root/DAY/'cursor.json',cursor)
+    current=[True];monkeypatch.setattr(A,'cursor_current',lambda data,c:current[0] and c.get('source_date')==DAY)
+    choose=lambda:A.select_source_date(tmp_path,days,night=DAY,check_preflight=lambda:None)
+    assert choose()==DAY
+    cursor['source_index']=1
+    if damage=='stale_source':current[0]=False
+    if damage=='new_generation_no_progress':cursor.update(generation='b'*64,source_index=0)
+    path=root/DAY/cursor['generation']/'label_bindings.sqlite';path.parent.mkdir(parents=True,exist_ok=True)
+    if damage=='index_alias':
+        target=tmp_path/'outside.sqlite';target.write_bytes(b'unchanged');path.symlink_to(target)
+    if damage=='index_invalid':path.write_bytes(b'invalid sqlite')
+    A.atomic(root/DAY/'cursor.json',cursor)
+    assert choose()==days[0]
+    assert choose()==days[1]
+    if damage=='index_alias':assert target.read_bytes()==b'unchanged' and path.is_symlink()
+
+
+@pytest.mark.parametrize('bad',[[],dict(generation='unknown',position=[0]*5),dict(generation='a'*64,position=[True]*5),dict(generation='a'*64,position=[0])])
+def test_latest_progress_rejects_malformed_sealed_checkpoint_without_replacing_it(tmp_path,monkeypatch,bad):
+    root=A.namespace(tmp_path);path=root/'schedule_cursor.json'
+    A.atomic(path,R.seal(dict(latest_checkpoint_before=bad,latest_priority_night=DAY,latest_priority_date=DAY)))
+    original=path.read_bytes();monkeypatch.setattr(A,'cursor_current',lambda *a:False)
+    with pytest.raises(ValueError,match='source_rotation_checkpoint_invalid'):
+        A.select_source_date(tmp_path,[DAY],night=DAY,check_preflight=lambda:None)
+    assert path.read_bytes()==original

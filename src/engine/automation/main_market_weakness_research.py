@@ -3401,16 +3401,64 @@ def select_source_date(data_root, dates, *, night, check_preflight):
     if rotation:
         check_seal(rotation)
     previous = rotation.get("last_" + lane + "_date", "")
-    if dates[-1] in repairs and rotation.get("latest_priority_night") != night:
-        # One latest-source opportunity per night, without moving the backlog
-        # cursor. Failed/crashed reservations cannot monopolize subsequent slots.
-        day = dates[-1]
-        rotation.update(latest_priority_night=night, latest_priority_date=day)
+    latest = dates[-1]
+    cursor = read_json(root / latest / "cursor.json", {})
+
+    def checkpoint():
+        # Read committed progress only. Never open the writer or scan labels.
+        generation = cursor.get("generation", "")
+        if (cursor.get("status") != "in_progress"
+                or not isinstance(generation, str)
+                or not re.fullmatch("[0-9a-f]{64}", generation)
+                or not cursor_current(data_root, cursor)):
+            return None
+        position = [cursor.get("source_index", 0), cursor.get("offset", 0),
+                    len(cursor.get("partitions", [])), cursor.get("native_indexed_rows", 0)]
+        if any(type(value) is not int or value < 0 for value in position):
+            return None
+        index = root.resolve() / latest / generation / "label_bindings.sqlite"
+        if index.is_symlink() or index.parent.resolve() != index.parent:
+            return None
+        loaded = 0
+        if index.exists():
+            try:
+                with contextlib.closing(sqlite3.connect(index.as_uri() + "?mode=ro", uri=True, timeout=0)) as db:
+                    loaded = db.execute("SELECT count(*) FROM loaded").fetchone()[0]
+            except sqlite3.Error:
+                return None
+        return dict(generation=generation, position=position + [loaded])
+
+    progress = checkpoint() if latest in repairs else None
+    check_preflight()
+    before = rotation.get("latest_checkpoint_before")
+    if before is not None and (not isinstance(before, dict)
+            or not isinstance(before.get("generation"), str)
+            or not re.fullmatch("[0-9a-f]{64}", before["generation"])
+            or not isinstance(before.get("position"), list)
+            or len(before["position"]) != 5
+            or any(type(value) is not int or value < 0 for value in before["position"])):
+        raise ValueError("source_rotation_checkpoint_invalid")
+    advanced = False
+    if progress is not None and "latest_checkpoint_before" in rotation:
+        if before is None or before.get("generation") != progress["generation"]:
+            advanced = any(progress["position"])
+        else:
+            advanced = progress["position"] > before["position"]
+    resume_latest = (advanced and rotation.get("latest_priority_night") == night
+                     and rotation.get("latest_priority_date") == latest
+                     and rotation.get("last_selected_date") != latest)
+    if latest in repairs and (rotation.get("latest_priority_night") != night or resume_latest):
+        # Keep the first opportunity, then alternate proven progress with
+        # backlog. No-progress/crashed reservations do not gain priority.
+        day = latest
+        rotation.update(latest_priority_night=night, latest_priority_date=day,
+                        latest_checkpoint_before=progress)
     else:
         if lane == "source" and len(candidates) > 1:
             candidates = [d for d in candidates if d != dates[-1]]
         day = next((d for d in candidates if d > previous), candidates[0])
         rotation.update({"last_" + lane + "_date": day})
+    rotation["last_selected_date"] = day
     check_preflight()
     atomic(
         path,
