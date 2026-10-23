@@ -166,3 +166,8 @@ Premarket `_NX`/nxt_only/NXT, Regular `_AL`/integrated/SOR/cohort KRX, Aftermark
 추가 과거 발행726179 원천 검사에서9e820도 거부하던 기존 코드 계보 누락을 재현했다. 기존 source-pair table의 정확한2단계 경로16개를 고정된 direct pair로 연결하고, c4 producer 변경7개 원천도 exact successor profile에 결속했다. 동적/임의 전이 허용은 추가하지 않았다. [기존 검토 경로 대사](../../tmp/quantity-historical-recovery-20261023/c4-existing-review-chain-audit.json). 원 policy·manifest·summary·PID 영수증은 그대로 유지하고 전체 successor profile 검사와 독립 준비 inventory가 계속 필요하다.
 
 대체/제거는 앞 수리의256건 생애 cap 제거와 공통 bounded queue·codec 소비 통합을 유지한다. 통합 보완은 기존 handoff/preparation code owner에 exact source표를 추가하고 실제소비9e820 profile을 retained했다. 새 source module·report producer·wrapper·worker·실행 entrypoint·이동0. 등록/codec/terminal 검증 때문에 순증하며 승인 원천을 모르는 hash는 계속 거부한다. 9e820 대비 본 기록 직전 증감: {"source": {"files": 13, "added": 433, "deleted": 35}, "tests": {"files": 10, "added": 301, "deleted": 15}, "docs": {"files": 3, "added": 171, "deleted": 0}}. 이 기록 자체는 문서 추가로 별도 계산한다. 전체 저장소 테스트 완료나 자연 수집/경제성 완료로 확대하지 않는다. 최종 immutable 후보의 native 원천 갱신·P5·ordered 실제 전환 결과는 기존 배포 기록에 이어 보존한다.
+
+
+### Integrated runtime acceptance (2026-10-23 15:30)
+
+승인된c4a177cb8은 선행 정책 수리를 포함한6d8891ac3으로15:30:40 배포·재기동 완료했다. Main3299469/start38150614의 native 정책 소비와candidate/selected P5가 통과했다. 변경된 trailing/수량 code의 native 근거도 재검증했다. 앞선 배포 전 OPEN 중 승인·선택·PID 항목은 이 후속 증거로 종료하고,256초과 자연 관측→native SELL 종료→장후 재생/경제성은 기존 holding owner에서 유지한다. [통합 배포·잔여 수용·검증 시간](postclose-root-cause-recovery-review-2026-10-19.md#holding-stream-integration-deployment-and-quantity-validation-timing-2026-10-23). 원9e820 대비 source13파일+433/-35, tests10파일+301/-15, 배포 전 docs3파일+180/-0이며 본 완료 기록은 별도 문서 추가다.
