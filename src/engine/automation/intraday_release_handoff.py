@@ -5154,6 +5154,26 @@ REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
     for name, current in REVIEWED_MACHINE_REST_HISTORY_HASHES.items()}}
 
 
+# Reviewed report-only auxiliary fixture succession. Retain the consumed REST profile.
+REVIEWED_AUXILIARY_CAPABILITY_HASHES = {'src/engine/infrastructure/startup_validation_code_context.py': '8ef7d406ba2b9af7504321f14114e4eea6a31c963d56048a26745f2a62cfd0de',
+ 'src/engine/monitoring/policy_generation_code_handoff.py': 'ceb7e9d6031da3e0f77fd0285897e760bec25b3c26f82f85e7b272537e4cbfee'}
+REVIEWED_AUXILIARY_CAPABILITY_PREVIOUS = {'src/engine/infrastructure/startup_validation_code_context.py': '0ca493e04eecc4031d75de2d3dfcc076fca47fbc6fb874843f29ab51ff7adebe',
+ 'src/engine/monitoring/policy_generation_code_handoff.py': '1a572a81032cd49121e24e2e4925d91d922d9697a65c65db0f473873b656c5cc'}
+REVIEWED_AUXILIARY_CAPABILITY_PROFILE = {**REVIEWED_MACHINE_REST_HISTORY_PROFILE, **REVIEWED_AUXILIARY_CAPABILITY_HASHES}
+REVIEWED_AUXILIARY_CAPABILITY_VARIANTS = {
+    key: {**value,
+        'dependencies': {**value['dependencies'], **REVIEWED_AUXILIARY_CAPABILITY_HASHES},
+        'contract_extensions': {origin: {name: REVIEWED_AUXILIARY_CAPABILITY_HASHES.get(os.path.normpath(name), sha)
+            for name, sha in paths.items()} for origin, paths in value['contract_extensions'].items()},
+    } for key, value in REVIEWED_MACHINE_REST_HISTORY_VARIANTS.items()
+}
+REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
+    name: REVIEWED_ENTRY_COST_PAIRS.get(name, ()) + tuple((origin, current) for origin in
+        {REVIEWED_AUXILIARY_CAPABILITY_PREVIOUS[name]} |
+        {old for pair in REVIEWED_ENTRY_COST_PAIRS.get(name, ()) for old in pair})
+    for name, current in REVIEWED_AUXILIARY_CAPABILITY_HASHES.items()}}
+
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -5340,7 +5360,11 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     machine_rest_history = any((root / name).is_file()
         and hashlib.sha256(candidate_bytes(name)).hexdigest() == sha
         for name, sha in REVIEWED_MACHINE_REST_HISTORY_HASHES.items())
-    prepared_hashes = (REVIEWED_MACHINE_REST_HISTORY_PROFILE if machine_rest_history else
+    auxiliary_capability = any((root / name).is_file()
+        and hashlib.sha256(candidate_bytes(name)).hexdigest() == sha
+        for name, sha in REVIEWED_AUXILIARY_CAPABILITY_HASHES.items())
+    prepared_hashes = (REVIEWED_AUXILIARY_CAPABILITY_PROFILE if auxiliary_capability else
+        REVIEWED_MACHINE_REST_HISTORY_PROFILE if machine_rest_history else
         REVIEWED_HOLDING_STREAM_PROFILE if holding_stream else
         REVIEWED_NATIVE_BUY_COST_PROFILE if native_buy_cost else
         REVIEWED_PRE_SUBMIT_ENTRY_COST_HASHES if pre_submit_present else
@@ -5349,7 +5373,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         REVIEWED_ENTRY_COST_HASHES if sentinel_scope_present else
         REVIEWED_PRE_FINALIZATION_HASHES if consumed_finalization else
         REVIEWED_NATIVE_PREOPEN_HASHES if native_preopen else REVIEWED_ENTRY_COST_PRE_SENTINEL_SCOPE_HASHES)
-    prepared_variants = (REVIEWED_MACHINE_REST_HISTORY_VARIANTS if machine_rest_history else
+    prepared_variants = (REVIEWED_AUXILIARY_CAPABILITY_VARIANTS if auxiliary_capability else
+        REVIEWED_MACHINE_REST_HISTORY_VARIANTS if machine_rest_history else
         REVIEWED_HOLDING_STREAM_VARIANTS if holding_stream else
         REVIEWED_NATIVE_BUY_COST_VARIANTS if native_buy_cost else
         REVIEWED_PRE_SUBMIT_DEPENDENCY_VARIANTS if pre_submit_present else

@@ -489,6 +489,29 @@ REVIEWED_PREPARATION_HISTORY.setdefault('src/trading/market/completed_history.py
   '381740faff9ca4c00ff6f117a076f444f9762985d1fb13a8d0e5b3581ff75ed5')})
 
 
+# Exact report-only auxiliary capability successor; preserve all original fixtures.
+REVIEWED_PREPARATION_HISTORY.setdefault('src/engine/monitoring/policy_generation_code_handoff.py', set()).update({('1a572a81032cd49121e24e2e4925d91d922d9697a65c65db0f473873b656c5cc',
+  'ceb7e9d6031da3e0f77fd0285897e760bec25b3c26f82f85e7b272537e4cbfee'),
+ ('1dff8c3fcc6dba15fdc720a36c5070a81805d5124433140b8158f3f50c62b98e',
+  'ceb7e9d6031da3e0f77fd0285897e760bec25b3c26f82f85e7b272537e4cbfee'),
+ ('41ebbc34a2fd015a0cd76ae525c1e6e859edbaa6dc4e4e88e4cc76a44a7a9bef',
+  'ceb7e9d6031da3e0f77fd0285897e760bec25b3c26f82f85e7b272537e4cbfee'),
+ ('4db24d4d542b8cc6142c1b85e0839bfce6a7116aaae5f49e2b0d90e4174e3d62',
+  'ceb7e9d6031da3e0f77fd0285897e760bec25b3c26f82f85e7b272537e4cbfee'),
+ ('58f427eee221104aef727ec4dcadb4ad5ec8021c262b6e3c104941ed851fcf6e',
+  'ceb7e9d6031da3e0f77fd0285897e760bec25b3c26f82f85e7b272537e4cbfee'),
+ ('858f6f949015f1c27d0185a0183df7a331f7fda971830408a5cdf53d16b39b5a',
+  'ceb7e9d6031da3e0f77fd0285897e760bec25b3c26f82f85e7b272537e4cbfee'),
+ ('b14d8aaf06d7414bcbe6bdb87ddfc685f2c3765db15f8a5f50d93f3e5eeaf444',
+  'ceb7e9d6031da3e0f77fd0285897e760bec25b3c26f82f85e7b272537e4cbfee'),
+ ('b65c616d024460c825d73472311ddf995282069cd58dfdec9241447d4285d841',
+  'ceb7e9d6031da3e0f77fd0285897e760bec25b3c26f82f85e7b272537e4cbfee'),
+ ('b9bb89e9ea3c3835e2cb45dc7687b91e38156d208adf1dfc7554869038e50a0e',
+  'ceb7e9d6031da3e0f77fd0285897e760bec25b3c26f82f85e7b272537e4cbfee'),
+ ('e9b1ef85c2cae6c3bec70a6697a36d767584abee1c6fe621530865ef5146a9eb',
+  'ceb7e9d6031da3e0f77fd0285897e760bec25b3c26f82f85e7b272537e4cbfee')})
+
+
 def reviewed_preparation_pair(relative, old, current):
     return (REVIEWED_PREPARATION_SOURCES.get(relative) == (old, current)
             or (old, current) in REVIEWED_PREPARATION_HISTORY.get(relative, ()))

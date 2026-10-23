@@ -1418,3 +1418,13 @@ def test_main_preparation_reviews_rest_history_sources(relative,damage):
     if damage=='unreviewed':new='0'*64
     elif damage=='wrong_origin':old='0'*64
     assert C.reviewed_preparation_pair(relative,old,new) is (damage is None)
+
+
+@pytest.mark.parametrize('damage', [None,'unreviewed','wrong_origin'])
+def test_main_preparation_reviews_auxiliary_capability_successor(damage):
+    relative='src/engine/monitoring/policy_generation_code_handoff.py'
+    old=H.REVIEWED_AUXILIARY_CAPABILITY_PREVIOUS[relative]
+    new=hashlib.sha256((ROOT/relative).read_bytes()).hexdigest()
+    if damage=='unreviewed':new='0'*64
+    elif damage=='wrong_origin':old='0'*64
+    assert C.reviewed_preparation_pair(relative,old,new) is (damage is None)
