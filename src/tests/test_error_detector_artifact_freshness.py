@@ -4590,7 +4590,8 @@ def test_current_health_birth_requires_independent_kernel_attestation(tmp_path, 
 
 
 @pytest.mark.parametrize('tamper', [None, 'source_issue', 'stale_input', 'wrong_actor'])
-def test_active_observer_consumer_warns_only_for_current_intact_bounded_report(tmp_path, monkeypatch, tamper):
+@pytest.mark.parametrize('trace_reader', ['raw', 'native_index'])
+def test_active_observer_consumer_warns_only_for_current_intact_bounded_report(tmp_path, monkeypatch, tamper, trace_reader):
     import copy
     from src.tests.test_submission_bottleneck_monitor import _bounded_outcome_health_fixture, _health_birth_fixture
     from src.engine.monitoring import submission_bottleneck_monitor as monitor
@@ -4598,6 +4599,20 @@ def test_active_observer_consumer_warns_only_for_current_intact_bounded_report(t
         report, *_ = _bounded_outcome_health_fixture(partial=False, outcome='unknown_pass')
         report.update(status='observing', blocker=None, scopes={'KRX|krx_regular|bundle': {}})
         report['input_provenance']['row_count'] = 1
+        if trace_reader == 'native_index':
+            from src.engine.automation import main_trailing_source_store as store
+            source = report['machine_semantics']['current_health_cohort']['view'][
+                'reversal_provider_lineage']['source_windows']['traces']
+            identity = source['source_identity']
+            generation = dict(schema=store.SCHEMA+':generation', namespace='ai_decision_trace',
+                path=f"ai_decision_trace_{report['date']}.jsonl", size=source['source_size'],
+                source_stat=[identity['device'], identity['inode'], source['source_size'], 1, 1],
+                catchup_end=0, raw_records=2, selected_records=2,
+                prefix_chain_sha256='0'*64, append_chain_sha256='a'*64, whole_file_sha256=False)
+            generation['sha256'] = hashlib.sha256(store.encode(generation)).hexdigest()
+            source.update(bytes_read=0, read_count=0, index_bytes_read=256, tail_truncated=False,
+                native_index_generation=generation, recent_count=2,
+                coverage_basis='native_index_projection_or_exact_raw_offset_size_sha256')
         return report
     mod, root, now, path, report, _, selection, seal = _quiet_current_observer_fixture(
         tmp_path, monkeypatch, payload_factory=payload)
