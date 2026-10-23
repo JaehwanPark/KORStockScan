@@ -328,9 +328,11 @@ def test_digest_cache_reuses_physical_file_but_detects_alias_and_content_changes
     with pytest.raises(ValueError,match='changed_during_read'):N._source_hash(str(alias),expected)
 
 
-def test_digest_cache_entry_and_byte_bounds_and_singleflight(tmp_path,monkeypatch):
+@pytest.mark.parametrize('large_source_threshold', [0, 1024*1024])
+def test_digest_cache_entry_and_byte_bounds_and_singleflight(tmp_path,monkeypatch,large_source_threshold):
     N._cached_source_hash.cache_clear()
     monkeypatch.setattr(N,'_HASH_MAX_ENTRIES',4);monkeypatch.setattr(N,'_HASH_MAX_BYTES',2000)
+    monkeypatch.setattr(N,'_HASH_LARGE_SOURCE_BYTES',large_source_threshold)
     for i in range(8):
         p=tmp_path/str(i);p.write_bytes(str(i).encode());N._source_hash(str(p),N._signature(p))
     assert N._cached_source_hash.cache_info().currsize<=4 and N._HASH_BYTES<=2000
@@ -344,6 +346,33 @@ def test_digest_cache_entry_and_byte_bounds_and_singleflight(tmp_path,monkeypatc
         fs=[pool.submit(N._source_hash,str(p),sig) for _ in range(5)]
         assert entered.wait(1);release.set();assert len({f.result() for f in fs})==1
     assert len(reads)==1 and not N._HASH_FLIGHTS
+    N._cached_source_hash.cache_clear()
+
+
+@pytest.mark.parametrize('mutate', [False, True])
+def test_small_source_churn_does_not_rehash_unchanged_large_source(tmp_path, monkeypatch, mutate):
+    N._cached_source_hash.cache_clear()
+    monkeypatch.setattr(N, '_HASH_MAX_ENTRIES', 4)
+    monkeypatch.setattr(N, '_HASH_MAX_BYTES', 2800)
+    monkeypatch.setattr(N, '_HASH_LARGE_SOURCE_BYTES', 16)
+    large = tmp_path/'frozen'; large.write_bytes(b'a'*65536)
+    original = N.hashlib.file_digest; reads = []
+    def measured(stream, *args):
+        reads.append((stream.name, os.fstat(stream.fileno()).st_size))
+        return original(stream, *args)
+    monkeypatch.setattr(N.hashlib, 'file_digest', measured)
+    expected = N._source_hash(str(large), N._signature(large))
+    for index in range(12):
+        small = tmp_path/f'code-{index}'; small.write_bytes(b'code')
+        N._source_hash(str(small), N._signature(small))
+    if mutate:
+        before = large.stat(); large.write_bytes(b'b'*65536)
+        os.utime(large, ns=(before.st_atime_ns, before.st_mtime_ns))
+    current = N._source_hash(str(large), N._signature(large))
+    assert (current != expected) == mutate
+    assert sum(name == str(large) for name, size in reads) == 1+int(mutate)
+    assert sum(size for name, size in reads) == 65536*(1+int(mutate))+12*4
+    assert len(N._HASH_CACHE) <= 4 and N._HASH_BYTES <= 2800
     N._cached_source_hash.cache_clear()
 
 

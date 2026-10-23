@@ -405,8 +405,9 @@ def source_receipt_matches(record, *, data_root=None):
 def _cached_source_hash(path: str, signature: tuple) -> str:
     """Bounded physical-file digest cache; lexical provenance stays in signature.
 
-    Measured active validation working set: 766 paths. Store hashes only, at
-    most 1024 entries AND 1 MiB accounted metadata, never source contents.
+    Store hashes only, at most 1024 entries AND 1 MiB accounted metadata. Current
+    validation exceeds 2500 paths: small code-file churn must not evict expensive
+    unchanged frozen sources. Every hit still verifies its physical signature.
     """
     global _HASH_BYTES, _HASH_HITS, _HASH_MISSES
     source = Path(path)
@@ -451,7 +452,11 @@ def _cached_source_hash(path: str, signature: tuple) -> str:
         size = sys.getsizeof(key) + sum(sys.getsizeof(v) for v in key) + sys.getsizeof(observed) + 256
         with _HASH_LOCK:
             while _HASH_CACHE and (len(_HASH_CACHE) >= _HASH_MAX_ENTRIES or _HASH_BYTES + size > _HASH_MAX_BYTES):
-                _, (_, removed_size) = _HASH_CACHE.popitem(last=False)
+                # Prefer the oldest cheap digest; keep the existing LRU order
+                # within each cost class and both original capacity limits.
+                victim = next((item for item in _HASH_CACHE
+                    if item[2] < _HASH_LARGE_SOURCE_BYTES), next(iter(_HASH_CACHE)))
+                _, removed_size = _HASH_CACHE.pop(victim)
                 _HASH_BYTES -= removed_size
             if size <= _HASH_MAX_BYTES:
                 _HASH_CACHE[key] = (observed, size)
@@ -468,6 +473,7 @@ _HASH_CACHE = OrderedDict()
 _HASH_FLIGHTS = {}
 _HASH_MAX_ENTRIES = 1024
 _HASH_MAX_BYTES = 1024 * 1024
+_HASH_LARGE_SOURCE_BYTES = 1024 * 1024
 _HASH_BYTES = _HASH_HITS = _HASH_MISSES = 0
 _HashInfo = namedtuple('CacheInfo', 'hits misses maxsize currsize')
 
