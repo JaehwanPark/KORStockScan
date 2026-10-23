@@ -1457,7 +1457,7 @@ def test_semantic_object_rejects_replacement_fifo_before_read(tmp_path, monkeypa
             path.rename(path.with_suffix('.original'))
             os.mkfifo(path); replaced.append(True)
         return original_open(name, flags, *args, **kwargs)
-    monkeypatch.setattr(detector.os, 'open', opening)
+    monkeypatch.setattr(detector.observer_io.os, 'open', opening)
     with pytest.raises(ValueError, match='observer_regular_file_required'):
         detector._semantic_object(path, limit=1024)
     assert replaced == [True]
@@ -4558,14 +4558,14 @@ def test_current_health_birth_requires_independent_kernel_attestation(tmp_path, 
         monkeypatch.setattr(mod, '_observer_live_identity', absent)
         monkeypatch.setattr(handoff, 'closed_consumption_observation', lambda day: dict(
             pid_identity=dict(pid=receipt['pid'], start_ticks=receipt['start_ticks'], cwd=receipt['process_cwd'])))
-        original_bytes=monitor._observer_regular_bytes
+        original_bytes=monitor.observer_io.regular_bytes
         def kernel(path, *, limit):
             if path!=Path('/proc/stat'):
                 return original_bytes(path,limit=limit)
             assert limit==256*1024
             calls.append((receipt,at))
             return ('btime '+str(boot)+'\n').encode()
-        monkeypatch.setattr(monitor, '_observer_regular_bytes', kernel)
+        monkeypatch.setattr(monitor.observer_io, 'regular_bytes', kernel)
         monkeypatch.setattr(mod.os, 'sysconf', lambda key: hz)
     seal()
     report['observer_generation']['actor_birth_proof'] = declared

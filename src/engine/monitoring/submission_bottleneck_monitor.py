@@ -12,7 +12,6 @@ import os
 import re
 import sqlite3
 import subprocess
-import stat
 import time
 import uuid
 from contextlib import contextmanager, nullcontext
@@ -25,6 +24,7 @@ from zoneinfo import ZoneInfo
 from src.engine.notify_error_detection_admin import (
     _load_telegram_config, _send_telegram, _write_state,
 )
+from src.engine.monitoring import observer_artifact_io as observer_io
 from src.utils.constants import PROJECT_ROOT
 
 SCHEMA = "submission_bottleneck_monitor_v1"
@@ -98,15 +98,15 @@ def _attest_health_actor_birth(generation, now):
         if type(pid) is not int or pid <= 0 or not isinstance(ticks, str) or not ticks.isdigit():
             raise ValueError('actor_identity_invalid')
         path = Path('/proc') / str(pid)
-        before = _observer_regular_bytes(path/'stat', limit=65536)
+        before = observer_io.regular_bytes(path/'stat', limit=65536)
         observed_ticks = before.decode().split(') ',1)[1].split()[19]
         cwd = str((path/'cwd').resolve(strict=True))
-        boot = _observer_regular_bytes(Path('/proc/stat'), limit=256*1024).decode()
+        boot = observer_io.regular_bytes(Path('/proc/stat'), limit=256*1024).decode()
         epoch = int(next(line.split()[1] for line in boot.splitlines() if line.startswith('btime ')))
         hz = os.sysconf('SC_CLK_TCK')
         if (observed_ticks != ticks or cwd != receipt['process_cwd']
                 or cwd != str(Path(generation['release_root'])/'src') or type(hz) is not int or hz <= 0
-                or _observer_regular_bytes(path/'stat', limit=65536).decode().split(') ',1)[1].split()[19] != ticks):
+                or observer_io.regular_bytes(path/'stat', limit=65536).decode().split(') ',1)[1].split()[19] != ticks):
             raise ValueError('actor_live_identity_changed')
         lower = epoch+int(ticks)/hz-1.0
         if not 0 < lower <= now.timestamp():
@@ -5622,60 +5622,8 @@ def notify(result, path, send=None):
 
 
 
-def _observer_file_signature(info):
-    return tuple(getattr(info, "st_" + field) for field in (
-        "dev", "ino", "mode", "nlink", "uid", "gid", "size", "mtime_ns", "ctime_ns"))
 
 
-@contextmanager
-def _observer_regular_fd(path, *, max_bytes=None):
-    """Never block opening special files or follow a replacement symlink."""
-    path = Path(path)
-    before = path.lstat()
-    if not stat.S_ISREG(before.st_mode): raise ValueError("observer_regular_file_required")
-    if max_bytes is not None and before.st_size > max_bytes:
-        raise ValueError("observer_file_size_limit")
-    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
-    try:
-        opened = os.fstat(fd)
-        if not stat.S_ISREG(opened.st_mode): raise ValueError("observer_regular_file_required")
-        if _observer_file_signature(opened) != _observer_file_signature(before):
-            raise ValueError("observer_file_changed_before_read")
-        yield fd
-        if (_observer_file_signature(os.fstat(fd)) != _observer_file_signature(opened)
-                or _observer_file_signature(path.lstat()) != _observer_file_signature(opened)):
-            raise ValueError("observer_file_changed_during_read")
-    finally:
-        os.close(fd)
-
-
-def _observer_regular_bytes(path, *, limit):
-    with _observer_regular_fd(path, max_bytes=limit) as fd:
-        chunks, total = [], 0
-        while True:
-            chunk = os.read(fd, min(128 * 1024, limit + 1 - total))
-            if not chunk: break
-            chunks.append(chunk); total += len(chunk)
-            if total > limit: raise ValueError("observer_file_size_limit")
-        return b"".join(chunks)
-
-
-def _observer_json_object(encoded):
-    def pairs(values):
-        result = {}
-        for key, value in values:
-            if key in result: raise ValueError("observer_json_duplicate_key")
-            result[key] = value
-        return result
-    def number(value):
-        result = float(value)
-        if not math.isfinite(result): raise ValueError("observer_json_nonfinite")
-        return result
-    def invalid_constant(value):
-        raise ValueError("observer_json_nonfinite")
-    value = json.loads(encoded, object_pairs_hook=pairs, parse_float=number, parse_constant=invalid_constant)
-    if not isinstance(value, dict): raise ValueError("observer_json_object_required")
-    return value
 
 
 def _observer_seal(value):
@@ -5690,7 +5638,7 @@ def _observer_code_identity():
     if not re.fullmatch("[0-9a-f]{40}", commit):
         raise ValueError("observer_code_commit_invalid")
     return dict(release_root=str(root), git_commit=commit,
-        observer_code_sha256=hashlib.sha256(_observer_regular_bytes(Path(__file__), limit=1024 * 1024)).hexdigest())
+        observer_code_sha256=hashlib.sha256(observer_io.regular_bytes(Path(__file__), limit=1024 * 1024)).hexdigest())
 
 
 def _observer_generation_snapshot(project, *, run_id, target_date, started_at):
@@ -5701,8 +5649,8 @@ def _observer_generation_snapshot(project, *, run_id, target_date, started_at):
         policy_pid_consumption_proven=False)
     try:
         path = Path(project) / "data/runtime/runtime_release_selection.json"
-        encoded = _observer_regular_bytes(path, limit=1024 * 1024)
-        selection = _observer_json_object(encoded)
+        encoded = observer_io.regular_bytes(path, limit=1024 * 1024)
+        selection = observer_io.json_object(encoded)
         code = _observer_code_identity()
         if (selection.get("schema") != "runtime_release_selection_v1"
                 or not isinstance(selection.get("release_root"), str)
@@ -5749,7 +5697,7 @@ def _observer_publication_lease(project):
     path = Path(project) / "data/runtime/runtime_release_selection.lock"
     opened = False
     try:
-        with _observer_regular_fd(path) as fd:
+        with observer_io.regular_fd(path) as fd:
             opened = True
             try:
                 fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
@@ -5784,7 +5732,7 @@ def _load_state(path):
         return {}
     # Removal/replacement after the initial presence check must fail, never
     # turn lost incident custody into a first run. Symlinks/FIFOs fail closed.
-    value = _observer_json_object(_observer_regular_bytes(path, limit=8*1024*1024))
+    value = observer_io.json_object(observer_io.regular_bytes(path, limit=8*1024*1024))
     if (value.get('schema') != SCHEMA or not isinstance(value.get('incidents'), dict)
             or value.get('persistence_schema') not in (None, 'submission_monitor_continuation_v1')):
         raise ValueError('observer_state_contract_invalid')
@@ -5823,7 +5771,7 @@ def main(argv=None):
         "pre_submit_delay_source_monitor_latest.json" if args.delay_source_only
         else "submission_bottleneck_monitor_latest.json")
     try:
-        report = _observer_json_object(_observer_regular_bytes(args.report, limit=8 * 1024 * 1024))
+        report = observer_io.json_object(observer_io.regular_bytes(args.report, limit=8 * 1024 * 1024))
     except (OSError, ValueError):
         report = {}
     from src.engine.infrastructure.validation_digest_session import (
