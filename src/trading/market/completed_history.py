@@ -11,6 +11,7 @@ import hashlib
 import json
 import math
 import os
+import re
 from pathlib import Path
 import sqlite3
 from zoneinfo import ZoneInfo
@@ -134,6 +135,114 @@ def read(root, identity, *, now, limit, include_forming=True, revision=None):
             return deepcopy(values[-limit:]), meta
     except (OSError, sqlite3.Error, ValueError, KeyError, TypeError, zlib.error):
         return None
+
+
+def outcome_revisions(root, day, *, as_of=None):
+    """Export bounded, portable completed revisions for offline outcomes.
+
+    This reads the native index and named immutable revisions, never the hot
+    cache or a provider. A caller freezes each yielded source in its own run.
+    No WS adjustment equivalence or execution authority is implied.
+    """
+    datetime.strptime(day, '%Y-%m-%d')
+    now = datetime.now(KST).timestamp() if as_of is None else as_of
+    if not math.isfinite(now):
+        raise ValueError('invalid completed outcome selection clock')
+    path = Path(root)/'runtime/main_minute_history'/day.replace('-', '')/'completed.sqlite3'
+    base = dict(schema='main_rest_completed_outcome_v1', source_date=day,
+                source_code_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+                runtime_effect=False, allowed_runtime_apply=False,
+                metric_role='source_quality_gate', decision_authority='offline_outcome_only',
+                window_policy='exact_item_date_named_completed_revision', sample_floor='none',
+                primary_decision_metric='verified_completed_rows',
+                source_quality_gate='native_revision_bar_hash_and_original_request_provenance',
+                forbidden_uses=['runtime_quote', 'WS_adjustment_equivalence', 'order_or_fill_authority'])
+    if not path.exists():
+        yield dict(base, status='unavailable', reason='history_database_absent')
+        return
+    try:
+        with closing(sqlite3.connect(path.absolute().as_uri()+'?mode=ro', uri=True, timeout=.025)) as db:
+            for scope, revision, stored_scope, available, raw in db.execute(
+                    'SELECT c.scope,c.revision,r.scope,r.available,r.manifest FROM current c '
+                    'LEFT JOIN revisions r ON r.hash=c.revision ORDER BY c.scope'):
+                try:
+                    if raw is None:
+                        raise ValueError('history_revision_unavailable')
+                    manifest = _unpack(raw)
+                    identity = manifest['identity']
+                    if (scope != stored_scope or scope != _digest(identity)
+                            or _digest(manifest) != revision or identity['schema'] != SCHEMA
+                            or identity['date'] != day.replace('-', '')
+                            or not isinstance(identity.get('auth_scope'), list)
+                            or len(identity['auth_scope']) < 2
+                            or identity['interval_sec'] != 60
+                            or identity['adjustment'] != 'ka10080:upd_stkpc_tp=1'
+                            or identity['time_basis'] != 'provider_bar_open_kst'):
+                        raise ValueError('history_identity_invalid')
+                    meta = manifest['first_receipt']['source_meta']
+                    if (available > now or type(meta.get('rest_received_ts_ms')) is not int
+                            or meta['rest_received_ts_ms']/1000 > now
+                            or meta.get('api_id') != 'ka10080'
+                            or meta.get('request_code') != identity['item']
+                            or meta.get('request_base_dt') != identity['date']
+                            or str(meta.get('last_http_status_code')) != '200'
+                            or meta.get('read_rate_control_status') != 'admitted'
+                            or any(meta.get(k) for k in ('continuous_next_key_missing',
+                                'rate_limit_detected', 'fetch_error', 'read_shared_cache_scope_changed'))):
+                        raise ValueError('history_provenance_invalid')
+                    pair = read(root, identity, now=now,
+                                limit=max(1, len(manifest['bar_hashes'])),
+                                include_forming=False, revision=revision)
+                    if pair is None:
+                        raise ValueError('history_revision_unavailable')
+                    rows, _ = pair
+                    # Revalidate the exported OHLCV and original completed cutoff.
+                    completed, forming = _completed(rows, meta['rest_received_ts_ms']/1000)
+                    if forming or len(completed) != len(rows):
+                        raise ValueError('history_forming_row_in_completed_revision')
+                    value = dict(base, status='verified', revision=revision,
+                               source_item=identity['item'], request_session=identity['session'],
+                               identity_sha256=_digest(identity), available_at=available,
+                               source_origin=identity['auth_scope'][1],
+                               source_meta=meta, rows=completed, rows_sha256=_digest(completed))
+                    outcome_rows(value, day=day)
+                    yield value
+                except (ValueError, KeyError, TypeError, zlib.error) as exc:
+                    yield dict(base, status='excluded', revision=revision,
+                               reason=str(exc) if isinstance(exc, ValueError) else type(exc).__name__)
+    except (OSError, sqlite3.Error) as exc:
+        yield dict(base, status='unavailable', reason=type(exc).__name__)
+
+
+def outcome_rows(value, *, day):
+    """Validate a portable, hash-bound source without reopening a live index."""
+    meta = value['source_meta']
+    if (value.get('schema') != 'main_rest_completed_outcome_v1'
+            or value.get('status') != 'verified' or value.get('source_date') != day
+            or value.get('runtime_effect') is not False
+            or value.get('allowed_runtime_apply') is not False
+            or value.get('decision_authority') != 'offline_outcome_only'
+            or not re.fullmatch(r'[0-9]{6}(?:_AL|_NX)?', str(value.get('source_item', '')))
+            or not re.fullmatch(r'[0-9a-f]{64}', str(value.get('revision', '')))
+            or value['rows_sha256'] != _digest(value['rows'])
+            or not 0 < len(value['rows']) <= MAX_ROWS
+            or meta.get('request_code') != value['source_item']
+            or meta.get('request_base_dt') != day.replace('-', '')
+            or meta.get('api_id') != 'ka10080'
+            or str(meta.get('last_http_status_code')) != '200'
+            or meta.get('read_rate_control_status') != 'admitted'
+            or type(meta.get('rest_received_ts_ms')) is not int
+            or type(value.get('available_at')) not in (int, float)
+            or not math.isfinite(value['available_at'])
+            or value['available_at'] > datetime.now(KST).timestamp()
+            or meta['rest_received_ts_ms']/1000 > datetime.now(KST).timestamp()
+            or any(meta.get(k) for k in ('continuous_next_key_missing',
+                'rate_limit_detected', 'fetch_error', 'read_shared_cache_scope_changed'))):
+        raise ValueError('completed_outcome_source_invalid')
+    completed, forming = _completed(value['rows'], meta['rest_received_ts_ms']/1000)
+    if forming or len(completed) != len(value['rows']):
+        raise ValueError('completed_outcome_rows_not_completed')
+    return completed
 
 
 def publish(root, identity, rows, source_meta, *, now, consumption_receipt=None):

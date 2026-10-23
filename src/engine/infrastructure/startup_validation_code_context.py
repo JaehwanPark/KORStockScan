@@ -468,6 +468,27 @@ REVIEWED_PREPARATION_HISTORY.setdefault('src/engine/monitoring/policy_generation
   '1a572a81032cd49121e24e2e4925d91d922d9697a65c65db0f473873b656c5cc')})
 
 
+# Reviewed native REST history outcome producer and frozen research consumers.
+REVIEWED_PREPARATION_HISTORY.setdefault('src/engine/scalping/continuous_reversal.py', set()).update({('17b73fbd524814faa53895148364758716aac406ca41761768cb69d430178030',
+  '7c1d8a3f8f093ec3fde3d8deda7c411ddb3230bb3115086a28b5f811204879cc')})
+REVIEWED_PREPARATION_HISTORY.setdefault('src/engine/scalping/continuous_reversal_branch_postclose.py', set()).update({('7525d0c8bb68b9eb57d4bdc29462b33d5f35bc6b62f48b41d9a2e0a2c58b4c4c',
+  'cf39f092eae8557ed031c82e4e24cfc32cc31279e60eb9069ae789e2500c43f8')})
+REVIEWED_PREPARATION_HISTORY.setdefault('src/engine/scalping/continuous_reversal_operating_postclose.py', set()).update({('2fc75be21c110341ac4596f08f8a3bcdb42adfd4e3ba8322f601337b84ab8441',
+  '60b420adf69789175491963858bad6ad26d38399d00294010de2079612e6b194')})
+REVIEWED_PREPARATION_HISTORY.setdefault('src/engine/scalping/continuous_reversal_path_postclose.py', set()).update({('ce4f350b3e372e6287d86ed8e070f8eb4679282964ab2a64b6b626c364269af2',
+  '7c8530c2419ca0465ec530c2cdde6125b4984326babd1ff2bbff05e32f150f5b')})
+REVIEWED_PREPARATION_HISTORY.setdefault('src/engine/scalping/continuous_reversal_postclose.py', set()).update({('d294d3fab9ef36e29b0b15007b0d22c47e1572f3b36de25d72802873f2568dda',
+  '212965dc89048c663bad5083d0f3a9fb21fb315825359a9a347428c20926d69c')})
+REVIEWED_PREPARATION_HISTORY.setdefault('src/engine/scalping/continuous_reversal_registered_postclose.py', set()).update({('e725b5d63af61268760ebdbf760d150f38f5d19790261d6f978f803a48f86b29',
+  '65f2cd48607abfae735836d5f4c5f60bad9d8866e0d4386b1c8e22756516899d')})
+REVIEWED_PREPARATION_HISTORY.setdefault('src/engine/scalping/reversal_cumulative_postclose.py', set()).update({('6adcd6526ca315d53e60d4817cda3cfec1b8ed8db30d624a1c212d6005dbba87',
+  '990d9dd982e2fe6976fe070588e39e6a2aa46830344e3ea449ce77c93c4b68fc'),
+ ('708ee7428c494f67a7407e5093771f8ddf45ba67227073bea05ff5d87a172493',
+  '990d9dd982e2fe6976fe070588e39e6a2aa46830344e3ea449ce77c93c4b68fc')})
+REVIEWED_PREPARATION_HISTORY.setdefault('src/trading/market/completed_history.py', set()).update({('dec2b7afcb5fdaab16980d046a124ddac384515b7e3400249d73acaacaf348e7',
+  '381740faff9ca4c00ff6f117a076f444f9762985d1fb13a8d0e5b3581ff75ed5')})
+
+
 def reviewed_preparation_pair(relative, old, current):
     return (REVIEWED_PREPARATION_SOURCES.get(relative) == (old, current)
             or (old, current) in REVIEWED_PREPARATION_HISTORY.get(relative, ()))

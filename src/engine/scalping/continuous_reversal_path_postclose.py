@@ -66,7 +66,7 @@ def begin_run(data_root,day,publication,parent_bundle,source):
         return target
     bars={}
     for date in sorted({r['day'] for r in source['normalized_sources']['partitions']}):
-        bars[date]=P.completed_bars(data_root,date,snapshot_sink=sink)
+        bars[date]=P.completed_bars(data_root,date,snapshot_sink=sink,source=source)
         frozen.extend(bars[date][1])
     _BARS[bar_key]=bars
     history=applied_census_raw(data_root,day)
@@ -245,7 +245,7 @@ def population(data_root,day,*,source=None):
                 if P.file_hash(dst)!=h:raise ValueError('registered_bar_snapshot_changed')
         finally:os.unlink(tmp)
         return dst
-    bars=_BARS.get((str(Path(data_root).resolve()),day)) or {d:P.completed_bars(data_root,d,snapshot_sink=snapshot_sink) for d in dates}
+    bars=_BARS.get((str(Path(data_root).resolve()),day)) or {d:P.completed_bars(data_root,d,snapshot_sink=snapshot_sink,source=source) for d in dates}
     previous={}
     if source.get('base_population'):
         origin=source['base_population']

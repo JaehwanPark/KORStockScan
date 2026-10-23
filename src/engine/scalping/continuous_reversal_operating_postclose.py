@@ -205,7 +205,7 @@ def machine_report(data_root,day,publication,parent,*,source=None,publish_output
                     dest=out/'frozen'/('bars-'+__import__('hashlib').sha256(content).hexdigest()+'.json')
                     if not dest.exists():dest.write_bytes(content)
                     return dest
-                bars[rec['day']]=P.completed_bars(data_root,rec['day'],snapshot_sink=sink)
+                bars[rec['day']]=P.completed_bars(data_root,rec['day'],snapshot_sink=sink,source=source)
                 source_receipts+=bars[rec['day']][1]
             fingerprint=P.digest([rec,manifest['detector_manifest_hash'],configs,code,bars[rec['day']][1],C.LABEL,
                                   P.file_hash(__file__),P.file_hash(A.__file__),P.file_hash(R.__file__)])

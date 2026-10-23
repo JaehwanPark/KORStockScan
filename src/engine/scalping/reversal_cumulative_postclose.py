@@ -115,7 +115,7 @@ def build(data_root,day,publication,parent,*,source=None,publish_outputs=True):
                     dest.parent.mkdir(parents=True,exist_ok=True)
                     if not dest.exists():dest.write_bytes(raw)
                     return dest
-                bars[rec['day']]=P.completed_bars(data_root,rec['day'],snapshot_sink=sink)
+                bars[rec['day']]=P.completed_bars(data_root,rec['day'],snapshot_sink=sink,source=source)
                 receipts.extend(bars[rec['day']][1])
             fingerprint=P.digest([rec,manifest['cumulative_variant_groups'],current,code,bars[rec['day']][1],C.LABEL])
             cached=store.checkpoint('cumulative-native-v2:'+fingerprint)
