@@ -701,3 +701,20 @@ def test_protected_hash_stream_is_bounded_and_rejects_mid_read_generation_change
             validation.file_sha(path,stream=True)
     else:
         assert validation.file_sha(path,stream=True)==hashlib.sha256(raw).hexdigest()
+
+
+@pytest.mark.parametrize('family', ['rising_missed', 'holding_vote'])
+def test_shared_numeric_owner_invalidates_capability_generation(family, monkeypatch, tmp_path):
+    import shutil
+    engine = tmp_path / 'src/engine'
+    names = (*generation.COMPONENTS[family], *generation.COMMON_CODE_COMPONENTS)
+    for name in names:
+        target=engine/name;target.parent.mkdir(parents=True,exist_ok=True)
+        shutil.copyfile(generation.ENGINE/name,target)
+    monkeypatch.setattr(generation,'ENGINE',engine)
+    before=generation.code_generation(family)
+    numeric=engine/'../utils/numeric.py'
+    numeric.write_bytes(numeric.read_bytes()+b'
+# changed numeric source
+')
+    assert generation.code_generation(family)!=before

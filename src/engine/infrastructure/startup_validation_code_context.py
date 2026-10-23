@@ -607,6 +607,33 @@ REVIEWED_PREPARATION_HISTORY.setdefault('src/engine/automation/ordered_intraday_
   'd14017560b8664ea2b1fe39a6c146840807c875178764e014683da4713e8bc9b')})
 
 
+# Complete numeric capability dependency inventory.
+REVIEWED_PREPARATION_HISTORY.setdefault('src/engine/monitoring/policy_generation_contract.py', set()).update({('ff28f004a26a287394d45c4bebfe14a22a144369e8354ea23df0a0c25f7b0028',
+  '9542537f06fc603ffe04b9cb6a1f01ea9689749d0b06becaeda8f0a4c19b20c9')})
+REVIEWED_PREPARATION_HISTORY.setdefault('src/engine/monitoring/policy_generation_code_handoff.py', set()).update({('1a572a81032cd49121e24e2e4925d91d922d9697a65c65db0f473873b656c5cc',
+  '62872a82eda5eae04541329a65dc062b4f99150360dfb24b7eeb8888214f0c25'),
+ ('1dff8c3fcc6dba15fdc720a36c5070a81805d5124433140b8158f3f50c62b98e',
+  '62872a82eda5eae04541329a65dc062b4f99150360dfb24b7eeb8888214f0c25'),
+ ('41ebbc34a2fd015a0cd76ae525c1e6e859edbaa6dc4e4e88e4cc76a44a7a9bef',
+  '62872a82eda5eae04541329a65dc062b4f99150360dfb24b7eeb8888214f0c25'),
+ ('4db24d4d542b8cc6142c1b85e0839bfce6a7116aaae5f49e2b0d90e4174e3d62',
+  '62872a82eda5eae04541329a65dc062b4f99150360dfb24b7eeb8888214f0c25'),
+ ('58f427eee221104aef727ec4dcadb4ad5ec8021c262b6e3c104941ed851fcf6e',
+  '62872a82eda5eae04541329a65dc062b4f99150360dfb24b7eeb8888214f0c25'),
+ ('858f6f949015f1c27d0185a0183df7a331f7fda971830408a5cdf53d16b39b5a',
+  '62872a82eda5eae04541329a65dc062b4f99150360dfb24b7eeb8888214f0c25'),
+ ('b14d8aaf06d7414bcbe6bdb87ddfc685f2c3765db15f8a5f50d93f3e5eeaf444',
+  '62872a82eda5eae04541329a65dc062b4f99150360dfb24b7eeb8888214f0c25'),
+ ('b65c616d024460c825d73472311ddf995282069cd58dfdec9241447d4285d841',
+  '62872a82eda5eae04541329a65dc062b4f99150360dfb24b7eeb8888214f0c25'),
+ ('b9bb89e9ea3c3835e2cb45dc7687b91e38156d208adf1dfc7554869038e50a0e',
+  '62872a82eda5eae04541329a65dc062b4f99150360dfb24b7eeb8888214f0c25'),
+ ('ceb7e9d6031da3e0f77fd0285897e760bec25b3c26f82f85e7b272537e4cbfee',
+  '62872a82eda5eae04541329a65dc062b4f99150360dfb24b7eeb8888214f0c25'),
+ ('e9b1ef85c2cae6c3bec70a6697a36d767584abee1c6fe621530865ef5146a9eb',
+  '62872a82eda5eae04541329a65dc062b4f99150360dfb24b7eeb8888214f0c25')})
+
+
 def reviewed_preparation_pair(relative, old, current):
     return (REVIEWED_PREPARATION_SOURCES.get(relative) == (old, current)
             or (old, current) in REVIEWED_PREPARATION_HISTORY.get(relative, ()))
