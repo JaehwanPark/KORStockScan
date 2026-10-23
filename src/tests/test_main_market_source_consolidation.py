@@ -21,7 +21,8 @@ from src.engine.scalping import continuous_reversal_source as S
 
 
 @pytest.mark.parametrize('damage', ['none', 'source_error', 'authority', 'mode', 'date',
-                                    'generation', 'strict_source', 'parent'])
+                                    'generation', 'strict_source', 'parent', 'receipt_missing',
+                                    'receipt_pointer', 'receipt_date', 'receipt_root', 'origin_code'])
 def test_code_handoff_rollover_requires_frozen_validated_next_session_origin(tmp_path, monkeypatch, damage):
     import sys
     from src.engine.scalping import reversal_code_handoff as H
@@ -37,9 +38,34 @@ def test_code_handoff_rollover_requires_frozen_validated_next_session_origin(tmp
     elif damage=='date': f['effective_date']='2026-10-16'
     path=base/'candidates/policy_2026-10-15.json';path.parent.mkdir(parents=True);path.write_text(json.dumps(candidate))
     frozen=base/'generations/candidate.json';frozen.write_text(json.dumps({**candidate,'changed':True} if damage=='generation' else candidate))
-    (base/'current.json').write_text(json.dumps(dict(bundle_sha256='parent')))
+    pointer=base/'current.json'
+    pointer.write_text(json.dumps(dict(bundle_sha256='parent',effective_date='2026-10-14')))
+    # The native child attests both the parent's date and its sealed closure.
+    # A hash-only stub cannot stand in for that cross-process contract.
+    origin=tmp_path/'origin';origin.mkdir()
+    original_code=origin/'reader.py';original_code.write_text('# reviewed parent\n')
+    original_source=root/'original-source.json';original_source.write_text('{}\n')
+    parent=dict(bundle_sha256='parent',target_date='2026-10-14')
+    receipt=P.seal(dict(schema=H.SCHEMA,authority=H.AUTHORITY,
+        target_date=parent['target_date'],release_commit='a'*40,release_root=str(origin),
+        bundle_sha256='parent',current_pointer_sha256=P.file_hash(pointer),
+        policy_reselected=False,provider_called=False,
+        source_hashes={str(original_source):P.file_hash(original_source)},
+        code_hashes={str(original_code):P.file_hash(original_code)}))
+    receipt_damage={'receipt_pointer':('current_pointer_sha256','f'*64),
+                    'receipt_date':('target_date','2026-10-13'),
+                    'receipt_root':('release_root',str(tmp_path/'foreign'))}
+    if damage in receipt_damage:
+        field,value=receipt_damage[damage];receipt=P.seal(dict(receipt,**{field:value}))
+    if damage!='receipt_missing':
+        P.write(H.path(root,parent['target_date'],'a'*40,'parent'),receipt)
+    if damage=='source_error':original_source.write_text('{"changed":true}\n')
+    if damage=='origin_code':original_code.write_text('# unreviewed parent\n')
     before={p:p.read_bytes() for p in base.rglob('*.json')}
-    def load(*args):raise ValueError('source_missing' if damage=='source_error' else 'v4_contract_code_changed:session_contract.py')
+    current_loads=[]
+    def load(*args):
+        current_loads.append(args)
+        raise ValueError('v4_contract_code_changed:session_contract.py')
     monkeypatch.setattr(N,'_load_current_uncached',load)
     monkeypatch.setattr(N,'validate',lambda *args,**kw:None)
     strict=[]
@@ -49,19 +75,30 @@ def test_code_handoff_rollover_requires_frozen_validated_next_session_origin(tmp
     monkeypatch.setattr(N,'_validate_bundle_sources',validate)
     origins=[]
     def attest(data,day,**kwargs):
-        origins.append((day,kwargs));return dict(bundle_sha256='wrong' if damage=='parent' else 'parent')
+        origins.append((day,kwargs));return dict(parent,bundle_sha256='wrong' if damage=='parent' else 'parent')
     monkeypatch.setattr(V,'_attested_activation_parent',attest)
     monkeypatch.setattr(sys,'argv',['origin',str(root),'2026-10-15'])
     monkeypatch.setattr(sys,'addaudithook',lambda hook:None)
     scope={}
     source=H._ORIGIN_SCRIPT.split('refs={}')[0]
     if damage!='none':
-        with pytest.raises(ValueError):exec(source,scope)
+        reason=('^active_policy_origin_receipt_source_changed:' if damage in ('source_error','origin_code')
+                else '^active_policy_code_handoff_invalid$' if damage in receipt_damage
+                else {'receipt_missing':'^active_policy_code_handoff_rollover_parent_receipt_missing$',
+                      'generation':'^active_policy_code_handoff_rollover_generation_changed$',
+                      'strict_source':'^strict_source_changed$',
+                      'parent':'^active_policy_code_handoff_rollover_parent_changed$'}.get(
+                          damage,'^v4_contract_code_changed:'))
+        with pytest.raises(ValueError,match=reason):exec(source,scope)
     else:
         exec(source,scope)
-        assert scope['b']==dict(bundle_sha256='parent')
+        assert scope['b']==parent
         assert strict==[candidate] and len(origins)==1
+        assert scope['prepared_refs'][str(original_source)]==P.file_hash(original_source)
+        assert scope['prepared_refs'][str(original_code)]==P.file_hash(original_code)
+        assert scope['prepared_refs'][str(frozen)]==P.file_hash(frozen)
         assert str(path.absolute()) not in scope['opened']
+    assert len(current_loads)==int(damage in ('authority','mode','date'))
     assert before=={p:p.read_bytes() for p in before}
 from src.trading.market.session_contract import market_source_partition_venue, market_source_session_bucket
 from src.tests.test_micro_reversion_forward_collector import _snapshot, _depth_snapshot
@@ -187,18 +224,24 @@ def test_v6_code_refresh_preserves_issued_policy_and_current_until_exact_activat
     next(iter(cell['routes'].values()))['payload']['arm'] = 'changed'
     with pytest.raises(ValueError, match='policy_changed'):
         V6._validate_code_refresh(tampered,root)
-    # The active-policy compatibility reader requires a real selector context.
-    # This isolated candidate has no compatibility receipt: preserve the native
-    # code mismatch rather than failing on an unrelated missing fixture file.
+    # Exercise the selected reader, then separately prove a foreign reader
+    # cannot use a missing compatibility receipt to bypass root custody.
+    from src.engine.scalping import reversal_code_handoff as H
+    reader=Path(H.__file__).resolve().parents[3]
     selection = root/'runtime/runtime_release_selection.json'
     selection.parent.mkdir(parents=True, exist_ok=True)
-    P.write(selection, dict(git_commit='b'*40, release_root=str(root/'new-release')))
-    monkeypatch.setattr(router,'selected_release',lambda *args:(root/'new-release','b'*40))
+    P.write(selection, dict(git_commit='b'*40, release_root=str(reader)))
+    monkeypatch.setattr(router,'selected_release',lambda *args:(reader,'b'*40))
     pin.write_text('# Unreviewed bytes\n')
     with pytest.raises(ValueError, match='contract_code_changed'):
         original_validate(refreshed,root)
+    with monkeypatch.context() as foreign:
+        P.write(selection,dict(git_commit='b'*40,release_root=str(root/'new-release')))
+        foreign.setattr(router,'selected_release',lambda *args:(root/'new-release','b'*40))
+        with pytest.raises(ValueError,match='^active_policy_code_reader_root_changed$'):
+            original_validate(refreshed,root)
+    P.write(selection,dict(git_commit='b'*40,release_root=str(reader)))
     pin.write_text('# New reviewed common dependency\n')
-    monkeypatch.setattr(router,'selected_release',lambda *args:(root/'new-release','b'*40))
     def corrupt_current(**kwargs):
         raise ValueError('machine_bundle_source_hash_invalid')
     monkeypatch.setattr(N,'load_effective',corrupt_current)
