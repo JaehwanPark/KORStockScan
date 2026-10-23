@@ -444,6 +444,79 @@ def refresh_native_research_costs(data_root, completion_date, *, completion_sour
             claim.close()
 
 
+def _native_missing_buy_position(root, trade, position, registry, generation, registry_index):
+    """Consume accepted BUY receipts when recovery emitted no pipeline event.
+
+    This is a research projection of existing executions, not a reconstructed
+    HOLDING event. Partial or conflicting pipeline executions stay excluded.
+    """
+    from . import main_stop_research_cost as native
+    from src.engine.ai import holding_exit_vote as vote
+    from src.engine.scalping.main_stop_quantity_source import _fill_facts
+    from src.engine.sniper_trade_review_report import _quantity_registry_fill_custody
+    missing = {'source_gap_buy_fill_missing', 'source_gap_negative_position_balance',
+               'source_gap_position_quantity_not_conserved'}
+    reasons = set(position['execution_source_quality_reasons'])
+    if (position['buy_legs'] or not missing <= reasons
+            or reasons - missing - {'source_gap_sell_leg_configured_cost'}
+            or not position['terminal_observed'] or position['status'] != 'COMPLETED'):
+        return position, None
+    record = _record(position['record_id'])
+    path = root/'runtime/holding_buy_fill_receipts'/(record+'.json')
+    if not path.exists():
+        return position, None
+    from .research_input_budget import Claim
+    with Claim(path.stat().st_size * 12):
+        receipt = native._read(path, vote._BUY_FILL_RECEIPT_MAX_BYTES)
+        stock = dict(id=int(record), code=trade['code'], buy_time=receipt.get('buy_time'),
+                     buy_qty=trade['buy_qty'], buy_price=trade['buy_price'])
+        entry_at, fact_at = _clock(stock['buy_time']), _clock(trade['buy_time'])
+        if (receipt.get('source') != 'accepted_broker_execution'
+                or fact_at not in {entry_at, entry_at.replace(microsecond=0)}
+                or vote.restore_buy_fill_receipt(stock, root) != 'restored'
+                or stock.get('_add_receipt_filled_by_order_no')
+                or stock.get('_add_receipt_executions_by_order_no')):
+            return position, None
+        facts, identity = _fill_facts(stock)
+        legs, hashes = [], []
+        owners, _ = registry_index
+        fills = [event for event in owners.get('main_scalping:'+record, [])
+                 if event.get('event') == 'FILL_RECORDED']
+        for leg in vote.buy_fill_legs_from_runtime(stock):
+            matches = [event for event in fills if event.get('broker_order_no') == leg['order_no']
+                       and event.get('execution_no') == leg['execution_no']]
+            if len(matches) != 1:
+                return position, None
+            event = matches[0]
+            signature = stock['_entry_receipt_executions_by_order_no'][leg['order_no']][leg['execution_no']]
+            # A single complete execution per order supplies an exact price.
+            # Do not infer per-fill clocks or prices from cumulative averages.
+            at = _clock(event['observed_at_kst'])
+            if (facts[leg['order_no']]['filled_qty'] != leg['qty']
+                    or facts[leg['order_no']]['remaining_qty'] != 0
+                    or signature.get('unit_exec_qty') != leg['qty']
+                    or event.get('filled_qty') != leg['qty']
+                    or event.get('fill_amount') != leg['qty'] * signature.get('unit_exec_price', 0)
+                    or at.date().isoformat() != event.get('order_date')):
+                return position, None
+            legs.append(dict(at=at.isoformat(), order_no=leg['order_no'], execution_no=leg['execution_no'],
+                qty=leg['qty'], price=signature['unit_exec_price'], route=event.get('route')))
+            hashes.append(event['event_hash'])
+        if (not legs or min(_clock(leg['at']) for leg in legs) != _clock(stock['buy_time'])
+                or sum(number(leg['qty']) for leg in position['sell_legs']) != number(trade['buy_qty'])):
+            return position, None
+        custody = _quantity_registry_fill_custody(trade, {'buy_fill_legs':legs}, registry,
+            generation, registry_index=registry_index)
+        # The shared custody owner validates exact account/owner/route and the
+        # complete registry fill census, including conflicting foreign claims.
+        custody_account(record, legs, custody)
+        proof = dict(receipt=native.byte_generation(path), buy_fill_identity=identity,
+            registry_sha256=generation['sha256'], fill_event_hashes=sorted(hashes),
+            clock_source='native_registry_fill_observed_at_kst')
+        return {**position, 'buy_legs':legs, 'custody_rows':custody,
+                'execution_source_quality_reasons':sorted(reasons-missing)}, proof
+
+
 def _refresh_native_research_costs(root, completion_date, *, completion_source, input_paths, input_signature):
     from . import main_stop_research_cost as native
     from src.engine.automation import main_trailing_source_store as indexed
@@ -495,6 +568,27 @@ def _refresh_native_research_costs(root, completion_date, *, completion_source, 
             except (OSError, ValueError, TypeError, KeyError):
                 sources[day] = None
         registry, registry_generation, registry_path = native._registry(root)
+        records = rows.keys() if rows is not None else previous.get('receipts', {}).keys()
+        buy_receipt_paths = [root/'runtime/holding_buy_fill_receipts'/(_record(record)+'.json')
+                             for record in records]
+        if input_signature != native._signature(input_paths):
+            raise ValueError('research_cost_revision_source_changed')
+        input_paths += buy_receipt_paths
+        input_signature = native._signature(input_paths)
+        buy_receipt_bytes = 0
+        def buy_receipt_generation(path):
+            nonlocal buy_receipt_bytes
+            if not path.exists():
+                return None
+            metadata = path.lstat()
+            if not stat.S_ISREG(metadata.st_mode):
+                raise ValueError('research_cost_buy_receipt_not_regular')
+            size = metadata.st_size
+            buy_receipt_bytes += size
+            if size > CACHED_RECEIPT_MAX_BYTES or buy_receipt_bytes > 4 * 1024 * 1024:
+                raise ValueError('research_cost_buy_receipt_budget')
+            return native.byte_generation(path)
+        buy_receipts = {path.stem:buy_receipt_generation(path) for path in buy_receipt_paths}
         buy_sources = {}
         for day in dates:
             path = root/'pipeline_events'/f'pipeline_events_{day}.jsonl'
@@ -506,12 +600,13 @@ def _refresh_native_research_costs(root, completion_date, *, completion_source, 
             'automation/main_trailing_source_store.py', 'sniper_trade_review_report.py',
             'lifecycle/broker_cost_source.py', 'lifecycle/broker_cost_reconciliation.py',
             'lifecycle/holding_window_generation.py', 'lifecycle/research_json_stream.py',
-            'lifecycle/snapshot_archive.py']
+            'lifecycle/snapshot_archive.py', 'ai/holding_exit_vote.py',
+            'scalping/main_stop_quantity_source.py']
         implementation = cached_code_generation([engine/name for name in owners])
         revision = dict(schema='initial_quantity_late_cost_revision_v2',
             completion_source_sha256=digest(completion_source), registry=registry_generation,
             official_sources={day:(source or {}).get('source_sha256') for day,source in sources.items()},
-            buy_sources=buy_sources, allocation_algorithm=ALGORITHM,
+            buy_sources=buy_sources, native_buy_receipts=buy_receipts, allocation_algorithm=ALGORITHM,
             implementation={name:implementation[str(engine/name)] for name in owners})
         if all((previous.get('native_revision') or {}).get(key) == value for key,value in revision.items()):
             if input_signature != native._signature(input_paths):
@@ -519,6 +614,12 @@ def _refresh_native_research_costs(root, completion_date, *, completion_source, 
             return previous
         if rows is None:
             rows, proof, paths = native._native_projection(root, completion_date, execution_events=True)
+        for record in rows:
+            if record not in buy_receipts:
+                path = root/'runtime/holding_buy_fill_receipts'/(_record(record)+'.json')
+                input_paths.append(path)
+                input_signature[str(path)] = native._signature([path])[str(path)]
+                buy_receipts[record] = buy_receipt_generation(path)
         # A new original completion generation can add an entry date. Admit
         # its official source before decoding, without a second timeline scan.
         added_dates = completion_dates(rows) - set(dates)
@@ -612,7 +713,7 @@ def _refresh_native_research_costs(root, completion_date, *, completion_source, 
             if remaining:
                 migration_io[day] = indexed.read_order_fill_windows(root, path, remaining,
                     expected_generation=buy_sources[day], consume=add_observation)
-        positions = []
+        positions, native_buy_recoveries = [], {}
         cost_only = {'source_gap_sell_leg_configured_cost', 'source_gap_profit_rate_unreconciled',
                      'source_gap_exact_cost_missing', 'source_gap_broker_actual_cost_missing'}
         for record, row in rows.items():
@@ -621,7 +722,19 @@ def _refresh_native_research_costs(root, completion_date, *, completion_source, 
                 ledger = ledger_for(record)
                 custody = _quantity_registry_fill_custody(row, ledger, registry,
                     registry_generation, registry_index=registry_index)
-                positions.append(review._quantity_research_position(row, observations[record], ledger, custody))
+                position = review._quantity_research_position(row, observations[record], ledger, custody)
+                try:
+                    position, recovery = _native_missing_buy_position(root, row, position,
+                        registry, registry_generation, registry_index)
+                except (ValueError, TypeError, KeyError, OSError) as exc:
+                    if str(exc).startswith('shared_research_budget_'):
+                        raise
+                    position = {**position, 'execution_source_quality_reasons':
+                        position['execution_source_quality_reasons'] + ['source_gap_native_buy_receipt_invalid']}
+                    recovery = None
+                if recovery is not None:
+                    native_buy_recoveries[record] = recovery
+                positions.append(position)
                 continue
             buy, sell = row.get('buy_fill_legs'), row.get('sell_fill_legs')
             custody = _quantity_registry_fill_custody(row, {'buy_fill_legs':buy}, registry,
@@ -655,7 +768,8 @@ def _refresh_native_research_costs(root, completion_date, *, completion_source, 
         for day,expected in buy_sources.items():
             if indexed.generation(root, root/'pipeline_events'/f'pipeline_events_{day}.jsonl') != expected:
                 raise ValueError('research_cost_buy_generation_changed')
-        revision.update(recovered_buy_events=recovered, migration_io=migration_io)
+        revision.update(recovered_buy_events=recovered, migration_io=migration_io,
+                        native_buy_recoveries=native_buy_recoveries)
         return persist_research_costs(root, completion_date, receipts, dates, native_revision=revision)
     finally:
         for claim in extra_claims + (rows.budget_claims if rows is not None else []):

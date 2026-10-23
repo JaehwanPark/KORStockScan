@@ -36,7 +36,7 @@ def registry(root, positions):
             quantity+=part['qty'];amount+=part['qty']*part['price']
             events.append(dict(anchor,event='FILL_RECORDED',state='ORDER_BOUND',
                 broker_order_no=part['order_no'],execution_no=part['execution_no'],
-                filled_qty=quantity,fill_amount=amount))
+                filled_qty=quantity,fill_amount=amount,observed_at_kst=part['at']))
         for row in events:
             row["previous_hash"] = previous
             row["event_hash"] = hashlib.sha256(previous.encode() + OrderOwnerRegistry._canonical(row)).hexdigest()

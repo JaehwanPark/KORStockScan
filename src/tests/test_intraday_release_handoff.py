@@ -2213,7 +2213,8 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(tmp_path,family,faul
     root=tmp_path/'candidate';root.mkdir()
     subprocess.run(['git','clone','-q','--shared','--no-checkout',str(canonical),str(root)],check=True)
     subprocess.run(['git','-C',str(root),'checkout','-q','75e0fbbf7'],check=True)
-    hashes=({'current':handoff.REVIEWED_OBSERVER_IO_ENTRY_COST_HASHES,
+    hashes=({'current':handoff.REVIEWED_NATIVE_BUY_COST_PROFILE,
+        'consumed_observer_io':handoff.REVIEWED_OBSERVER_IO_ENTRY_COST_HASHES,
         'consumed_index_sentinel':handoff.REVIEWED_ENTRY_COST_HASHES,
         'consumed_sentinel':handoff.REVIEWED_ENTRY_COST_DEPLOYED_SENTINEL_HASHES,
         'consumed_pre_finalization':handoff.REVIEWED_PRE_FINALIZATION_HASHES,
@@ -2235,7 +2236,7 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(tmp_path,family,faul
     for name in hashes:
         content=((canonical/name).read_bytes() if generation=='current' else
             subprocess.check_output(['git','-C',str(canonical),'show',
-                {'consumed_index_sentinel':'926ebca82','consumed_sentinel':'2b7ca0380','consumed_native_preopen':'9a8e59bfc','consumed_pre_finalization':'91e5d2702','consumed_pre_startup':'90bf2d11f','consumed_pre_shutdown':'70fc572f8',
+                {'consumed_observer_io':'a2ca8e7d8','consumed_index_sentinel':'926ebca82','consumed_sentinel':'2b7ca0380','consumed_native_preopen':'9a8e59bfc','consumed_pre_finalization':'91e5d2702','consumed_pre_startup':'90bf2d11f','consumed_pre_shutdown':'70fc572f8',
                  'consumed_pre_native_label':'b1519a2d4','consumed_pre_coordination':'3dd9f1bf5','consumed_pre_prepared_validation':'bf330ae92','consumed_pre_prepared_repair':'81f43b8ba','consumed_pre_main_preparation':'8644e15fc','consumed_pre_prepared_start':'3b951f1f1','consumed_pre_first_turn':'e9ee2c8ea','consumed_pre_expiry_health':'9476e9ecd','consumed_pre_signed_surge':'bf26ddf0e','consumed_pre_preassessment':'fc51a179b','consumed_pre_prestart':'64ec63a87','consumed_pre_prepared_owner':'d346aa3af'}[generation]+':'+name]))
         (root/name).write_bytes(content)
     name='src/engine/automation/intraday_release_handoff.py'
@@ -2425,3 +2426,20 @@ def test_observer_io_handoff_retains_consumed_index_generation(tmp_path,family,f
     test_entry_cost_handoff_keeps_exact_complete_generation(
         tmp_path,family,fault,'consumed_index_sentinel',
         dependency='src/engine/monitoring/submission_bottleneck_monitor.py')
+
+
+@pytest.mark.parametrize('family', ['pre_submit_delay','main_stop','holding_vote'])
+@pytest.mark.parametrize('fault', [None,'missing','dirty','committed_change'])
+@pytest.mark.parametrize('dependency', ['src/engine/lifecycle/broker_cost_allocation.py',
+    'src/engine/scalping/initial_quantity_monitor_projection.py',
+    'src/engine/infrastructure/startup_validation_code_context.py'])
+def test_native_buy_cost_handoff_keeps_exact_reviewed_generation(tmp_path,family,fault,dependency):
+    test_entry_cost_handoff_keeps_exact_complete_generation(
+        tmp_path,family,fault,'current',dependency=dependency)
+
+
+@pytest.mark.parametrize('family', ['pre_submit_delay','main_stop','holding_vote'])
+@pytest.mark.parametrize('fault', [None,'missing','parent_mix'])
+def test_native_buy_cost_handoff_preserves_consumed_observer(tmp_path,family,fault):
+    test_entry_cost_handoff_keeps_exact_complete_generation(
+        tmp_path,family,fault,'consumed_observer_io',dependency='src/engine/lifecycle/broker_cost_allocation.py')

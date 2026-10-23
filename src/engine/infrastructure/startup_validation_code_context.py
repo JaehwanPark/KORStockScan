@@ -270,6 +270,21 @@ for _relative, _origins in {'src/engine/automation/entry_cancel_wait_tuning.py':
         (_origin, _origins[1]) for _origin in _origins[0])
 
 
+# Native BUY cost and its complete observation-reader dependency closure.
+REVIEWED_PREPARATION_HISTORY.setdefault('src/engine/lifecycle/broker_cost_allocation.py', set()).update({('404a1fb1f49683eba1e0443b74758cda11fd8b62452e49f229808b7e5769afae',
+  '7d2954281bc187ba3778ce3587631a6980929536856a73111cbf78ac8f8fdfea'),
+ ('e392d3e79ad63fe1502a7921aca590ce93c3134d9d3e4d488d42775dd20cf349',
+  '7d2954281bc187ba3778ce3587631a6980929536856a73111cbf78ac8f8fdfea')})
+REVIEWED_PREPARATION_HISTORY.setdefault('src/engine/scalping/initial_quantity_monitor_projection.py', set()).update({('252ca991d7729e4b86393831ca2b6c7345a4a255d0e9c8d5d39c1bbf77a13947',
+  '87f78306653fc9f51d890a3531752301589782639b1832ad38a24f7c29c4215d'),
+ ('81a69a5f6a4d512ab7578b196fcddcf08d56ceb791ee8d2d1d3a9bdfdb926327',
+  '87f78306653fc9f51d890a3531752301589782639b1832ad38a24f7c29c4215d'),
+ ('c0ac0738df35657d770b4c7a1a7c0490a0ab4bc8756aa1c19215ad2661dead8b',
+  '87f78306653fc9f51d890a3531752301589782639b1832ad38a24f7c29c4215d'),
+ ('ef78c5ae7aa9dd7eab7e7ce3575329943713750fc70b248f6e992766511fd114',
+  '87f78306653fc9f51d890a3531752301589782639b1832ad38a24f7c29c4215d')})
+
+
 def reviewed_preparation_pair(relative, old, current):
     return (REVIEWED_PREPARATION_SOURCES.get(relative) == (old, current)
             or (old, current) in REVIEWED_PREPARATION_HISTORY.get(relative, ()))

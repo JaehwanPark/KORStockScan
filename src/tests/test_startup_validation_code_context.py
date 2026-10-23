@@ -1368,3 +1368,14 @@ def test_main_preparation_independently_reviews_observer_p5_b67_sources(relative
     if damage=='unreviewed':new='0'*64
     elif damage=='wrong_origin':old='0'*64
     assert C.reviewed_preparation_pair(relative,old,new) is (damage is None)
+
+
+@pytest.mark.parametrize('damage', [None,'unreviewed','wrong_origin'])
+@pytest.mark.parametrize('relative', ['src/engine/lifecycle/broker_cost_allocation.py',
+    'src/engine/scalping/initial_quantity_monitor_projection.py'])
+def test_main_preparation_independently_reviews_native_buy_cost(damage,relative):
+    old=hashlib.sha256(subprocess.check_output(['git','-C',str(ROOT),'show','a2ca8e7d8:'+relative])).hexdigest()
+    new=hashlib.sha256((ROOT/relative).read_bytes()).hexdigest()
+    if damage=='unreviewed':new='0'*64
+    elif damage=='wrong_origin':old='0'*64
+    assert C.reviewed_preparation_pair(relative,old,new) is (damage is None)

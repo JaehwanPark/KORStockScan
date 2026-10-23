@@ -4938,6 +4938,25 @@ REVIEWED_OBSERVER_IO_DEPENDENCY_VARIANTS = {
     } for key, value in REVIEWED_ENTRY_COST_DEPENDENCY_VARIANTS.items()
 }
 
+# Exact native BUY cost consumer; preserve the already consumed observer profile.
+REVIEWED_NATIVE_BUY_COST_HASHES = {'src/engine/infrastructure/startup_validation_code_context.py': 'd986bde23b08bcdef9112f0b243acb58f6f374595b56a7317b51db5cde41af30',
+ 'src/engine/lifecycle/broker_cost_allocation.py': '7d2954281bc187ba3778ce3587631a6980929536856a73111cbf78ac8f8fdfea',
+ 'src/engine/scalping/initial_quantity_monitor_projection.py': '87f78306653fc9f51d890a3531752301589782639b1832ad38a24f7c29c4215d'}
+REVIEWED_NATIVE_BUY_COST_PROFILE = {**REVIEWED_OBSERVER_IO_ENTRY_COST_HASHES, **REVIEWED_NATIVE_BUY_COST_HASHES}
+REVIEWED_NATIVE_BUY_COST_VARIANTS = {
+    (key[0], REVIEWED_NATIVE_BUY_COST_HASHES.get(key[0], key[1])): {
+        **value, 'dependencies': {**value['dependencies'], **REVIEWED_NATIVE_BUY_COST_HASHES},
+        'contract_extensions': {origin: {name: REVIEWED_NATIVE_BUY_COST_HASHES.get(os.path.normpath(name), sha)
+            for name, sha in paths.items()} for origin, paths in value['contract_extensions'].items()},
+    } for key, value in REVIEWED_OBSERVER_IO_DEPENDENCY_VARIANTS.items()
+}
+REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
+    name: REVIEWED_ENTRY_COST_PAIRS.get(name, ()) + tuple((origin, current) for origin in
+        {REVIEWED_OBSERVER_IO_ENTRY_COST_HASHES[name]} |
+        {old for pair in REVIEWED_ENTRY_COST_PAIRS.get(name, ()) for old in pair})
+    for name, current in REVIEWED_NATIVE_BUY_COST_HASHES.items()}}
+
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -5111,12 +5130,16 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     deployed_sentinel = all((root / name).is_file() and hashlib.sha256(candidate_bytes(name)).hexdigest() == digest
         for name, digest in REVIEWED_DEPLOYED_SENTINEL_SCOPE_HASHES.items())
     observer_io_present = (root / 'src/engine/monitoring/observer_artifact_io.py').exists()
-    prepared_hashes = (REVIEWED_OBSERVER_IO_ENTRY_COST_HASHES if observer_io_present else
+    native_buy_cost = any((root / name).is_file() and hashlib.sha256(candidate_bytes(name)).hexdigest() == sha
+        for name, sha in REVIEWED_NATIVE_BUY_COST_HASHES.items())
+    prepared_hashes = (REVIEWED_NATIVE_BUY_COST_PROFILE if native_buy_cost else
+        REVIEWED_OBSERVER_IO_ENTRY_COST_HASHES if observer_io_present else
         REVIEWED_ENTRY_COST_DEPLOYED_SENTINEL_HASHES if deployed_sentinel else
         REVIEWED_ENTRY_COST_HASHES if sentinel_scope_present else
         REVIEWED_PRE_FINALIZATION_HASHES if consumed_finalization else
         REVIEWED_NATIVE_PREOPEN_HASHES if native_preopen else REVIEWED_ENTRY_COST_PRE_SENTINEL_SCOPE_HASHES)
-    prepared_variants = (REVIEWED_OBSERVER_IO_DEPENDENCY_VARIANTS if observer_io_present else
+    prepared_variants = (REVIEWED_NATIVE_BUY_COST_VARIANTS if native_buy_cost else
+        REVIEWED_OBSERVER_IO_DEPENDENCY_VARIANTS if observer_io_present else
         REVIEWED_ENTRY_COST_DEPLOYED_SENTINEL_VARIANTS if deployed_sentinel else
         REVIEWED_ENTRY_COST_DEPENDENCY_VARIANTS if sentinel_scope_present else
         REVIEWED_PRE_FINALIZATION_VARIANTS if consumed_finalization else

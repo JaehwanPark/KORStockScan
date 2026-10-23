@@ -1895,7 +1895,9 @@ def test_original_stream_entry_seal_survives_preservation_then_compression(tmp_p
 
 @pytest.mark.parametrize('legacy', [False, True])
 @pytest.mark.parametrize('fill_source', ['indexed', 'historical_window', 'missing', 'conflicting', 'guard',
-    'partial_indexed', 'partial_historical'])
+    'partial_indexed', 'partial_historical', 'native_receipt', 'native_wrong_clock',
+    'native_wrong_qty', 'native_wrong_execution', 'native_wrong_price', 'native_guard',
+    'native_foreign', 'native_partial'])
 def test_completion_cost_adapter_consumes_original_buy_without_changing_fact_bytes(
         tmp_path, monkeypatch, legacy, fill_source):
     from src.engine import sniper_trade_review_report as review
@@ -1919,6 +1921,29 @@ def test_completion_cost_adapter_consumes_original_buy_without_changing_fact_byt
     observed = source(tmp_path)
     official.atomic(official.source_path(tmp_path, day), observed)
     registry(tmp_path, [item])
+    if fill_source.startswith('native_'):
+        from src.engine.ai import holding_exit_vote as vote
+        stock = dict(id=1, code='005930', buy_time=day+'T10:00:00', buy_qty=2, buy_price=10000,
+            entry_filled_qty=2, _entry_receipt_filled_by_order_no={'11':2},
+            _entry_receipt_executions_by_order_no={'11':{'101':dict(cumulative_qty=2,
+                cumulative_exec_amount=20000, order_qty=2, remaining_qty=0,
+                unit_exec_qty=2, unit_exec_price=10000)}},
+            _add_receipt_filled_by_order_no={}, _add_receipt_executions_by_order_no={})
+        if fill_source == 'native_wrong_clock': stock['buy_time']=day+'T10:00:00.100000'
+        elif fill_source == 'native_wrong_price': stock['buy_price']=10001
+        elif fill_source == 'native_wrong_qty': stock['buy_qty']=3
+        if fill_source != 'native_wrong_qty': vote.persist_buy_fill_receipt(stock,tmp_path)
+        else:
+            vote.persist_buy_fill_receipt({**stock,'buy_qty':2},tmp_path)
+            path=tmp_path/'runtime/holding_buy_fill_receipts/1.json'
+            changed=json.loads(path.read_bytes());changed['buy_qty']=3;path.write_text(json.dumps(changed))
+        if fill_source in {'native_wrong_execution','native_partial','native_foreign'}:
+            path=tmp_path/'runtime/holding_buy_fill_receipts/1.json'
+            changed=json.loads(path.read_bytes())
+            if fill_source == 'native_wrong_execution': changed['record_id']=2
+            elif fill_source == 'native_foreign': changed['source']='legacy_path_vote_exact_buy_legs'
+            else: changed['receipt_fields']['_entry_receipt_executions_by_order_no']['11']['101'].update(order_qty=3,remaining_qty=1)
+            path.write_text(json.dumps(changed))
     missing = {**item, 'buy_legs':[], 'execution_source_quality_reasons':['source_gap_buy_fill_missing']}
     old = allocation.build_research_cost_allocations({day:observed}, [missing])
     allocation.persist_research_costs(tmp_path, day, old, [day])
@@ -1956,7 +1981,7 @@ def test_completion_cost_adapter_consumes_original_buy_without_changing_fact_byt
     monkeypatch.setattr(indexed, 'maintain', lambda *a:None)
     append(tmp_path, log, dict(record_id=1, stock_code='005930', pipeline='ENTRY_PIPELINE',
         stage='order_leg_sent', emitted_at=day+'T09:59:59', fields={}))
-    if fill_source != 'missing':
+    if fill_source != 'missing' and (not fill_source.startswith('native_') or fill_source == 'native_guard'):
         payload = dict(record_id=1, stock_code='005930', pipeline='HOLDING_PIPELINE',
             stage=buy.stage, emitted_at=day+'T10:00:00', fields=buy.fields)
         project = indexed.project
@@ -1968,7 +1993,7 @@ def test_completion_cost_adapter_consumes_original_buy_without_changing_fact_byt
                 'execution_no':'103','order_filled_qty':2,'order_remaining_qty':0,'fill_quality':'FULL_FILL'}))
         if fill_source == 'conflicting':
             append(tmp_path, log, dict(payload,fields={**buy.fields,'fill_price':10001}))
-        elif fill_source == 'guard':
+        elif fill_source in {'guard', 'native_guard'}:
             # An identical execution ID cannot erase a forbidden broker guard.
             append(tmp_path, log, dict(payload,fields={**buy.fields,'broker_order_forbidden':True}))
         monkeypatch.setattr(indexed, 'project', project)
@@ -1992,13 +2017,28 @@ def test_completion_cost_adapter_consumes_original_buy_without_changing_fact_byt
     rows = _overlay_for_test(tmp_path,[original])
     assert rows[0]['completion_source_date'] == day
     receipt = policy._quantity_research_fact_cost(rows[0])
-    assert receipt['status'] == ('research_cost_invalid' if fill_source in {'missing','conflicting','guard'} else 'research_cost_allocated')
+    invalid = fill_source in {'missing','conflicting','guard'} or fill_source.startswith('native_') and fill_source != 'native_receipt'
+    assert receipt['status'] == ('research_cost_invalid' if invalid else 'research_cost_allocated')
+    if fill_source == 'native_receipt':
+        index=json.loads((tmp_path/'runtime/initial_quantity_research_costs'/day/'index.json').read_bytes())
+        proof=index['native_revision']['native_buy_recoveries']['1']
+        assert proof['clock_source']=='native_registry_fill_observed_at_kst'
+        assert len(proof['receipt']['sha256'])==64 and len(proof['fill_event_hashes'])==1
     assert rows[0]['profit_rate'] is None and rows[0]['realized_pnl_krw'] is None
     cache.verify_completion_overlay_generations(rows.completion_generations,data_dir=tmp_path)
     cache.verify_completion_census_context(rows,dict(completion_overlay_generations=rows.completion_generations,
         completion_overlay_summary=rows.completion_overlay_summary,persisted_fact_generations={day:{'issue':None}}),
         as_of=day,data_dir=tmp_path,entry_on_or_after='2026-09-29')
     assert {p:p.read_bytes() for p in immutable} == immutable
+    if fill_source == 'native_receipt':
+        # A changed native receipt is a new producer input, not a warm-cache hit.
+        native_path=tmp_path/'runtime/holding_buy_fill_receipts/1.json'
+        changed=json.loads(native_path.read_bytes());changed['buy_qty']=3
+        native_path.write_text(json.dumps(changed))
+        monkeypatch.setattr(indexed,'read_order_fill_windows',lambda *a,**kw:{})
+        cache.prepare_completion_cost_revisions(tmp_path,day,day,validate_day=policy._quantity_original_fact_generation_issue)
+        revised=json.loads((tmp_path/'runtime/initial_quantity_research_costs'/day/'1.json').read_bytes())
+        assert revised['status']=='research_cost_invalid'
     dependency=Path(str(path.with_suffix('.completed_projection.json'))+'.dependencies.json')
     dependency.write_bytes(dependency.read_bytes()+b' ')
     with pytest.raises(ValueError):
