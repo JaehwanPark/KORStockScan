@@ -5301,6 +5301,32 @@ REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
     for name, current in REVIEWED_AFTERMARKET_LISTING_HASHES.items()}}
 
 
+# Report-only legacy preflight lineage successor; preserve the consumed listing generation.
+REVIEWED_SCANNER_PREFLIGHT_HASHES = {'src/engine/infrastructure/startup_validation_code_context.py': '21fdf9d9229c558edc70361412735a1be36b483e7eb841665a1d5659c45f7387',
+ 'src/engine/monitoring/submission_bottleneck_monitor.py': '038d0b162dfd801d10fc23a27f06d062b0f917ec306c942314ee89c6779d3dda'}
+REVIEWED_SCANNER_PREFLIGHT_PREVIOUS = {'src/engine/infrastructure/startup_validation_code_context.py': 'c2ad2370a32236543bdc70991274a83a109ed48ccd24d1eac4a7206f987034f5',
+ 'src/engine/monitoring/submission_bottleneck_monitor.py': 'f8d68d78e8423db51d4a2f8786c786ea1a53def58f43cb3019d6d79a58dc5902'}
+REVIEWED_SCANNER_PREFLIGHT_PROFILE = {**REVIEWED_AFTERMARKET_LISTING_PROFILE, **REVIEWED_SCANNER_PREFLIGHT_HASHES}
+REVIEWED_SCANNER_PREFLIGHT_VARIANTS = {
+    key: {**value,
+        'selector_path': 'src/engine/monitoring/submission_bottleneck_monitor.py',
+        'selector_sha256': REVIEWED_SCANNER_PREFLIGHT_HASHES['src/engine/monitoring/submission_bottleneck_monitor.py'],
+        'dependencies': {**value['dependencies'], **REVIEWED_SCANNER_PREFLIGHT_HASHES},
+        'contract_extensions': {origin: {name: REVIEWED_SCANNER_PREFLIGHT_HASHES.get(os.path.normpath(name), sha)
+            for name, sha in paths.items()} for origin, paths in value['contract_extensions'].items()},
+    } for key, value in REVIEWED_AFTERMARKET_LISTING_VARIANTS.items()
+}
+for (_trigger, _old_sha), _variant in tuple(REVIEWED_SCANNER_PREFLIGHT_VARIANTS.items()):
+    if _trigger in REVIEWED_SCANNER_PREFLIGHT_HASHES:
+        REVIEWED_SCANNER_PREFLIGHT_VARIANTS[
+            (_trigger, REVIEWED_SCANNER_PREFLIGHT_HASHES[_trigger])] = _variant
+REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
+    name: REVIEWED_ENTRY_COST_PAIRS.get(name, ()) + tuple((origin, current) for origin in
+        {REVIEWED_SCANNER_PREFLIGHT_PREVIOUS[name]} |
+        {old for pair in REVIEWED_ENTRY_COST_PAIRS.get(name, ()) for old in pair})
+    for name, current in REVIEWED_SCANNER_PREFLIGHT_HASHES.items()}}
+
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -5498,7 +5524,11 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     aftermarket_listing = any((root / name).is_file()
         and hashlib.sha256(candidate_bytes(name)).hexdigest() == sha
         for name, sha in REVIEWED_AFTERMARKET_LISTING_HASHES.items())
-    prepared_hashes = (REVIEWED_AFTERMARKET_LISTING_PROFILE if aftermarket_listing else
+    scanner_preflight = any((root / name).is_file()
+        and hashlib.sha256(candidate_bytes(name)).hexdigest() == sha
+        for name, sha in REVIEWED_SCANNER_PREFLIGHT_HASHES.items())
+    prepared_hashes = (REVIEWED_SCANNER_PREFLIGHT_PROFILE if scanner_preflight else
+        REVIEWED_AFTERMARKET_LISTING_PROFILE if aftermarket_listing else
         REVIEWED_NUMERIC_REPLAY_PROFILE if numeric_replay else
         REVIEWED_AUXILIARY_CAPABILITY_PROFILE if auxiliary_capability else
         REVIEWED_MACHINE_REST_HISTORY_PROFILE if machine_rest_history else
@@ -5510,7 +5540,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         REVIEWED_ENTRY_COST_HASHES if sentinel_scope_present else
         REVIEWED_PRE_FINALIZATION_HASHES if consumed_finalization else
         REVIEWED_NATIVE_PREOPEN_HASHES if native_preopen else REVIEWED_ENTRY_COST_PRE_SENTINEL_SCOPE_HASHES)
-    prepared_variants = (REVIEWED_AFTERMARKET_LISTING_VARIANTS if aftermarket_listing else
+    prepared_variants = (REVIEWED_SCANNER_PREFLIGHT_VARIANTS if scanner_preflight else
+        REVIEWED_AFTERMARKET_LISTING_VARIANTS if aftermarket_listing else
         REVIEWED_NUMERIC_REPLAY_VARIANTS if numeric_replay else
         REVIEWED_AUXILIARY_CAPABILITY_VARIANTS if auxiliary_capability else
         REVIEWED_MACHINE_REST_HISTORY_VARIANTS if machine_rest_history else

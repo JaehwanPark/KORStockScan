@@ -697,6 +697,23 @@ REVIEWED_PREPARATION_HISTORY.setdefault('src/engine/monitoring/policy_generation
   '056582f3a61d683220910a86107018d5fea3467f5181a7a837498cf94df6d4c2')})
 
 
+# Signed preflight history classification only; no policy consumption is invented.
+REVIEWED_PREPARATION_HISTORY.setdefault('src/engine/monitoring/submission_bottleneck_monitor.py', set()).update({('00e5a75bdbf7fa812145212820094baa7e04638d5a9c18d4e8011b3b7165abae',
+  '038d0b162dfd801d10fc23a27f06d062b0f917ec306c942314ee89c6779d3dda'),
+ ('0cacfa688b336befe533f2010b3bfaea40d5d2fe778e4ca48d7347071114527e',
+  '038d0b162dfd801d10fc23a27f06d062b0f917ec306c942314ee89c6779d3dda'),
+ ('6e1588b8e5709563f15cdea0705babe7357fed62a27061365ec5ac2425fc2085',
+  '038d0b162dfd801d10fc23a27f06d062b0f917ec306c942314ee89c6779d3dda'),
+ ('808deb51627b4ed17561f168ad2cad808f0181aaac7a754377493912e71d9e57',
+  '038d0b162dfd801d10fc23a27f06d062b0f917ec306c942314ee89c6779d3dda'),
+ ('9c51124b5c07b8ae9039e2e70d1f36da0e3b542136dd24d2ff66ccab642b4ccb',
+  '038d0b162dfd801d10fc23a27f06d062b0f917ec306c942314ee89c6779d3dda'),
+ ('a5a8b7be30b63d0e7990a5761a60a6e0225a563272b15a24c8ccf9fc013f21d8',
+  '038d0b162dfd801d10fc23a27f06d062b0f917ec306c942314ee89c6779d3dda'),
+ ('f8d68d78e8423db51d4a2f8786c786ea1a53def58f43cb3019d6d79a58dc5902',
+  '038d0b162dfd801d10fc23a27f06d062b0f917ec306c942314ee89c6779d3dda')})
+
+
 def reviewed_preparation_pair(relative, old, current):
     return (REVIEWED_PREPARATION_SOURCES.get(relative) == (old, current)
             or (old, current) in REVIEWED_PREPARATION_HISTORY.get(relative, ()))

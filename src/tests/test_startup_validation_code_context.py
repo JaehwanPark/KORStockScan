@@ -1455,3 +1455,13 @@ def test_main_preparation_reviews_aftermarket_listing_sources(relative, damage):
     elif damage == 'wrong_origin':
         old = '0' * 64
     assert C.reviewed_preparation_pair(relative, old, new) is (damage is None)
+
+
+@pytest.mark.parametrize('damage', [None, 'unreviewed', 'wrong_origin'])
+def test_main_preparation_reviews_scanner_preflight_reader(damage):
+    relative = 'src/engine/monitoring/submission_bottleneck_monitor.py'
+    old = H.REVIEWED_SCANNER_PREFLIGHT_PREVIOUS[relative]
+    new = hashlib.sha256((ROOT / relative).read_bytes()).hexdigest()
+    if damage == 'unreviewed': new = '0' * 64
+    elif damage == 'wrong_origin': old = '0' * 64
+    assert C.reviewed_preparation_pair(relative, old, new) is (damage is None)

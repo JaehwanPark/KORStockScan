@@ -3502,8 +3502,24 @@ def _historical_scanner_incident(incident_key, incident, observations, actor, bi
         payload = _json_bytes(observation)
         at = stamp(observation.get('captured_at'))
         receipt = observation.get('runtime_consumption')
+        source = observation.get('source')
+        exact = source.get('exact_payload') if isinstance(source, dict) else None
+        assessment = source.get('assessment') if isinstance(source, dict) else None
+        # The dated preflight producer stops before reversal adjudication. Its
+        # signed legacy-role receipt still records the exact process and safe
+        # nonprovider terminal; it cannot claim native policy consumption.
+        legacy_preflight = (observation.get('evaluation_role') == 'unspecified_legacy'
+            and isinstance(exact, dict) and exact.get('evaluation_role') in (None, 'unspecified_legacy')
+            and isinstance(assessment, dict)
+            and (assessment.get('schema'), assessment.get('action'), assessment.get('reason'))
+                == ('mechanistic_entry_source_invalid_v1', 'source_invalid', 'ai_input_preflight_blocked')
+            and all(observation.get(k) is False for k in
+                    ('provider_called', 'actual_order_submitted', 'runtime_effect', 'allowed_runtime_apply'))
+            and observation.get('broker_order_forbidden') is True
+            and observation.get('capture_contract') is None
+            and isinstance(receipt, dict) and 'continuous_reversal' not in receipt)
         if (len(payload) > 128*1024 or observation.get('schema') != 'mechanistic_entry_observation_v1'
-                or observation.get('evaluation_role') != 'main_live'
+                or observation.get('evaluation_role') != 'main_live' and not legacy_preflight
                 or _scanner_observation_identity(observation) != key
                 or '|'.join(key.split('|')[-3:]) != scope
                 or at is None or at.date() != now.date() or not at.timestamp() < birth

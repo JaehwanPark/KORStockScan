@@ -5192,11 +5192,12 @@ def _old_scanner_observation(now, birth, actor):
     return row
 
 
+@pytest.mark.parametrize('capture_kind', ['main_live', 'legacy_preflight'])
 @pytest.mark.parametrize('damage',[None,'hash','actor','start','at','date','scope','rule','count','missing',
     'unknown','duplicate','promotion','new_issue','birth','oversize','conflicting_native'])
 @pytest.mark.parametrize('coverage_order',['none','first','last'])
 @pytest.mark.parametrize('notification_pending', [False, True])
-def test_historical_scanner_health_requires_all_exact_original_evidence(damage,coverage_order,notification_pending):
+def test_historical_scanner_health_requires_all_exact_original_evidence(damage,coverage_order,notification_pending,capture_kind):
     from src.engine.scalping.ai_decision_trace import _json_bytes
     if coverage_order=='none':
         result,_,_,_=_bounded_outcome_health_fixture(partial=False)
@@ -5206,6 +5207,17 @@ def test_historical_scanner_health_requires_all_exact_original_evidence(damage,c
     birth=generation['actor_birth_proof']['birth_lower_bound_epoch']
     actor=generation['actor_birth_proof']['actor']
     row=_old_scanner_observation(now,birth,actor)
+    if capture_kind == 'legacy_preflight':
+        row['evaluation_role'] = 'unspecified_legacy'
+        row['source']['exact_payload'] = {'entry_machine_input_trace': {
+            'entry_machine_input_error': 'entry_machine_input_deadline_expired'}}
+        row['source']['assessment'] = dict(schema='mechanistic_entry_source_invalid_v1',
+            action='source_invalid', reason='ai_input_preflight_blocked')
+        row.update(provider_called=False, actual_order_submitted=False,
+            runtime_effect=False, allowed_runtime_apply=False, broker_order_forbidden=True)
+        row['runtime_consumption'].pop('continuous_reversal', None)
+        row['machine_observation_sha256'] = hashlib.sha256(_json_bytes({k:v for k,v in row.items()
+            if k != 'machine_observation_sha256'})).hexdigest()
     identity=monitor._scanner_observation_identity(row);scope='|'.join(identity.split('|')[-3:])
     rule='economic_producer_gap';key=hashlib.sha256(f'{scope}|{rule}'.encode()).hexdigest()[:24]
     item=dict(scope=scope,rule=rule,category='structural_evidence',status='active',
@@ -5621,3 +5633,46 @@ def test_registered_native_first_hold_breach_is_diagnostic_only(tmp_path, monkey
     if damage is None:
         assert result['diagnostics']=={'machine_trace:reversal_first_price_hold_invalidated':1}
     assert trace==before
+
+
+@pytest.mark.parametrize('damage', [None, 'provider', 'order', 'runtime', 'authority', 'broker',
+    'action', 'schema', 'reason', 'role', 'exact_role', 'capture_contract', 'native_claim'])
+def test_legacy_preflight_historical_membership_never_invents_consumption(damage):
+    from src.engine.scalping.ai_decision_trace import _json_bytes
+    result, *_ = _bounded_outcome_health_fixture(partial=False)
+    now = monitor.stamp(result['as_of'])
+    generation = result['observer_generation']
+    actor = generation['actor_birth_proof']['actor']
+    birth = generation['actor_birth_proof']['birth_lower_bound_epoch']
+    row = _old_scanner_observation(now, birth, actor)
+    row.update(evaluation_role='unspecified_legacy', provider_called=False,
+        actual_order_submitted=False, runtime_effect=False, allowed_runtime_apply=False,
+        broker_order_forbidden=True)
+    row['runtime_consumption'].pop('continuous_reversal', None)
+    row['source']['exact_payload'] = {}
+    assessment = dict(schema='mechanistic_entry_source_invalid_v1', action='source_invalid',
+        reason='ai_input_preflight_blocked')
+    row['source']['assessment'] = assessment
+    if damage in ('provider', 'order', 'runtime', 'authority', 'broker'):
+        field = dict(provider='provider_called', order='actual_order_submitted',
+            runtime='runtime_effect', authority='allowed_runtime_apply', broker='broker_order_forbidden')[damage]
+        row[field] = damage != 'broker'
+    elif damage in ('action', 'schema', 'reason'): assessment[damage] = 'unknown'
+    elif damage == 'role': row['evaluation_role'] = 'probe_observation'
+    elif damage == 'exact_role': row['source']['exact_payload']['evaluation_role'] = 'probe_observation'
+    elif damage == 'capture_contract': row['capture_contract'] = 'continuous_reversal_consumption_v1'
+    elif damage == 'native_claim': row['runtime_consumption']['continuous_reversal'] = {}
+    row['machine_observation_sha256'] = hashlib.sha256(_json_bytes({k:v for k,v in row.items()
+        if k != 'machine_observation_sha256'})).hexdigest()
+    identity = monitor._scanner_observation_identity(row)
+    scope = '|'.join(identity.split('|')[-3:]); rule = 'source_or_submit_lineage_gap'
+    key = hashlib.sha256(f'{scope}|{rule}'.encode()).hexdigest()[:24]
+    incident = dict(scope=scope, rule=rule, category='structural_evidence', status='active',
+        count=1, evidence_ids=[identity], first_seen=now.isoformat(), last_seen=now.isoformat())
+    result['incidents'][key] = incident
+    result['machine_semantics']['historical_scanner_observations'] = {identity:row}
+    original = json.dumps(result, sort_keys=True)
+    health = monitor.observation_health_projection(result)
+    assert health['status'] == ('warning_pending' if damage is None else 'not_eligible')
+    assert json.dumps(result, sort_keys=True) == original
+    assert health['current_observation_verified'] is False and health['full_coverage_proven'] is False
