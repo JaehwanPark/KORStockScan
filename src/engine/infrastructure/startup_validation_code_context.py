@@ -376,6 +376,10 @@ REVIEWED_PREPARATION_HISTORY.setdefault('src/engine/automation/policy_generation
   '65a54013574589331515057cba2c28abca8d794aebec133bb7f51395a0ab555c')})
 REVIEWED_PREPARATION_HISTORY.setdefault('src/engine/automation/tuning_performance_control_tower.py', set()).update({('9172370837eed5724bc16fcd483cdaaa9ea2144a92f06ba55d10df91369569b1',
   '3f47b1381a43e0ef5f44fe99ebc8774e8666fabe3e81578694fbdf2772762f8d')})
+REVIEWED_PREPARATION_HISTORY.setdefault('src/engine/automation/main_startup_validation.py', set()).update({('b6bd145a6b7b1508a81667d35932dc802b3f1c4123df75ddf991738daea34d54',
+  'e71cc4965ab6749c2579a3fe3e864624502fe98269d07c1e362618691fa7ab64'),
+ ('fcf33f73c9b4831339c3215732c5364c9cd11f30147273c30c172fa3f611fd0c',
+  'e71cc4965ab6749c2579a3fe3e864624502fe98269d07c1e362618691fa7ab64')})
 REVIEWED_PREPARATION_HISTORY.setdefault('src/engine/monitoring/policy_generation_code_handoff.py', set()).update({('1dff8c3fcc6dba15fdc720a36c5070a81805d5124433140b8158f3f50c62b98e',
   'b14d8aaf06d7414bcbe6bdb87ddfc685f2c3765db15f8a5f50d93f3e5eeaf444'),
  ('41ebbc34a2fd015a0cd76ae525c1e6e859edbaa6dc4e4e88e4cc76a44a7a9bef',

@@ -2460,7 +2460,8 @@ def test_observer_io_handoff_retains_consumed_index_generation(tmp_path,family,f
     'src/engine/scalping/holding_path_vote_policy.py','src/engine/runtime_approval_summary.py',
     'src/engine/infrastructure/startup_validation_isolation.py',
     'src/engine/automation/policy_generation_fixture_validation.py',
-    'src/engine/automation/tuning_performance_control_tower.py'])
+    'src/engine/automation/tuning_performance_control_tower.py',
+    'src/engine/automation/main_startup_validation.py'])
 def test_native_buy_cost_handoff_keeps_exact_reviewed_generation(tmp_path,family,fault,dependency):
     test_entry_cost_handoff_keeps_exact_complete_generation(
         tmp_path,family,fault,'current',dependency=dependency)

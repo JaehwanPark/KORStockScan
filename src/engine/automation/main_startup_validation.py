@@ -213,7 +213,7 @@ def _native_preparation_check(selected_root, target_date, source_date, capture_m
                 selection = H._read(H.DATA_DIR/'runtime/runtime_release_selection.json')
                 live_pid = (selection.get('actual_pid_receipt') or {}).get('pid')
                 proof = H.verify_predecessor_consumption(target_date, pid=live_pid)
-                if (proof.get('status') == 'pass' and proof.get('basis') == 'native_preopen'
+                if (proof.get('status') == 'pass' and proof.get('basis') in {'native_preopen', 'intraday_policy_preserving_handoff'}
                         and proof.get('actual_pid_consumed') is True
                         and proof.get('release_root') == str(selected_root)):
                     execution_root, native_pid = ROOT, live_pid

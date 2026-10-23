@@ -1379,7 +1379,8 @@ def test_main_preparation_independently_reviews_observer_p5_b67_sources(relative
     'src/engine/scalping/holding_path_vote_policy.py','src/engine/runtime_approval_summary.py',
     'src/engine/infrastructure/startup_validation_isolation.py',
     'src/engine/automation/policy_generation_fixture_validation.py',
-    'src/engine/automation/tuning_performance_control_tower.py'])
+    'src/engine/automation/tuning_performance_control_tower.py',
+    'src/engine/automation/main_startup_validation.py'])
 def test_main_preparation_independently_reviews_native_buy_cost(damage,relative):
     old=hashlib.sha256(subprocess.check_output(['git','-C',str(ROOT),'show','a2ca8e7d8:'+relative])).hexdigest()
     new=hashlib.sha256((ROOT/relative).read_bytes()).hexdigest()

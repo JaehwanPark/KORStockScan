@@ -4968,9 +4968,10 @@ REVIEWED_PRE_SUBMIT_DEPENDENCY_VARIANTS = {
 }
 
 # Exact native BUY cost consumer; preserve the already consumed observer profile.
-REVIEWED_NATIVE_BUY_COST_HASHES = {'src/engine/automation/policy_generation_fixture_validation.py': '65a54013574589331515057cba2c28abca8d794aebec133bb7f51395a0ab555c',
+REVIEWED_NATIVE_BUY_COST_HASHES = {'src/engine/automation/main_startup_validation.py': 'e71cc4965ab6749c2579a3fe3e864624502fe98269d07c1e362618691fa7ab64',
+ 'src/engine/automation/policy_generation_fixture_validation.py': '65a54013574589331515057cba2c28abca8d794aebec133bb7f51395a0ab555c',
  'src/engine/automation/tuning_performance_control_tower.py': '3f47b1381a43e0ef5f44fe99ebc8774e8666fabe3e81578694fbdf2772762f8d',
- 'src/engine/infrastructure/startup_validation_code_context.py': '4c1f4a94a8f07a347307850f379919216940c8c750339f3ac9e614e0cac289e1',
+ 'src/engine/infrastructure/startup_validation_code_context.py': '94d6a8f4d3e5266523512f77fc05b706c0d26b0a28bf3bebb86dc2e863853337',
  'src/engine/infrastructure/startup_validation_isolation.py': '42715b0545c044c2ccee975c6109f42195092adc3595a0e16c2535957ec283cb',
  'src/engine/kiwoom_websocket.py': 'ddc6bab2dfd4adb2d253a420e66eac6bd33c1877b18070023f75c489f9c40730',
  'src/engine/lifecycle/broker_cost_allocation.py': '021f0a60d6569d0fe02dd619333b7af2f8bcfa0858601b30d93f2847be1c11c9',
@@ -4991,7 +4992,8 @@ REVIEWED_NATIVE_BUY_COST_VARIANTS = {
             for name, sha in paths.items()} for origin, paths in value['contract_extensions'].items()},
     } for key, value in REVIEWED_PRE_SUBMIT_DEPENDENCY_VARIANTS.items()
 }
-REVIEWED_NATIVE_BUY_ORIGINAL_HASHES = {'src/engine/automation/policy_generation_fixture_validation.py': '28ec0362fddac74b6a1ad9230b4729879faccdf1e67ab9245e27eae5c4b45331',
+REVIEWED_NATIVE_BUY_ORIGINAL_HASHES = {'src/engine/automation/main_startup_validation.py': 'fcf33f73c9b4831339c3215732c5364c9cd11f30147273c30c172fa3f611fd0c',
+ 'src/engine/automation/policy_generation_fixture_validation.py': '28ec0362fddac74b6a1ad9230b4729879faccdf1e67ab9245e27eae5c4b45331',
  'src/engine/automation/tuning_performance_control_tower.py': '9172370837eed5724bc16fcd483cdaaa9ea2144a92f06ba55d10df91369569b1',
  'src/engine/infrastructure/startup_validation_code_context.py': 'ee715b40b27ddd814128f7c49945d2dfbba08e65cf6c7c23c4a8cbd73594b171',
  'src/engine/infrastructure/startup_validation_isolation.py': '475bbdf7f45d7979e7cb687fe8a68a86e4d4c3e42fe54deb90d8bc049801f7ae',

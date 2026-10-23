@@ -152,7 +152,9 @@ def test_invalid_closed_origin_cannot_choose_candidate_native_reader(native_prep
         validation._native_preparation_check(selected,DAY,'2026-10-16')
 
 
-def test_consumed_native_preopen_uses_candidate_only_in_exact_predecessor_scope(native_preparation_cli,monkeypatch):
+@pytest.mark.parametrize('basis', ['native_preopen', 'intraday_policy_preserving_handoff', 'foreign'])
+@pytest.mark.parametrize('consumed', [True, False])
+def test_consumed_native_preopen_uses_candidate_only_in_exact_predecessor_scope(native_preparation_cli,monkeypatch,basis,consumed):
     from src.engine.automation import intraday_release_handoff as H
     code,data=native_preparation_cli;selected=code.parent/'native-selected'
     monkeypatch.setattr(validation,'ROOT',code)
@@ -160,10 +162,18 @@ def test_consumed_native_preopen_uses_candidate_only_in_exact_predecessor_scope(
     monkeypatch.setattr(H,'closed_consumption_observation',lambda day: (_ for _ in ()).throw(ValueError('live')))
     monkeypatch.setattr(H,'_read',lambda path:dict(actual_pid_receipt=dict(pid=123)))
     monkeypatch.setattr(H,'verify_predecessor_consumption',lambda *a,**kw:dict(status='pass',
-        basis='native_preopen',actual_pid_consumed=True,release_root=str(selected)))
+        basis=basis,actual_pid_consumed=consumed,release_root=str(selected)))
     (code/'src/engine/automation/intraday_release_handoff.py').write_text(
         'from contextlib import contextmanager\n@contextmanager\ndef predecessor_review(day,*,pid):\n'
         f'    assert day=={DAY!r} and pid==123\n    yield\n')
+    if basis == 'foreign' or not consumed:
+        def original(command, *, cwd, env):
+            assert cwd == selected and command[0] == str(selected/'.venv/bin/python')
+            raise ValueError('unverified_predecessor_keeps_original_reader')
+        monkeypatch.setattr(validation, '_run_native_validation', original)
+        with pytest.raises(ValueError, match='unverified_predecessor_keeps_original_reader'):
+            validation._native_preparation_check(selected, DAY, '2026-10-16')
+        return
     result=validation._native_preparation_check(selected,DAY,'2026-10-16')
     assert result['status']=='pass' and result['native_process_lifecycle']['child_terminated'] is True
     assert result['actual_pid_consumed'] is False
