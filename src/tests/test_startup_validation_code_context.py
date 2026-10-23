@@ -1465,3 +1465,14 @@ def test_main_preparation_reviews_scanner_preflight_reader(damage):
     if damage == 'unreviewed': new = '0' * 64
     elif damage == 'wrong_origin': old = '0' * 64
     assert C.reviewed_preparation_pair(relative, old, new) is (damage is None)
+
+
+@pytest.mark.parametrize('origin', ['926ebca82', '6e970e41f'])
+@pytest.mark.parametrize('damage', [None, 'unreviewed', 'wrong_origin'])
+def test_main_preparation_independently_reviews_closed_scanner(origin, damage):
+    relative = 'src/engine/error_detectors/artifact_freshness.py'
+    old = hashlib.sha256(subprocess.check_output(['git', '-C', str(ROOT), 'show', origin+':'+relative])).hexdigest()
+    new = hashlib.sha256((ROOT / relative).read_bytes()).hexdigest()
+    if damage == 'unreviewed': new = '0'*64
+    elif damage == 'wrong_origin': old = '0'*64
+    assert C.reviewed_preparation_pair(relative, old, new) is (damage is None)

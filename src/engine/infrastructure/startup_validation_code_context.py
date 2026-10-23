@@ -714,6 +714,13 @@ REVIEWED_PREPARATION_HISTORY.setdefault('src/engine/monitoring/submission_bottle
   '038d0b162dfd801d10fc23a27f06d062b0f917ec306c942314ee89c6779d3dda')})
 
 
+# Closed scanner diagnostic only; retain both issued predecessor generations.
+REVIEWED_PREPARATION_HISTORY.setdefault('src/engine/error_detectors/artifact_freshness.py', set()).update({
+    (old, 'a6b9f2882bac4ae90f8a972a3cfbd56e111d78dd3bacead8cb5f32c41a949e27')
+    for old in ('3a58f8ac3220ea8d64247cf17a756d2658c7815cd3d57744303f80bc40d34dcc',
+                '6f853e28cf95b2f6513ad6650350c6574ddeeb5b99f5d2d2d5756d34ebf14ed9')})
+
+
 def reviewed_preparation_pair(relative, old, current):
     return (REVIEWED_PREPARATION_SOURCES.get(relative) == (old, current)
             or (old, current) in REVIEWED_PREPARATION_HISTORY.get(relative, ()))

@@ -5327,6 +5327,25 @@ REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
     for name, current in REVIEWED_SCANNER_PREFLIGHT_HASHES.items()}}
 
 
+# Exact closed-scanner diagnostic successor; consumed preflight remains intact.
+REVIEWED_CLOSED_SCANNER_HASHES = {'src/engine/infrastructure/startup_validation_code_context.py': 'eb920e10c024b853a1c554d1438b6ebcd9d80d1f00b8d3d398bf8bd58f659299', 'src/engine/error_detectors/artifact_freshness.py': 'a6b9f2882bac4ae90f8a972a3cfbd56e111d78dd3bacead8cb5f32c41a949e27'}
+REVIEWED_CLOSED_SCANNER_PROFILE = {**REVIEWED_SCANNER_PREFLIGHT_PROFILE, **REVIEWED_CLOSED_SCANNER_HASHES}
+REVIEWED_CLOSED_SCANNER_VARIANTS = {
+    (key[0], REVIEWED_CLOSED_SCANNER_HASHES.get(key[0], key[1])): {
+        **value, 'selector_path': 'src/engine/error_detectors/artifact_freshness.py',
+        'selector_sha256': REVIEWED_CLOSED_SCANNER_HASHES['src/engine/error_detectors/artifact_freshness.py'],
+        'dependencies': {**value['dependencies'], **REVIEWED_CLOSED_SCANNER_HASHES},
+        'contract_extensions': {origin: {name: REVIEWED_CLOSED_SCANNER_HASHES.get(os.path.normpath(name), sha)
+            for name, sha in paths.items()} for origin, paths in value['contract_extensions'].items()},
+    } for key, value in REVIEWED_SCANNER_PREFLIGHT_VARIANTS.items()
+}
+REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
+    name: REVIEWED_ENTRY_COST_PAIRS.get(name, ()) + tuple((origin, current) for origin in
+        {REVIEWED_SCANNER_PREFLIGHT_PROFILE[name]} |
+        {old for pair in REVIEWED_ENTRY_COST_PAIRS.get(name, ()) for old in pair})
+    for name, current in REVIEWED_CLOSED_SCANNER_HASHES.items()}}
+
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -5527,7 +5546,10 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     scanner_preflight = any((root / name).is_file()
         and hashlib.sha256(candidate_bytes(name)).hexdigest() == sha
         for name, sha in REVIEWED_SCANNER_PREFLIGHT_HASHES.items())
-    prepared_hashes = (REVIEWED_SCANNER_PREFLIGHT_PROFILE if scanner_preflight else
+    closed_scanner = (hashlib.sha256(candidate_bytes('src/engine/error_detectors/artifact_freshness.py')).hexdigest()
+        == REVIEWED_CLOSED_SCANNER_HASHES['src/engine/error_detectors/artifact_freshness.py'])
+    prepared_hashes = (REVIEWED_CLOSED_SCANNER_PROFILE if closed_scanner else
+        REVIEWED_SCANNER_PREFLIGHT_PROFILE if scanner_preflight else
         REVIEWED_AFTERMARKET_LISTING_PROFILE if aftermarket_listing else
         REVIEWED_NUMERIC_REPLAY_PROFILE if numeric_replay else
         REVIEWED_AUXILIARY_CAPABILITY_PROFILE if auxiliary_capability else
@@ -5540,7 +5562,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         REVIEWED_ENTRY_COST_HASHES if sentinel_scope_present else
         REVIEWED_PRE_FINALIZATION_HASHES if consumed_finalization else
         REVIEWED_NATIVE_PREOPEN_HASHES if native_preopen else REVIEWED_ENTRY_COST_PRE_SENTINEL_SCOPE_HASHES)
-    prepared_variants = (REVIEWED_SCANNER_PREFLIGHT_VARIANTS if scanner_preflight else
+    prepared_variants = (REVIEWED_CLOSED_SCANNER_VARIANTS if closed_scanner else
+        REVIEWED_SCANNER_PREFLIGHT_VARIANTS if scanner_preflight else
         REVIEWED_AFTERMARKET_LISTING_VARIANTS if aftermarket_listing else
         REVIEWED_NUMERIC_REPLAY_VARIANTS if numeric_replay else
         REVIEWED_AUXILIARY_CAPABILITY_VARIANTS if auxiliary_capability else
