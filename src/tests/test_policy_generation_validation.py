@@ -714,7 +714,5 @@ def test_shared_numeric_owner_invalidates_capability_generation(family, monkeypa
     monkeypatch.setattr(generation,'ENGINE',engine)
     before=generation.code_generation(family)
     numeric=engine/'../utils/numeric.py'
-    numeric.write_bytes(numeric.read_bytes()+b'
-# changed numeric source
-')
+    numeric.write_bytes(numeric.read_bytes()+b'\n# changed numeric source\n')
     assert generation.code_generation(family)!=before
