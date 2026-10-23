@@ -5081,6 +5081,43 @@ REVIEWED_ENTRY_COST_PAIRS['src/engine/monitoring/runtime_performance.py'] += ((
     'ad937198678bef9cc5ef62e6aa41d9b980a0427d456608a94a1317b4fcd3cb39'),)
 
 
+# Exact two-edge reviews for issued 726179 policy ancestry. The complete
+# generation profile remains mandatory; unconnected origins remain rejected.
+REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
+    name: REVIEWED_ENTRY_COST_PAIRS.get(name, ()) + pairs for name, pairs in {'src/engine/automation/main_trailing_source_reuse.py': (('272f0753cce9fc43324063a2d690394e844630f6eab8da7dace87596620ac0ab',
+                                                          'bdbfff175232f9595b5180bd64b1f288f659e8964d4f7306311d7c45f3c940ba'),),
+ 'src/engine/automation/ordered_intraday_deploy.py': (('d67e4f0b2c1ae0d7a88de0cffaeb8f76cb114e4b34c55dfb5575b0e464a17d90',
+                                                       '7f52b1d056bf13f16791c4d5d41e8ca4ba4a9715a77176403c1dff97e95d0026'),),
+ 'src/engine/automation/postclose_finalization_generation.py': (('1ac7c5d9a4269f73a9a9f82656d22a277689813b32c94b3a526e0b37452d3041',
+                                                                 'ba7533068261dadc984418175d3dcb5e7bba70110e359de4aba488a52cc8c0e3'),),
+ 'src/engine/automation/prepared_policy_code_handoff.py': (('9ef09608077aa02c25bdd40d8bc33344bf0e10dbde18cae0fdcf434b0c6efaf8',
+                                                            '5bf1ed07810e5beeba889493c83bdd5b8eaa913b1710fc534c8a20246e1422e3'),),
+ 'src/engine/holding_exit_sentinel.py': (('5bc00325005b6d4346dc896c21741cec0e61fcd9904c6c947ae7774ce5e031e4',
+                                          '7ae845b51d16bf425337e4758d1f83047f1f4e1c3479d39875523f0e2748012a'),),
+ 'src/engine/kiwoom_websocket.py': (('5016a58492f59a0728d9bbf979d76cc59a10de4681e92a5fcac21bf6c1cffde2',
+                                     'ddc6bab2dfd4adb2d253a420e66eac6bd33c1877b18070023f75c489f9c40730'),),
+ 'src/engine/monitoring/submission_bottleneck_monitor.py': (('9b6066255a77a38bd869bfcf2e3aacd4814bf7742f306428d04ed1f1741908d1',
+                                                             'f8d68d78e8423db51d4a2f8786c786ea1a53def58f43cb3019d6d79a58dc5902'),),
+ 'src/engine/runtime_approval_summary.py': (('91dbb00d92f0aeb51de17f92dc0bea31591f1d41ad3bcab24579c8cb3c1dd14d',
+                                             'cabe6bfd2bcde43ff81988905dc2149e48c809e80f535b03d28b0338bc11b1fe'),),
+ 'src/engine/scalping/continuous_reversal_source.py': (('96f1edc13538616832ec4270064afcc9a6bacab8274903cd57b2838573a1155d',
+                                                        '0c8e4d4a0ab08c2bb54e115d8071fa5f2b732e99414043b75e2d51b9da914ba0'),),
+ 'src/engine/scalping/initial_quantity_policy.py': (('806875b857f58895a39ec116ed0a3b619539f7d782fc1996581c1af84c201a34',
+                                                     '0dc2ed9f75960006ec08e4f5eb7606dc1ee5b501ebcaf3507e0af6f8c8d12dca'),),
+ 'src/engine/scalping/reversal_code_handoff.py': (('6c5b8f3013e055ef54774c1e89be66fda93988aa5792e775bb82bac86636cbf0',
+                                                   '852d31cba14cfcb68cfb73603de07b30643969c5e476ddca6dde1f2d3a6fc589'),),
+ 'src/engine/scalping/reversal_source_diagnostics.py': (('bf7dd538048888ce9793ccdf39a6c5c4a463c9e3379f4c3c5c1a09173f543eb8',
+                                                         'bd5e37ae27b48464ea62f07b949979d3d5b112352f6e0e400c16e8f4fbc3cbee'),),
+ 'src/engine/scalping/zero_base_probe.py': (('c91d31899343d4381a30edaa82046a65ace8cb6a55f33c03cd5851d9cd1e689f',
+                                             '104746b1f9a2144bc6c6955c022e9ad925cba688300e715392554ec2c81e097c'),),
+ 'src/scanners/scalping_scanner.py': (('3280979b86c4bb10231b7886f591aba239c453b3e37d1ba79b8c2fdb1d4f477f',
+                                       'e3b93e6526caab14d4870bc2550c7efdbb841d86b65abc9cd1f36b8d7c21f90c'),),
+ 'src/scanners/zero_base_discovery_runtime.py': (('47347d90b4dad70233a55bca9dc282da20b14b3be4fda4090291ce1d7e66bb57',
+                                                  'b27a13a0e24a3b07b3161defb97271a73bcc4d214ce2ff419d10d09bc46ce606'),),
+ 'src/utils/kiwoom_utils.py': (('a21607460d8bc4817b80499414a796bf4ac8a3e8af10846c2682e1daa12e152f',
+                                '498cfc4bc4ce9b1cbe13f0b70967da7f2dbb113c6d70563924b03c98d371b323'),)}.items()}}
+
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
