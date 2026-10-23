@@ -508,6 +508,33 @@ def test_0d_depth_capture_uses_separate_journal_and_sequence(tmp_path) -> None:
     assert row["broker_order_forbidden"] is True
 
 
+def test_probe_terminal_trace_keeps_real_collector_rejections_and_admission(tmp_path):
+    collector = _collector(tmp_path, path_capture_enabled=True, depth_capture_enabled=True)
+    manager = KiwoomWSManager('test-token')
+    manager._market_data_transport_epoch = 7
+    manager._micro_reversion_forward_collector = collector
+    good = _depth_snapshot()
+    source = good['last_depth_tick']
+    source.update(transport_epoch=7, route_sequence=1, market_route='krx_only')
+    manager._exact_probe_item_leases['000001'] = dict(
+        lease_id='lease', epoch=7, interval_started_epoch=source['received_at_ms']/1000-1)
+    bad = {**good, 'last_depth_tick': {**source, 'ask_levels': []}}
+    try:
+        manager._observe_micro_reversion_forward('000001', bad, realtime_type='0D')
+        source['route_sequence'] = 2
+        manager._observe_micro_reversion_forward('000001', good, realtime_type='0D')
+        trace = manager.exact_probe_source_trace('000001', 'lease')
+    finally:
+        collector.close()
+    counts = trace['lease']['collector_result_counts_by_type']['0D']
+    assert counts == {'invalid_depth_snapshot': 1, 'enqueued': 1}
+    assert trace['lease']['collector_first_non_enqueued_by_type']['0D']['route_sequence'] == 1
+    assert trace['lease']['collector_last_result_by_type']['0D']['route_sequence'] == 2
+    assert collector.runtime_snapshot().depth_writer_persisted_envelope_count == 1
+    assert trace['broker_ack_observed'] is None
+    assert trace['order_authority'] is False
+
+
 def test_low_disk_warning_propagates_for_path_and_depth_without_capture_loss(
     tmp_path, monkeypatch
 ) -> None:

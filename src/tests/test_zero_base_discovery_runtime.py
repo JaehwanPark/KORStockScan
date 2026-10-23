@@ -274,13 +274,19 @@ def test_runtime_durable_claim_machine_enter_and_late_result_rejection(tmp_path)
         event_bus=bus, session_date="2026-09-28", state_path=state,
         claim_receipt_emitter=lambda *args, **kwargs: claim_receipts.append((args, kwargs)),
     )
-    summary = runtime.scan_once("token", fetcher=_panel, now_epoch=T0 + 1)
+    panel = _panel("token")
+    panel["observations"][0]["volume"] = 12345
+    summary = runtime.scan_once("token", fetcher=lambda _token: panel, now_epoch=T0 + 1)
     assert summary["probe_requested_count"] == 1
     request = next(payload for event, payload in bus.events if event == PROBE_REQUEST_EVENT)
     assert state.exists()
     assert request["claim"]["source_kind"] == "activity"
     assert claim_receipts[0][0] == ("zero_base_probe_claim",)
     assert claim_receipts[0][1]["fields"]["zero_base_source_sha256"] == "a" * 64
+    assert claim_receipts[0][1]["fields"]["zero_base_discovery_volume"] == request["claim"]["discovery_volume"]
+    assert claim_receipts[0][1]["fields"]["zero_base_discovery_volume"] == 12345
+    assert claim_receipts[0][1]["fields"]["zero_base_source_kind"] == "activity"
+    assert claim_receipts[0][1]["fields"]["physical_probe_lease_id"] == request["claim"]["physical_probe_lease_id"]
 
     bus.publish(PROBE_RESULT_EVENT, {
         **request, "result": "assessed", "machine_action": "ENTER_NOW",
@@ -473,6 +479,8 @@ def test_scanner_emits_failed_probe_identity_and_artifact_cause(monkeypatch, tmp
         "evaluation_attempt_id": "machine-source-invalid-exact",
         "provider_called": False, "continuous_reversal_rejected_claim_receipt": {"sha256":"exact-proof"},
         "machine_capture_status": "captured", "machine_observation_sha256": "a" * 64,
+        "ws_source_trace": {"lease": {"collector_result_counts_by_type": {
+            "0D": {"enqueued": 10, "invalid_depth_snapshot": 2, "queue_full": 1}}}},
         "machine_input_trace": {"entry_machine_input_as_of": 11,
                                 "entry_machine_input_preparation_ms": 0,
                                 "entry_machine_input_preparation_stages_ms": {"policy_resolve_ms": 1.5}},
@@ -499,6 +507,7 @@ def test_scanner_emits_failed_probe_identity_and_artifact_cause(monkeypatch, tmp
     assert payload["fields"]["provider_called"] is False
     assert payload["fields"]["continuous_reversal_rejected_claim_receipt"] == result["continuous_reversal_rejected_claim_receipt"]
     assert payload["fields"]["machine_observation_sha256"] == "a" * 64
+    assert payload["fields"]["zero_base_ws_source_trace"] == result["ws_source_trace"]
 
     result.update(result="source_unavailable", evaluation_attempt_id=None,
                   machine_evaluation_status=None, machine_preflight_artifact_status=None)
