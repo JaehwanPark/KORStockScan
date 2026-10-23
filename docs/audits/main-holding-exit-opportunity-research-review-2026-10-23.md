@@ -157,3 +157,12 @@ Premarket `_NX`/nxt_only/NXT, Regular `_AL`/integrated/SOR/cohort KRX, Aftermark
 [최종 대상 회귀](../../tmp/holding-input-replay-stream-20261023/pytest-final-scoped.log) **1,509 PASS**, [별도 process의 delay 계약](../../tmp/holding-input-replay-stream-20261023/pytest-delay-isolated.log) **13 PASS**다. 수정 전 실패가 재현된 역사적 AST 검사2건만 최종 범위에서 명시적으로 제외했으며 원 실패 로그는 보존했다. 총1,522개 통과를 전체 저장소 GREEN이나 배포 수용으로 확대하지 않는다. Python18파일 compile, diff check, 새 수리 문서 링크, 현재 stable owner1개 및 print-only parser를 통과했다. [검증 원장](../../tmp/holding-input-replay-stream-20261023/validation.json).
 
 소스 기준a2ca 대비 비테스트10파일 **+247/−33**, 테스트8파일 **+239/−12**다. 무손실 codec·종료 coverage·negative 검증 때문에 순증했으며 새 source module/실행 entrypoint/거래 decision branch는 없다. 기존 관측 queue category와 startup/close 등록만 추가됐다. 이 감사의 앞104행은 선행 연구이며 수리 기록을 같은 owner에 이어 썼다. base checklist에는 본 수리 진행1행만 추가했고 병행 항목은 보존했다. immutable checklist archive `91d9874a2fe47a5bcebe281c052ca65d0c978fe3477562557a7e735ae8b23011`의 원 bytes/SHA를 편집 전에 재확인했다. 외부 sync·패키지·provider·Kiwoom 요청/주문·정책 임계치·원 장후 산출물·선택 release/PID를 변경하지 않았다.
+
+
+### Integration review before runtime transition (2026-10-23)
+
+선행9e820 소비 이후 c4a177을 병합하고 재리뷰했다. 기존204개 exact code profile/변조·누락·세대 혼합 검사와488개 ordered/replay/startup 검사, fixture 원장격리 보완 후94개 런타임 검사를 통과했다. 원 AST 해시 실패2개는 기존 평가시각 수리의 정확한 두 delta로 원인이 확정됐고, 해시를 바꾸지 않고 해당 delta를 검증하여 모두 통과했다. 커밋 전 dirty verifier 거부는 원 실패로 보존했다.
+
+추가 과거 발행726179 원천 검사에서9e820도 거부하던 기존 코드 계보 누락을 재현했다. 기존 source-pair table의 정확한2단계 경로16개를 고정된 direct pair로 연결하고, c4 producer 변경7개 원천도 exact successor profile에 결속했다. 동적/임의 전이 허용은 추가하지 않았다. [기존 검토 경로 대사](../../tmp/quantity-historical-recovery-20261023/c4-existing-review-chain-audit.json). 원 policy·manifest·summary·PID 영수증은 그대로 유지하고 전체 successor profile 검사와 독립 준비 inventory가 계속 필요하다.
+
+대체/제거는 앞 수리의256건 생애 cap 제거와 공통 bounded queue·codec 소비 통합을 유지한다. 통합 보완은 기존 handoff/preparation code owner에 exact source표를 추가하고 실제소비9e820 profile을 retained했다. 새 source module·report producer·wrapper·worker·실행 entrypoint·이동0. 등록/codec/terminal 검증 때문에 순증하며 승인 원천을 모르는 hash는 계속 거부한다. 9e820 대비 본 기록 직전 증감: {"source": {"files": 13, "added": 433, "deleted": 35}, "tests": {"files": 10, "added": 301, "deleted": 15}, "docs": {"files": 3, "added": 171, "deleted": 0}}. 이 기록 자체는 문서 추가로 별도 계산한다. 전체 저장소 테스트 완료나 자연 수집/경제성 완료로 확대하지 않는다. 최종 immutable 후보의 native 원천 갱신·P5·ordered 실제 전환 결과는 기존 배포 기록에 이어 보존한다.
