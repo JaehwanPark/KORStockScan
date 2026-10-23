@@ -1193,3 +1193,16 @@ def test_test_guard_blocks_production_mutation_before_it_happens(tmp_path, opera
                 finally:os.close(fd)
         assert target.read_text()=='original'
     finally:active[0]=False
+
+
+def test_session_defaults_are_private_before_writer_imports():
+    from src.utils import constants
+    from src.engine import log_archive_service
+    from src.tests.conftest import _REPOSITORY_ROOT
+
+    assert not constants.DATA_DIR.is_relative_to(_REPOSITORY_ROOT)
+    assert not constants.TMP_DIR.is_relative_to(_REPOSITORY_ROOT)
+    assert constants.CONFIG_PATH.parent == constants.DATA_DIR
+    assert constants.DEV_PATH.parent == constants.DATA_DIR
+    assert log_archive_service.LOG_ARCHIVE_DIR.is_relative_to(constants.DATA_DIR)
+    assert log_archive_service.LOG_ARCHIVE_DIR.is_dir()

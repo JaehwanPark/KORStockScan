@@ -73,6 +73,17 @@ def pytest_configure(config):
     _landlock(ctypes.CDLL(None, use_errno=True), scratch[0],
               test_roots=tuple(scratch) + (Path('/dev/null'),))
     import requests
+    from src.utils import constants
+
+    # Bind defaults before collection/autouse imports can initialize writers.
+    # Production roots above remain protected, including child processes.
+    root = Path(tempfile.mkdtemp(prefix="korstockscan-unit-"))
+    constants.DATA_DIR = root / "data"
+    constants.TMP_DIR = root / "tmp"
+    constants.LOGS_DIR = root / "logs"
+    constants.LEGACY_LOGS_DIR = root / "legacy_logs"
+    constants.CONFIG_PATH = constants.DATA_DIR / "config_prod.json"
+    constants.DEV_PATH = constants.DATA_DIR / "config_dev.json"
     import src.utils.logger as logger
 
     def unmocked_http(*_args, **_kwargs):
@@ -81,7 +92,6 @@ def pytest_configure(config):
     requests.sessions.Session.request = unmocked_http
     # Per-test logger patches restore to this isolated session directory,
     # never production logs, including late background-worker completion.
-    root = Path(tempfile.mkdtemp(prefix="korstockscan-unit-logs-"))
     logger.LOGS_DIR = root / "logs"
     logger.LEGACY_LOGS_DIR = root / "legacy_logs"
 
