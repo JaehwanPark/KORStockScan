@@ -3578,7 +3578,12 @@ def _closed_submission_observer_evidence(payload, root, source_day, current_day)
             selected,selected_sha=_observer_small_object(selected_path,limit=1024*1024)
             eod_path=Path(root)/'data/runtime/update_kospi_status'/f'update_kospi_{source_day}.json'
             eod,eod_sha=_observer_small_object(eod_path,limit=1024*1024)
-            finished=_observer_clock(eod.get('finished_at'))
+            # update_kospi._now_iso emits native local KST without an offset.
+            # Observer/selector clocks retain their stricter aware contract.
+            finished=datetime.fromisoformat(str(eod.get('finished_at')))
+            if finished.tzinfo is None:
+                finished=finished.replace(tzinfo=ZoneInfo('Asia/Seoul'))
+            finished=finished.astimezone(ZoneInfo('Asia/Seoul'))
             selected_at=_observer_clock(selected.get('selected_at_kst'))
             next_day=selected.get('next_operating_date')
             if not isinstance(next_day,str) or date.fromisoformat(next_day).isoformat()!=next_day:

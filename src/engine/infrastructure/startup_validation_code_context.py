@@ -727,6 +727,25 @@ REVIEWED_PREPARATION_HISTORY.setdefault('src/engine/error_detectors/artifact_fre
                 '6f853e28cf95b2f6513ad6650350c6574ddeeb5b99f5d2d2d5756d34ebf14ed9')})
 
 
+# Native EOD local-KST clock interpretation; observer clocks stay strict.
+REVIEWED_PREPARATION_HISTORY.setdefault('src/engine/error_detectors/artifact_freshness.py', set()).update({
+    (old, '6f9cf859a4adf8e27b6465d38cf4eb536b16631381e94af199ecf84554ca7ffa') for old in ('a6b9f2882bac4ae90f8a972a3cfbd56e111d78dd3bacead8cb5f32c41a949e27',
+        '3a58f8ac3220ea8d64247cf17a756d2658c7815cd3d57744303f80bc40d34dcc',
+        '6f853e28cf95b2f6513ad6650350c6574ddeeb5b99f5d2d2d5756d34ebf14ed9')
+})
+
+# Completed postclose code custody retains the native whole-chain verifier.
+REVIEWED_PREPARATION_HISTORY['src/engine/scalping/reversal_code_handoff.py'].update({
+    ('16776a22b99bff4054ba99914cd8f7c96e87f6ca9fb1ac041e6a8191723b929d', '0c096ae9f75e8539e6b9d4df84cc5c8d2ce20d4abc523f07fbcfb51796e4470c'),
+    ('54b9c0efc38700a0cb8722694cdf84b9df8aa478a28f529b2b618f5532559b5a', '0c096ae9f75e8539e6b9d4df84cc5c8d2ce20d4abc523f07fbcfb51796e4470c'),
+    ('6c5b8f3013e055ef54774c1e89be66fda93988aa5792e775bb82bac86636cbf0', '0c096ae9f75e8539e6b9d4df84cc5c8d2ce20d4abc523f07fbcfb51796e4470c'),
+    ('852d31cba14cfcb68cfb73603de07b30643969c5e476ddca6dde1f2d3a6fc589', '0c096ae9f75e8539e6b9d4df84cc5c8d2ce20d4abc523f07fbcfb51796e4470c'),
+    ('8681d10376f4228bbe5b9d1d012d3510e8abd89470036077c3c0bc69fad63471', '0c096ae9f75e8539e6b9d4df84cc5c8d2ce20d4abc523f07fbcfb51796e4470c'),
+    ('ab61f882f4c8bbaddc0576a5765f4f102e38fd824b44a25341ffc78d647741b5', '0c096ae9f75e8539e6b9d4df84cc5c8d2ce20d4abc523f07fbcfb51796e4470c'),
+    ('b77b63fa5afe9b3dff59266cecce73f92880b5256b12c32343a70aeddba63aa9', '0c096ae9f75e8539e6b9d4df84cc5c8d2ce20d4abc523f07fbcfb51796e4470c'),
+    ('c5c6edd558c15bd1067e018d2fa84e4670cd213183baa376cf223e1376ba0238', '0c096ae9f75e8539e6b9d4df84cc5c8d2ce20d4abc523f07fbcfb51796e4470c'),
+})
+
 def reviewed_preparation_pair(relative, old, current):
     return (REVIEWED_PREPARATION_SOURCES.get(relative) == (old, current)
             or (old, current) in REVIEWED_PREPARATION_HISTORY.get(relative, ()))

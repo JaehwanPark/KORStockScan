@@ -749,7 +749,7 @@ def test_second_code_handoff_preserves_selector_provenance_without_freezing_tran
 @pytest.mark.parametrize('damage',[None,'source_date','main_live','session_live','restart','hold',
     'consumed','source_selection','next_date','eod_date','eod_status','eod_rows','failed_commit','failed_status',
     'failed_run','failed_exit','ancestry','changed'])
-def test_postclose_midnight_handoff_requires_stopped_exact_native_ancestry(tmp_path,monkeypatch,damage,legacy_damage=False):
+def test_postclose_midnight_handoff_requires_stopped_exact_native_ancestry(tmp_path,monkeypatch,damage,legacy_damage=False,completed=False):
     import json
     from pathlib import Path
     from datetime import timedelta
@@ -801,6 +801,20 @@ def test_postclose_midnight_handoff_requires_stopped_exact_native_ancestry(tmp_p
     status.write_text(json.dumps(dict(schema_version=2,run_id='invalid' if damage=='failed_run' else 'd'*32,
         exit_code=0 if damage=='failed_exit' else 1,report_type='threshold_cycle_postclose_status',target_date=source,
         status='running' if damage=='failed_status' else 'failed',code_commit='b'*40 if damage=='failed_commit' else 'a'*40,runtime_effect=False)))
+    if completed:
+        from src.engine.automation import postclose_done_controller as controller
+        script=origin/'deploy/run_threshold_cycle_postclose.sh';script.parent.mkdir();script.write_text('reviewed workflow')
+        body=json.loads(status.read_bytes());body.update(status='succeeded',exit_code=0,code_commit='b'*40,
+            reason='verified_main_completed',workflow_source=dict(root=str(origin),commit='a'*40,script=str(script),sha256=P.file_hash(script)))
+        if damage=='failed_commit':body['workflow_source']['commit']='b'*40
+        if damage=='failed_status':body['status']='running'
+        if damage=='failed_exit':body['exit_code']=1
+        status.write_text(json.dumps(body))
+        report=data/'report/postclose_done_controller'/('postclose_done_controller_'+source+'.json');report.parent.mkdir()
+        attempt=report.parent/'attempt.json';verification=report.parent/'verification.json'
+        attempt.write_text('{}');verification.write_text('{}')
+        report.write_text(json.dumps(dict(main_run_id='wrong' if damage=='controller_run' else body['run_id'],attempt_path=str(attempt),verification_attempt_path=str(verification))))
+        monkeypatch.setattr(controller,'done_terminal_receipt_issues',lambda *a,**k:['current_contract_failed'] if damage=='controller_invalid' else [])
     if damage=='restart':(tmp_path/'restart.flag').touch()
     if damage=='hold':(data/'runtime/operator_startup_hold.json').write_text('{}')
     monkeypatch.setattr(D,'_main_pids',lambda:[42] if damage=='main_live' else [])
@@ -828,6 +842,14 @@ def test_postclose_midnight_handoff_requires_stopped_exact_native_ancestry(tmp_p
     assert proof['verification_basis']=='verified_previous_day_postclose_native_code_ancestry'
     assert all(P.file_hash(name)==sha for name,sha in proof['source_hashes'].items() if name!=str(data/'old.json'))
     assert eod.read_bytes()==before[0] and status.read_bytes()==before[1]
+
+
+@pytest.mark.parametrize('damage',[None,'main_live','session_live','restart','hold','consumed',
+    'source_selection','next_date','eod_date','eod_status','eod_rows','failed_commit','failed_status',
+    'failed_run','failed_exit','ancestry','changed','controller_run','controller_invalid'])
+def test_completed_postclose_midnight_reuses_verified_whole_chain(tmp_path,monkeypatch,damage):
+    test_postclose_midnight_handoff_requires_stopped_exact_native_ancestry(
+        tmp_path,monkeypatch,damage,completed=True)
 
 
 @pytest.mark.parametrize('legacy_damage',[None,'unknown_scope','p5_fail','p5_day','p5_root',

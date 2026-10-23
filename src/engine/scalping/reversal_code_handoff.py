@@ -315,11 +315,36 @@ def _postclose_origin_receipt(data_root,day,source_date,origin_root,origin_commi
             or eod.get('failed_steps')!=[] or state.get('latest_quote_date')!=source_date
             or type(state.get('rows_on_latest_date')) is not int or state['rows_on_latest_date']<=0
             or failed.get('report_type')!='threshold_cycle_postclose_status'
-            or failed.get('target_date')!=source_date or failed.get('status')!='failed'
+            or failed.get('target_date')!=source_date
             or failed.get('schema_version')!=2
             or not isinstance(failed.get('run_id'),str) or re.fullmatch('[0-9a-f]{32}',failed['run_id']) is None
-            or type(failed.get('exit_code')) is not int or failed['exit_code']==0
-            or failed.get('code_commit')!=origin_commit or failed.get('runtime_effect') is not False):
+            or type(failed.get('exit_code')) is not int
+            or failed.get('runtime_effect') is not False):
+        raise ValueError('active_policy_postclose_terminal_evidence_invalid')
+    terminal_refs={}
+    if failed.get('status')=='failed':
+        if failed['exit_code']==0 or failed.get('code_commit')!=origin_commit:
+            raise ValueError('active_policy_postclose_terminal_evidence_invalid')
+    elif failed.get('status')=='succeeded' and failed['exit_code']==0:
+        # A completed calculation may still require a detector-only code repair.
+        # Authenticate its existing workflow and whole-chain owner; never turn
+        # a stored success string into a new completion or PID observation.
+        from src.engine.automation import postclose_done_controller as controller
+        workflow=failed.get('workflow_source') or {}
+        script=origin_root/'deploy/run_threshold_cycle_postclose.sh'
+        report_path=root/'report/postclose_done_controller'/('postclose_done_controller_'+source_date+'.json')
+        if (failed.get('reason')!='verified_main_completed'
+                or workflow.get('root')!=str(origin_root) or workflow.get('commit')!=origin_commit
+                or workflow.get('script')!=str(script) or workflow.get('sha256')!=P.file_hash(script)):
+            raise ValueError('active_policy_postclose_workflow_evidence_invalid')
+        report,report_raw,report_identity=D._owned_metadata(report_path)
+        if (report.get('main_run_id')!=failed['run_id']
+                or controller.done_terminal_receipt_issues(report_path,source_date,started_after_ns=0)
+                or D._owned_metadata(report_path)[1:]!=(report_raw,report_identity)):
+            raise ValueError('active_policy_postclose_completed_evidence_invalid')
+        for name in (Path(report['attempt_path']),Path(report['verification_attempt_path']),script):
+            terminal_refs[str(name)]=P.file_hash(name)
+    else:
         raise ValueError('active_policy_postclose_terminal_evidence_invalid')
     checked=_validated_origin_receipt(root,source_date,origin_root,origin_commit,bundle_sha,pointer_sha)
     if checked is None:raise ValueError('active_policy_postclose_native_ancestry_missing')
@@ -343,7 +368,7 @@ def _postclose_origin_receipt(data_root,day,source_date,origin_root,origin_commi
         refs[str(destination)]=D._digest(raw)
     if D._owned_metadata(root/'runtime/runtime_release_selection.json')[1]!=selected_raw or not stopped():
         raise ValueError('active_policy_postclose_origin_changed')
-    checked['source_hashes'].update(refs|transition_refs)
+    checked['source_hashes'].update(refs|transition_refs|terminal_refs)
     checked['verification_basis']='verified_previous_day_postclose_native_code_ancestry'
     return checked
 

@@ -4949,8 +4949,9 @@ def test_optional_research_native_receipts_calendar_scope_and_generation(tmp_pat
     assert result['native_validated'] is False
 
 
-@pytest.mark.parametrize('damage',['none','active_main','unknown_main','eod_missing','eod_failed','eod_date','eod_db','eod_late','selection_scope','pid_consumed','pid_receipt','next_date','bad_next_date','terminal','archive'])
-def test_same_day_closed_observer_requires_exact_eod_and_no_live_main(tmp_path,monkeypatch,damage):
+@pytest.mark.parametrize('eod_clock',['aware_kst','naive_kst','aware_utc'])
+@pytest.mark.parametrize('damage',['none','active_main','unknown_main','eod_missing','eod_failed','eod_date','eod_db','eod_late','eod_clock_invalid','eod_clock_date','selection_clock_naive','selection_scope','pid_consumed','pid_receipt','next_date','bad_next_date','terminal','archive'])
+def test_same_day_closed_observer_requires_exact_eod_and_no_live_main(tmp_path,monkeypatch,damage,eod_clock):
     mod,root,now,path,report,_,_,selector,selection=_current_observer_fixture(tmp_path,monkeypatch)
     archived=root/'data/runtime/postclose_recovery/2026-10-14/recovery/selection-before.json'
     archived.parent.mkdir(parents=True);archived.write_bytes(selector.read_bytes())
@@ -4962,11 +4963,16 @@ def test_same_day_closed_observer_requires_exact_eod_and_no_live_main(tmp_path,m
     eod_path=root/'data/runtime/update_kospi_status/update_kospi_2026-10-14.json';eod_path.parent.mkdir(parents=True)
     eod=dict(target_date='2026-10-14',status='completed_with_warnings',finished_at='2026-10-14T20:56:06+09:00',
         db_state=dict(latest_quote_date='2026-10-14',rows_on_latest_date=2600))
+    eod['finished_at']={'aware_kst':'2026-10-14T20:56:06+09:00',
+        'naive_kst':'2026-10-14T20:56:06','aware_utc':'2026-10-14T11:56:06+00:00'}[eod_clock]
     monkeypatch.setattr(mod,'_postclose_main_absent',lambda:damage not in {'active_main','unknown_main'})
     if damage=='eod_failed':eod['status']='failed'
     elif damage=='eod_date':eod['target_date']='2026-10-13'
     elif damage=='eod_db':eod['db_state']['rows_on_latest_date']=0
     elif damage=='eod_late':eod['finished_at']='2026-10-14T22:00:00+09:00'
+    elif damage=='eod_clock_invalid':eod['finished_at']='not-a-clock'
+    elif damage=='eod_clock_date':eod['finished_at']='2026-10-13T20:56:06'
+    elif damage=='selection_clock_naive':current['selected_at_kst']='2026-10-14T21:00:00'
     elif damage=='selection_scope':current['approval_scope']='ordered_intraday'
     elif damage=='pid_consumed':current['actual_pid_consumed']=True
     elif damage=='pid_receipt':current['actual_pid_receipt']=selection['actual_pid_receipt']

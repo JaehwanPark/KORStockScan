@@ -5328,7 +5328,19 @@ REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
 
 
 # Exact closed-scanner diagnostic successor; consumed preflight remains intact.
-REVIEWED_CLOSED_SCANNER_HASHES = {'src/engine/infrastructure/startup_validation_code_context.py': '5b1f9610fd8eda6353e8911cf558beb9d40f764cbd11472ddb883454d3355d6e', 'src/engine/error_detectors/artifact_freshness.py': 'a6b9f2882bac4ae90f8a972a3cfbd56e111d78dd3bacead8cb5f32c41a949e27', 'deploy/run_threshold_cycle_postclose.sh': 'ce9cf7c699628ec67466c79890b135c9cea46f268381192c722e6259fd86bfac'}
+REVIEWED_CLOSED_SCANNER_PREVIOUS_HASHES = {'src/engine/infrastructure/startup_validation_code_context.py': '5b1f9610fd8eda6353e8911cf558beb9d40f764cbd11472ddb883454d3355d6e', 'src/engine/error_detectors/artifact_freshness.py': 'a6b9f2882bac4ae90f8a972a3cfbd56e111d78dd3bacead8cb5f32c41a949e27', 'deploy/run_threshold_cycle_postclose.sh': 'ce9cf7c699628ec67466c79890b135c9cea46f268381192c722e6259fd86bfac'}
+REVIEWED_CLOSED_SCANNER_PREVIOUS_PROFILE = {**REVIEWED_SCANNER_PREFLIGHT_PROFILE, **REVIEWED_CLOSED_SCANNER_PREVIOUS_HASHES}
+REVIEWED_CLOSED_SCANNER_PREVIOUS_VARIANTS = {
+    (key[0], REVIEWED_CLOSED_SCANNER_PREVIOUS_HASHES.get(key[0], key[1])): {
+        **value, 'selector_path': 'src/engine/error_detectors/artifact_freshness.py',
+        'selector_sha256': REVIEWED_CLOSED_SCANNER_PREVIOUS_HASHES['src/engine/error_detectors/artifact_freshness.py'],
+        'dependencies': {**value['dependencies'], **REVIEWED_CLOSED_SCANNER_PREVIOUS_HASHES},
+        'contract_extensions': {origin: {name: REVIEWED_CLOSED_SCANNER_PREVIOUS_HASHES.get(os.path.normpath(name), sha)
+            for name, sha in paths.items()} for origin, paths in value['contract_extensions'].items()},
+    } for key, value in REVIEWED_SCANNER_PREFLIGHT_VARIANTS.items()
+}
+
+REVIEWED_CLOSED_SCANNER_HASHES = {**REVIEWED_CLOSED_SCANNER_PREVIOUS_HASHES, 'src/engine/infrastructure/startup_validation_code_context.py': '036d6db60e92ca0656ad555db8bc5842e1b175c61893ea6030a3391b66d4f619', 'src/engine/error_detectors/artifact_freshness.py': '6f9cf859a4adf8e27b6465d38cf4eb536b16631381e94af199ecf84554ca7ffa', 'src/engine/scalping/reversal_code_handoff.py': '0c096ae9f75e8539e6b9d4df84cc5c8d2ce20d4abc523f07fbcfb51796e4470c'}
 REVIEWED_CLOSED_SCANNER_PROFILE = {**REVIEWED_SCANNER_PREFLIGHT_PROFILE, **REVIEWED_CLOSED_SCANNER_HASHES}
 REVIEWED_CLOSED_SCANNER_VARIANTS = {
     (key[0], REVIEWED_CLOSED_SCANNER_HASHES.get(key[0], key[1])): {
@@ -5341,7 +5353,7 @@ REVIEWED_CLOSED_SCANNER_VARIANTS = {
 }
 REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
     name: REVIEWED_ENTRY_COST_PAIRS.get(name, ()) + tuple((origin, current) for origin in
-        {REVIEWED_SCANNER_PREFLIGHT_PROFILE[name]} |
+        {REVIEWED_SCANNER_PREFLIGHT_PROFILE[name], REVIEWED_CLOSED_SCANNER_PREVIOUS_PROFILE[name]} |
         {old for pair in REVIEWED_ENTRY_COST_PAIRS.get(name, ()) for old in pair})
     for name, current in REVIEWED_CLOSED_SCANNER_HASHES.items()}}
 
@@ -5548,7 +5560,10 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         for name, sha in REVIEWED_SCANNER_PREFLIGHT_HASHES.items())
     closed_scanner = (hashlib.sha256(candidate_bytes('src/engine/error_detectors/artifact_freshness.py')).hexdigest()
         == REVIEWED_CLOSED_SCANNER_HASHES['src/engine/error_detectors/artifact_freshness.py'])
+    previous_closed_scanner = (_sha(root/'src/engine/error_detectors/artifact_freshness.py')
+        == REVIEWED_CLOSED_SCANNER_PREVIOUS_HASHES['src/engine/error_detectors/artifact_freshness.py'])
     prepared_hashes = (REVIEWED_CLOSED_SCANNER_PROFILE if closed_scanner else
+        REVIEWED_CLOSED_SCANNER_PREVIOUS_PROFILE if previous_closed_scanner else
         REVIEWED_SCANNER_PREFLIGHT_PROFILE if scanner_preflight else
         REVIEWED_AFTERMARKET_LISTING_PROFILE if aftermarket_listing else
         REVIEWED_NUMERIC_REPLAY_PROFILE if numeric_replay else
@@ -5563,6 +5578,7 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         REVIEWED_PRE_FINALIZATION_HASHES if consumed_finalization else
         REVIEWED_NATIVE_PREOPEN_HASHES if native_preopen else REVIEWED_ENTRY_COST_PRE_SENTINEL_SCOPE_HASHES)
     prepared_variants = (REVIEWED_CLOSED_SCANNER_VARIANTS if closed_scanner else
+        REVIEWED_CLOSED_SCANNER_PREVIOUS_VARIANTS if previous_closed_scanner else
         REVIEWED_SCANNER_PREFLIGHT_VARIANTS if scanner_preflight else
         REVIEWED_AFTERMARKET_LISTING_VARIANTS if aftermarket_listing else
         REVIEWED_NUMERIC_REPLAY_VARIANTS if numeric_replay else

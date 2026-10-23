@@ -2246,6 +2246,7 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(tmp_path,family,faul
     subprocess.run(['git','clone','-q','--shared','--no-checkout',str(canonical),str(root)],check=True)
     subprocess.run(['git','-C',str(root),'checkout','-q','75e0fbbf7'],check=True)
     hashes=({'current':handoff.REVIEWED_CLOSED_SCANNER_PROFILE,
+        'consumed_closed_scanner':handoff.REVIEWED_CLOSED_SCANNER_PREVIOUS_PROFILE,
         'consumed_scanner_preflight':handoff.REVIEWED_SCANNER_PREFLIGHT_PROFILE,
         'consumed_listing_source':handoff.REVIEWED_AFTERMARKET_LISTING_PROFILE,
         'consumed_numeric_source':handoff.REVIEWED_NUMERIC_REPLAY_PROFILE,
@@ -2276,7 +2277,7 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(tmp_path,family,faul
     for name in hashes:
         content=((canonical/name).read_bytes() if generation=='current' else
             subprocess.check_output(['git','-C',str(canonical),'show',
-                {'consumed_scanner_preflight':'6e970e41f','consumed_listing_source':'ea8a9ba85','consumed_numeric_source':'b7aeb7efc','consumed_auxiliary_capability':'428f7ece3','consumed_rest_history':'97a72d632','consumed_holding_stream':'6d8891ac3','consumed_policy_custody':'9e820cbf8','prepared_pre_submit':'b2dbb0862','consumed_observer_io':'a2ca8e7d8','consumed_index_sentinel':'926ebca82','consumed_sentinel':'2b7ca0380','consumed_native_preopen':'9a8e59bfc','consumed_pre_finalization':'91e5d2702','consumed_pre_startup':'90bf2d11f','consumed_pre_shutdown':'70fc572f8',
+                {'consumed_closed_scanner':'2edf3263e','consumed_scanner_preflight':'6e970e41f','consumed_listing_source':'ea8a9ba85','consumed_numeric_source':'b7aeb7efc','consumed_auxiliary_capability':'428f7ece3','consumed_rest_history':'97a72d632','consumed_holding_stream':'6d8891ac3','consumed_policy_custody':'9e820cbf8','prepared_pre_submit':'b2dbb0862','consumed_observer_io':'a2ca8e7d8','consumed_index_sentinel':'926ebca82','consumed_sentinel':'2b7ca0380','consumed_native_preopen':'9a8e59bfc','consumed_pre_finalization':'91e5d2702','consumed_pre_startup':'90bf2d11f','consumed_pre_shutdown':'70fc572f8',
                  'consumed_pre_native_label':'b1519a2d4','consumed_pre_coordination':'3dd9f1bf5','consumed_pre_prepared_validation':'bf330ae92','consumed_pre_prepared_repair':'81f43b8ba','consumed_pre_main_preparation':'8644e15fc','consumed_pre_prepared_start':'3b951f1f1','consumed_pre_first_turn':'e9ee2c8ea','consumed_pre_expiry_health':'9476e9ecd','consumed_pre_signed_surge':'bf26ddf0e','consumed_pre_preassessment':'fc51a179b','consumed_pre_prestart':'64ec63a87','consumed_pre_prepared_owner':'d346aa3af'}[generation]+':'+name]))
         (root/name).write_bytes(content)
     name='src/engine/automation/intraday_release_handoff.py'
@@ -2576,7 +2577,7 @@ def test_scanner_preflight_handoff_rejects_unreviewed_or_mixed_sources(tmp_path,
 
 
 @pytest.mark.parametrize('family', ['pre_submit_delay', 'main_stop', 'holding_vote'])
-@pytest.mark.parametrize('generation', ['current', 'consumed_scanner_preflight'])
+@pytest.mark.parametrize('generation', ['current', 'consumed_scanner_preflight', 'consumed_closed_scanner'])
 def test_closed_scanner_handoff_preserves_consumed_preflight(tmp_path, family, generation):
     test_entry_cost_handoff_keeps_exact_complete_generation(tmp_path, family, None, generation)
 
