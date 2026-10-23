@@ -5056,7 +5056,7 @@ REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
     for name, current in REVIEWED_HOLDING_STREAM_HASHES.items()}}
 
 
-# Original issued-policy origins already accepted by the consumed 9e820 reader.
+# Original issued-policy origins, bound to the complete reviewed successor.
 REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
     name: REVIEWED_ENTRY_COST_PAIRS.get(name, ()) + pairs for name, pairs in {'src/engine/automation/main_trailing_source_assembler.py': (('921fcb2621dfd444e029fe6ddd8bd9c1d933c4fbbc0f4dda2ec0b3ae97939fa8',
                                                               '1aa864f4fd5db4f3ef4d14b6983617c9ac41cc208e792497cf34134b4e99bc52'),),
@@ -5072,6 +5072,13 @@ REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
                                                       'afbcc348707d87032e8dcdc01c2c84c7712fa69e8cbe387342c3708fdd09e49b'),),
  'src/utils/pipeline_event_logger.py': (('fde49c9a27dfc5c858d765353a0a898ac45728d57ecfa0526c4a6df4fef4c99e',
                                          '402e7391e0083ee87fdcaa248e9a46aaabd960d8b967a3df419d67b8b735b624'),)}.items()}}
+
+
+# Compose the existing native-invalidation and submit-timing reviews for the
+# issued 726179 origin. No unreviewed intermediate or runtime hash is accepted.
+REVIEWED_ENTRY_COST_PAIRS['src/engine/monitoring/runtime_performance.py'] += ((
+    '80089ba158ce24d79df5f37de8d521321bc2a40f988d5f394e354db637cce78d',
+    'ad937198678bef9cc5ef62e6aa41d9b980a0427d456608a94a1317b4fcd3cb39'),)
 
 
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
