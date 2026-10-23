@@ -381,6 +381,16 @@ REVIEWED_ENTRY_ROUTE_SOURCE_SUCCESSORS = {
                      '2e0f07b39199681be1f55a4645e9dcd72438519e955546236a436f9cdee35e36'),
 }
 
+# Source22 reports retain their native fixtures across the reviewed lossless
+# archive census reader and the bounded research-retention inventory addition.
+# Both original fixtures and independent current fixtures are still mandatory.
+REVIEWED_ARCHIVE_RETENTION_SOURCE_SUCCESSORS = {
+    'entry_cancel_wait': ('60620f4b8fbe73f3c0506eed8f49c27c031d74a643b68667ca7421c6512d6f57',
+                          '5ec9def232f1e0f792a0de280f7124c47473b74c0a1015afa89c7fec155eff0b'),
+    'holding_vote': ('b37bdd2ec37e69e281fad273e3b9d07dab8aaf559c5a7841b9d4473141beb9ee',
+                     'f658caee8304f4461764301dc54774aef42c2867ff0bb340dc4f39b92fc28179'),
+}
+
 def _historical_fixture(contract, data, family, *, late_report=None):
     """Preserve a prior fixture without using it to certify the successor."""
     reference = contract.get('fixture_receipt')
@@ -515,7 +525,8 @@ def current_fixture_observation(observed, data):
                     or actual_pair == REVIEWED_NATIVE_SELECTION_SUCCESSORS.get(family)
                     or actual_pair == REVIEWED_NATIVE_SELECTION_SOURCE_SUCCESSORS.get(family)
                     or actual_pair == REVIEWED_NATIVE_SELECTION_CONSUMED_SUCCESSORS.get(family)
-                    or actual_pair == REVIEWED_ENTRY_ROUTE_SOURCE_SUCCESSORS.get(family))
+                    or actual_pair == REVIEWED_ENTRY_ROUTE_SOURCE_SUCCESSORS.get(family)
+                    or actual_pair == REVIEWED_ARCHIVE_RETENTION_SOURCE_SUCCESSORS.get(family))
     if reader_match:
         pair = actual_pair
     if not pair or actual_pair != pair:
