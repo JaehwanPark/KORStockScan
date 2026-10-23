@@ -135,6 +135,12 @@ REVIEWED_PREPARATION_HISTORY['src/engine/scalping/reversal_code_handoff.py'].upd
 })
 
 REVIEWED_PREPARATION_HISTORY['deploy/run_threshold_cycle_postclose.sh'] = {('c5e60200a9cf27839204a8fd7d46733f0c10c1a4a0ddeef5bfae35f683b29470', 'dde8ede993e00f022654534a93c9b54c9b38227b9c151bde6288b8782d096067')}
+# Reviewed source quarantine -> native index -> cost consumer handoff.
+REVIEWED_PREPARATION_HISTORY['deploy/run_threshold_cycle_postclose.sh'].update({
+    (old, 'ce9cf7c699628ec67466c79890b135c9cea46f268381192c722e6259fd86bfac') for old in ('c5e60200a9cf27839204a8fd7d46733f0c10c1a4a0ddeef5bfae35f683b29470',
+        'dde8ede993e00f022654534a93c9b54c9b38227b9c151bde6288b8782d096067')
+})
+
 
 # Reviewed immutable auxiliary snapshots and explicit native active-parent source closure.
 REVIEWED_PREPARATION_HISTORY.setdefault('src/engine/scalping/reversal_code_handoff.py', set()).update({('b77b63fa5afe9b3dff59266cecce73f92880b5256b12c32343a70aeddba63aa9', '852d31cba14cfcb68cfb73603de07b30643969c5e476ddca6dde1f2d3a6fc589'), ('54b9c0efc38700a0cb8722694cdf84b9df8aa478a28f529b2b618f5532559b5a', '852d31cba14cfcb68cfb73603de07b30643969c5e476ddca6dde1f2d3a6fc589'), ('8681d10376f4228bbe5b9d1d012d3510e8abd89470036077c3c0bc69fad63471', '852d31cba14cfcb68cfb73603de07b30643969c5e476ddca6dde1f2d3a6fc589')})

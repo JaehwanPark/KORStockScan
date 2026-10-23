@@ -2311,6 +2311,14 @@ except (OSError, ValueError, KeyError, TypeError) as exc:
 PY
 then
   INITIAL_QUANTITY_REFRESH_DIR="$PROJECT_DIR/data/report/initial_entry_quantity_type_policy/refresh_postclose_${TARGET_DATE}"
+  # Preflight quarantine replaces the raw inode. Enroll that closed day's
+  # surviving sources before costs consume their native index generations.
+  # The existing owner preserves displaced indexes and reuses complete sources.
+  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" - "$PROJECT_DIR/data" "$TARGET_DATE" <<'PY_QUANTITY_SOURCE_INDEX'
+import json, sys
+from src.engine.automation.main_trailing_source_store import prepare_window
+print(json.dumps(prepare_window(sys.argv[1], sys.argv[2], start_date=sys.argv[2])))
+PY_QUANTITY_SOURCE_INDEX
   run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.scalping.initial_quantity_policy \
     --as-of "$TARGET_DATE" \
     --parent-current "$INITIAL_QUANTITY_CURRENT" \

@@ -5328,7 +5328,7 @@ REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
 
 
 # Exact closed-scanner diagnostic successor; consumed preflight remains intact.
-REVIEWED_CLOSED_SCANNER_HASHES = {'src/engine/infrastructure/startup_validation_code_context.py': 'eb920e10c024b853a1c554d1438b6ebcd9d80d1f00b8d3d398bf8bd58f659299', 'src/engine/error_detectors/artifact_freshness.py': 'a6b9f2882bac4ae90f8a972a3cfbd56e111d78dd3bacead8cb5f32c41a949e27'}
+REVIEWED_CLOSED_SCANNER_HASHES = {'src/engine/infrastructure/startup_validation_code_context.py': '5b1f9610fd8eda6353e8911cf558beb9d40f764cbd11472ddb883454d3355d6e', 'src/engine/error_detectors/artifact_freshness.py': 'a6b9f2882bac4ae90f8a972a3cfbd56e111d78dd3bacead8cb5f32c41a949e27', 'deploy/run_threshold_cycle_postclose.sh': 'ce9cf7c699628ec67466c79890b135c9cea46f268381192c722e6259fd86bfac'}
 REVIEWED_CLOSED_SCANNER_PROFILE = {**REVIEWED_SCANNER_PREFLIGHT_PROFILE, **REVIEWED_CLOSED_SCANNER_HASHES}
 REVIEWED_CLOSED_SCANNER_VARIANTS = {
     (key[0], REVIEWED_CLOSED_SCANNER_HASHES.get(key[0], key[1])): {

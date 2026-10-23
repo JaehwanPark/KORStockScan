@@ -8,6 +8,63 @@ def _text(relative: str) -> str:
     return (ROOT / relative).read_text(encoding="utf-8")
 
 
+@pytest.mark.parametrize('changed_after_prepare', [False, True])
+def test_quantity_workflow_rebinds_quarantined_source_before_native_cost_reader(
+    tmp_path, monkeypatch, changed_after_prepare
+):
+    import json
+    import sys
+    from src.engine.automation import main_trailing_source_store as index
+    from src.engine.automation import main_trailing_completed_store as completed
+    from src.tests import test_main_stop_research_cost as fixture
+
+    day = fixture.DAY
+    items = [fixture.position(1)]
+    fixture.native(tmp_path, items)
+    fixture.registry(tmp_path, items)
+    observed = fixture.source(tmp_path)
+    fixture.official.atomic(fixture.official.source_path(tmp_path, day), observed)
+    path = tmp_path / 'pipeline_events' / f'pipeline_events_{day}.jsonl'
+    path.parent.mkdir()
+    event = dict(record_id=1, stock_code='005930', stage='order_leg_sent',
+                 pipeline='ENTRY_PIPELINE', emitted_at=day+'T10:00:00', fields={})
+    path.write_text(json.dumps(event)+'\n')
+    index.build_step(tmp_path, path)
+    original = index.generation(tmp_path, path)
+    # The quarantine writer replaces the inode even if all retained rows match.
+    replacement = path.with_suffix('.replacement')
+    replacement.write_bytes(path.read_bytes())
+    replacement.replace(path)
+    with pytest.raises(index.InputPending, match='coverage_incomplete'):
+        index.generation(tmp_path, path)
+    script = _text('deploy/run_threshold_cycle_postclose.sh')
+    start = script.index("<<'PY_QUANTITY_SOURCE_INDEX'\n")
+    end = script.index('\nPY_QUANTITY_SOURCE_INDEX', start)
+    assert script.index('fi # Native, verified prefix') < start
+    assert end < script.index('-m src.engine.scalping.initial_quantity_policy', end)
+    # Only the completed-source fixture is unrelated to this pipeline rewrite.
+    monkeypatch.setattr(completed, 'prepare_window', lambda *a: [])
+    monkeypatch.setattr(sys, 'argv', ['-', str(tmp_path), day])
+    body = script[start:].split('\n', 1)[1].split('\nPY_QUANTITY_SOURCE_INDEX', 1)[0]
+    exec(compile(body, '<native-quantity-source-index>', 'exec'), {})
+    current = index.generation(tmp_path, path)
+    assert current != original
+    assert list((tmp_path/'report/main_trailing_source_index'/day).glob('*.before-offline-*.sqlite'))
+    if changed_after_prepare:
+        path.write_bytes(path.read_bytes()+b'{}\n')
+    rows, proof, _ = fixture.stop._native_projection(tmp_path, day)
+    for claim in rows.budget_claims:
+        claim.close()
+    completion = dict(source_date=day, projection=proof['projection'],
+                      actual_cost_source_generation=proof['original_cost_generation'])
+    if changed_after_prepare:
+        with pytest.raises(index.InputPending, match='coverage_incomplete'):
+            fixture.allocation.refresh_native_research_costs(tmp_path, day, completion_source=completion)
+    else:
+        result = fixture.allocation.refresh_native_research_costs(tmp_path, day, completion_source=completion)
+        assert result['native_revision']['buy_sources'][day] == current
+
+
 @pytest.mark.parametrize("exit_code,with_affinity", [(0, False), (0, True), (23, True)])
 def test_system_sampler_wrapper_routes_canonical_cli_and_preserves_markers(
     tmp_path, exit_code, with_affinity
@@ -156,6 +213,7 @@ run_postclose_cmd() {
       printf final > "$SOURCE_GENERATION" ;;
     *src.engine.scalping.initial_quantity_policy*)
       cp "$SOURCE_GENERATION" "$QUANTITY_CONSUMED" ;;
+    *"$PROJECT_DIR/data $TARGET_DATE") cat >/dev/null ;;
     *) return 43 ;;
   esac
 }
