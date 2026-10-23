@@ -484,6 +484,11 @@ REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS['auxiliary'] = REVIEWED_FROZEN_INPUT_SOU
 REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS['rising_missed'] = REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS.get('rising_missed', ()) + (('b1fb8b69fb938893d36c8b16192bbd0cd5e414f169b8304374d781cc54248ab5', '14e336d1cf91e37ca131a21da7735d05cb69527e96f14dab35b8c87f3e834808'),)
 REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS['holding_vote'] = REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS.get('holding_vote', ()) + (('b37bdd2ec37e69e281fad273e3b9d07dab8aaf559c5a7841b9d4473141beb9ee', '5ea5f8ab8fc464227886ccf60226e668c59f90063453b684dafc2e61a2541094'),)
 
+# d53c36e59 binds cumulative completed bars to the frozen research source.
+# Only current code capability is projected; original source/results stay intact.
+# Review: docs/audits/main-market-weakness-source-completeness-and-status-review-2026-10-16.md.
+REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS['auxiliary'] += (('507700d07f88f668f1b467678615656db7af893e0c3e6dbf8148d5c918ed9120', '8659bf2145e1b617359c6d02b3b703d4f222f3f7bdad8c8e43b5ad6a495b867a'),)
+
 
 def current_fixture_observation(observed, data):
     family = observed.get('family')

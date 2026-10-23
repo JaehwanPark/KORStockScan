@@ -529,6 +529,7 @@ def test_post_aux_guard_successor_does_not_transitively_promote_older_reports(tm
     *[(family,'REVIEWED_CLEANUP_SOURCE_SUCCESSORS') for family in validation.PLANS],
     *[(family,'REVIEWED_RECEIPT_CUSTODY_SOURCE_SUCCESSORS') for family in validation.PLANS],
     ('holding_vote','REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS'),
+    ('auxiliary','REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS'),
 
     *[(family,'REVIEWED_SOURCE_READER_SUCCESSORS') for family in ('rising_missed','auxiliary')],
     *[(family,'REVIEWED_DELAY_CLEANUP_SUCCESSORS') for family in ('rising_missed','auxiliary','holding_vote')],
@@ -595,12 +596,8 @@ def test_successor_requires_preserved_prior_fixture_and_independent_current_fixt
         assert result['historical_contract_status']=='unverified'
 
 
-@pytest.mark.parametrize('family,review_map', [
-    ('rising_missed', 'REVIEWED_INTEGRATED_OBSERVATION_SUCCESSORS'),
-    ('entry_cancel_wait', 'REVIEWED_ARCHIVE_RETENTION_SOURCE_SUCCESSORS'),
-    ('holding_vote', 'REVIEWED_INTEGRATED_OBSERVATION_SUCCESSORS'),
-])
-def test_latest_capability_pair_is_current_and_keeps_original_source(family, review_map):
+@pytest.mark.parametrize('family', list(validation.PLANS))
+def test_latest_capability_pair_is_current_and_keeps_original_source(family):
     from src.engine.monitoring import policy_generation_code_handoff as handoff
     old, current = handoff.REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS[family][-1]
     assert current == generation.code_generation(family)
@@ -608,6 +605,7 @@ def test_latest_capability_pair_is_current_and_keeps_original_source(family, rev
         'rising_missed': 'b1fb8b69fb938893d36c8b16192bbd0cd5e414f169b8304374d781cc54248ab5',
         'holding_vote': 'b37bdd2ec37e69e281fad273e3b9d07dab8aaf559c5a7841b9d4473141beb9ee',
         'entry_cancel_wait': '60620f4b8fbe73f3c0506eed8f49c27c031d74a643b68667ca7421c6512d6f57',
+        'auxiliary': '507700d07f88f668f1b467678615656db7af893e0c3e6dbf8148d5c918ed9120',
     }[family]
 
 
@@ -620,7 +618,7 @@ def test_native_verified_family_does_not_require_historical_successor(family, mo
     assert handoff.current_fixture_observation(observed, tmp_path) == observed
 
 
-@pytest.mark.parametrize('family', ['rising_missed', 'holding_vote'])
+@pytest.mark.parametrize('family', ['rising_missed', 'holding_vote', 'auxiliary'])
 def test_unreviewed_code_pair_is_not_reported_as_original_report_mutation(family, tmp_path):
     from src.engine.monitoring import policy_generation_code_handoff as handoff
     observed = dict(family=family, status='unverified', findings=['policy_generation_unverified'],
