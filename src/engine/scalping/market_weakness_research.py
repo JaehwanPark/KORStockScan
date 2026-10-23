@@ -158,6 +158,36 @@ def project_native_observation(raw, source_date):
     )
     captured = timestamp(raw.get("captured_at"))
     symbol, attempt = context.get("stock_code"), context.get("evaluation_attempt_id")
+    if (
+        not native
+        and assessment
+        == dict(
+            schema="mechanistic_entry_source_invalid_v1",
+            action="source_invalid",
+            reason="ai_input_preflight_blocked",
+        )
+        and captured
+        and captured.date().isoformat() == source_date
+        and isinstance(symbol, str)
+        and len(symbol) == 6
+        and symbol.isdigit()
+        and isinstance(attempt, str)
+        and attempt
+        and type(raw.get("redacted")) is bool
+        and raw.get("provider_called") is False
+        and all(raw.get(k) == v for k, v in AUTH.items() if k != "decision_authority")
+        and raw.get("machine_observation_sha256") == native_digest(body)
+        and payload.get("stock_code") == symbol
+        and payload.get("evaluation_attempt_id") == attempt
+        and raw.get("bundle_sha256") == receipt.get("bundle_sha256")
+        and type(receipt.get("pid")) is int
+        and receipt["pid"] > 0
+        and receipt.get("process_start_ticks")
+        and receipt.get("consumed_at") == raw["captured_at"]
+    ):
+        # The producer deliberately has no native consumption before assessment.
+        # Retain the rejection count, without inventing an event or path label.
+        return None, "native_input_preflight_rejected"
     if not (
         captured
         and captured.date().isoformat() == source_date
@@ -483,6 +513,26 @@ def project_trace(raw, source_date, listing_market=None):
     effective = raw.get("entry_ai_effective_assessment")
     malformed_effective = effective is not None and not isinstance(effective, dict)
     effective = effective if isinstance(effective, dict) else {}
+    rejection = None
+    if not native and not event and raw.get("provider_called") is False:
+        if (
+            raw.get("entry_mechanistic_action") == "source_invalid"
+            and raw.get("machine_source_invalid_receipt") is True
+            and raw.get("machine_evaluation_status")
+            == "source_quality_blocked_before_assessment"
+            and raw.get("result_source") == "input_preflight_blocked"
+            and raw.get("reason") == "ai_input_preflight_blocked"
+        ):
+            rejection = "pre_native_input_preflight_blocked"
+        elif (
+            raw.get("entry_mechanistic_action") is None
+            and raw.get("machine_evaluation_status") == "assessment_contract_invalid"
+            and raw.get("result_source") == "mechanistic_pre_adjudication_rejected"
+            and raw.get("reason") == "mechanistic_input_contract_invalid"
+            and isinstance(raw.get("machine_contract_error"), str)
+            and raw["machine_contract_error"]
+        ):
+            rejection = "pre_native_assessment_contract_invalid"
     row = dict(
         opportunity_id=identity,
         identity_grade="canonical" if canonical else "trace_only",
@@ -532,9 +582,16 @@ def project_trace(raw, source_date, listing_market=None):
         machine_observation_sha256=raw.get("machine_observation_sha256"),
         entry_ask=ask,
         features=features,
-        decision_origin="natural_decision",
+        decision_origin=(
+            "probe_observation"
+            if stage == "zero_base_probe_machine_only_v1"
+            else "natural_decision"
+        ),
+        pre_native_rejection_reason=rejection,
+        machine_evaluation_status=raw.get("machine_evaluation_status"),
+        machine_contract_error=raw.get("machine_contract_error"),
         outcome="U",
-        outcome_reason="exact_label_binding_missing",
+        outcome_reason=rejection or "exact_label_binding_missing",
         outcome_kind="counterfactual_price_path",
         fill_kind="unobserved",
         cost_status="configured_label_cost",

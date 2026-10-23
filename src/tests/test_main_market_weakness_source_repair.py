@@ -2958,3 +2958,178 @@ def test_latest_progress_rejects_malformed_sealed_checkpoint_without_replacing_i
     with pytest.raises(ValueError,match='source_rotation_checkpoint_invalid'):
         A.select_source_date(tmp_path,[DAY],night=DAY,check_preflight=lambda:None)
     assert path.read_bytes()==original
+
+
+def rejected_trace(kind="preflight", probe=False):
+    _, value = native_capture()
+    value.pop("continuous_reversal_consumption")
+    value.pop("machine_observation_sha256")
+    value.update(
+        provider_called=False,
+        action="DROP",
+        source_event_stage=(
+            "zero_base_probe_machine_only_v1"
+            if probe
+            else "watching_analyze_target_async_v1"
+        ),
+    )
+    if kind == "preflight":
+        value.update(
+            entry_mechanistic_action="source_invalid",
+            result_source="input_preflight_blocked",
+            reason="ai_input_preflight_blocked",
+            machine_source_invalid_receipt=True,
+            machine_evaluation_status="source_quality_blocked_before_assessment",
+        )
+    else:
+        value.update(
+            entry_mechanistic_action=None,
+            result_source="mechanistic_pre_adjudication_rejected",
+            reason="mechanistic_input_contract_invalid",
+            machine_source_invalid_receipt=False,
+            machine_evaluation_status="assessment_contract_invalid",
+            machine_contract_error="reversal_signal_path_changed",
+        )
+    return value
+
+
+@pytest.mark.parametrize("kind", ["preflight", "contract"])
+def test_pre_native_rejection_is_preserved_through_trace_binding(kind):
+    projected, reason = R.project_trace(rejected_trace(kind), DAY, "KOSPI")
+    assert reason is None
+    db = sqlite3.connect(":memory:")
+    db.execute(
+        "CREATE TABLE native(key TEXT PRIMARY KEY,source TEXT,row TEXT,conflict INTEGER)"
+    )
+    A.bind_trace_native(projected, db)
+    db.close()
+    assert projected["native_binding_status"] == "not_adjudicated"
+    assert projected["outcome"] == "U" and projected["entry_ask"] is None
+    assert projected["outcome_reason"] == (
+        "pre_native_input_preflight_blocked"
+        if kind == "preflight"
+        else "pre_native_assessment_contract_invalid"
+    )
+    assert projected["machine_contract_error"] == (
+        None if kind == "preflight" else "reversal_signal_path_changed"
+    )
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("provider_called", True),
+        ("continuous_reversal_consumption", {"pid": 123}),
+        ("entry_mechanistic_action", "ENTER_NOW"),
+        ("machine_evaluation_status", "unknown"),
+    ],
+)
+def test_pre_native_rejection_does_not_hide_unknown_or_consumed_input(field, value):
+    raw = rejected_trace()
+    raw[field] = value
+    row = R.project_trace(raw, DAY, "KOSPI")[0]
+    assert not row.get("pre_native_rejection_reason")
+    assert row["outcome_reason"] == "exact_label_binding_missing"
+
+
+def test_machine_only_probe_trace_is_not_a_live_natural_decision():
+    row = R.project_trace(rejected_trace("contract", probe=True), DAY, "KOSPI")[0]
+    assert row["decision_origin"] == "probe_observation"
+
+
+def test_sealed_preflight_capture_is_rejection_not_corrupt_native_consumption():
+    raw, _ = native_capture()
+    raw["runtime_consumption"].pop("continuous_reversal")
+    raw["runtime_consumption"]["consumed_at"] = raw["captured_at"]
+    raw["source"]["assessment"] = dict(
+        schema="mechanistic_entry_source_invalid_v1",
+        action="source_invalid",
+        reason="ai_input_preflight_blocked",
+    )
+    raw["machine_observation_sha256"] = R.native_digest(
+        {k: v for k, v in raw.items() if k != "machine_observation_sha256"}
+    )
+    assert R.project_native_observation(raw, DAY) == (
+        None,
+        "native_input_preflight_rejected",
+    )
+    raw["source"]["exact_payload"]["stock_code"] = "000000"
+    assert R.project_native_observation(raw, DAY) == (
+        None,
+        "native_observation_binding_invalid",
+    )
+
+
+def historical_registry_capture(data, monkeypatch, defect=None):
+    from src.engine.scalping import reversal_auxiliary_intraday as I
+    from src.engine.scalping import reversal_auxiliary_registry as G
+    from src.engine.scalping import reversal_auxiliary_compatibility as C
+    from src.engine.scalping import continuous_reversal_postclose as P
+    body, t, value, bundle, overlay = effective_registry_capture(data, monkeypatch)
+    origin = data/'frozen-origin'
+    origin.mkdir()
+    old_hashes = {}
+    frozen = []
+    for name in I.code_hashes():
+        p = origin/name
+        p.write_text('# original reader '+name+'\n')
+        old_hashes[name] = A.file_hash(p)
+        frozen.append(dict(path=str(p)))
+    overlay = P.seal(dict(overlay, code_hashes=old_hashes))
+    source = I.root(data)/'generations'/(overlay['artifact_content_sha256']+'.json')
+    A.atomic(source, overlay)
+    body['source']['assessment']['auxiliary_overlay_sha256'] = overlay['artifact_content_sha256']
+    rehash_native(body)
+    t['machine_observation_sha256'] = body['machine_observation_sha256']
+    lineage = data/'original-source.json'
+    lineage.write_text('{"original":true}')
+    inventory = dict(schema='historical_native_reader_source_inventory_v1',root=str(origin),git_commit='a'*40,
+                     source_hashes={x['path']:A.file_hash(x['path']) for x in frozen})
+    if defect == 'inventory':inventory['source_hashes'].pop(frozen[0]['path'])
+    inventory_path = data/'code-inventory.json'
+    A.atomic(inventory_path,P.seal(inventory))
+    original = dict(original_validation_status='pass',bundle_sha256=bundle['bundle_sha256'],
+        original_reader_root=str(origin),original_reader_commit='a'*40,code_inventory_path=str(inventory_path),
+        code_inventory_sha256=A.file_hash(inventory_path),reader_hashes=old_hashes,
+        refs=overlay['bindings'],values={value['registry_sha256']:value},
+        bindings={value['registry_sha256']:G.binding(value)},source_sha256=A.file_hash(source),
+        lineage_sources=[dict(path=str(lineage),sha256=A.file_hash(lineage))])
+    if defect == 'native_status':original['original_validation_status']='fail'
+    if defect == 'native_bundle':original['bundle_sha256']='wrong'
+    if defect == 'native_scope':original['refs']={}
+    if defect == 'registry':original['bindings']={}
+    original_path=data/'original-validation.json'
+    A.atomic(original_path,P.seal(original))
+    evidence=data/'reader-parity.json'
+    A.atomic(evidence,P.seal(dict(schema='reviewed_historical_auxiliary_reader_parity_v1',status='pass',
+        base_bundle_sha256=bundle['bundle_sha256'],source_sha256=A.file_hash(source),
+        v1_bindings_sha256=P.digest(overlay['bindings']),new_reader_hashes=I.code_hashes(),
+        original_reader_result_path=str(original_path),original_reader_result_sha256=A.file_hash(original_path))))
+    C.issue(data,bundle,source,old_hashes,I.code_hashes(),evidence=evidence,frozen_readers=frozen)
+    if defect=='code':Path(frozen[0]['path']).write_text('modified reader')
+    if defect=='lineage':lineage.write_text('{"changed":true}')
+    if defect=='proof_missing':C.path(data,bundle,source,I.code_hashes()).unlink()
+    # Historical research cannot grant present-day native execution eligibility.
+    monkeypatch.setattr(I,'validate_record',lambda *a,**k:pytest.fail('prospective validator called'))
+    monkeypatch.setattr(I,'lineage_sources',lambda *a,**k:pytest.fail('prospective lineage called'))
+    return body,t
+
+
+def test_original_native_validation_binds_historical_registry_without_current_launch_authority(tmp_path,monkeypatch):
+    body,t=historical_registry_capture(tmp_path,monkeypatch)
+    projected,native=bind_effective_capture(tmp_path,body,t)
+    assert projected['native_binding_status']=='verified'
+    assert projected['auxiliary_binding_status']=='verified'
+    assert native['effective_auxiliary_status']=='verified'
+    assert projected['actual_order_submitted'] is False
+    assert projected['allowed_runtime_apply'] is False
+    assert projected['outcome']=='U'
+
+
+@pytest.mark.parametrize('defect',['inventory','native_status','native_bundle','native_scope','registry','code','lineage','proof_missing'])
+def test_historical_reader_proof_never_admits_missing_or_conflicting_evidence(tmp_path,monkeypatch,defect):
+    body,t=historical_registry_capture(tmp_path,monkeypatch,defect)
+    projected,native=bind_effective_capture(tmp_path,body,t)
+    assert projected.get('auxiliary_binding_status')!='verified'
+    assert native['effective_auxiliary_status']=='unverified'
+    assert projected['outcome']=='U'

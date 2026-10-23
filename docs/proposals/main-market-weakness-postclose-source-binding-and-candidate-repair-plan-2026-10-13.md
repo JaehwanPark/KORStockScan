@@ -312,3 +312,12 @@ raw auxiliary response 계약과 응답 후 실행 guard 계약을 분리한다.
 사용자 승인 단회 closed-source 복구는 기존 namespace lock·nice/resource supervisor와 native custody context에서 지정7일만 처리한다. `cumulative(from_date=...)`는 recovery_from_date/configured 시작일을 source scope에 함께 봉인하고 currentness/notifier가 같은 범위를 소비한다. 이전 기간은 immutable 진단으로 보존하며 검증하지 않은 이전 날짜를 새코드 current로 합산하지 않는다. 변경된 잘못된 binding의 후보는 재동결하고 이미 보유한 날짜 이후 cutoff를 적용한다. 장중 logger/판정/provider/주문·정기 cron/selector/PID 변경 권한은 이 단회 복구에서 발생하지 않는다.
 
 구현·실제7일 소비와 남은 과거 증빙/원천·기계 capability는 [원 owner의 10/22 수용](../audits/main-market-weakness-source-completeness-and-status-review-2026-10-16.md#effective-registry-결속-수리와-7거래일-제한-복구--2026-10-22)에 기록한다.
+
+
+## 16. 2026-10-23 과거 15거래일의 제한 복구와 역사 검증
+
+사용자는 현재 코드로9/29~10/22의15거래일을 제한 재처리하고 누적 비교·알림 판정을 재검증하도록 승인했다. 이 단회 source-only 복구는 기존 namespace lock·native custody context·nice19·worker1/512MiB·단계60초·누적 연구 실행600초(검토·읽기 전용 대사 경과시간과 구분)를 사용한다. 원천일10/23은 읽거나 생성하지 않는다. 이미 소진한 정기 야간9회/예약540초, 설치/cron·selector·Main PID/정책·수동 veto·outbox를 보존한다. checkpoint가 진전할 때만 남은 입력을 재개하며, source/코드 변경·결정적 실패·자원 한도에서는 중단한다. 예산 초기화나 무변경 전체 재시도는 하지 않는다.
+
+과거 source의 reader hash가 현재와 다르면 기존 native compatibility owner의 exact bundle/source/old/new-reader 증빙을 요구한다. 그 증빙은 원 hash의 코드 inventory 아래에서 실제 실행한 원 native overlay/inheritance 검증, 원 lineage·registry/binding 결과와 물리 SHA를 연결한다. 연구 reader는 이 원 검증과 현재 registry·실제 request/schema/wire·scope/시점을 확인한다. 현재 매매를 시작할 수 있는지 확인하는 native 실행 검사를 역사적 연구 기록에 대신 적용하지 않는다. 원 현재 실행 검사·provider·주문·hard guard는 변경하지 않으며, missing/수정된 코드·증빙·원천·미확정 가격경로는 계속 unverified/U다.
+
+입력 사전검사 차단과 판정 전 계약 거부는 `not_adjudicated`로 보존하고 원 오류를 기록한다. 원 사건/ask가 없으므로 라벨을 만들지 않는다. 명시된 machine-only probe stage는 probe로 구분한다. 알 수 없는 native 결속 누락은 기존 오류를 유지한다. 이번 수용과 정기 선택 코드/설치 재결속·다음 source23→10/24 자연 수용은 별개이며 [기존 리뷰](../audits/main-market-weakness-source-completeness-and-status-review-2026-10-16.md#2026-10-23-15거래일-제한-복구와-역사-reader-결속)와 `MainMarketWeaknessPostcloseObservation1008`에서 관리한다.
