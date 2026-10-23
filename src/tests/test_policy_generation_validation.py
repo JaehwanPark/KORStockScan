@@ -171,6 +171,9 @@ def test_fixture_writer_failure_cannot_publish_or_modify_protected_source(tmp_pa
         pid=123
         def __init__(self,command,**kwargs):
             self.command=command
+            output=Path(next(x.split('=',1)[1] for x in command if x.startswith('--junitxml=')))
+            assert not output.is_relative_to(data)
+            assert output.parent.is_dir()
             self.running=True
         def wait(self,timeout):
             if bad=='timeout' and self.running:
@@ -599,7 +602,7 @@ def test_successor_requires_preserved_prior_fixture_and_independent_current_fixt
 ])
 def test_latest_capability_pair_is_current_and_keeps_original_source(family, review_map):
     from src.engine.monitoring import policy_generation_code_handoff as handoff
-    old, current = getattr(handoff, review_map)[family]
+    old, current = handoff.REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS[family][-1]
     assert current == generation.code_generation(family)
     assert old == {
         'rising_missed': 'b1fb8b69fb938893d36c8b16192bbd0cd5e414f169b8304374d781cc54248ab5',

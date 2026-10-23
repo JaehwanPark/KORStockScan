@@ -148,7 +148,7 @@ def build_tuning_performance_control_tower(target_date: str) -> dict[str, Any]:
     assert_sources_unchanged(handoff_receipt, handoff_paths)
     assert_sources_unchanged(observed_runtime_receipt, observed_runtime_paths)
     json_path.parent.mkdir(parents=True, exist_ok=True)
-    from src.engine.runtime_approval_summary import _atomic_write
+    from src.engine.verify_threshold_cycle_postclose_chain import _atomic_write
     _atomic_write(json_path,json.dumps(report, ensure_ascii=False, indent=2) + "\n")
     _atomic_write(md_path,
         "\n".join([

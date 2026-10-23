@@ -360,6 +360,39 @@ REVIEWED_PREPARATION_HISTORY.setdefault('src/engine/kiwoom_websocket.py', set())
 REVIEWED_PREPARATION_HISTORY.setdefault('src/scanners/zero_base_discovery_runtime.py', set()).update({('dc058e9520482506a7659ae9cbefe1e7ce2a3ac0f2dde0b8b053742aec0535f4',
   'b27a13a0e24a3b07b3161defb97271a73bcc4d214ce2ff419d10d09bc46ce606')})
 
+
+# Reviewed consumed-parent closure and sealed summary/test-write custody.
+REVIEWED_PREPARATION_HISTORY.setdefault('src/engine/scalping/holding_path_vote_policy.py', set()).update({('7e7ebfded9809b0944e3eb97d63d1cc9439eaa8b95c9aca91030d0aef0d2667b',
+  '6aaf70d617961fee9a8aa18a3db19efd54cedcefc9a51aa1bce02ed91abd430e'),
+ ('f66fa049d9f15c51169015bd44c0464d4de540726d164d0c610e8fb9c51d8c85',
+  '6aaf70d617961fee9a8aa18a3db19efd54cedcefc9a51aa1bce02ed91abd430e')})
+REVIEWED_PREPARATION_HISTORY.setdefault('src/engine/runtime_approval_summary.py', set()).update({('a79d492129b3222a25711d1f1086b37c2714f50c3920b2973e74f518a97ef43d',
+  'cabe6bfd2bcde43ff81988905dc2149e48c809e80f535b03d28b0338bc11b1fe')})
+REVIEWED_PREPARATION_HISTORY.setdefault('src/engine/infrastructure/startup_validation_isolation.py', set()).update({('475bbdf7f45d7979e7cb687fe8a68a86e4d4c3e42fe54deb90d8bc049801f7ae',
+  '42715b0545c044c2ccee975c6109f42195092adc3595a0e16c2535957ec283cb')})
+REVIEWED_PREPARATION_HISTORY.setdefault('src/engine/automation/policy_generation_fixture_validation.py', set()).update({('28ec0362fddac74b6a1ad9230b4729879faccdf1e67ab9245e27eae5c4b45331',
+  '65a54013574589331515057cba2c28abca8d794aebec133bb7f51395a0ab555c'),
+ ('88e251b6268e1814ad2e1ff6882381edb5c733973de72ad1b377ec3335cde058',
+  '65a54013574589331515057cba2c28abca8d794aebec133bb7f51395a0ab555c')})
+REVIEWED_PREPARATION_HISTORY.setdefault('src/engine/automation/tuning_performance_control_tower.py', set()).update({('9172370837eed5724bc16fcd483cdaaa9ea2144a92f06ba55d10df91369569b1',
+  '3f47b1381a43e0ef5f44fe99ebc8774e8666fabe3e81578694fbdf2772762f8d')})
+REVIEWED_PREPARATION_HISTORY.setdefault('src/engine/monitoring/policy_generation_code_handoff.py', set()).update({('1dff8c3fcc6dba15fdc720a36c5070a81805d5124433140b8158f3f50c62b98e',
+  'b14d8aaf06d7414bcbe6bdb87ddfc685f2c3765db15f8a5f50d93f3e5eeaf444'),
+ ('41ebbc34a2fd015a0cd76ae525c1e6e859edbaa6dc4e4e88e4cc76a44a7a9bef',
+  'b14d8aaf06d7414bcbe6bdb87ddfc685f2c3765db15f8a5f50d93f3e5eeaf444'),
+ ('4db24d4d542b8cc6142c1b85e0839bfce6a7116aaae5f49e2b0d90e4174e3d62',
+  'b14d8aaf06d7414bcbe6bdb87ddfc685f2c3765db15f8a5f50d93f3e5eeaf444'),
+ ('58f427eee221104aef727ec4dcadb4ad5ec8021c262b6e3c104941ed851fcf6e',
+  'b14d8aaf06d7414bcbe6bdb87ddfc685f2c3765db15f8a5f50d93f3e5eeaf444'),
+ ('858f6f949015f1c27d0185a0183df7a331f7fda971830408a5cdf53d16b39b5a',
+  'b14d8aaf06d7414bcbe6bdb87ddfc685f2c3765db15f8a5f50d93f3e5eeaf444'),
+ ('b65c616d024460c825d73472311ddf995282069cd58dfdec9241447d4285d841',
+  'b14d8aaf06d7414bcbe6bdb87ddfc685f2c3765db15f8a5f50d93f3e5eeaf444'),
+ ('b9bb89e9ea3c3835e2cb45dc7687b91e38156d208adf1dfc7554869038e50a0e',
+  'b14d8aaf06d7414bcbe6bdb87ddfc685f2c3765db15f8a5f50d93f3e5eeaf444'),
+ ('e9b1ef85c2cae6c3bec70a6697a36d767584abee1c6fe621530865ef5146a9eb',
+  'b14d8aaf06d7414bcbe6bdb87ddfc685f2c3765db15f8a5f50d93f3e5eeaf444')})
+
 def reviewed_preparation_pair(relative, old, current):
     return (REVIEWED_PREPARATION_SOURCES.get(relative) == (old, current)
             or (old, current) in REVIEWED_PREPARATION_HISTORY.get(relative, ()))

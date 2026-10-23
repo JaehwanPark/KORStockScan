@@ -5,6 +5,7 @@ from src.engine.scalping.holding_path_vote_policy import publication_status as h
 
 import argparse
 import hashlib
+import fcntl
 import json
 import os
 import tempfile
@@ -160,6 +161,9 @@ def _reversal_comparison_disposition(handoff: dict[str, Any], *,
 
 
 def summary_paths(target_date: str) -> tuple[Path, Path]:
+    date.fromisoformat(target_date)
+    if REPORT_DIR.resolve() != (DATA_DIR / 'report/runtime_approval_summary').resolve():
+        raise ValueError('summary_output_data_root_mismatch')
     base = REPORT_DIR / f"runtime_approval_summary_{target_date}"
     return base.with_suffix(".json"), base.with_suffix(".md")
 
@@ -314,19 +318,71 @@ def _date_matches(payload: dict[str, Any], target_date: str) -> bool:
     return bool(values) and target_date in {str(value) for value in values}
 
 
+def _preserve_summary_bytes(path: Path, raw: bytes) -> None:
+    """Publish a content-addressed original once; never replace its bytes."""
+    from src.engine.monitoring.observer_artifact_io import regular_bytes
+    if len(raw) > 8 * 1024 * 1024:
+        raise ValueError('summary_preservation_budget_exceeded')
+    destination = path.parent / 'generations' / path.stem / (hashlib.sha256(raw).hexdigest() + path.suffix)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if destination.parent.resolve() != destination.parent.absolute():
+        raise ValueError('summary_generation_symlink_invalid')
+    fd, name = tempfile.mkstemp(prefix='.summary-', dir=destination.parent)
+    try:
+        with os.fdopen(fd, 'wb') as handle:
+            handle.write(raw); handle.flush(); os.fsync(handle.fileno())
+            os.fchmod(handle.fileno(), 0o444)
+        try:
+            os.link(name, destination)
+        except FileExistsError:
+            if regular_bytes(destination, limit=8 * 1024 * 1024) != raw:
+                raise ValueError('summary_preserved_generation_changed')
+        directory = os.open(destination.parent, os.O_RDONLY | os.O_DIRECTORY)
+        try: os.fsync(directory)
+        finally: os.close(directory)
+    finally:
+        Path(name).unlink(missing_ok=True)
+
+
 def _atomic_write(path: Path, content: str) -> None:
     from src.engine.infrastructure.research_release_transition import journal_write
-    if journal_write(path,content.encode('utf-8')):return
+    from src.engine.monitoring.observer_artifact_io import regular_bytes
+    # Reject a partially patched test root before creating directories or bytes.
+    if path.stem.startswith('runtime_approval_summary_'):
+        target = path.stem.removeprefix('runtime_approval_summary_')
+        allowed = summary_paths(target)
+    else:
+        target = path.stem.removeprefix('holding_path_vote_policy_')
+        summary_paths(target)
+        allowed = (holding_vote_policy_path(DATA_DIR, target),)
+    if path not in allowed:
+        raise ValueError('summary_output_path_invalid')
+    path = path.parent.resolve() / path.name
     path.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=path.parent, delete=False) as handle:
-        temporary = Path(handle.name)
-        handle.write(content)
-        handle.flush()
-        os.fsync(handle.fileno())
-    try:
-        os.replace(temporary, path)
-    finally:
-        temporary.unlink(missing_ok=True)
+    lock_path = path.with_name('.' + path.stem + '.publication.lock')
+    fd = os.open(lock_path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, 'a+b') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        previous = regular_bytes(path, limit=8 * 1024 * 1024) if path.exists() or path.is_symlink() else None
+        raw = content.encode('utf-8')
+        if previous is not None:
+            _preserve_summary_bytes(path, previous)
+        _preserve_summary_bytes(path, raw)
+        if previous == raw:
+            return
+        # The native transaction still owns CAS, rollback and multi-file publication.
+        if journal_write(path, raw):
+            return
+        with tempfile.NamedTemporaryFile('wb', dir=path.parent, delete=False) as handle:
+            temporary = Path(handle.name)
+            handle.write(raw); handle.flush(); os.fsync(handle.fileno())
+        try:
+            os.replace(temporary, path)
+            directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+            try: os.fsync(directory)
+            finally: os.close(directory)
+        finally:
+            temporary.unlink(missing_ok=True)
 
 
 def _flag_enabled(value: Any, default: bool = True) -> bool:
@@ -1009,7 +1065,7 @@ def _holding_vote_publication_bundle(*, source_date, target_date, source_report_
 def build_runtime_approval_summary(
     target_date: str, *, include_swing: bool = True, include_producer_gap: bool = True
 ) -> dict[str, Any]:
-    date.fromisoformat(target_date)
+    summary_paths(target_date)  # Validate output custody before any producer runs.
     paths = _paths(target_date)
     required_by_owner, owner_contract = _owner_requirements(target_date)
     sources: dict[str, dict[str, Any]] = {}

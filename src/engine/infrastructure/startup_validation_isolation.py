@@ -139,7 +139,7 @@ def _syscall(libc: ctypes.CDLL, number: int, *args) -> int:
     return int(result)
 
 
-def _landlock(libc: ctypes.CDLL, root: Path) -> int:
+def _landlock(libc: ctypes.CDLL, root: Path, *, test_roots: tuple[Path, ...] = ()) -> int:
     abi = _syscall(libc, 444, ctypes.c_void_p(), ctypes.c_size_t(0), ctypes.c_uint(1))
     if abi < 3:
         raise IsolationUnavailable("landlock_abi_requires_truncate_protection")
@@ -150,17 +150,24 @@ def _landlock(libc: ctypes.CDLL, root: Path) -> int:
     allowed = sum(1 << bit for bit in (1, 4, 5, 7, 8, 13, 14))
     attributes = _Ruleset(handled)
     ruleset_fd = _syscall(libc, 444, ctypes.byref(attributes), ctypes.sizeof(attributes), 0)
-    parent_fd = None
     try:
-        parent_fd = os.open(root, os.O_PATH | os.O_DIRECTORY | os.O_CLOEXEC)
-        rule = _PathRule(allowed, parent_fd)
-        _syscall(libc, 445, ruleset_fd, 1, ctypes.byref(rule), 0)
+        # Validation retains its exact single-directory rights. Unit tests use
+        # private scratch/cache roots, inherited by every subprocess as well.
+        for path in test_roots or (root,):
+            is_directory = path.is_dir()
+            rights = (handled & ~(1 << 15)) if test_roots and is_directory else allowed
+            if not is_directory:
+                rights = (1 << 1) | (1 << 14)
+            descriptor = os.open(path, os.O_PATH | os.O_CLOEXEC)
+            try:
+                rule = _PathRule(rights, descriptor)
+                _syscall(libc, 445, ruleset_fd, 1, ctypes.byref(rule), 0)
+            finally:
+                os.close(descriptor)
         if libc.prctl(38, 1, 0, 0, 0) != 0:  # PR_SET_NO_NEW_PRIVS
             raise IsolationUnavailable(f"no_new_privs_failed:{ctypes.get_errno()}")
         _syscall(libc, 446, ruleset_fd, 0)
     finally:
-        if parent_fd is not None:
-            os.close(parent_fd)
         os.close(ruleset_fd)
     return abi
 

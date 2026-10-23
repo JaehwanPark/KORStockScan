@@ -473,6 +473,13 @@ def _historical_fixture(contract, data, family, *, late_report=None):
     return dict(path=str(path), sha256=sha)
 
 
+
+# Verified native parent consumption and private fixture output; original reports remain strict.
+REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS['entry_cancel_wait'] = REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS.get('entry_cancel_wait', ()) + (('60620f4b8fbe73f3c0506eed8f49c27c031d74a643b68667ca7421c6512d6f57', '473cd48023ef70c1ed83a5cebbcbb1ee736888a177869f5b9a1d1ee95c1b4de1'),)
+REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS['rising_missed'] = REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS.get('rising_missed', ()) + (('b1fb8b69fb938893d36c8b16192bbd0cd5e414f169b8304374d781cc54248ab5', '4b2ee77abed6bb9e88e87f668523b6a8b90213ecfc0643aea6ca5ebf05c070b4'),)
+REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS['holding_vote'] = REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS.get('holding_vote', ()) + (('b37bdd2ec37e69e281fad273e3b9d07dab8aaf559c5a7841b9d4473141beb9ee', '7bd73742e266ed69ddbe0705ae1f330ce58d7e960b78ec3a26a56f626ad24cc3'),)
+REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS['auxiliary'] = REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS.get('auxiliary', ()) + (('507700d07f88f668f1b467678615656db7af893e0c3e6dbf8148d5c918ed9120', '618c3e354a84a5b2ac6afb2887d2882f4bf9ea99321ad894eeeeda8c62af6974'),)
+
 def current_fixture_observation(observed, data):
     family = observed.get('family')
     pair = REVIEWED_SUCCESSORS.get(family)

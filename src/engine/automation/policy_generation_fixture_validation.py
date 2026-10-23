@@ -9,6 +9,7 @@ from pathlib import Path
 import signal
 import subprocess
 import sys
+import tempfile
 import uuid
 from zoneinfo import ZoneInfo
 
@@ -56,7 +57,9 @@ def validate(family, data, *, source_date, target_date, publish=False):
     # Deny real network access for the entire child interpreter. Mocked provider
     # tests remain available; any attempted connection fails the validation even
     # if application code catches its exception.
-    guard = run/'fixture_network_guard.py'
+    scratch = tempfile.TemporaryDirectory(prefix='korstockscan-policy-fixtures-')
+    private = Path(scratch.name)
+    guard = private/'fixture_network_guard.py'
     guard.write_text("""import json, socket
 from pathlib import Path
 attempts = []
@@ -72,7 +75,7 @@ def pytest_sessionfinish(session, exitstatus):
     if attempts: session.exitstatus = 1
 """)
     command = [sys.executable,'-B','-m','pytest','-q',*validation.PLANS[family],
-               '--junitxml='+str(run/'tests.xml'),'-p','no:cacheprovider','-p','fixture_network_guard']
+               '--junitxml='+str(private/'tests.xml'),'-p','no:cacheprovider','-p','fixture_network_guard']
     start = datetime.now(ZoneInfo('Asia/Seoul')).isoformat()
     process = None
     def stop(signum, frame):
@@ -81,9 +84,13 @@ def pytest_sessionfinish(session, exitstatus):
     try:
         with (run/'tests.log').open('xb') as log:
             process = subprocess.Popen(command, cwd=validation.ROOT,
-                env={**os.environ,'PYTHONPATH':str(run)+os.pathsep+str(validation.ROOT),'PYTHONDONTWRITEBYTECODE':'1'},
+                env={**os.environ,'PYTHONPATH':str(private)+os.pathsep+str(validation.ROOT),'PYTHONDONTWRITEBYTECODE':'1'},
                 stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
             result = process.wait(timeout=180)
+        # The trusted publisher alone transfers bounded child output into evidence.
+        for name in ('tests.xml', 'network.json'):
+            if (private/name).exists():
+                (run/name).write_bytes(validation.file_bytes(private/name))
         if result != 0:
             raise ValueError('fixture_tests_failed:'+str(result))
         count = validation.junit_counts(run/'tests.xml', family)
@@ -126,6 +133,7 @@ def pytest_sessionfinish(session, exitstatus):
         raise
     finally:
         signal.signal(signal.SIGTERM,previous)
+        scratch.cleanup()
 
 
 def main(argv=None):

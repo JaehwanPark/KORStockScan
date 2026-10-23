@@ -1,10 +1,47 @@
 from datetime import datetime as _REAL_DATETIME
 from pathlib import Path
 import tempfile
+import os
+import sys
+import subprocess
 
 import pytest
 
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+
+
+
+def _reject_production_mutation(event, args, roots):
+    """Fail before Python writes/replaces/unlinks a production artifact.
+
+    Real paths also protect runtime-release symlinks. This process-wide guard
+    remains installed for late workers after fixture teardown. Child commands
+    that do not inherit Python hooks require the existing OS-isolated runner.
+    """
+    paths = []
+    if event == 'open':
+        path, mode, flags = args
+        if flags & (os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_TRUNC | os.O_APPEND):
+            paths.append((path, None))
+    elif event in {'os.rename', 'os.link'}:
+        paths.extend(((args[0], args[2]), (args[1], args[3])))
+    elif event == 'os.symlink':
+        paths.append((args[1], args[2]))
+    elif event in {'os.remove', 'os.rmdir', 'os.mkdir', 'os.chmod', 'os.chown', 'os.utime', 'os.truncate'}:
+        index = {'os.remove': 1, 'os.rmdir': 1, 'os.mkdir': 2, 'os.chmod': 2,
+                 'os.chown': 3, 'os.utime': 3}.get(event)
+        paths.append((args[0], args[index] if index is not None and len(args) > index else None))
+    for value, directory in paths:
+        if isinstance(value, int):
+            value = f'/proc/self/fd/{value}'
+        if not isinstance(value, (str, bytes, os.PathLike)):
+            continue
+        path = Path(os.fsdecode(value))
+        if not path.is_absolute() and directory not in (None, -1):
+            path = Path(f'/proc/self/fd/{directory}').resolve() / path
+        path = path.resolve()
+        if any(path == root or path.is_relative_to(root) for root in roots):
+            raise PermissionError(f'unit_test_production_write_forbidden:{event}:{path}')
 
 
 def pytest_configure(config):
@@ -15,6 +52,26 @@ def pytest_configure(config):
     monkeypatch fixture. Explicit HTTP response mocks still override this
     default; unmocked calls follow the normal transport-failure path.
     """
+    common = Path(subprocess.check_output(
+        ['git', 'rev-parse', '--path-format=absolute', '--git-common-dir'],
+        cwd=_REPOSITORY_ROOT, text=True, timeout=10).strip()).resolve().parent
+    roots = tuple((root / name).resolve() for root in {_REPOSITORY_ROOT, common}
+                  for name in ('data', 'logs'))
+    sys.addaudithook(lambda event, args: _reject_production_mutation(event, args, roots))
+    # Use the existing Linux filesystem boundary for the whole test process.
+    # Python hooks alone do not protect native extensions or child commands.
+    import ctypes
+    from src.engine.infrastructure.startup_validation_isolation import _landlock
+    scratch = [Path(tempfile.gettempdir()).resolve(), _REPOSITORY_ROOT / '.pytest_cache']
+    if config.option.basetemp:
+        scratch.append(Path(config.option.basetemp).resolve())
+    for path in scratch:
+        if any(path == root or path.is_relative_to(root) or root.is_relative_to(path) for root in roots):
+            raise RuntimeError('unit_test_writable_root_overlaps_production')
+        path.mkdir(parents=True, exist_ok=True)
+    sys.dont_write_bytecode = True
+    _landlock(ctypes.CDLL(None, use_errno=True), scratch[0],
+              test_roots=tuple(scratch) + (Path('/dev/null'),))
     import requests
     import src.utils.logger as logger
 

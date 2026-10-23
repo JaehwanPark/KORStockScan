@@ -271,3 +271,28 @@ def test_readonly_descriptor_flag_query_remains_available(tmp_path):
         assert_no_forbidden_attempts()
     """)
     assert result.returncode == 0, result.stderr
+
+
+def test_test_filesystem_boundary_is_inherited_by_exec_children(tmp_path):
+    source = tmp_path / 'sealed-summary.json'
+    source.write_text('original')
+    private = tmp_path / 'scratch'; private.mkdir()
+    script = r"""
+import ctypes, os, pathlib, subprocess, sys
+from src.engine.infrastructure.startup_validation_isolation import _landlock
+private, source = map(pathlib.Path, sys.argv[1:])
+_landlock(ctypes.CDLL(None,use_errno=True),private,test_roots=(private,pathlib.Path('/dev/null')))
+(private/'allowed').write_text('test output')
+code = "import pathlib,sys; pathlib.Path(sys.argv[1]).write_text('corrupt')"
+child = subprocess.run([sys.executable,'-B','-c',code,str(source)],capture_output=True,text=True)
+assert child.returncode != 0 and 'PermissionError' in child.stderr, child.stderr
+libc=ctypes.CDLL(None,use_errno=True)
+assert libc.open(os.fsencode(source),os.O_WRONLY|os.O_TRUNC)==-1
+assert source.read_text()=='original'
+print('native_and_exec_writes_denied')
+"""
+    result = subprocess.run([sys.executable,'-B','-c',script,str(private),str(source)],
+        cwd=ROOT,env={**os.environ,'PYTHONPATH':str(ROOT)},capture_output=True,text=True,timeout=15)
+    assert result.returncode==0,result.stderr
+    assert result.stdout.strip()=='native_and_exec_writes_denied'
+    assert source.read_text()=='original'

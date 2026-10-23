@@ -1123,3 +1123,73 @@ def test_large_entry_split_uses_native_pair_and_rejects_tampering(tmp_path,monke
     assert mod._large_companion('entry_split',path,day,mod._sha(path),paths)[2]
     monkeypatch.setattr(native,'ENTRY_REPORT_MAX_BYTES',1)
     assert mod._large_companion('entry_split',path,day,mod._sha(path),paths)[2]
+
+
+def test_summary_rejects_partial_root_patch_before_producer_or_write(tmp_path, monkeypatch):
+    production = tmp_path / 'production/report/runtime_approval_summary'
+    production.mkdir(parents=True)
+    original = production / 'runtime_approval_summary_2026-10-12.json'
+    original.write_bytes(b'{"sealed":true}\n')
+    monkeypatch.setattr(mod, 'DATA_DIR', tmp_path / 'test-data')
+    monkeypatch.setattr(mod, 'REPORT_DIR', production)
+    monkeypatch.setattr(mod, '_paths', lambda _: pytest.fail('producer ran before output custody validation'))
+    with pytest.raises(ValueError, match='summary_output_data_root_mismatch'):
+        mod.build_runtime_approval_summary('2026-10-12')
+    assert original.read_bytes() == b'{"sealed":true}\n'
+
+
+def test_summary_publication_keeps_both_generations_and_rejects_archive_damage(tmp_path, monkeypatch):
+    _patch(monkeypatch, tmp_path)
+    path, _ = mod.summary_paths('2026-10-12')
+    before, after = '{"version":1}\n', '{"version":2}\n'
+    mod._atomic_write(path, before)
+    mod._atomic_write(path, after)
+    directory = path.parent / 'generations' / path.stem
+    saved = directory / (hashlib.sha256(before.encode()).hexdigest()+'.json')
+    assert saved.read_text() == before and saved.stat().st_mode & 0o222 == 0
+    assert (directory / (hashlib.sha256(after.encode()).hexdigest()+'.json')).read_text() == after
+    assert path.read_text() == after
+    # A conflicting preserved generation must stop publication, not be resealed.
+    saved.chmod(0o600); saved.write_text('{}')
+    with pytest.raises(ValueError, match='summary_preserved_generation_changed'):
+        mod._atomic_write(path, before)
+    assert path.read_text() == after
+
+
+def test_summary_publication_rejects_symlink_destination(tmp_path, monkeypatch):
+    _patch(monkeypatch, tmp_path)
+    path, _ = mod.summary_paths('2026-10-12')
+    path.parent.mkdir(parents=True)
+    protected=tmp_path/'protected'; protected.write_text('original')
+    path.symlink_to(protected)
+    with pytest.raises(ValueError, match='regular_file'):
+        mod._atomic_write(path, '{}')
+    assert protected.read_text() == 'original'
+
+
+@pytest.mark.parametrize('operation', ['open', 'replace', 'unlink', 'symlink', 'dir_fd'])
+def test_test_guard_blocks_production_mutation_before_it_happens(tmp_path, operation):
+    import os
+    import sys
+    from src.tests.conftest import _reject_production_mutation
+    protected = tmp_path / 'protected'
+    protected.mkdir(); target=protected/'summary.json'; target.write_text('original')
+    temporary=tmp_path/'new.json'; temporary.write_text('replacement')
+    alias=tmp_path/'alias'; alias.symlink_to(protected, target_is_directory=True)
+    # Scope this hook to a temporary root; do not touch real production files.
+    active=[True]
+    def guard(event,args):
+        if active[0]:_reject_production_mutation(event,args,(protected,))
+    sys.addaudithook(guard)
+    try:
+        with pytest.raises(PermissionError,match='unit_test_production_write_forbidden'):
+            if operation=='open': (alias/'summary.json').write_text('changed')
+            elif operation=='replace':os.replace(temporary,target)
+            elif operation=='unlink':target.unlink()
+            elif operation=='symlink':os.symlink(temporary,protected/'new')
+            else:
+                fd=os.open(protected,os.O_RDONLY|os.O_DIRECTORY)
+                try:os.rename(temporary,'summary.json',dst_dir_fd=fd)
+                finally:os.close(fd)
+        assert target.read_text()=='original'
+    finally:active[0]=False

@@ -1080,3 +1080,115 @@ def test_historical_mode_cannot_migrate_a_numerical_successor(tmp_path, monkeypa
     monkeypatch.setattr(experiment, 'code_sha', lambda: 'f'*64)
     with pytest.raises(ValueError, match='holding_vote_successor_code_changed'):
         policy.validate_successor(bundle, target_date='2026-10-12', require_current_code=False)
+
+
+def _consumed_parent_fixture(root, parent):
+    day = parent['target_date']
+    base = root / 'runtime/policy_bootstrap'
+    env = base / f'runtime_policy_bootstrap_{day}.env'
+    env.parent.mkdir(parents=True, exist_ok=True)
+    env.write_text('fixture policy environment\n')
+    manifest = dict(report_type='runtime_policy_bootstrap', target_date=day,
+        env_file=str(env), env_sha256=hashlib.sha256(env.read_bytes()).hexdigest(),
+        env_overrides={policy.ENV_PATH: str(policy.policy_path(root, day)),
+                       policy.ENV_SHA: parent['bundle_sha256'], policy.ENV_DATE: day},
+        holding_path_vote_policy_receipt=dict(status='estimated_provisional_verified',
+            source_date=parent['source_date'], target_date=day,
+            bundle_sha256=parent['bundle_sha256'], policy_set_sha256=parent['policy_set_sha256'],
+            source_report_sha256=parent['source_report_sha256'], cell_count=len(parent['cells']),
+            allowed_runtime_apply=True, path=str(policy.policy_path(root, day))))
+    manifest['manifest_sha256'] = policy.digest(manifest)
+    mp = base / f'runtime_policy_bootstrap_{day}.json'
+    mr = write(mp, manifest)
+    commit, release = 'a' * 40, root.parent / 'fixture-release'
+    hp = base / 'intraday_handoff' / day / (commit + '.json')
+    handoff = dict(schema='intraday_policy_preserving_release_handoff_v1',
+        authority='APPROVED_INTRADAY_POLICY_PRESERVING_RELEASE_HANDOFF',
+        target_date=day, selected_release_commit=commit, release_root=str(release),
+        status='prepared_verified', policy_effect='unchanged', manifest_sha256=manifest['manifest_sha256'],
+        frozen_files={str(mp): mr['sha256'], str(env): manifest['env_sha256']},
+        prepared_at=day+'T09:00:00+09:00', first_launch_before=day+'T09:15:00+09:00')
+    hr = write(hp, handoff)
+    cp = hp.with_name(commit + '.consumed.json')
+    consumed = dict(schema='intraday_policy_preserving_consumption_v1', status='pass',
+        actual_pid_consumed=True, target_date=day, selected_release_commit=commit,
+        release_root=str(release), manifest_sha256=manifest['manifest_sha256'],
+        handoff_sha256=hr['sha256'], verified_at=day+'T09:01:00+09:00',
+        pid_identity=dict(pid=123, start_ticks='456', cwd=str(release / 'src')))
+    write(cp, consumed)
+    return mp, env, hp, cp
+
+
+def test_native_consumed_parent_closes_ancestry_but_not_new_source(tmp_path, monkeypatch):
+    from src.engine.automation import postclose_summary_handoff as summary
+    from src.engine.automation import runtime_policy_bootstrap as bootstrap
+    parent, *_rest, numeric = fixture(tmp_path)
+    _consumed_parent_fixture(tmp_path, parent)
+    numeric['selected_cells'] = {}
+    replay = summarize_holding_path_votes([], load_events=lambda _: [], model='gpt-5.4-nano')
+    replay['vote_numeric_research'] = numeric
+    observation = dict(date='2026-10-08', holding_path_vote_replay=replay,
+        completed_population_quality=dict(complete=False, db_completed_main_ids=[],
+            strict_completed_position_ids=[], source_gap_ids=[], excluded_all_reasons={}, source_gap_dates=[]))
+    source = write(tmp_path/'report/monitor_snapshots/holding_exit_observation_2026-10-08.json', observation)
+    bundle = policy.create_bundle(source_date='2026-10-08', target_date='2026-10-12',
+        source_report_sha256=source['sha256'], replay=replay,
+        source_quality=policy.source_quality_from_observation(observation))
+    write(policy.policy_path(tmp_path, '2026-10-12'), bundle)
+    current_summary = tmp_path/'report/runtime_approval_summary/runtime_approval_summary_2026-10-08.json'
+    write(current_summary, dict(holding_path_vote_policy=dict(status=policy.publication_status(bundle),
+        source_date='2026-10-08', target_date='2026-10-12', bundle_sha256=bundle['bundle_sha256'],
+        policy_set_sha256=bundle['policy_set_sha256'], source_report_sha256=source['sha256'], cell_count=12)))
+    monkeypatch.setattr(summary, 'stage_receipt_issues', lambda *a, **kw: [])
+    # The old mutable summary is damaged after a native verified consumption.
+    (tmp_path/'report/runtime_approval_summary/runtime_approval_summary_2026-10-07.json').write_text('{}')
+    policy.verify_source_handoff(tmp_path, bundle)
+    monkeypatch.setattr(bootstrap, 'DATA_DIR', tmp_path)
+    env, receipt = bootstrap._holding_vote_handoff('2026-10-12')
+    assert receipt['bundle_sha256'] == bundle['bundle_sha256']
+    assert policy.runtime_policy_from_env(env, data_root=tmp_path, active_date='2026-10-12')[1]['status'] == 'verified_incumbent_loaded'
+    # New input and terminal proof must remain strict after ancestry closure.
+    monkeypatch.setattr(summary, 'stage_receipt_issues', lambda *a, **kw: ['new_terminal_invalid'])
+    with pytest.raises(ValueError, match='strict_handoff_not_complete'):
+        policy.verify_source_handoff(tmp_path, bundle)
+    monkeypatch.setattr(summary, 'stage_receipt_issues', lambda *a, **kw: [])
+    original = Path(source['path']).read_bytes()
+    Path(source['path']).write_text('{}')
+    with pytest.raises(ValueError, match='source_report_hash_mismatch'):
+        policy.verify_source_handoff(tmp_path, bundle)
+    Path(source['path']).write_bytes(original)
+    current_summary.write_text('{}')
+    with pytest.raises(ValueError, match='summary_binding_invalid'):
+        policy.verify_source_handoff(tmp_path, bundle)
+
+
+@pytest.mark.parametrize('fault', ['policy', 'env', 'handoff', 'consumed', 'pid', 'clock', 'manifest', 'symlink'])
+def test_consumed_parent_rejects_changed_or_unproved_binding(tmp_path, fault):
+    parent, *_ = fixture(tmp_path)
+    mp, env, hp, cp = _consumed_parent_fixture(tmp_path, parent)
+    assert policy.consumed_parent_handoff(tmp_path, parent)['runtime_effect'] is False
+    if fault == 'policy': parent = dict(parent, bundle_sha256='b'*64)
+    elif fault == 'env': env.write_text('changed')
+    elif fault == 'manifest':
+        value=json.loads(mp.read_text()); value['target_date']='2026-10-09'; write(mp, value)
+    elif fault == 'handoff':
+        value=json.loads(hp.read_text()); value['policy_effect']='changed'; write(hp, value)
+    elif fault == 'symlink':
+        raw=cp.read_bytes(); other=tmp_path/'other.json'; other.write_bytes(raw); cp.unlink(); cp.symlink_to(other)
+    else:
+        value=json.loads(cp.read_text())
+        if fault == 'consumed': value['actual_pid_consumed']=False
+        elif fault == 'pid': value['pid_identity']['start_ticks']=''
+        else: value['verified_at']='2026-10-09T09:01:00+09:00'
+        write(cp, value)
+    with pytest.raises(ValueError): policy.consumed_parent_handoff(tmp_path, parent)
+
+
+def test_missing_native_consumption_does_not_close_historical_parent(tmp_path, monkeypatch):
+    from src.engine.automation import postclose_summary_handoff as summary
+    parent, *_ = fixture(tmp_path)
+    assert policy.consumed_parent_handoff(tmp_path, parent) is None
+    monkeypatch.setattr(summary, 'stage_receipt_issues', lambda *a, **kw: [])
+    (tmp_path/'report/runtime_approval_summary/runtime_approval_summary_2026-10-07.json').write_text('{}')
+    with pytest.raises(ValueError, match='summary_binding_invalid'):
+        policy.verify_source_handoff(tmp_path, parent)
