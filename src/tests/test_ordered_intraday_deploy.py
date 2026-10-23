@@ -10,6 +10,25 @@ import pytest
 from src.engine.automation import ordered_intraday_deploy as D
 
 
+def _candidate_p5_fixture(d, commit=None):
+    selected=json.loads(d.selection.read_bytes())
+    directory=d.workspace/'data/report/main_startup_validation'/d.day/('d'*32)
+    directory.mkdir(parents=True, exist_ok=True)
+    path=directory/'final.json'
+    value=dict(schema='main_policy_load_exit_validation_v1', run_id=directory.name,
+        status='passed', findings=[], target_date=d.day,
+        execution_release_root=str(d.candidate), execution_release_commit=commit or d.commit,
+        selected_release_root=selected['release_root'], selected_release_commit=selected['git_commit'],
+        child_terminated=True, child_exit_code=0, failure_phase=None,
+        load_check_passed=True, protected_sources_unchanged=True,
+        runtime_effect=False, allowed_runtime_apply=False, actual_pid_consumed=False)
+    path.write_bytes(D._json_bytes(value))
+    d.candidate_p5_path=path
+    d.candidate_p5_sha256=D.H._sha(path)
+    if hasattr(d, 'commit'): d.pin_candidate_p5()
+    return path
+
+
 @pytest.fixture(autouse=True)
 def _summary_preflight_contract(monkeypatch):
     from src.engine.monitoring import sentinel_summary_contract as summary
@@ -74,6 +93,7 @@ def stopped_recovery(tmp_path, monkeypatch):
         pointer_path=str(policy),pointer_sha256=D.H._sha(policy)))
     monkeypatch.setattr(D, 'verify_candidate_report_currentness', lambda *a:dict(status='pass'), raising=False)
     d=D.StoppedDeploymentRecovery(tmp_path,candidate,day,D.CONFIRM)
+    _candidate_p5_fixture(d, new_commit)
     return d, status_path, policy
 
 
@@ -247,9 +267,10 @@ def test_cli_holds_detector_lock_through_attestation_and_failure(tmp_path, monke
                     raise ValueError(name)
                 return {'status': 'pass'}
             return step
-    monkeypatch.setattr(D, 'Deployment', lambda *args: Driver())
+    monkeypatch.setattr(D, 'Deployment', lambda *args, **kw: Driver())
     rc = D.main(['--workspace', str(tmp_path), '--release-root', str(tmp_path),
-                 '--target-date', '2026-10-12', '--confirm', D.CONFIRM])
+                 '--target-date', '2026-10-12', '--candidate-p5-path', str(tmp_path/'final.json'),
+                 '--candidate-p5-sha256', 'a'*64, '--confirm', D.CONFIRM])
     assert rc == (1 if failure else 0)
     assert calls[-1] == ('fail' if failure else 'attest')
     with D.detector_transition_lock(tmp_path, timeout=0):
@@ -266,7 +287,8 @@ def test_busy_detector_times_out_before_deployment_preflight(tmp_path, monkeypat
         ticks = iter([0, 61])
         monkeypatch.setattr(D.time, 'monotonic', lambda: next(ticks))
         assert D.main(['--workspace', str(tmp_path), '--release-root', str(tmp_path),
-                       '--target-date', '2026-10-12', '--confirm', D.CONFIRM]) == 1
+                       '--target-date', '2026-10-12', '--candidate-p5-path', str(tmp_path/'final.json'),
+                 '--candidate-p5-sha256', 'a'*64, '--confirm', D.CONFIRM]) == 1
         assert lock_path.stat().st_ino == inode
         _assert_detector_lock_held(tmp_path)
         assert not (tmp_path / 'data/runtime/operator_startup_hold.json').exists()
@@ -431,6 +453,7 @@ def driver(tmp_path, monkeypatch):
     d.checklist = tmp_path / 'checklist.md'; d.checklist.write_text('original')
     d.document_before = b'original'; d.document_after = b'reviewed candidate'
     d.frozen = {str(d.checklist): D._digest(d.document_before)}
+    _candidate_p5_fixture(d)
     return d
 
 
@@ -1093,6 +1116,72 @@ def test_publish_preserves_concurrent_work_checklist(driver,monkeypatch):
     assert d.checklist.read_bytes()==before
     assert d.state['checklist_sha256']==D._digest(before)
     assert d.selection.read_bytes()==d.published
+
+
+def test_publish_replaces_inherited_candidate_p5(driver, monkeypatch):
+    d=driver
+    d.old.update(candidate_p5_path='/old/candidate/final.json', candidate_p5_sha256='f'*64)
+    d.before=D._json_bytes(d.old);d.selection.write_bytes(d.before)
+    original=d.selection.read_bytes()
+    d.acquire_hold();d.phase='drained'
+    monkeypatch.setattr(D, '_main_pids', lambda: [])
+    d.publish()
+    published=json.loads(d.selection.read_bytes())
+    assert published['candidate_p5_path']==str(d.candidate_p5_path)
+    assert published['candidate_p5_sha256']==d.candidate_p5_sha256
+    assert d.before==original
+    proof=json.loads(d.candidate_p5_path.read_bytes())
+    assert proof['execution_release_commit']==published['git_commit']
+    # Pre-drain P5 correctly identifies the incumbent as then-selected.
+    assert proof['selected_release_commit']==d.previous_commit!=d.commit
+
+
+@pytest.mark.parametrize('fault', ['commit','root','date','selected_commit','selected_root',
+    'sha','missing','failed','findings','terminated','load','sources','runtime','apply','pid',
+    'symlink','fifo','duplicate','run_id','exit','failure_phase'])
+def test_candidate_p5_rejects_unbound_or_invalid_proof_before_hold(driver, fault):
+    d=driver;path=d.candidate_p5_path;value=json.loads(path.read_bytes())
+    fields={'commit':'execution_release_commit','root':'execution_release_root','date':'target_date',
+        'selected_commit':'selected_release_commit','selected_root':'selected_release_root',
+        'failed':'status','findings':'findings','terminated':'child_terminated',
+        'load':'load_check_passed','sources':'protected_sources_unchanged',
+        'runtime':'runtime_effect','apply':'allowed_runtime_apply','pid':'actual_pid_consumed','run_id':'run_id',
+        'exit':'child_exit_code','failure_phase':'failure_phase'}
+    if fault in fields:
+        value[fields[fault]] = (['failure'] if fault=='findings' else
+            False if fault in {'terminated','load','sources'} else
+            True if fault in {'runtime','apply','pid'} else 'foreign')
+        path.write_bytes(D._json_bytes(value));d.candidate_p5_sha256=D.H._sha(path)
+    elif fault=='sha':d.candidate_p5_sha256='0'*64
+    elif fault=='missing':path.unlink()
+    elif fault=='symlink':
+        saved=path.with_suffix('.old');path.rename(saved);path.symlink_to(saved)
+    elif fault=='fifo':path.unlink();os.mkfifo(path)
+    elif fault=='duplicate':
+        path.write_bytes(b'{"status":"passed","status":"passed"}');d.candidate_p5_sha256=D.H._sha(path)
+    before=d.selection.read_bytes()
+    with pytest.raises((ValueError,OSError)):
+        d.pin_candidate_p5()
+    assert d.selection.read_bytes()==before and not d.hold.exists()
+
+
+@pytest.mark.parametrize('changed', ['p5','same_bytes_new_inode','selector','during_publication'])
+def test_p5_or_selector_change_stops_publication(driver, monkeypatch, changed):
+    d=driver;d.acquire_hold();d.phase='drained'
+    monkeypatch.setattr(D,'_main_pids',lambda:[])
+    original=d.selection.read_bytes()
+    if changed=='p5':d.candidate_p5_path.write_text('{}')
+    elif changed=='same_bytes_new_inode':
+        saved=d.candidate_p5_path.with_suffix('.old');d.candidate_p5_path.rename(saved)
+        d.candidate_p5_path.write_bytes(saved.read_bytes())
+    elif changed=='selector':d.selection.write_text('{}')
+    else:
+        monkeypatch.setattr(D,'inherit_prepared_delay_code',lambda *a:d.candidate_p5_path.write_text('{}'))
+    expected=d.selection.read_bytes()
+    with pytest.raises((ValueError,OSError)):d.publish()
+    assert d.selection.read_bytes()==expected
+    assert d.hold.read_bytes()==d.hold_bytes
+    if changed!='selector':assert expected==original
 
 
 @pytest.mark.parametrize('module',['src.engine.automation.intraday_release_handoff',

@@ -174,6 +174,42 @@ def _owned_metadata(path):
     return value, raw, _metadata_signature(path)
 
 
+def verify_candidate_p5(workspace, day, candidate, commit, path, expected_sha, selection):
+    """Authenticate pre-drain execution proof against its original selector.
+
+    Candidate execution and then-selected incumbent are separate identities.
+    Never inherit a predecessor's P5 pointer or accept a prepared successor P5.
+    """
+    path = Path(path or '')
+    if (not path.is_absolute() or path.resolve() != path
+            or path.parent.parent != Path(workspace)/'data/report/main_startup_validation'/day
+            or path.name != 'final.json'
+            or re.fullmatch('[0-9a-f]{32}', path.parent.name) is None
+            or re.fullmatch('[0-9a-f]{64}', str(expected_sha)) is None):
+        raise ValueError('deployment_candidate_p5_reference_invalid')
+    proof, raw, signature = _owned_metadata(path)
+    if (_digest(raw) != expected_sha
+            or proof.get('schema') != 'main_policy_load_exit_validation_v1'
+            or proof.get('run_id') != path.parent.name or proof.get('status') != 'passed'
+            or proof.get('findings') != [] or proof.get('target_date') != day
+            or type(proof.get('child_exit_code')) is not int or proof['child_exit_code'] != 0
+            or proof.get('failure_phase') is not None
+            or proof.get('execution_release_root') != str(candidate)
+            or proof.get('execution_release_commit') != commit
+            or proof.get('selected_release_root') != selection.get('release_root')
+            or proof.get('selected_release_commit') != selection.get('git_commit')
+            or any(proof.get(k) is not True for k in (
+                'child_terminated', 'load_check_passed', 'protected_sources_unchanged'))
+            or any(proof.get(k) is not False for k in (
+                'runtime_effect', 'allowed_runtime_apply', 'actual_pid_consumed'))):
+        raise ValueError('deployment_candidate_p5_invalid')
+    return dict(path=str(path), sha256=expected_sha, signature=signature,
+                target_date=day, execution_release_root=str(candidate),
+                execution_release_commit=commit,
+                selected_release_root=selection['release_root'],
+                selected_release_commit=selection['git_commit'])
+
+
 
 @contextmanager
 def _existing_selector_lock(path):
@@ -657,7 +693,8 @@ def verify_collector_shutdown(pin):
 
 
 class Deployment:
-    def __init__(self, workspace, candidate, day, confirm, *, adopt_failed_hold=False):
+    def __init__(self, workspace, candidate, day, confirm, *, adopt_failed_hold=False,
+                 candidate_p5_path=None, candidate_p5_sha256=None):
         if confirm != CONFIRM:
             raise ValueError('ordered_deployment_explicit_approval_required')
         H._today(day, None)
@@ -677,6 +714,13 @@ class Deployment:
         self.failed_hold_adoption = None
         self._preflight_native_verified = False
         self.preserve_editable_checklist = True
+        self.candidate_p5_path = candidate_p5_path
+        self.candidate_p5_sha256 = candidate_p5_sha256
+
+    def pin_candidate_p5(self):
+        self.candidate_p5 = verify_candidate_p5(self.workspace, self.day,
+            self.candidate, self.commit, self.candidate_p5_path,
+            self.candidate_p5_sha256, json.loads(self.before))
 
     def run_json(self, root, module, *args, timeout=120):
         # Compatible predecessors share this invocation's digest session too.
@@ -711,6 +755,7 @@ class Deployment:
         self.candidate, self.commit = R.validate_release(self.workspace, {
             'schema': 'runtime_release_selection_v1', 'workspace': str(self.workspace),
             'release_root': str(self.candidate), 'git_commit': commit})
+        self.pin_candidate_p5()
         if Path(__file__).resolve().parents[3] != self.candidate:
             raise ValueError('deployment_must_execute_reviewed_candidate_code')
         if self.candidate == self.previous:
@@ -754,6 +799,7 @@ class Deployment:
             predecessor_identity=self.identity, runtime_effect='authorized_code_restart_only',
             predecessor_launcher=dict(pid=self.launcher, start_ticks=self.launcher_stat),
             policy_effect='unchanged', original_selection_sha256=_digest(self.before))
+        self.state['candidate_p5'] = self.candidate_p5
         _atomic(self.directory / 'selection-before.json', self.before)
         self.checkpoint('preflight')
         try:
@@ -956,6 +1002,10 @@ class Deployment:
         self._assert_failed_transition_unchanged()
         if self.selection.read_bytes() != self.before:
             raise ValueError('deployment_selection_changed')
+        if verify_candidate_p5(self.workspace, self.day, self.candidate, self.commit,
+                self.candidate_p5['path'], self.candidate_p5['sha256'],
+                json.loads(self.before)) != self.candidate_p5:
+            raise ValueError('deployment_candidate_p5_changed')
         if any(H._sha(path) != sha for path, sha in self.frozen.items()):
             raise ValueError('deployment_predecessor_generation_changed')
 
@@ -1042,6 +1092,8 @@ class Deployment:
         value = dict(self.old)
         value.pop('actual_pid_receipt', None)
         value.update(release_root=str(self.candidate), git_commit=self.commit,
+            candidate_p5_path=self.candidate_p5['path'],
+            candidate_p5_sha256=self.candidate_p5['sha256'],
             source_commit=self.previous_commit,
             previous_release_root=str(self.previous), previous_git_commit=self.previous_commit,
             previous_selection_backup=str(self.directory / 'selection-before.json'),
@@ -1303,6 +1355,7 @@ class StoppedDeploymentRecovery(Deployment):
         self.candidate, self.commit = R.validate_release(self.workspace, dict(
             schema='runtime_release_selection_v1', workspace=str(self.workspace),
             release_root=str(self.candidate), git_commit=commit))
+        self.pin_candidate_p5()
         if (self.candidate in {failed_root, self.previous}
                 or Path(__file__).resolve().parents[3] != self.candidate):
             raise ValueError('deployment_recovery_requires_new_reviewed_candidate')
@@ -1344,6 +1397,7 @@ class StoppedDeploymentRecovery(Deployment):
                 previous_hold_sha256=_digest(hold_raw),
                 **{('native_predecessor_sha256' if native_basis else 'intraday_predecessor_proof_sha256'):native['sha256']},
                 transfer_status='verified_not_transferred'))
+        self.state['candidate_p5'] = self.candidate_p5
         self.failed_hold_adoption = dict(raw=hold_raw, signature=hold_sig,
             transition_path=str(failed_path), transition_raw=failed_raw, transition_signature=failed_sig,
             prior_path=str(prior_path), prior_raw=prior_raw, prior_signature=prior_sig)
@@ -1379,12 +1433,16 @@ def main(argv=None):
     parser.add_argument('--workspace', type=Path, default=H.DATA_DIR.parent)
     parser.add_argument('--release-root', type=Path, required=True)
     parser.add_argument('--target-date', required=True)
+    parser.add_argument('--candidate-p5-path', type=Path, required=True)
+    parser.add_argument('--candidate-p5-sha256', required=True)
     parser.add_argument('--confirm', required=True)
     args = parser.parse_args(argv)
     try:
         with R.runtime_release_set_lock(args.workspace):
             with detector_transition_lock(args.workspace):
-                result = execute(Deployment(args.workspace, args.release_root, args.target_date, args.confirm))
+                result = execute(Deployment(args.workspace, args.release_root, args.target_date, args.confirm,
+                    candidate_p5_path=args.candidate_p5_path,
+                    candidate_p5_sha256=args.candidate_p5_sha256))
     except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as exc:
         print(json.dumps({'status': 'fail', 'findings': [str(exc)]}))
         return 1
