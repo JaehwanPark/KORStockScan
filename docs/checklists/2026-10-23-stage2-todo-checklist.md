@@ -43,6 +43,7 @@
 ## 실행 항목
 
 - [ ] `[DirectFamilyPreopenPolicyHandoff] direct family 날짜별 정책·bootstrap 장전 소비 확인` (`Due: 2026-10-23`, `Slot: PREOPEN`, `TimeWindow: 07:35~08:05`, `Track: RuntimeStability`)
+  - 14:32 보고서 결속: source22/target23 트레일링 native 재검증·원 정책 동일성 및 수량 native 소비 findings[] PASS. 4fb3ec13a 정지 전 실패는 보존하며 새 불변 후보에서 report-currentness→P5→ordered→PID/observer를 완료한다.
   - P5 후속: 기존 실제소비 장중 predecessor에서도 검토된 후보 reader를 사용하도록 기존 scope 선택을 보완한다. 원69a76617 실패와 현재 PID native PASS를 함께 보존하며, 정책값·원본·현재/새 결손 판정은 유지한다.
   - 10/23 정책 완결 수리: 손상된10/12 요약 원본·실패P5는 보존하고, 기존 실제소비 부모의 manifest/env/정책·handoff·PID/start/기한으로 역사 이력을 결속한다. 현재 원천·수치·rollback·summary/strict는 계속 검증한다. 테스트 운영쓰기 차단·요약 세대 보존 및 native fixture 임시출력 수리 후 통합P5→ordered배포→새PID 소비를 완료하고 c4a177cb8 통합을 이어간다. [수리·검증 기록](../audits/postclose-root-cause-recovery-review-2026-10-19.md#consumed-policy-parent-closure-and-test-write-custody-2026-10-23). 다음 자연 장후 수용은 OPEN 유지.
   - 11시 세대 결속 수리: source22 원 보고서/fixture와 현재 코드의 component 차이를 대조해 rising b1fb8b69→6d493cf1·holding b37bdd2e→2e0f07b3의 직접 인계 누락을 확인했다. 기존 handoff owner에 정확한 두 쌍을 추가하고 과거/현재 fixture·원천/계약/권한 음성검증을 유지했다. 실제 원천의 격리 native consumer 재생은 capability 검증 PASS이며 원52697dcb/00cf9aa6·native_validated=false·경제성null은 보존한다. 관련2114+digest경계9 PASS; 정책/selector/PID1982231 변경0, 운영 경고 해소는 별도 승인 통합 후 현재 observer/health 소비로 확인하며 OPEN이다. [원인·리뷰·잔여 수용](../audits/postclose-root-cause-recovery-review-2026-10-19.md#policy-generation-handoff-and-preparation-latency-repair-2026-10-23).
