@@ -69,21 +69,62 @@ def result_paths(data_root,day,name='provider-results.jsonl'):
     return [p for p in sorted(root.glob('????-??-??/'+name)) if '2026-06-05'<=p.parent.name<=day]
 
 
-def completed_bars(data_root,day,*,snapshot_sink=None):
-    """Same-item cached completed bars only; unresolved rows stay excluded."""
-    sources=defaultdict(dict);native=set();receipts=[]
-    paths=[Path(data_root)/'report'/'machine_completed_price_source'/f'machine_completed_price_source_{day}.json']
-    paths+=sorted((Path(data_root)/'runtime'/'shared_ws_completed_bars'/day).glob('*/*.json'))
-    for path in paths:
-        if not path.is_file():continue
-        raw_bytes=path.read_bytes()
+def completed_bars(data_root,day,*,snapshot_sink=None,source=None):
+    """Freeze or resume exact-item outcome sources, including preserved REST.
+
+    Each REST-adjusted revision remains an independent label series. Frozen
+    generations never consult a later database pointer or mutable checkpoint.
+    """
+    from src.trading.market import completed_history as H
+    sources=defaultdict(dict);native=set();receipts=[];alternatives=defaultdict(list)
+    def freeze(original,raw):
+        if snapshot_sink:return Path(snapshot_sink(original,raw))
+        dst=directory(data_root,day)/'completed-source-snapshots'/(hashlib.sha256(raw).hexdigest()+'.json')
+        dst.parent.mkdir(parents=True,exist_ok=True)
+        if dst.exists():
+            if dst.read_bytes()!=raw:raise ValueError('completed_source_snapshot_changed')
+        else:
+            import tempfile
+            fd,name=tempfile.mkstemp(dir=dst.parent,prefix='.completed-')
+            try:
+                with os.fdopen(fd,'wb') as out:out.write(raw);out.flush();os.fsync(out.fileno())
+                try:os.link(name,dst)
+                except FileExistsError:
+                    if dst.read_bytes()!=raw:raise ValueError('completed_source_snapshot_changed')
+            finally:os.unlink(name)
+        return dst
+    frozen=(source or {}).get('completed_bar_sources',{}).get(day)
+    def inputs():
+        if frozen is not None:
+            for rec in frozen:
+                raw=Path(rec['path']).read_bytes()
+                if hashlib.sha256(raw).hexdigest()!=rec['sha256']:raise ValueError('completed_source_snapshot_changed')
+                yield Path(rec['path']),raw,rec['kind'],rec.get('origin_path',rec['path'])
+            return
+        paths=[Path(data_root)/'report'/'machine_completed_price_source'/f'machine_completed_price_source_{day}.json']
+        paths+=sorted((Path(data_root)/'runtime'/'shared_ws_completed_bars'/day).glob('*/*.json'))
+        for path in paths:
+            if path.is_file():yield path,path.read_bytes(),'broker' if path.name.startswith('machine_completed_price_source_') else 'ws',str(path.resolve())
+        for value in H.outcome_revisions(data_root,day):
+            raw=json.dumps(seal(value),sort_keys=True,separators=(',',':'),ensure_ascii=True,allow_nan=False).encode()
+            origin=Path(data_root)/'runtime/main_minute_history'/day.replace('-','')/'completed.sqlite3'
+            yield origin,raw,'rest_history',str(origin.resolve())
+    for path,raw_bytes,kind,origin in inputs():
         value=json.loads(raw_bytes)
-        if value.get('source_date',value.get('trade_date'))!=day:continue
-        broker=path.name.startswith('machine_completed_price_source_')
-        if broker and value.get('artifact_content_sha256')!=digest({k:v for k,v in value.items() if k!='artifact_content_sha256'}):
+        if value.get('source_date',value.get('trade_date'))!=day:raise ValueError('completed_source_date_conflict')
+        broker=kind=='broker'
+        if (broker or kind=='rest_history') and value.get('artifact_content_sha256')!=seal(value)['artifact_content_sha256']:
+            if frozen is not None:raise ValueError('completed_source_seal_invalid')
             continue
-        receipt_path=snapshot_sink(path,raw_bytes) if snapshot_sink else path
-        receipts.append(dict(path=str(Path(receipt_path).resolve()),sha256=hashlib.sha256(raw_bytes).hexdigest()))
+        receipt_path=freeze(path,raw_bytes)
+        if file_hash(receipt_path)!=hashlib.sha256(raw_bytes).hexdigest():raise ValueError('completed_source_snapshot_changed')
+        receipts.append(dict(path=str(receipt_path.resolve()),sha256=hashlib.sha256(raw_bytes).hexdigest(),kind=kind,source_date=day,origin_path=origin))
+        if kind=='rest_history':
+            if value.get('status')!='verified':continue
+            rows=H.outcome_rows(value,day=day)
+            records=[dict(t=datetime.strptime(r['source_timestamp'],'%Y%m%d%H%M%S').replace(tzinfo=KST).timestamp(),h=r['고가'],l=r['저가']) for r in rows if r['source_timestamp'].startswith(day.replace('-',''))]
+            alternatives[day,value['source_item']].append(kernel.Bars(records,revision=value['revision']))
+            continue
         for bar in value.get('prices',[]) if broker else value.get('bars',[]):
             if broker:
                 if bar.get('completed_bar_only') is not True or bar.get('source_quality')!='pass_completed_ka10080_bar':continue
@@ -104,7 +145,7 @@ def completed_bars(data_root,day,*,snapshot_sink=None):
             if old is not None and old!=record:record['invalid']=True
             sources[key][t]=record
             if broker:native.add((key,t))
-    return {key:kernel.Bars(list(rows.values())) for key,rows in sources.items()},receipts
+    return {key:kernel.Bars(list(sources[key].values()),alternatives=alternatives[key]) for key in sources.keys()|alternatives.keys()},receipts
 
 
 def _validated_population(path, *, day, expected_sha256=None):
@@ -116,6 +157,9 @@ def _validated_population(path, *, day, expected_sha256=None):
         records=source[field].get('partitions',[]) if field=='normalized_sources' else source[field]
         for record in records:
             if file_hash(record['path'])!=record['sha256']:raise ValueError('continuous_reversal_frozen_source_changed')
+    for records in source.get('completed_bar_sources',{}).values():
+        for rec in records:
+            if file_hash(rec['path'])!=rec['sha256']:raise ValueError('completed_source_snapshot_changed')
     return source
 
 
@@ -189,7 +233,7 @@ def _build_population(data_root,day,out):
         normalized_sources=dict(partitions=(parent or {}).get('normalized_sources',{}).get('partitions',[])+normalized),
         reviewed_events=(parent or {}).get('reviewed_events',[])+events,
         selected_routes={**(parent or {}).get('selected_routes',{}),**selected},
-        completed_bar_receipts=bar_receipts,parent_manifest_sha256=(parent or {}).get('artifact_content_sha256'),
+        completed_bar_receipts=bar_receipts,completed_bar_sources={**(parent or {}).get('completed_bar_sources',{}),day:bar_receipts},parent_manifest_sha256=(parent or {}).get('artifact_content_sha256'),
         code_sha256=file_hash(kernel.__file__),machine_decisions_used=False,new_raw_partition_count=len(normalized),**AUTH))
     write(path,manifest)
     return _validated_population(path,day=day)

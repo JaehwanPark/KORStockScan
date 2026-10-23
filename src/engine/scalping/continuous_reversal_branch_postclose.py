@@ -292,7 +292,7 @@ def select_machine(points,parent_family,*,regular_parents=None):
 def daily_population(data_root,day):
     """Same native history for first turns and confirmed turns, no AI trace filter."""
     source=P.ensure_population(data_root,day);out=directory(data_root,day)
-    bar_sources={d:P.completed_bars(data_root,d) for d in sorted({r['day'] for r in source['normalized_sources']['partitions']})}
+    bar_sources={d:P.completed_bars(data_root,d,source=source) for d in sorted({r['day'] for r in source['normalized_sources']['partitions']})}
     fingerprint=P.digest([source['artifact_content_sha256'],P.file_hash(B.__file__),P.file_hash(K.__file__),B.DEFINITION_SHA256,
                           dict(target_net_pct=.4,stop_net_pct=-3.,cost_rate=.0023,horizon_seconds=1800),
                           {d:receipts for d,(_,receipts) in bar_sources.items()}])

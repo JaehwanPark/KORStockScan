@@ -21,6 +21,7 @@ CODE_REFRESH_AUTHORITY = 'reviewed_identical_policy_code_refresh'
 
 
 def contract_modules():
+    from src.trading.market import completed_history as COMPLETED_HISTORY
     from src.engine.scalping import continuous_reversal_policy_v5 as V5
     from src.engine.scalping import reversal_extended_state as R
     from src.engine.scalping import reversal_extended_auxiliary as T
@@ -37,7 +38,7 @@ def contract_modules():
     from src.engine.scalping import reversal_cumulative_runtime as CUM_RUNTIME
     from src.engine.scalping import reversal_cumulative_registration as CUM_REG
     from src.engine.scalping import reversal_cumulative_postclose as CUM_POST
-    return (*V5.contract_modules(),C,A,R,T,E,ER,D,INTRA,MANUAL,JOINT,JOINT_REG,ANCHORS,CODE_HANDOFF,CUM,CUM_RUNTIME,CUM_REG,CUM_POST,__import__(__name__,fromlist=['*']))
+    return (*V5.contract_modules(),C,A,R,T,E,ER,D,INTRA,MANUAL,JOINT,JOINT_REG,ANCHORS,CODE_HANDOFF,CUM,CUM_RUNTIME,CUM_REG,CUM_POST,COMPLETED_HISTORY,__import__(__name__,fromlist=['*']))
 
 
 def scopes():

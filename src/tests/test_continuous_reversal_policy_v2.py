@@ -182,7 +182,11 @@ def test_daily_native_producer_actual_phase_cache_and_nextday_handoff(native,mon
  r=rows();last=r[-1][:];last[0]+=10;last[2]+=1;last[3]=last[5]=105.;last[4]=104.99;r.append(last)
  normalized=root/'normalized.json.gz';normalized.write_bytes(gzip.compress(json.dumps(dict(symbols={'005930':r})).encode()))
  source=P.seal(dict(source_date='2026-10-07',normalized_sources=dict(partitions=[dict(day='2026-10-07',venue='SOR',session='SOR_REGULAR',path=str(normalized),sha256=P.file_hash(normalized))]),reviewed_events=[],selected_routes={}))
- monkeypatch.setattr(P,'ensure_population',lambda *args:source);monkeypatch.setattr(P,'completed_bars',lambda *args:({},[]))
+ monkeypatch.setattr(P,'ensure_population',lambda *args:source)
+ def frozen_bars(*args,source):
+  assert source['source_date']=='2026-10-07'
+  return {},[]
+ monkeypatch.setattr(P,'completed_bars',frozen_bars)
  P.write(P.directory(root,'2026-10-07')/'source.json',source)
  machine=R.machine_report(root,'2026-10-07','2026-10-07',parent)
  points=R.prepare_daily_inputs(root,'2026-10-07',machine)
