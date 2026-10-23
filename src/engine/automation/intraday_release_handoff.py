@@ -5118,6 +5118,35 @@ REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
                                 '498cfc4bc4ce9b1cbe13f0b70967da7f2dbb113c6d70563924b03c98d371b323'),)}.items()}}
 
 
+# Exact numeric/replay successor; the consumed holding-stream profile stays intact.
+REVIEWED_NUMERIC_REPLAY_HASHES = {'src/engine/infrastructure/startup_validation_code_context.py': 'e596255136c5c98fbbe5ccbf4282c949fb75fa4f6f53e739169cf4e205bfa950',
+ 'src/engine/kiwoom_sniper_v2.py': '51b75d2cd21cc8a66c9fc5bcda6119c102d0f2256b6f569ea5e05194e15f1ce4',
+ 'src/engine/lifecycle/avg_down_policy_replay.py': '7e11c813a94653b142f2682946b78a9bda3fd700c9300f4112e7209771787096',
+ 'src/engine/log_archive_service.py': '1a3f94cc9e50ab7768cd7b7fb2953a3c0787a15f5b99e7a9f40231a41f8b81f2',
+ 'src/engine/sniper_scale_in.py': '4a60e43a414c26b2e4f8d809b45bb339c2d8c04c16ca229fa8c334868c29a506',
+ 'src/engine/sniper_state_handlers.py': 'ea59d6365ae1707af457535650937c49977997d9bc516bb8cc141f07da6eea86',
+ 'src/utils/numeric.py': '2da99f1423eefd7ac55e0c30c8d62d4b9f175944b7017aae46bc21ae23e02273'}
+REVIEWED_NUMERIC_REPLAY_PREVIOUS = {'src/engine/infrastructure/startup_validation_code_context.py': '5a881b096932962604f6aab3a995378d0246ea30e7cb3c17e3ef7e3b93b2288d',
+ 'src/engine/kiwoom_sniper_v2.py': 'bbbe478a566caa33fe2fcf8889d3e9c05dd15409e10f70eb97caaef76595e365',
+ 'src/engine/lifecycle/avg_down_policy_replay.py': '26ec5374924617f9beef1bda42a7b2433c583abbae73407da360e4d866ed35cd',
+ 'src/engine/log_archive_service.py': '18e912bb93cf937548077466fc4fd510c13fff73823e2b1c2510a19481e980af',
+ 'src/engine/sniper_scale_in.py': '11d6a2313c16d28e257cb0fc0cd4e2a44b7e6c2d29eb8c692509735bfdb08be3',
+ 'src/engine/sniper_state_handlers.py': '0fe0c01839a6186b0ef45aa8112075d13220ebc64f299656164aa007a84b1541'}
+REVIEWED_NUMERIC_REPLAY_PROFILE = {**REVIEWED_HOLDING_STREAM_PROFILE, **REVIEWED_NUMERIC_REPLAY_HASHES}
+REVIEWED_NUMERIC_REPLAY_VARIANTS = {
+    (key[0], REVIEWED_NUMERIC_REPLAY_HASHES.get(key[0], key[1])): {
+        **value, 'dependencies': {**value['dependencies'], **REVIEWED_NUMERIC_REPLAY_HASHES},
+        'contract_extensions': {origin: {name: REVIEWED_NUMERIC_REPLAY_HASHES.get(os.path.normpath(name), sha)
+            for name, sha in paths.items()} for origin, paths in value['contract_extensions'].items()},
+    } for key, value in REVIEWED_HOLDING_STREAM_VARIANTS.items()
+}
+REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
+    name: REVIEWED_ENTRY_COST_PAIRS.get(name, ()) + tuple((origin, current) for origin in
+        {REVIEWED_NUMERIC_REPLAY_PREVIOUS[name]} |
+        {old for pair in REVIEWED_ENTRY_COST_PAIRS.get(name, ()) for old in pair})
+    for name, current in REVIEWED_NUMERIC_REPLAY_HASHES.items() if name in REVIEWED_NUMERIC_REPLAY_PREVIOUS}}
+
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -5301,7 +5330,11 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     holding_stream = any((root / name).is_file() and hashlib.sha256(candidate_bytes(name)).hexdigest() == sha
         for name, sha in REVIEWED_HOLDING_STREAM_HASHES.items()
         if sha != REVIEWED_HOLDING_STREAM_PREVIOUS[name])
-    prepared_hashes = (REVIEWED_HOLDING_STREAM_PROFILE if holding_stream else
+    numeric_replay = (root / 'src/utils/numeric.py').exists() or any(
+        (root / name).is_file() and hashlib.sha256(candidate_bytes(name)).hexdigest() == sha
+        for name, sha in REVIEWED_NUMERIC_REPLAY_HASHES.items())
+    prepared_hashes = (REVIEWED_NUMERIC_REPLAY_PROFILE if numeric_replay else
+        REVIEWED_HOLDING_STREAM_PROFILE if holding_stream else
         REVIEWED_NATIVE_BUY_COST_PROFILE if native_buy_cost else
         REVIEWED_PRE_SUBMIT_ENTRY_COST_HASHES if pre_submit_present else
         REVIEWED_OBSERVER_IO_ENTRY_COST_HASHES if observer_io_present else
@@ -5309,7 +5342,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         REVIEWED_ENTRY_COST_HASHES if sentinel_scope_present else
         REVIEWED_PRE_FINALIZATION_HASHES if consumed_finalization else
         REVIEWED_NATIVE_PREOPEN_HASHES if native_preopen else REVIEWED_ENTRY_COST_PRE_SENTINEL_SCOPE_HASHES)
-    prepared_variants = (REVIEWED_HOLDING_STREAM_VARIANTS if holding_stream else
+    prepared_variants = (REVIEWED_NUMERIC_REPLAY_VARIANTS if numeric_replay else
+        REVIEWED_HOLDING_STREAM_VARIANTS if holding_stream else
         REVIEWED_NATIVE_BUY_COST_VARIANTS if native_buy_cost else
         REVIEWED_PRE_SUBMIT_DEPENDENCY_VARIANTS if pre_submit_present else
         REVIEWED_OBSERVER_IO_DEPENDENCY_VARIANTS if observer_io_present else

@@ -468,6 +468,43 @@ REVIEWED_PREPARATION_HISTORY.setdefault('src/engine/monitoring/policy_generation
   '1a572a81032cd49121e24e2e4925d91d922d9697a65c65db0f473873b656c5cc')})
 
 
+# Numeric consolidation and import-only replay repair; no policy or order change.
+REVIEWED_PREPARATION_HISTORY.setdefault('src/engine/kiwoom_sniper_v2.py', set()).update({('02ecf7b4a55042fbcd2a7b4f59bf8602bed6020730f0a8bb326b41d5d6418866',
+  '51b75d2cd21cc8a66c9fc5bcda6119c102d0f2256b6f569ea5e05194e15f1ce4'),
+ ('bbbe478a566caa33fe2fcf8889d3e9c05dd15409e10f70eb97caaef76595e365',
+  '51b75d2cd21cc8a66c9fc5bcda6119c102d0f2256b6f569ea5e05194e15f1ce4'),
+ ('f0289f079fc3f193efe02a0ff3ee7542da5dc3b1689292277372ba526bc4eba7',
+  '51b75d2cd21cc8a66c9fc5bcda6119c102d0f2256b6f569ea5e05194e15f1ce4'),
+ ('f88f16a8747ba64edc7594e5936dcf6d7e636fd07d852932635204c44384d4a8',
+  '51b75d2cd21cc8a66c9fc5bcda6119c102d0f2256b6f569ea5e05194e15f1ce4')})
+REVIEWED_PREPARATION_HISTORY.setdefault('src/engine/sniper_state_handlers.py', set()).update({('0fe0c01839a6186b0ef45aa8112075d13220ebc64f299656164aa007a84b1541',
+  'ea59d6365ae1707af457535650937c49977997d9bc516bb8cc141f07da6eea86'),
+ ('2e69e440301dbc3bf4ec7020abc29b4a37b0dfd5dd624480378c7eab491c45d9',
+  'ea59d6365ae1707af457535650937c49977997d9bc516bb8cc141f07da6eea86'),
+ ('56a0613b596418c0ade581aabedef12d38371ff7d4d2af9fffea2cc00665dd20',
+  'ea59d6365ae1707af457535650937c49977997d9bc516bb8cc141f07da6eea86'),
+ ('6a8c1ad86951d2720a91175cda4565d6202e9ff63b0b220b6613166760c84f66',
+  'ea59d6365ae1707af457535650937c49977997d9bc516bb8cc141f07da6eea86'),
+ ('8a0c18d2c097b063a8349907f39e6057d43b7ad9ef173e5f6c4e1be48f8b21f9',
+  'ea59d6365ae1707af457535650937c49977997d9bc516bb8cc141f07da6eea86'),
+ ('b3b2965f65f33e5e5bf52fd960757d6bdbe6b5a63e6844bd95f5dc1d5353ea1d',
+  'ea59d6365ae1707af457535650937c49977997d9bc516bb8cc141f07da6eea86'),
+ ('bd2c589431b0f507b2bbbba31cfc700a22dcab07b914313dc101add2cc9c9686',
+  'ea59d6365ae1707af457535650937c49977997d9bc516bb8cc141f07da6eea86'),
+ ('e25983d9d6175fb628cc3d483ae8f522a4f336f8ce31f107d6a3cf757bd52847',
+  'ea59d6365ae1707af457535650937c49977997d9bc516bb8cc141f07da6eea86'),
+ ('eaca4d2d23d2764c42e3f7cc2f73d04db0b29bb8115cabac4f10cf48e89d57aa',
+  'ea59d6365ae1707af457535650937c49977997d9bc516bb8cc141f07da6eea86'),
+ ('edfd4af04194182dff2a3ced3952dbfc5dc989d85906409c0172fabadb381419',
+  'ea59d6365ae1707af457535650937c49977997d9bc516bb8cc141f07da6eea86')})
+REVIEWED_PREPARATION_HISTORY.setdefault('src/engine/sniper_scale_in.py', set()).update({('11d6a2313c16d28e257cb0fc0cd4e2a44b7e6c2d29eb8c692509735bfdb08be3',
+  '4a60e43a414c26b2e4f8d809b45bb339c2d8c04c16ca229fa8c334868c29a506')})
+REVIEWED_PREPARATION_HISTORY.setdefault('src/engine/lifecycle/avg_down_policy_replay.py', set()).update({('26ec5374924617f9beef1bda42a7b2433c583abbae73407da360e4d866ed35cd',
+  '7e11c813a94653b142f2682946b78a9bda3fd700c9300f4112e7209771787096')})
+REVIEWED_PREPARATION_HISTORY.setdefault('src/engine/log_archive_service.py', set()).update({('18e912bb93cf937548077466fc4fd510c13fff73823e2b1c2510a19481e980af',
+  '1a3f94cc9e50ab7768cd7b7fb2953a3c0787a15f5b99e7a9f40231a41f8b81f2')})
+
+
 def reviewed_preparation_pair(relative, old, current):
     return (REVIEWED_PREPARATION_SOURCES.get(relative) == (old, current)
             or (old, current) in REVIEWED_PREPARATION_HISTORY.get(relative, ()))

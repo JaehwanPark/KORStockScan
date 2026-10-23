@@ -11,6 +11,32 @@ from src.engine import monitor_snapshot_runtime as runtime
 from src.engine.notify_monitor_snapshot_admin import _build_message, _load_json_line
 
 
+def test_import_under_replay_guard_does_not_create_archive_directories(tmp_path):
+    import subprocess
+
+    target = tmp_path / "absent-data"
+    script = """
+from pathlib import Path
+import sys
+from src.utils import constants
+constants.DATA_DIR = Path(sys.argv[1])
+from src.engine.lifecycle.avg_down_policy_replay import _install_effect_guard
+_install_effect_guard()
+from src.engine import log_archive_service as archive
+assert archive.LOG_ARCHIVE_DIR == constants.DATA_DIR / 'log_archive'
+assert archive.load_monitor_snapshot('missing', '2026-10-23') is None
+assert not constants.DATA_DIR.exists()
+print('read_only_import')
+"""
+    result = subprocess.run(
+        [sys.executable, "-B", "-c", script, str(target)],
+        capture_output=True, text=True, timeout=15,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "read_only_import" in result.stdout
+    assert not target.exists()
+
+
 def _postclose_phase_fixture(tmp_path,monkeypatch):
     from src.engine import sniper_trade_review_report as trades
     from src.engine import sniper_post_sell_feedback as post_sell
@@ -400,9 +426,7 @@ if run_snapshot_once "$OUTPUT_FILE"; then exit 0; else exit $?; fi
 
 def test_monitor_snapshot_roundtrip(tmp_path, monkeypatch):
     snapshot_dir = tmp_path / "monitor_snapshots"
-    snapshot_dir.mkdir(parents=True, exist_ok=True)
     manifest_dir = snapshot_dir / "manifests"
-    manifest_dir.mkdir(parents=True, exist_ok=True)
     monkeypatch.setattr(service, "MONITOR_SNAPSHOT_DIR", snapshot_dir)
     monkeypatch.setattr(service, "MONITOR_SNAPSHOT_MANIFEST_DIR", manifest_dir)
 
@@ -414,6 +438,11 @@ def test_monitor_snapshot_roundtrip(tmp_path, monkeypatch):
     assert loaded is not None
     assert loaded == payload
     assert not list(snapshot_dir.glob(".trade_review_2026-04-06.json.*.tmp"))
+    manifest = service.save_monitor_snapshot_manifest(
+        "2026-04-06", profile="full", snapshots={"trade_review": str(path)},
+    )
+    assert manifest.parent == manifest_dir
+    assert json.loads(manifest.read_text())["snapshot_paths"] == {"trade_review": str(path)}
 
 
 @pytest.mark.parametrize('transactional', [False, True])
@@ -885,7 +914,6 @@ def test_completion_artifact_readers_keep_complete_generation_during_partial_wri
 
 def test_archive_and_replay_daily_log_slice(tmp_path, monkeypatch):
     archive_dir = tmp_path / "log_archive"
-    archive_dir.mkdir(parents=True, exist_ok=True)
     monkeypatch.setattr(service, "LOG_ARCHIVE_DIR", archive_dir)
 
     logs_dir = tmp_path / "logs"
