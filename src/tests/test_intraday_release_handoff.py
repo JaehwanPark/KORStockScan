@@ -2452,7 +2452,10 @@ def test_observer_io_handoff_retains_consumed_index_generation(tmp_path,family,f
 @pytest.mark.parametrize('fault', [None,'missing','dirty','committed_change'])
 @pytest.mark.parametrize('dependency', ['src/engine/lifecycle/broker_cost_allocation.py',
     'src/engine/scalping/initial_quantity_monitor_projection.py',
-    'src/engine/infrastructure/startup_validation_code_context.py'])
+    'src/engine/infrastructure/startup_validation_code_context.py',
+    'src/engine/monitoring/policy_generation_code_handoff.py',
+    'src/engine/sniper_state_handlers.py','src/scanners/scalping_scanner.py',
+    'src/utils/pipeline_event_logger.py'])
 def test_native_buy_cost_handoff_keeps_exact_reviewed_generation(tmp_path,family,fault,dependency):
     test_entry_cost_handoff_keeps_exact_complete_generation(
         tmp_path,family,fault,'current',dependency=dependency)

@@ -308,7 +308,11 @@ def test_late_historical_fixture_uses_exact_original_issuer_plan(tmp_path,monkey
     'REVIEWED_DELAY_RESEARCH_SOURCE_SUCCESSORS', 'REVIEWED_INTEGRATED_RESEARCH_SOURCE_SUCCESSORS',
     'REVIEWED_STARTUP_READONLY_SOURCE_SUCCESSORS', 'REVIEWED_CLEANUP_SOURCE_SUCCESSORS']
 ] + [(family, 'REVIEWED_ENTRY_ROUTE_SOURCE_SUCCESSORS')
-     for family in ('rising_missed', 'holding_vote')])
+     for family in ('rising_missed', 'holding_vote')]
+  + [(family, 'REVIEWED_ARCHIVE_RETENTION_SOURCE_SUCCESSORS')
+     for family in ('entry_cancel_wait', 'holding_vote')]
+  + [(family, review_map) for family in ('rising_missed','holding_vote')
+     for review_map in ('REVIEWED_INTEGRATED_OBSERVATION_SUCCESSORS','REVIEWED_INTEGRATED_CONSUMED_SUCCESSORS')])
 @pytest.mark.parametrize('damage', [None,'unreviewed_old','unreviewed_current','source','contract',
     'fixture_code','plan','report_path','state','missing','authority','receipt'])
 def test_exact_reviewed_successor_preserves_historical_code_and_source(tmp_path, monkeypatch, family, damage, review_map):
@@ -323,7 +327,9 @@ def test_exact_reviewed_successor_preserves_historical_code_and_source(tmp_path,
     contract['code_sha256']=old
     if review_map in {'REVIEWED_INTEGRATED_RESEARCH_SOURCE_SUCCESSORS',
                       'REVIEWED_STARTUP_READONLY_SOURCE_SUCCESSORS', 'REVIEWED_CLEANUP_SOURCE_SUCCESSORS',
-                      'REVIEWED_ENTRY_ROUTE_SOURCE_SUCCESSORS'}:
+                      'REVIEWED_ENTRY_ROUTE_SOURCE_SUCCESSORS',
+                      'REVIEWED_ARCHIVE_RETENTION_SOURCE_SUCCESSORS', 'REVIEWED_INTEGRATED_OBSERVATION_SUCCESSORS',
+                      'REVIEWED_INTEGRATED_CONSUMED_SUCCESSORS'}:
         historical=dict(value,code_sha256=old)
         historical['receipt_sha256']=generation.digest({k:v for k,v in historical.items() if k!='receipt_sha256'})
         historical_path=data/'report/postclose_generation_validation'/(family+'_'+old+'.json')
@@ -534,8 +540,10 @@ def test_post_aux_guard_successor_does_not_transitively_promote_older_reports(tm
     *[(family,review_map) for family in ('rising_missed','holding_vote') for review_map in (
         'REVIEWED_NATIVE_SELECTION_SUCCESSORS','REVIEWED_NATIVE_SELECTION_SOURCE_SUCCESSORS',
         'REVIEWED_NATIVE_SELECTION_CONSUMED_SUCCESSORS','REVIEWED_ENTRY_ROUTE_SOURCE_SUCCESSORS',
-        'REVIEWED_PRE_SUBMIT_CONSUMED_SUCCESSORS')],
+        'REVIEWED_PRE_SUBMIT_CONSUMED_SUCCESSORS','REVIEWED_INTEGRATED_OBSERVATION_SUCCESSORS',
+        'REVIEWED_INTEGRATED_CONSUMED_SUCCESSORS')],
     *[(family,'REVIEWED_QUANTITY_CAPTURE_SUCCESSORS') for family in ('rising_missed','holding_vote')],
+    *[(family,'REVIEWED_ARCHIVE_RETENTION_SOURCE_SUCCESSORS') for family in ('entry_cancel_wait','holding_vote')],
     ('entry_cancel_wait','REVIEWED_BUY_IDENTITY_SUCCESSORS'),
     *[(family,'REVIEWED_ENTRY_RECEIPT_SUCCESSORS') for family in ('entry_cancel_wait','rising_missed','holding_vote')],
 ])
@@ -584,18 +592,23 @@ def test_successor_requires_preserved_prior_fixture_and_independent_current_fixt
         assert result['historical_contract_status']=='unverified'
 
 
-@pytest.mark.parametrize('family', ['rising_missed', 'holding_vote'])
-def test_latest_capability_pair_is_current_and_keeps_original_source(family):
+@pytest.mark.parametrize('family,review_map', [
+    ('rising_missed', 'REVIEWED_INTEGRATED_OBSERVATION_SUCCESSORS'),
+    ('entry_cancel_wait', 'REVIEWED_ARCHIVE_RETENTION_SOURCE_SUCCESSORS'),
+    ('holding_vote', 'REVIEWED_INTEGRATED_OBSERVATION_SUCCESSORS'),
+])
+def test_latest_capability_pair_is_current_and_keeps_original_source(family, review_map):
     from src.engine.monitoring import policy_generation_code_handoff as handoff
-    old, current = handoff.REVIEWED_ENTRY_ROUTE_SOURCE_SUCCESSORS[family]
+    old, current = getattr(handoff, review_map)[family]
     assert current == generation.code_generation(family)
     assert old == {
         'rising_missed': 'b1fb8b69fb938893d36c8b16192bbd0cd5e414f169b8304374d781cc54248ab5',
         'holding_vote': 'b37bdd2ec37e69e281fad273e3b9d07dab8aaf559c5a7841b9d4473141beb9ee',
+        'entry_cancel_wait': '60620f4b8fbe73f3c0506eed8f49c27c031d74a643b68667ca7421c6512d6f57',
     }[family]
 
 
-@pytest.mark.parametrize('family', ['entry_cancel_wait', 'auxiliary'])
+@pytest.mark.parametrize('family', list(validation.PLANS))
 def test_native_verified_family_does_not_require_historical_successor(family, monkeypatch, tmp_path):
     from src.engine.monitoring import policy_generation_code_handoff as handoff
     observed = dict(family=family, status='verified', findings=[],
