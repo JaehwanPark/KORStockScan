@@ -369,6 +369,18 @@ REVIEWED_NATIVE_SELECTION_CONSUMED_SUCCESSORS = {
     for family, pair in REVIEWED_NATIVE_SELECTION_SUCCESSORS.items()
 }
 
+# Direct original source22 reports to the reviewed explicit-entry-route and
+# archived-source reader repairs. Only the shared entry handler changed for
+# rising; holding also changed the archived master-source equality reader.
+# Original reports/fixtures and independent current fixtures remain required.
+# Review: docs/audits/postclose-root-cause-recovery-review-2026-10-19.md.
+REVIEWED_ENTRY_ROUTE_SOURCE_SUCCESSORS = {
+    'rising_missed': ('b1fb8b69fb938893d36c8b16192bbd0cd5e414f169b8304374d781cc54248ab5',
+                      '6d493cf1a74732175bfeb2e27af9c53de44d8a001bc0b1d01296888671da22de'),
+    'holding_vote': ('b37bdd2ec37e69e281fad273e3b9d07dab8aaf559c5a7841b9d4473141beb9ee',
+                     '2e0f07b39199681be1f55a4645e9dcd72438519e955546236a436f9cdee35e36'),
+}
+
 def _historical_fixture(contract, data, family, *, late_report=None):
     """Preserve a prior fixture without using it to certify the successor."""
     reference = contract.get('fixture_receipt')
@@ -502,10 +514,19 @@ def current_fixture_observation(observed, data):
                     or actual_pair == REVIEWED_SHUTDOWN_CONSUMED_SUCCESSORS.get(family)
                     or actual_pair == REVIEWED_NATIVE_SELECTION_SUCCESSORS.get(family)
                     or actual_pair == REVIEWED_NATIVE_SELECTION_SOURCE_SUCCESSORS.get(family)
-                    or actual_pair == REVIEWED_NATIVE_SELECTION_CONSUMED_SUCCESSORS.get(family))
+                    or actual_pair == REVIEWED_NATIVE_SELECTION_CONSUMED_SUCCESSORS.get(family)
+                    or actual_pair == REVIEWED_ENTRY_ROUTE_SOURCE_SUCCESSORS.get(family))
     if reader_match:
         pair = actual_pair
     if not pair or actual_pair != pair:
+        if (family in validation.PLANS and actual_pair[0] != actual_pair[1]
+                and observed.get('status') == 'unverified'
+                and observed.get('findings') == ['policy_generation_unverified']
+                and observed.get('missing_components') == []
+                and observed.get('observation_complete') is True
+                and observed.get('native_validated') is False):
+            return dict(observed, current_fixture_status='unverified',
+                        current_fixture_reason='successor_code_pair_unreviewed')
         return validation.current_fixture_observation(observed, data)
     if (observed.get('status') != 'unverified' or observed.get('findings') != ['policy_generation_unverified']
             or observed.get('missing_components') != [] or observed.get('observation_complete') is not True
