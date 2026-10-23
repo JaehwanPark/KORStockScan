@@ -23,6 +23,48 @@ def test_resident_native_projection_matches_legacy_stream_without_raw_read(tmp_p
     assert storage.logical_value(old)==storage.logical_value(new)
 
 
+@pytest.mark.parametrize('fault', [None, 'middle_loss', 'last_loss', 'all_loss', 'duplicate',
+    'wrong_generation', 'missing_close', 'admission_loss', 'corrupt_quote', 'native_source_gap'])
+def test_continuous_observation_terminal_reconciles_every_attempt_in_both_readers(tmp_path, fault):
+    from src.engine.lifecycle.research_json_stream import resident_completed_rows
+    from src.engine.scalping import universal_trailing_replay as replay
+    q = quote(1, DAY+'T09:00:01')
+    events = [dict(stage='scalp_trailing_input_transition', fields=dict(
+        universal_trailing_quote=json.dumps(replay.encode_quote(q)),
+        event_sequence=str(i), position_key='record:7', observation_buy_fill_identity='a'*64,
+        observation_stream_contract=replay.OBSERVATION_STREAM,
+        observation_telemetry_gap='False')) for i in range(1,301)]
+    close = dict(contract=replay.OBSERVATION_STREAM, position_key='record:7',
+        buy_fill_identity='a'*64, expected_count=300, source_gap=False)
+    if fault == 'middle_loss': del events[100]
+    if fault == 'last_loss': events.pop()
+    if fault == 'all_loss': events.clear()
+    if fault == 'duplicate': events[100] = events[99]
+    if fault == 'wrong_generation': close['buy_fill_identity'] = 'b'*64
+    if fault == 'admission_loss': close['source_gap'] = True
+    if fault == 'corrupt_quote': events[100]['fields']['universal_trailing_quote'] = '{broken'
+    if fault == 'native_source_gap': events[100]['fields']['universal_trailing_quote'] = json.dumps(replay.encode_quote(dict(kind='SOURCE_GAP',reason='bid_identity_missing')))
+    if fault != 'missing_close':
+        events.append(dict(stage='sell_completed',fields=dict(trailing_observation_close=json.dumps(close))))
+    row = dict(id=7, status='COMPLETED', timeline=events,
+        buy_fill_legs=[dict(at=DAY+'T09:00:00',qty=10,amount_krw=1000)])
+    native_positions, _ = replay.completed_sources([row])
+    assert bool(native_positions[0].get('source_gap')) is bool(fault)
+    path = tmp_path/'legacy.json'
+    path.write_text(json.dumps(dict(sections=dict(completed_trade_projection=[row]))))
+    old = list(completed_rows(path,tmp_path/'old'))
+    new = list(resident_completed_rows([row],tmp_path/'new'))
+    assert storage.logical_value(old) == storage.logical_value(new)
+    body, tree = new[0]
+    assert bool(body.get('trailing_observation_source_gap')) is bool(fault)
+    # Partitioned assembly carries the gap even after timeline extraction.
+    body['buy_fill_legs'] = row['buy_fill_legs']
+    positions, _ = replay.completed_sources([body])
+    assert bool(positions[0].get('source_gap')) is bool(fault)
+    if not fault:
+        assert list(storage.iter_tree(tmp_path/'new',tree)) == [q]*300
+
+
 def test_stream_keeps_every_timeline_and_fill_without_large_display_fields(tmp_path):
     event={'stage':'scalp_trailing_input_transition','fields':{'universal_trailing_quote':json.dumps(quote(1,DAY+'T09:00:01'))}}
     trade={'id':'main:1','strategy':'SCALPING','buy_filled_qty':10,'buy_fill_amount':1000,'irrelevant':'x'*(5*1024*1024),'buy_fill_legs':[{'at':DAY+'T09:00:00','qty':10,'amount_krw':1000}],

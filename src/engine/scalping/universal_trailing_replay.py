@@ -8,6 +8,10 @@ from collections import Counter
 from dataclasses import dataclass, asdict
 from datetime import date, datetime
 import math
+import base64
+import hashlib
+import json
+import zlib
 from zoneinfo import ZoneInfo
 
 from src.trading.market.session_contract import resolve_market_session
@@ -25,6 +29,110 @@ MAX_POSITIONS = 20000
 SLIPPAGE_BPS = (0, 30, 100)
 MAX_QUOTE_ENVELOPE_BYTES = 12 * 1024
 WS_PROJECTION_SCHEMA = 'main_m1_route_touch_tape_projection_v1'
+QUOTE_STORAGE_CODEC = 'zlib_json_sha256_v1'
+OBSERVATION_STREAM = 'continuous_bounded_queue_v1'
+
+
+def encode_quote(source):
+    """Lossless storage only; the original semantic quote hash is unchanged."""
+    raw = json.dumps(source, sort_keys=True, separators=(',', ':'), ensure_ascii=True,
+                     allow_nan=False).encode('ascii')
+    if len(raw) > MAX_QUOTE_ENVELOPE_BYTES:
+        raise ValueError('trailing_quote_envelope_unbounded')
+    return dict(codec=QUOTE_STORAGE_CODEC, raw_bytes=len(raw),
+                raw_sha256=hashlib.sha256(raw).hexdigest(),
+                payload=base64.b64encode(zlib.compress(raw, 1)).decode('ascii'))
+
+
+def decode_quote(value):
+    """Read legacy JSON/dicts and bounded compressed quotes with byte proof."""
+    if isinstance(value, str):
+        if len(value) > MAX_QUOTE_ENVELOPE_BYTES * 2:
+            raise ValueError('trailing_quote_encoding_unbounded')
+        value = json.loads(value)
+    if not isinstance(value, dict) or 'codec' not in value:
+        return value
+    if (value.get('codec') != QUOTE_STORAGE_CODEC
+            or type(value.get('raw_bytes')) is not int
+            or not 0 < value['raw_bytes'] <= MAX_QUOTE_ENVELOPE_BYTES
+            or not isinstance(value.get('payload'), str)
+            or len(value['payload']) > MAX_QUOTE_ENVELOPE_BYTES * 2):
+        raise ValueError('trailing_quote_encoding_invalid')
+    try:
+        decoder = zlib.decompressobj()
+        raw = decoder.decompress(base64.b64decode(value['payload'], validate=True),
+                                 value['raw_bytes'] + 1)
+        if (len(raw) != value['raw_bytes'] or not decoder.eof
+                or decoder.unused_data or decoder.unconsumed_tail
+                or hashlib.sha256(raw).hexdigest() != value.get('raw_sha256')):
+            raise ValueError('trailing_quote_encoding_integrity')
+        result = json.loads(raw)
+        if not isinstance(result, dict):
+            raise ValueError('trailing_quote_encoding_object_required')
+        return result
+    except (zlib.error, UnicodeError) as exc:
+        raise ValueError('trailing_quote_encoding_invalid') from exc
+
+
+class ObservationCoverage:
+    """Constant-memory admission-to-terminal proof, including a lost last row.
+
+    Legacy capped records keep their original semantics. A new stream requires
+    every attempted sequence and its matching native close watermark; enqueue
+    alone cannot prove append. Neither this proof nor a quote grants a fill.
+    """
+    def __init__(self):
+        self.count = 0
+        self.identity = None
+        self.close = None
+        self.required = False
+        self.invalid = False
+
+    def observe(self, event):
+        fields = event.get('fields') or {}
+        close = fields.get('trailing_observation_close')
+        if close is not None and event.get('stage') == 'sell_completed':
+            self.required = True
+            if isinstance(close, str):
+                try:close = json.loads(close) if len(close) <= 2048 else None
+                except ValueError:close = None
+            if not isinstance(close, dict) or close.get('contract') != OBSERVATION_STREAM:
+                self.invalid = True
+            elif self.close is not None and self.close != close:
+                self.invalid = True
+            else:
+                self.close = close
+        if (event.get('stage') != 'scalp_trailing_input_transition'
+                or fields.get('observation_stream_contract') != OBSERVATION_STREAM):
+            return
+        self.required = True
+        self.count += 1
+        identity = (fields.get('position_key'), fields.get('observation_buy_fill_identity'))
+        if self.identity is None:
+            self.identity = identity
+        sequence = fields.get('event_sequence')
+        if isinstance(sequence, str) and sequence.isascii() and sequence.isdigit() and len(sequence) <= 20:
+            sequence = int(sequence)
+        self.invalid |= (identity != self.identity or not all(identity)
+                         or type(sequence) is not int or sequence != self.count
+                         or fields.get('observation_telemetry_gap') not in (False, 'False', 'false'))
+
+    def gap(self):
+        if not self.required:
+            return None
+        close = self.close or {}
+        if (self.invalid or not self.close or self.count == 0
+                or type(close.get('expected_count')) is not int
+                or close['expected_count'] != self.count
+                or close.get('source_gap') is not False
+                or (close.get('position_key'), close.get('buy_fill_identity')) != self.identity):
+            return 'trailing_observation_stream_incomplete'
+        return None
+
+    def quote(self, source):
+        if self.required and (not isinstance(source, dict)
+                or source.get('kind') != 'QUOTE' or source.get('coverage_complete') is not True):
+            self.invalid = True
 
 
 def research_entry_window_start(consumed_dates):
@@ -217,16 +325,20 @@ def completed_sources(trades):
         if not identity:
             raise ValueError('universal_completed_population_identity_missing')
         events, entry_context, entry_pin = [], trade.get('trailing_entry_context'), trade.get('trailing_situation_pin')
+        coverage, encoding_gap = ObservationCoverage(), None
         for event in trade.get('timeline') or []:
-            if not isinstance(event, dict) or event.get('stage') != 'scalp_trailing_input_transition':
+            if not isinstance(event, dict):
+                continue
+            coverage.observe(event)
+            if event.get('stage') != 'scalp_trailing_input_transition':
                 continue
             source = (event.get('fields') or {}).get('universal_trailing_quote')
-            if isinstance(source, str):
-                import json
-                try:
-                    source = json.loads(source)
-                except ValueError:
-                    source = None
+            try:
+                source = decode_quote(source)
+            except (ValueError, TypeError):
+                source = None
+                encoding_gap = 'trailing_quote_encoding_invalid'
+            coverage.quote(source)
             if isinstance(source, dict) and source.get('kind') == 'QUOTE':
                 events.append(source)
                 for key in ('trailing_entry_context', 'trailing_situation_pin'):
@@ -299,6 +411,9 @@ def completed_sources(trades):
             positions[-1].update(source_gap='completed_buy_fill_ledger_missing',
                 completed_buy_filled_qty=trade.get('buy_filled_qty'),
                 completed_buy_fill_amount=trade.get('buy_fill_amount'))
+        observation_gap = trade.get('trailing_observation_source_gap') or coverage.gap() or encoding_gap
+        if observation_gap:
+            positions[-1].setdefault('source_gap', observation_gap)
         paths[identity] = events
     return positions, paths
 

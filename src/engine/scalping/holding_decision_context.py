@@ -39,6 +39,7 @@ from src.engine.scalping.market_data_enrichment import (
     rest_signed_tape_tick_freshness,
 )
 from src.engine.scalping.multi_timeframe_context import promotion_activation_state
+from src.engine.scalping.holding_vote_exit_models import cost_known_epoch
 
 SCHEMA = "holding_decision_context_v1"
 KST = ZoneInfo("Asia/Seoul")
@@ -285,10 +286,11 @@ def _observed_exit_costs(position, ws, *, levels, fresh, average, quantity, now)
     cost = position.get("_trailing_entry_cost_model")
     if not fresh or average <= 0 or quantity <= 0 or type(cost) is not dict:
         return None
-    rate, known = cost.get("sell_cost_rate"), cost.get("known_at")
+    rate = cost.get("sell_cost_rate")
+    known = cost_known_epoch(cost.get("known_at"))
     sha = cost.get("source_sha256")
     if (type(rate) not in (int, float) or not math.isfinite(rate) or not 0 <= rate < .05
-            or type(known) not in (int, float) or not math.isfinite(known) or not 0 < known <= now
+            or known is None or known > now
             or type(cost.get("buy_cost_krw")) not in (int, float) or cost["buy_cost_krw"] != 0
             or cost.get("actual_broker_cost") is not False
             or cost.get("allocation") != "frozen_configured_round_trip_rate_on_sell_model_only"

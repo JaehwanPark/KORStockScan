@@ -1387,3 +1387,23 @@ def test_main_preparation_independently_reviews_native_buy_cost(damage,relative)
     if damage=='unreviewed':new='0'*64
     elif damage=='wrong_origin':old='0'*64
     assert C.reviewed_preparation_pair(relative,old,new) is (damage is None)
+
+
+@pytest.mark.parametrize('relative', ['src/engine/automation/main_trailing_source_assembler.py',
+ 'src/engine/automation/pre_submit_delay_research_review.py',
+ 'src/engine/kiwoom_sniper_v2.py',
+ 'src/engine/lifecycle/research_json_stream.py',
+ 'src/engine/scalping/holding_decision_context.py',
+ 'src/engine/scalping/trailing_threshold_policy.py',
+ 'src/engine/scalping/universal_trailing_replay.py',
+ 'src/engine/sniper_execution_receipts.py',
+ 'src/engine/sniper_state_handlers.py',
+ 'src/utils/pipeline_event_logger.py',
+ 'src/engine/monitoring/policy_generation_code_handoff.py'])
+@pytest.mark.parametrize('damage', [None,'unreviewed','wrong_origin'])
+def test_main_preparation_reviews_continuous_holding_stream(relative,damage):
+    old=hashlib.sha256(subprocess.check_output(['git','-C',str(ROOT),'show','9e820cbf8:'+relative])).hexdigest()
+    new=hashlib.sha256((ROOT/relative).read_bytes()).hexdigest()
+    if damage=='unreviewed':new='0'*64
+    elif damage=='wrong_origin':old='0'*64
+    assert C.reviewed_preparation_pair(relative,old,new) is (damage is None)

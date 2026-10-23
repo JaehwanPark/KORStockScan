@@ -883,10 +883,10 @@ def _timing_opportunities(events):
                     and fields.get("buy_owner_id") == "main_scalping:" + rid):
                 orders.setdefault(rid, set()).add(str(fields.get("order_no")))
         elif stage == "scalp_trailing_input_transition":
-            from src.engine.scalping.universal_trailing_replay import quote_source_digest
+            from src.engine.scalping.universal_trailing_replay import quote_source_digest, decode_quote
             try:
                 q = fields.get("universal_trailing_quote")
-                q = json.loads(q) if isinstance(q, str) else q
+                q = decode_quote(q)
                 if not isinstance(q, dict) or q.get("kind") != "QUOTE":
                     continue
                 known, event = initial.number(q.get("known_at")), initial.number(q.get("event_at"))

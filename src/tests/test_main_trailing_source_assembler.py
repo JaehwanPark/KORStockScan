@@ -268,10 +268,21 @@ def _read_trailing_source(root, known):
         db.close()
 
 
-def test_runtime_plan_serializer_native_join_and_observed_forward_path(tmp_path,monkeypatch):
+@pytest.mark.parametrize('compressed', [False, True])
+def test_runtime_plan_serializer_native_join_and_observed_forward_path(tmp_path,monkeypatch,compressed):
     root=tmp_path/'source'
     receipt,known,native=_issued_trailing_receipt(root,monkeypatch)
     before=native.read_bytes()
+    if compressed:
+        from src.utils import pipeline_event_logger as logger
+        from src.engine.scalping.universal_trailing_replay import encode_quote
+        original = logger.emit_pipeline_event
+        def compressed_emit(*args, **kwargs):
+            fields = kwargs.get('fields') or {}
+            if 'universal_trailing_quote' in fields:
+                fields['universal_trailing_quote'] = json.dumps(encode_quote(json.loads(fields['universal_trailing_quote'])))
+            return original(*args, **kwargs)
+        monkeypatch.setattr(logger, 'emit_pipeline_event', compressed_emit)
     _emit_trailing_source(root,monkeypatch,receipt,known)
     rows,gaps=_read_trailing_source(root,known)
     assert len(rows)==1

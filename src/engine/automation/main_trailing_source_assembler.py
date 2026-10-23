@@ -18,7 +18,7 @@ from src.engine.lifecycle.holding_window_generation import byte_generation, capt
 from src.engine.lifecycle.research_input_budget import Claim
 from src.engine.scalping.pre_submit_delay_initial_policy import digest, _atomic, number
 from src.engine.scalping.universal_trailing_replay import (
-    completed_sources, research_entry_window_start, apply_research_entry_window,
+    completed_sources, research_entry_window_start, apply_research_entry_window, decode_quote,
 )
 from src.engine.scalping.micro_reversion.symbol_master import VerifiedSymbolMaster
 
@@ -552,7 +552,7 @@ def _entry_plan_index(root, days, sources, gaps, db):
                         plan=fields.get('trailing_entry_plan_receipt_sha256')
                         if not isinstance(plan,str) or len(plan)!=64: continue
                         quote=fields.get('universal_trailing_quote')
-                        if isinstance(quote,str): quote=json.loads(quote)
+                        quote=decode_quote(quote)
                         if (not isinstance(quote,dict) or quote.get('kind')!='QUOTE'
                                 or quote.get('source_sha256')!=quote_source_digest(quote)
                                 or type(quote.get('sequence')) is not int
@@ -781,7 +781,8 @@ def _trace_rows(root, days, sources, gaps, exclude=lambda *args:None,db=None,as_
                     native_clock=native_clock.timestamp()
                 except (ValueError,TypeError):
                     native_clock=None;gaps['native_signal_clock_missing']+=1
-                source_quote=event.get('universal_trailing_quote')
+                try:source_quote=decode_quote(event.get('universal_trailing_quote'))
+                except (ValueError,TypeError):source_quote=None
                 path_events=[source_quote] if isinstance(source_quote,dict) else []
                 position=dict(position_key='cf:'+projected['opportunity_id'],evidence_kind='enter_pass_opportunity_cf',
                     owner='main',automatic_management_allowed=True,symbol=projected['symbol'],entry_at=clock,

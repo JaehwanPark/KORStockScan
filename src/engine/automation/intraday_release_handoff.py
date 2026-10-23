@@ -5015,6 +5015,47 @@ REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
     for name, current in REVIEWED_NATIVE_BUY_COST_HASHES.items()}}
 
 
+# Reviewed continuous holding observation producer and terminal consumer.
+# Preserve the actually consumed 9e820 profile above as an independent generation.
+REVIEWED_HOLDING_STREAM_HASHES = {'src/engine/automation/main_trailing_source_assembler.py': '1aa864f4fd5db4f3ef4d14b6983617c9ac41cc208e792497cf34134b4e99bc52',
+ 'src/engine/automation/pre_submit_delay_research_review.py': '79fd3246300d7636c2e8d0c4ba33cbd2d26cf6cbc9a431b1d87f02e0725076d0',
+ 'src/engine/infrastructure/startup_validation_code_context.py': '5a881b096932962604f6aab3a995378d0246ea30e7cb3c17e3ef7e3b93b2288d',
+ 'src/engine/kiwoom_sniper_v2.py': 'bbbe478a566caa33fe2fcf8889d3e9c05dd15409e10f70eb97caaef76595e365',
+ 'src/engine/lifecycle/research_json_stream.py': 'cfaf531c495730a6ae2f159601153749f8dc53ab297576250e03de61decf796b',
+ 'src/engine/monitoring/policy_generation_code_handoff.py': '1a572a81032cd49121e24e2e4925d91d922d9697a65c65db0f473873b656c5cc',
+ 'src/engine/scalping/holding_decision_context.py': 'afbcc348707d87032e8dcdc01c2c84c7712fa69e8cbe387342c3708fdd09e49b',
+ 'src/engine/scalping/trailing_threshold_policy.py': 'ff2211f487c9475494e711f26cb1dae0ba11b90b40f6e6790e10c74483a3260b',
+ 'src/engine/scalping/universal_trailing_replay.py': '2de2182dcf57d4d3f850b57e6583ad3a48eba4618ebf254525970a2da668850a',
+ 'src/engine/sniper_execution_receipts.py': '83e2d110d5219698c3caf502fe96beb3f24018399706b574076902f63c36647f',
+ 'src/engine/sniper_state_handlers.py': '0fe0c01839a6186b0ef45aa8112075d13220ebc64f299656164aa007a84b1541',
+ 'src/utils/pipeline_event_logger.py': '402e7391e0083ee87fdcaa248e9a46aaabd960d8b967a3df419d67b8b735b624'}
+REVIEWED_HOLDING_STREAM_PREVIOUS = {'src/engine/automation/main_trailing_source_assembler.py': 'b951b49987a039de6b9746f40ae9f3190facb4c42dd28265a1585d02c52ef413',
+ 'src/engine/automation/pre_submit_delay_research_review.py': '7dc2c312ce3fe14d5f3343d668e22d90f083a214e5ed25144f446e26f6dec8d3',
+ 'src/engine/infrastructure/startup_validation_code_context.py': '94d6a8f4d3e5266523512f77fc05b706c0d26b0a28bf3bebb86dc2e863853337',
+ 'src/engine/kiwoom_sniper_v2.py': '02ecf7b4a55042fbcd2a7b4f59bf8602bed6020730f0a8bb326b41d5d6418866',
+ 'src/engine/lifecycle/research_json_stream.py': '8fd211dc5409ee6a5bdd619bef772255c07687e921b075d473f50f70303a6201',
+ 'src/engine/monitoring/policy_generation_code_handoff.py': 'b14d8aaf06d7414bcbe6bdb87ddfc685f2c3765db15f8a5f50d93f3e5eeaf444',
+ 'src/engine/scalping/holding_decision_context.py': '5d7577896850988b6419996a76db24344f7a612c59ecac339331ca2e841607d2',
+ 'src/engine/scalping/trailing_threshold_policy.py': 'ce1171456cba2374a001ea31d1cda60a4ee2593e4a5c7fca6426c6ed37b4ef1a',
+ 'src/engine/scalping/universal_trailing_replay.py': '70055c43944d7dac085826c416fd6fffb42bd0a38bde96e928c5ed5b550a4b4f',
+ 'src/engine/sniper_execution_receipts.py': 'f7210ea376fcd04d19e1592d72d0bc4a8261b799422e6161e511a338052eebb1',
+ 'src/engine/sniper_state_handlers.py': '6a8c1ad86951d2720a91175cda4565d6202e9ff63b0b220b6613166760c84f66',
+ 'src/utils/pipeline_event_logger.py': '67fa82fe4f022123a529f13efa14a0b13a20ef1975210c45b2a5deae3b675b3d'}
+REVIEWED_HOLDING_STREAM_PROFILE = {**REVIEWED_NATIVE_BUY_COST_PROFILE, **REVIEWED_HOLDING_STREAM_HASHES}
+REVIEWED_HOLDING_STREAM_VARIANTS = {
+    (key[0], REVIEWED_HOLDING_STREAM_HASHES.get(key[0], key[1])): {
+        **value, 'dependencies': {**value['dependencies'], **REVIEWED_HOLDING_STREAM_HASHES},
+        'contract_extensions': {origin: {name: REVIEWED_HOLDING_STREAM_HASHES.get(os.path.normpath(name), sha)
+            for name, sha in paths.items()} for origin, paths in value['contract_extensions'].items()},
+    } for key, value in REVIEWED_NATIVE_BUY_COST_VARIANTS.items()
+}
+REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
+    name: REVIEWED_ENTRY_COST_PAIRS.get(name, ()) + tuple((origin, current) for origin in
+        {REVIEWED_HOLDING_STREAM_PREVIOUS[name]} |
+        {old for pair in REVIEWED_ENTRY_COST_PAIRS.get(name, ()) for old in pair})
+    for name, current in REVIEWED_HOLDING_STREAM_HASHES.items()}}
+
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -5195,14 +5236,19 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
                         'src/engine/monitoring/policy_generation_code_handoff.py'})
     native_buy_cost = any((root / name).is_file() and hashlib.sha256(candidate_bytes(name)).hexdigest() == sha
         for name, sha in REVIEWED_NATIVE_BUY_COST_HASHES.items())
-    prepared_hashes = (REVIEWED_NATIVE_BUY_COST_PROFILE if native_buy_cost else
+    holding_stream = any((root / name).is_file() and hashlib.sha256(candidate_bytes(name)).hexdigest() == sha
+        for name, sha in REVIEWED_HOLDING_STREAM_HASHES.items()
+        if sha != REVIEWED_HOLDING_STREAM_PREVIOUS[name])
+    prepared_hashes = (REVIEWED_HOLDING_STREAM_PROFILE if holding_stream else
+        REVIEWED_NATIVE_BUY_COST_PROFILE if native_buy_cost else
         REVIEWED_PRE_SUBMIT_ENTRY_COST_HASHES if pre_submit_present else
         REVIEWED_OBSERVER_IO_ENTRY_COST_HASHES if observer_io_present else
         REVIEWED_ENTRY_COST_DEPLOYED_SENTINEL_HASHES if deployed_sentinel else
         REVIEWED_ENTRY_COST_HASHES if sentinel_scope_present else
         REVIEWED_PRE_FINALIZATION_HASHES if consumed_finalization else
         REVIEWED_NATIVE_PREOPEN_HASHES if native_preopen else REVIEWED_ENTRY_COST_PRE_SENTINEL_SCOPE_HASHES)
-    prepared_variants = (REVIEWED_NATIVE_BUY_COST_VARIANTS if native_buy_cost else
+    prepared_variants = (REVIEWED_HOLDING_STREAM_VARIANTS if holding_stream else
+        REVIEWED_NATIVE_BUY_COST_VARIANTS if native_buy_cost else
         REVIEWED_PRE_SUBMIT_DEPENDENCY_VARIANTS if pre_submit_present else
         REVIEWED_OBSERVER_IO_DEPENDENCY_VARIANTS if observer_io_present else
         REVIEWED_ENTRY_COST_DEPLOYED_SENTINEL_VARIANTS if deployed_sentinel else

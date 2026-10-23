@@ -394,7 +394,6 @@ from src.engine.scalping.trailing_operational_replay import (
 )
 from src.engine.scalping.trailing_threshold_policy import (
     GRID_VERSION as SCALP_TRAILING_GRID_VERSION,
-    MAX_POSITION_SAMPLES as SCALP_TRAILING_MAX_POSITION_SAMPLES,
     START_GRID_PCT as SCALP_TRAILING_START_GRID_PCT,
     closed_exit_gap as scalp_trailing_closed_exit_gap,
     market_type_at as scalp_trailing_market_type_at,
@@ -20267,6 +20266,9 @@ def _log_holding_pipeline(stock, code, stage, **fields):
     )
     observe_candidate_transition_safe(stock, code, stage, fields)
     record_id = stock.get("id")
+    if stage == 'scalp_trailing_input_transition':
+        from src.utils.pipeline_event_logger import enqueue_trailing_observation
+        return enqueue_trailing_observation(stock.get('name'), code, record_id, fields)
     return emit_pipeline_event(
         "HOLDING_PIPELINE",
         stock.get("name"),
@@ -29878,6 +29880,7 @@ def _observe_scalp_trailing_input_transition(
         if previous_key != position_key:
             previous_count = 0
             stock["scalp_trailing_observation_coverage_exhausted"] = False
+            stock.pop('scalp_trailing_observation_admission_failure', None)
             if stock.get("scalp_trailing_observation_source_gap_position_key") != position_key:
                 stock["scalp_trailing_observation_source_gap"] = False
             stock["scalp_trailing_grid_first_arm"] = {}
@@ -29893,15 +29896,16 @@ def _observe_scalp_trailing_input_transition(
             if candidate.triggered and key not in first_triggers:
                 first_triggers[key] = float(now_ts)
                 new_triggers.append(key)
-        if previous_count >= SCALP_TRAILING_MAX_POSITION_SAMPLES:
-            if stock.get("scalp_trailing_observation_coverage_exhausted"):
-                return
-            stock["scalp_trailing_observation_coverage_exhausted"] = True
-            coverage_exhausted = True
-            sequence = previous_count + 1
-        else:
-            coverage_exhausted = False
-            sequence = previous_count + 1
+        from src.engine.scalping.universal_trailing_replay import OBSERVATION_STREAM
+        # Bound pending work, never the lifetime of a held position. Legacy
+        # exhaustion remains a gap for that position, not a reason to stop.
+        if stock.get('scalp_trailing_observation_coverage_exhausted'):
+            stock['scalp_trailing_observation_source_gap'] = True
+        coverage_exhausted = False
+        sequence = previous_count + 1
+        stock['scalp_trailing_observation_stream_contract'] = OBSERVATION_STREAM
+        if previous_key != position_key or not stock.get('scalp_trailing_observation_buy_fill_identity'):
+            stock['scalp_trailing_observation_buy_fill_identity'] = holding_generation
         stock["scalp_trailing_observation_sequence"] = sequence
         stock["scalp_trailing_grid_last_logged_at"] = now_ts
         stock["scalp_trailing_grid_max_gap_since_event"] = 0.0
@@ -29958,11 +29962,11 @@ def _observe_scalp_trailing_input_transition(
             or stock.get('manual_control_auto_open_loss_blocked')
             or stock.get('manual_control_auto_hard_stop_blocked')))
     try:
-        _log_holding_pipeline(
+        append_result = _log_holding_pipeline(
             stock,
             code,
             "scalp_trailing_input_transition",
-            universal_trailing_quote=json.dumps(universal_quote, sort_keys=True, separators=(',', ':')),
+            universal_trailing_quote=universal_quote,
             trailing_entry_plan_receipt_sha256=stock.get('_trailing_entry_plan_receipt_sha256'),
             trailing_entry_plan_holding_link=json.dumps(trailing_link, sort_keys=True, separators=(',', ':')),
             trailing_entry_context=json.dumps(stock.get('trailing_entry_context'), sort_keys=True, separators=(',', ':')),
@@ -29976,7 +29980,9 @@ def _observe_scalp_trailing_input_transition(
             observation_telemetry_gap=bool(
                 stock.get("scalp_trailing_observation_source_gap")
             ),
-            observation_max_samples=SCALP_TRAILING_MAX_POSITION_SAMPLES,
+            observation_admission_failure=stock.get('scalp_trailing_observation_admission_failure'),
+            observation_stream_contract=OBSERVATION_STREAM,
+            observation_buy_fill_identity=stock.get('scalp_trailing_observation_buy_fill_identity'),
             evaluation_at_epoch=now_ts,
             tuning_market_type=market_type or "-",
             tuning_exit_allowed_by_clock=exit_allowed_by_clock,
@@ -30150,6 +30156,16 @@ def _observe_scalp_trailing_input_transition(
             actual_order_submitted=False,
             runtime_effect=False,
         )
+        if not (append_result is True or (isinstance(append_result, dict)
+                and (append_result.get('status') == 'queued'
+                     or append_result.get('structured_append_succeeded') is True))):
+            # Expected backpressure is retained in the next row/terminal and
+            # queue counters; never perform synchronous fallback/log I/O here.
+            stock['scalp_trailing_observation_source_gap'] = True
+            stock['scalp_trailing_observation_source_gap_position_key'] = position_key
+            stock['scalp_trailing_observation_admission_failure'] = (
+                str(append_result.get('reason') or 'append_unconfirmed')[:96]
+                if isinstance(append_result, dict) else 'append_unconfirmed')
     except Exception as exc:
         stock["scalp_trailing_observation_source_gap"] = True
         stock["scalp_trailing_observation_source_gap_position_key"] = position_key

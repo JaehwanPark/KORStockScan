@@ -10,6 +10,7 @@ from pathlib import Path
 from contextlib import nullcontext, contextmanager
 from .research_input_budget import Claim
 from . import research_storage as storage
+from src.engine.scalping.universal_trailing_replay import decode_quote, ObservationCoverage
 
 
 @contextmanager
@@ -37,7 +38,7 @@ def hashed_text_source(path):
 TRADE_FIELDS=frozenset(('id','record_id','strategy','stock_code','code','status',
     'main_automatic_management_allowed','first_buy_at_epoch','buy_fill_quantity','buy_filled_qty','buy_fill_amount',
     'trailing_replay_cost_model','actual_cost_reconciliation','entry_quote_route','entry_quote_item',
-    'holding_ai_required','holding_vote_source','holding_ai_policy_sha256','trailing_entry_context','trailing_situation_pin',
+    'trailing_observation_source_gap','holding_ai_required','holding_vote_source','holding_ai_policy_sha256','trailing_entry_context','trailing_situation_pin',
     'rec_date','completion_observed_date','entry_mode','terminal_population_scope',
     'prior_entry_snapshot_receipt','prior_fill_snapshot_receipts','sell_quantity_conserved',
     'terminal_profit_rate_reconciled','realized_pnl_krw_source','realized_pnl_krw',
@@ -58,6 +59,7 @@ def resident_completed_rows(trades,output_root):
         if not isinstance(original,dict):
             raise ValueError('research_native_completed_row_invalid')
         body={};quotes=None;signals=[];signal_bytes=0
+        coverage=ObservationCoverage()
         def bounded(value,limit):
             try:
                 raw=storage.encoded(value)
@@ -88,6 +90,7 @@ def resident_completed_rows(trades,output_root):
                             continue
                         if not isinstance(event,dict):
                             raise ValueError('research_legacy_timeline_invalid')
+                        coverage.observe(event)
                         if event.get('stage')=='holding_path_signal_snapshot':
                             signal=compact_signal(event);signal_bytes+=len(storage.encoded(signal))
                             if signal_bytes<=1024*1024:signals.append(signal)
@@ -95,7 +98,11 @@ def resident_completed_rows(trades,output_root):
                                 signals.clear();body['holding_path_projection_gap']='signal_projection_capacity_exceeded'
                         if event.get('stage')!='scalp_trailing_input_transition':continue
                         fields=event.get('fields') or {};quote=fields.get('universal_trailing_quote')
-                        if isinstance(quote,str):quote=json.loads(quote)
+                        try:quote=decode_quote(quote)
+                        except (ValueError,TypeError):
+                            body['trailing_observation_source_gap']='trailing_quote_encoding_invalid'
+                            quote=None
+                        coverage.quote(quote)
                         if isinstance(quote,dict) and quote.get('kind')=='QUOTE':
                             if body.get('holding_vote_source') is None:
                                 body['holding_vote_source']=quote.get('holding_vote_source')
@@ -110,6 +117,7 @@ def resident_completed_rows(trades,output_root):
                     (bounded(leg,storage.RECORD_BYTES) for leg in value))
             elif key in TRADE_FIELDS:
                 body[key]=bounded(value,storage.RECORD_BYTES)
+        if coverage.gap():body['trailing_observation_source_gap']=coverage.gap()
         body['holding_path_signal_snapshots_ref']=storage.write_tree(output_root,signals)
         yield body,quotes or storage.write_tree(output_root,[])
 
@@ -306,6 +314,7 @@ def completed_rows(path,output_root,*,expected_generation=None):
     """Yield original trade metadata and a separate complete quote path ref."""
     def trade(reader):
         body={};reference=None
+        coverage=ObservationCoverage()
         signals=[];signal_bytes=0
         def bounded(r,limit):
             try:return r.value(limit)
@@ -325,6 +334,7 @@ def completed_rows(path,output_root,*,expected_generation=None):
                             yield dict(kind='SOURCE_GAP',known_at=None,reason='normalized_event_unbounded')
                             continue
                         if not isinstance(event,dict):raise ValueError('research_legacy_timeline_invalid')
+                        coverage.observe(event)
                         if event.get('stage')=='holding_path_signal_snapshot':
                             from src.engine.scalping.holding_path_vote_replay import compact_signal
                             signal=compact_signal(event)
@@ -336,7 +346,11 @@ def completed_rows(path,output_root,*,expected_generation=None):
                                 body['holding_path_projection_gap']='signal_projection_capacity_exceeded'
                         if event.get('stage')!='scalp_trailing_input_transition':continue
                         fields=event.get('fields') or {};quote=fields.get('universal_trailing_quote')
-                        if isinstance(quote,str):quote=json.loads(quote)
+                        try:quote=decode_quote(quote)
+                        except (ValueError,TypeError):
+                            body['trailing_observation_source_gap']='trailing_quote_encoding_invalid'
+                            quote=None
+                        coverage.quote(quote)
                         if isinstance(quote,dict) and quote.get('kind')=='QUOTE':
                             if body.get('holding_vote_source') is None:body['holding_vote_source']=quote.get('holding_vote_source')
                             yield quote
@@ -354,6 +368,7 @@ def completed_rows(path,output_root,*,expected_generation=None):
             else:r.skip()
             return iter(())
         for _ in reader.fields(field):pass
+        if coverage.gap():body['trailing_observation_source_gap']=coverage.gap()
         body['holding_path_signal_snapshots_ref']=storage.write_tree(output_root,signals)
         return body,reference or storage.write_tree(output_root,[])
     import gzip

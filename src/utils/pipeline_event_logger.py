@@ -63,7 +63,7 @@ class BoundedObservationQueue:
 
     def submit(self, callback, *args, **kwargs):
         category = kwargs.pop('observation_category', 'default')
-        if category not in {'default', 'pre_submit_delay', 'initial_quantity', 'main_stop'}:
+        if category not in {'default', 'pre_submit_delay', 'initial_quantity', 'main_stop', 'trailing'}:
             return self._unavailable('observation_category_invalid')
         try:
             # Copy at admission, never retain a live stock or an AI payload.
@@ -88,7 +88,7 @@ class BoundedObservationQueue:
                 or self._category_bytes.get(category, 0) + size > self.max_bytes // 4
             ):
                 return self._unavailable('observation_category_budget_exceeded')
-            if category in {'initial_quantity','main_stop'} and (
+            if category in {'initial_quantity','main_stop','trailing'} and (
                 self._category_items.get(category,0)>=min(128,max(1,self.max_items//8))
                 or self._category_bytes.get(category,0)+size>self.max_bytes//8
             ):
@@ -224,6 +224,36 @@ class BoundedObservationQueue:
             if self._items:
                 self._unavailable('observation_shutdown_drain_timeout')
             return self._items == 0
+
+
+_TRAILING_OBSERVATION_SINK = None
+
+
+def configure_trailing_observation_sink(sink):
+    """Use Main's existing bounded executor and shutdown drain owner."""
+    global _TRAILING_OBSERVATION_SINK
+    _TRAILING_OBSERVATION_SINK = sink
+
+
+def _append_trailing_observation(name, code, record_id, fields):
+    from src.engine.scalping.universal_trailing_replay import encode_quote
+    fields['universal_trailing_quote_source_sha256'] = fields['universal_trailing_quote'].get('source_sha256')
+    fields['universal_trailing_quote'] = json.dumps(
+        encode_quote(fields['universal_trailing_quote']), sort_keys=True, separators=(',', ':'))
+    return emit_pipeline_event('HOLDING_PIPELINE', name, code,
+        'scalp_trailing_input_transition', record_id=record_id, fields=fields,
+        observed_at_epoch=fields['evaluation_at_epoch'])
+
+
+def enqueue_trailing_observation(name, code, record_id, fields):
+    # Admission copies finite JSON; the writer never retains a live position.
+    # No synchronous fallback when the diagnostic queue is full or closed.
+    sink = _TRAILING_OBSERVATION_SINK
+    if sink is None:
+        return dict(status='unavailable', reason='trailing_observation_sink_missing',
+                    structured_append_succeeded=False)
+    return sink(_append_trailing_observation, name, code, record_id, fields,
+                observation_category='trailing')
 
 _TEXT_INFO_STAGE_KEYWORDS = (
     "order_submitted",
@@ -792,6 +822,17 @@ def _project_fields_for_text(stage: str, fields: dict[str, str]) -> dict[str, st
         # The structured source is stored once; diagnostics carry its identity.
         return {key:value for key,value in fields.items() if key!='main_stop_source'} | {
             'text_field_projection':'main_stop_source_reference_only_v1'}
+    if stage == 'scalp_trailing_input_transition':
+        # Canonical fields retain the lossless source once. Text diagnostics
+        # reference the sequence/hash instead of duplicating the large capsule.
+        keys = ('id', 'position_key', 'event_sequence', 'evaluation_at_epoch',
+                'observation_stream_contract', 'observation_buy_fill_identity',
+                'universal_trailing_quote_source_sha256', 'observation_telemetry_gap',
+                'observation_admission_failure', 'tuning_grid_source_complete',
+                'tuning_grid_source_gap_reason', 'tuning_market_type', 'evaluator',
+                'armed', 'triggered', 'decision_authority', 'runtime_effect')
+        return {key:fields[key] for key in keys if key in fields} | {
+            'text_field_projection':'trailing_quote_reference_only_v1'}
     if stage in {
         "scalping_scanner_source_fetch_census",
         "scalping_scanner_candidate_pool_census",
