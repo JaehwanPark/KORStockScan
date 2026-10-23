@@ -328,6 +328,15 @@ def entry_history_requirement(*, now, session, requested_limit):
         adjustment='ka10080:upd_stkpc_tp=1', ws_equivalence='unproven')
 
 
+def _completed_ws_rows(selected, *, limit, observed):
+    return [{'체결시간': row['cntr_tm'], 'source_timestamp': row['cntr_tm'],
+             **({'_history_basis': 'observed_valid_rows'} if observed else {}),
+             'source_time_basis': 'provider_trade_time', '시가': int(row['open_pric']),
+             '고가': int(row['high_pric']), '저가': int(row['low_pric']),
+             '현재가': int(row['cur_prc']), '거래량': int(row['trde_qty'])}
+            for row in selected['stk_min_pole_chart_qry'][-limit:]]
+
+
 def fetch_entry_candles_with_meta(
     token: str | None,
     code: str,
@@ -409,12 +418,7 @@ def fetch_entry_candles_with_meta(
             raise ValueError('completed_bar_input_transport_epoch_missing')
         if transport_epoch is not None and selected_epoch != transport_epoch:
             raise ValueError('completed_bar_transport_changed_during_selection')
-        candles = [{'체결시간':r['cntr_tm'],'source_timestamp':r['cntr_tm'],
-            **({'_history_basis': 'observed_valid_rows'} if reduced_inputs else {}),
-            'source_time_basis':'provider_trade_time','시가':int(r['open_pric']),
-            '고가':int(r['high_pric']),'저가':int(r['low_pric']),
-            '현재가':int(r['cur_prc']),'거래량':int(r['trde_qty'])}
-            for r in selected['stk_min_pole_chart_qry'][-required_bars:]]
+        candles = _completed_ws_rows(selected, limit=required_bars, observed=reduced_inputs)
         source_meta = dict(api_id='WS_0B_completed_1m', source_quality='valid',
             completed_bar_source=selected['_completed_bar_source'], request_code=request_code)
         demand('ka10080','ws_selected_http0')
@@ -1893,6 +1897,92 @@ def build_entry_candle_context(
         now_ts=now_kst.timestamp(),
     )
     return context
+
+
+def wait_for_completed_entry_candle(context, ws, *, budget, fields):
+    """Wait only for an already selected WS projection, within the original budget.
+
+    Reads local sealed source bytes only. A ready publication still needs the
+    caller's fresh WS, canonical preflight, native claim and provider guards.
+    """
+    timing = context.get('completed_candle_timing') or {}
+    proof = timing.get('source_proof') or {}
+    meta = (context.get('source_quality') or {}).get('source_meta') or {}
+    preflight = (context.get('ai_market_snapshot_v1') or {}).get('ai_input_preflight_v1') or {}
+    derived = {'candle_completed_timing_invalid', 'candle_source_quality',
+               'candle_unknown_age', 'krx_integrated_event_venue_unproven',
+               'candle_latest_completed_missing'}
+    pending = (timing.get('blockers') == ['candle_latest_completed_missing']
+               or timing.get('status') == 'validated'
+               and 'candle_latest_completed_missing' in (preflight.get('source_blockers') or []))
+    if (budget is None or context.get('decision_input_profile') != 'reduced_completed_v1'
+            or not pending
+            or set((context.get('source_quality') or {}).get('blockers') or []) - {'candle_latest_completed_missing'}
+            or proof.get('source') != 'kiwoom_ws_AL_completed_1m'
+            or set(preflight.get('source_blockers') or []) - derived):
+        return context
+    # Eligibility cannot repair a corrupted prepared receipt by replacing it.
+    original_body = {key: value for key, value in timing.items() if key != 'sha256'}
+    if timing.get('sha256') != hashlib.sha256(json.dumps(original_body, sort_keys=True,
+            ensure_ascii=True, separators=(',', ':'), allow_nan=False).encode()).hexdigest():
+        return context
+    from src.trading.market import shared_ws_snapshot as shared
+    request = context.get('request_code', '')
+    if (len(request) != 9 or not request[:6].isdigit() or request[6:] != '_AL'
+            or proof.get('session') not in {'SOR_PREMARKET', 'SOR_REGULAR', 'SOR_AFTERMARKET'}):
+        raise ValueError('candle_ws_provenance_invalid')
+    started = time.perf_counter()
+    fields.update(entry_machine_input_candle_wait_state='waiting',
+                  entry_machine_input_candle_wait_deadline_epoch=budget.epoch)
+    generation = None
+    try:
+        while True:
+            budget.require()
+            now = _now_kst(time.time())
+            path = shared.COMPLETED_BARS_ROOT / now.date().isoformat() / request / (proof['session'] + '.json')
+            stamp = path.stat()
+            current = (stamp.st_dev, stamp.st_ino, stamp.st_size, stamp.st_mtime_ns, stamp.st_ctime_ns)
+            if current != generation:
+                selected = shared.read_shared_completed_bars(request, now=now,
+                    allow_partial_history=True, require_fresh_snapshot=True)
+                source = selected['_completed_bar_source']
+                if (source['source_epoch'] != proof['source_epoch']
+                        or source['transport_epoch'] != proof['transport_epoch']
+                        or source['session'] != proof['session']):
+                    raise ValueError('candle_ws_publication_generation_changed')
+                issue = completed_ws_candle_source_issue(source, request_code=request,
+                    transport_epoch=ws.get('market_data_transport_epoch'), now_epoch=now.timestamp())
+                if issue and issue != 'candle_latest_completed_missing':
+                    raise ValueError(issue)
+                if not issue:
+                    budget.require()
+                    rows = _completed_ws_rows(selected, limit=DECISION_CONTINUITY_HORIZON_MINUTES+1,
+                                              observed=True)
+                    metadata = dict(meta, api_id='WS_0B_completed_1m',
+                        completed_bar_source=source, completed_only=True,
+                        complete_session_prefix=source.get('complete_session_prefix') is True,
+                        multi_timeframe_auxiliary_fetch=False)
+                    result = build_entry_candle_context(None, request[:6], ws,
+                        context['venue'], context['session'], now_ts=now,
+                        recent_candles=rows, source_meta=metadata,
+                        broker_route=(context['ai_market_snapshot_v1'])['broker_route'])
+                    # Optional sources keep their original clocks, not the publication clock.
+                    for name in ('investor', 'program'):
+                        previous = context['ai_market_snapshot_v1'].get('sources', {}).get(name)
+                        if previous is not None:
+                            result['ai_market_snapshot_v1']['sources'][name] = copy.deepcopy(previous)
+                    budget.require()
+                    fields.update(entry_machine_input_candle_wait_state='ready',
+                        entry_machine_input_candle_publication_sha256=source['content_sha256'])
+                    return result
+                generation = current
+            time.sleep(min(.05, budget.remaining()))
+    except (OSError, ValueError, KeyError, TypeError):
+        fields['entry_machine_input_candle_wait_state'] = 'failed'
+        raise
+    finally:
+        fields['entry_machine_input_candle_wait_ms'] = round((time.perf_counter()-started)*1000, 3)
+
 
 
 def revalidate_entry_candle_snapshot(

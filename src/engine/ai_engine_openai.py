@@ -178,9 +178,11 @@ from src.engine.ai_prompt_contracts import (
 
 
 def _final_entry_machine_inputs(ws_data, recent_ticks, candle_context, *, refresher,
-                                deadline_epoch=None):
+                                deadline_epoch=None, entry_budget=None):
     """Freeze local inputs after slow preparation; never renew an attempt deadline."""
-    from src.engine.scalping.entry_candle_context import revalidate_entry_candle_snapshot
+    from src.engine.scalping.entry_candle_context import (
+        revalidate_entry_candle_snapshot, wait_for_completed_entry_candle,
+    )
 
     started = time.perf_counter()
     fields = {}
@@ -191,6 +193,11 @@ def _final_entry_machine_inputs(ws_data, recent_ticks, candle_context, *, refres
             not math.isfinite(float(deadline_epoch)) or time.time() >= deadline_epoch
         ):
             raise ValueError("entry_machine_input_deadline_expired")
+        if entry_budget is None and deadline_epoch is not None:
+            from src.engine.scalping.entry_deadline import EntryDeadline
+            entry_budget = EntryDeadline.create(caller_epoch=deadline_epoch)
+        if entry_budget is not None:
+            entry_budget.require()
         if deadline_epoch is not None:
             fields['entry_machine_input_budget_at_freeze_ms'] = round((deadline_epoch - time.time()) * 1000, 3)
         copy_started = time.perf_counter()
@@ -199,6 +206,8 @@ def _final_entry_machine_inputs(ws_data, recent_ticks, candle_context, *, refres
         phase = "after_input_copy"
         if deadline_epoch is not None and time.time() >= deadline_epoch:
             raise ValueError("entry_machine_input_deadline_expired")
+        if entry_budget is not None:
+            entry_budget.require()
         phase = "local_refresh"
         refresh_started = time.perf_counter()
         try:
@@ -226,6 +235,21 @@ def _final_entry_machine_inputs(ws_data, recent_ticks, candle_context, *, refres
             context = revalidate_entry_candle_snapshot(context, ws, now_ts=as_of, _owned_inputs=True)
         finally:
             fields["entry_machine_input_canonical_revalidation_ms"] = round((time.perf_counter() - revalidate_started) * 1000, 3)
+        phase = "completed_candle_publication"
+        ready = wait_for_completed_entry_candle(context, ws, budget=entry_budget, fields=fields)
+        if ready is not context:
+            # Publication never refreshes the executable quote or grants a claim.
+            # Reuse the same local refresher, then revalidate the entire new view.
+            phase = "publication_input_refresh"
+            ws, ticks, context, refresh_fields = refresher(ws, ticks, ready)
+            ws, ticks, context = copy.deepcopy((ws, ticks, context))
+            if refresh_fields.get("entry_ai_final_snapshot_revalidation_error"):
+                raise ValueError(refresh_fields["entry_ai_final_snapshot_revalidation_error"])
+            if (ws_data or {}).get("market_data_transport_epoch") != (ws or {}).get("market_data_transport_epoch"):
+                raise ValueError("entry_machine_transport_epoch_changed")
+            entry_budget.require()
+            as_of = time.time()
+            context = revalidate_entry_candle_snapshot(context, ws, now_ts=as_of, _owned_inputs=True)
         phase = "quote_consistency"
         from src.trading.market.quote_consistency import ws_quote_receive_age_ms, ws_quote_source_receipt
         bbo = (context.get("ai_market_snapshot_v1") or {}).get("sources", {}).get("bbo", {})
@@ -254,6 +278,8 @@ def _final_entry_machine_inputs(ws_data, recent_ticks, candle_context, *, refres
                     raise ValueError("entry_machine_quote_value_conflict")
         if deadline_epoch is not None and time.time() >= deadline_epoch:
             raise ValueError("entry_machine_input_deadline_expired")
+        if entry_budget is not None:
+            entry_budget.require()
     except Exception as exc:
         error = str(exc) or type(exc).__name__
         fields["entry_machine_input_failure_phase"] = phase
@@ -9553,7 +9579,7 @@ class GPTSniperEngine:
             preparation_ms = round((time.perf_counter() - analysis_started) * 1000, 3)
             ws_data, recent_ticks, candle_context, machine_input_fields = _final_entry_machine_inputs(
                 ws_data, recent_ticks, candle_context, refresher=entry_input_refresher,
-                deadline_epoch=entry_input_deadline_epoch,
+                deadline_epoch=entry_input_deadline_epoch, entry_budget=entry_budget,
             )
             machine_input_fields["entry_machine_input_preparation_ms"] = preparation_ms
             preparation_stages["other_preparation_ms"] = max(0.0, preparation_ms - sum(preparation_stages.values()))

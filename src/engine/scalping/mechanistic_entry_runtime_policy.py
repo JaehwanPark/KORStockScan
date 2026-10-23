@@ -16,6 +16,7 @@ import re
 import stat as stat_module
 import sys
 import tempfile
+import time
 from collections import OrderedDict, namedtuple
 from datetime import date, datetime, timedelta
 from contextvars import ContextVar
@@ -256,11 +257,21 @@ def signature_pass():
 
 
 def dependencies_unchanged(dependencies):
-    try:
-        with signature_pass():
-            return all(_signature(path) == sig for path, sig in dependencies.items())
-    except (OSError, ValueError):
-        return False
+    from src.engine.monitoring.runtime_performance import policy_validation
+    with policy_validation('policy_dependencies') as facts:
+        facts.update(dependency_count=len(dependencies), checked_count=0, valid=False)
+        try:
+            with signature_pass():
+                for path, sig in dependencies.items():
+                    facts['checked_count'] += 1
+                    if _signature(path) != sig:
+                        facts['changed_dependency'] = str(path)[:512]
+                        return False
+            facts['valid'] = True
+            return True
+        except (OSError, ValueError) as exc:
+            facts.update(error_type=type(exc).__name__, reason=str(exc)[:256])
+            return False
 
 
 @contextmanager
@@ -433,7 +444,10 @@ def _cached_source_hash(path: str, signature: tuple) -> str:
             _HASH_FLIGHTS[key] = pending
             _HASH_MISSES += 1
     if not leader:
-        if not pending.wait(timeout=2.0):
+        from src.engine.monitoring.runtime_performance import policy_validation
+        with policy_validation('policy_digest_wait'):
+            completed = pending.wait(timeout=2.0)
+        if not completed:
             raise ValueError('machine_policy_source_hash_in_progress')
         if _signature(source) != signature:
             raise ValueError('machine_policy_source_changed_during_read')
@@ -447,6 +461,8 @@ def _cached_source_hash(path: str, signature: tuple) -> str:
     try:
         with source.open('rb') as handle:
             observed = hashlib.file_digest(handle, 'sha256').hexdigest()
+            from src.engine.monitoring.runtime_performance import record_policy_digest_read
+            record_policy_digest_read(handle.tell())
         if _signature(source) != signature:
             raise ValueError('machine_policy_source_changed_during_read')
         size = sys.getsizeof(key) + sum(sys.getsizeof(v) for v in key) + sys.getsizeof(observed) + 256
@@ -2829,62 +2845,80 @@ def activate_operator_auxiliary_prompt(
 
 def _load_current(data_root: Path, target_date: str, *, _immutable=False) -> dict | None:
     """Single-flight validation; no I/O under the short cache metadata lock."""
-    key = _current_cache_key(data_root, target_date)
-    with _CURRENT_CACHE_LOCK:
-        cached = _CURRENT_CACHE.get(key)
-    if cached is not None:
-        dependencies, bundle = cached
-        effective = (bundle.get('strategy_activation') or {}).get('effective_from')
-        # Continuous policies carry activation time on the pointer, not on the
-        # bundle. A backwards wall clock must not reuse a not-yet-effective hit.
-        pointer = root(data_root) / 'current.json'
-        if pointer.exists():
-            effective = _read(pointer).get('effective_from') or effective
-        if dependencies_unchanged(dependencies) and (not effective or datetime.fromisoformat(effective) <= datetime.now(KST)):
-            return bundle if _immutable else copy.deepcopy(bundle)
-    with _CURRENT_CACHE_LOCK:
-        pending = _CURRENT_FLIGHTS.get(key)
-        if pending is None:
-            pending = Event()
-            _CURRENT_FLIGHTS[key] = pending
-            leader = True
-        else:
-            leader = False
-    if not leader:
-        if not pending.wait(timeout=2.0):
-            raise ValueError('machine_policy_validation_in_progress')
-        # A failed leader must never return the previous, potentially stale view.
+    from src.engine.monitoring.runtime_performance import policy_validation
+    with policy_validation('policy_load') as facts:
+        facts.update(target_date=target_date, cache_status='miss', miss_reason='cold',
+                     immutable=_immutable)
+        lookup_started = time.perf_counter()
+        key = _current_cache_key(data_root, target_date)
         with _CURRENT_CACHE_LOCK:
             cached = _CURRENT_CACHE.get(key)
-        if cached is None or not dependencies_unchanged(cached[0]):
-            raise ValueError('machine_policy_validation_failed_or_changed')
-        bundle = cached[1]
-        return bundle if _immutable else copy.deepcopy(bundle)
-    dependencies = {}
-    token = _READ_DEPENDENCIES.set(dependencies)
-    try:
-        bundle = _load_current_uncached(data_root, target_date)
-        if bundle is not None:
-            if not dependencies_unchanged(dependencies):
-                raise ValueError('machine_policy_dependency_changed_during_validation')
-            bundle = _freeze(bundle)
+        facts['cache_lookup_seconds'] = time.perf_counter()-lookup_started
+        if cached is not None:
+            dependencies, bundle = cached
+            facts.update(dependency_count=len(dependencies), bundle_sha256=bundle.get('bundle_sha256'))
+            effective = (bundle.get('strategy_activation') or {}).get('effective_from')
+            # Continuous policies carry activation time on the pointer, not on the
+            # bundle. A backwards wall clock must not reuse a not-yet-effective hit.
+            pointer = root(data_root) / 'current.json'
+            if pointer.exists():
+                effective = _read(pointer).get('effective_from') or effective
+            unchanged = dependencies_unchanged(dependencies)
+            if unchanged and (not effective or datetime.fromisoformat(effective) <= datetime.now(KST)):
+                facts.update(cache_status='hit', miss_reason=None)
+                return bundle if _immutable else copy.deepcopy(bundle)
+            facts['miss_reason'] = 'not_effective' if unchanged else 'dependency_changed'
+        with _CURRENT_CACHE_LOCK:
+            pending = _CURRENT_FLIGHTS.get(key)
+            if pending is None:
+                pending = Event()
+                _CURRENT_FLIGHTS[key] = pending
+                leader = True
+            else:
+                leader = False
+        facts['validation_role'] = 'leader' if leader else 'follower'
+        if not leader:
+            wait_started = time.perf_counter()
+            completed = pending.wait(timeout=2.0)
+            facts['singleflight_wait_seconds'] = time.perf_counter() - wait_started
+            if not completed:
+                raise ValueError('machine_policy_validation_in_progress')
+            # A failed leader must never return the previous, potentially stale view.
             with _CURRENT_CACHE_LOCK:
-                if len(_CURRENT_CACHE) >= 16:
-                    _CURRENT_CACHE.pop(next(iter(_CURRENT_CACHE)), None)
-                _CURRENT_CACHE[key] = (dependencies, bundle)
-        else:
+                cached = _CURRENT_CACHE.get(key)
+            if cached is None or not dependencies_unchanged(cached[0]):
+                raise ValueError('machine_policy_validation_failed_or_changed')
+            bundle = cached[1]
+            facts['bundle_sha256'] = bundle.get('bundle_sha256')
+            return bundle if _immutable else copy.deepcopy(bundle)
+        validation_started = time.perf_counter()
+        dependencies = {}
+        token = _READ_DEPENDENCIES.set(dependencies)
+        try:
+            bundle = _load_current_uncached(data_root, target_date)
+            facts['bundle_sha256'] = (bundle or {}).get('bundle_sha256')
+            if bundle is not None:
+                if not dependencies_unchanged(dependencies):
+                    raise ValueError('machine_policy_dependency_changed_during_validation')
+                bundle = _freeze(bundle)
+                with _CURRENT_CACHE_LOCK:
+                    if len(_CURRENT_CACHE) >= 16:
+                        _CURRENT_CACHE.pop(next(iter(_CURRENT_CACHE)), None)
+                    _CURRENT_CACHE[key] = (dependencies, bundle)
+            else:
+                with _CURRENT_CACHE_LOCK:
+                    _CURRENT_CACHE.pop(key, None)
+            return bundle if _immutable else copy.deepcopy(bundle)
+        except BaseException:
             with _CURRENT_CACHE_LOCK:
                 _CURRENT_CACHE.pop(key, None)
-        return bundle if _immutable else copy.deepcopy(bundle)
-    except BaseException:
-        with _CURRENT_CACHE_LOCK:
-            _CURRENT_CACHE.pop(key, None)
-        raise
-    finally:
-        _READ_DEPENDENCIES.reset(token)
-        with _CURRENT_CACHE_LOCK:
-            _CURRENT_FLIGHTS.pop(key, None)
-            pending.set()
+            raise
+        finally:
+            facts['full_validation_seconds'] = time.perf_counter()-validation_started
+            _READ_DEPENDENCIES.reset(token)
+            with _CURRENT_CACHE_LOCK:
+                _CURRENT_FLIGHTS.pop(key, None)
+                pending.set()
 
 
 def _load_current_uncached(data_root: Path, target_date: str, *, historical_code_root=None) -> dict | None:

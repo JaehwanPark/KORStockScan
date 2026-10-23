@@ -2407,3 +2407,46 @@ The actual ordered verify_candidate_report_currentness now PASS: trailing genera
 최종 코드 검증은488 ordered/replay/startup,204 exact profile/negative,94 fixture 보완 runtime,12 역사·실제 소비 계보,455 Main 독립 준비,57 수량 projection과3 optional installer/실패 rollback 회귀 PASS(범위 중복이 있어 합산하지 않음),23파일 compile·diff·print-only parser PASS다.9e820→6d8891ac3 변경은 비테스트13파일+433/-35, 테스트10파일+301/-15, 문서3파일+180/-0; 후속 배포 결과 기록은 문서3파일+25/-0이다.256건 생애 절단 removed, 관측 저장/codec consolidated, 역사 reader/실제 소비9e820 profile/hard guards retained; 새 module/worker/entrypoint/이동0. 릴리스97→98, 삭제0, 배포 직전 후보+복구 예약99 및 약92.89GiB 가용을 확인했다. 디렉터리 총수 한도는 미설정이며256은 router unit 목록 한도다.
 
 배포/PID 소비는 완료다. HoldingProfitExitSourceContractRepair의 다음 자연 수용은10/23 통합 애프터 `_AL`/krx_nxt_integrated/SOR 관측 및256초과→native terminal→장후 projection, 별도10/26 프리마켓 `_NX`/nxt_only/NXT 분기의 실제 관측이다. broker 실체결 거래소 미확정은 그대로 유지하고 관측을 만들기 위한 주문·재구독은 하지 않는다. 원4건 역사 결손과 실제 비용/독립 정책 경제성도 별도 OPEN이다. 체크리스트 원 strict archive91d9874a는 편집 전에 native owner로 재검증·보존했다.
+## Source writer flush and completed candle revalidation repair 2026-10-23
+
+- Owner: `MainEntrySourceTerminalRepair1022`. 기준은 실제 선택 `6d8891ac3771d26e2f764c7d8bd87211549bfa1a`; 격리 작업본은 `/home/ubuntu/KORStockScan-worktrees/source-flush-recheck-20261023`이다. 요청 범위는 수리·리뷰·회귀·커밋까지다. canonical dirty 변경, 현재 선택본/PID와 원 정책·실패 기록은 보존하며 배포·재기동·정책 발행·provider/계좌/주문 호출은 수행하지 않는다.
+- 원 진단: [15:32 원천·후보 소진 점검](/home/ubuntu/KORStockScan/tmp/policy-latency-submit-cause-20261023-1506/report.md). 정규장 `_AL`/`krx_nxt_integrated`·KRX 정책 cohort·SOR 요청과 실제 체결 거래소 미검증을 구분한다. 분봉 발행 후 새 판단이 반드시 PASS/매수된다는 주장이나 경제성 판단은 없다.
+
+### Cause, repair and review
+
+1. 기존 `NonBlockingPathJournalWriter._run`은 매 행마다 idle timeout을 다시 시작해 지속 수신 시 batch가 차거나 종료할 때까지 저장을 미뤘다. **첫 대기 행 기준 monotonic flush deadline**으로 교체했다. batch 상한·비차단 submit·원 저장 순서·disk guard·실패/손실 계수·종료 drain·durable 저장 뒤 projection 순서는 유지했다. scheduler/디스크 쓰기 완료의 절대 지연을 보장한다는 뜻은 아니다.
+2. `_final_entry_machine_inputs`의 기존 local refresher는 최신 호가를 읽어도 준비된 분봉은 다시 읽지 않았다. 기존 `entry_candle_context`에서 **이미 선택된 WS 완성 분봉만** 원 `EntryDeadline`의 wall/monotonic 예산 안에서 기다리고, 발행 후 같은 native reader로 hash·생산자 생존/PID·item·session·source/transport epoch·integrity·완료 시각을 검증해 입력을 다시 만든다. 이후 기존 local refresher와 canonical preflight·호가 일치 검사, 원 claim·정책·provider/제출 검사를 그대로 거친다. 새 worker·REST fallback·구독·provider 요청·deadline 갱신은 없다.
+3. 대기 조건은 최신 완성 분봉 부재에 한정했다. 준비 중 분 경계가 넘어간 경우도 원 영수증 hash와 canonical 판정을 사용한다. 손상된 준비 영수증, 다른 source-quality 결손, 잘못된 요청 결속, REST/NXT 원천, deadline 부재는 이 대기를 시작하지 않는다. 발행 파일 손상·epoch 변경·원 deadline 소진은 실패를 유지한다. stale 호가는 새 분봉만으로 통과하지 못한다. 선택된 파일 세대가 그대로이면 stat만 확인하고 전체 native 재독해를 반복하지 않는다.
+4. 미확정 policy 긴 지연에는 기존 `runtime_performance`의 분당 로그를 확장했다. `_load_current`의 hit/miss·의존 변경·cold/full 검증·singleflight/hash 대기, `_prepare_verified`의 설정 재사용·extra identity·handoff 검증·소비 기록·잠금 대기와 startup 단회 retry 사유를 기록한다. call/parent ID·native thread ID·bundle/date·벽시계/스레드 CPU·실제로 digest에 읽은 바이트를 결속한다. 최근128/느리거나 실패한32개로 유한 보관하며 별도 producer/로그/ledger를 만들지 않는다. non-CPU wall은 I/O·잠금·스케줄링을 포함하므로 순수 I/O 시간으로 해석하지 않는다. **과거 12~18초의 정확한 원인은 여전히 미확정이며, 이 계측의 실제 PID 소비도 아직 확인하지 않았다.**
+
+리뷰 후 보완: 정규장 fixture의 `explicit_request_code` 누락은 올바른 원천 guard가 거부한 테스트 계약 문제였다. fixture를 수정하고 실제 대기 조건도 다른 candle 품질 실패를 제외하도록 좁혔다. 준비 시 유효했으나 분 경계를 넘긴 영수증, 손상된 원 영수증·발행 원천, source epoch 변경, 시계 역행 사례를 추가했다. 만료 후에도 원 quote-clock 진단을 보존하도록 순서를 보완했고, 계측이 테스트용 비-dict 반환값이나 startup retry의 원 예외를 바꾸지 않도록 수정했다.
+
+테스트 격리 보완: collection 시 `log_archive_service`가 생산 data 기본 경로에 디렉터리를 만들려 해 기존 차단기가 중단했다. 기존 conftest에서 그 import만 scratch DATA_DIR로 결속했고 원 차단기는 유지했다. 기존 multiprocessing 검증의 POSIX semaphore를 위해 테스트 Landlock의 IPC 쓰기 범위에 `/dev/shm`만 추가했다. 운영 data/log 쓰기 예외는 추가하지 않았으며 open/replace/unlink/symlink/dir_fd 차단을 검증한다. child native 검증에는 프로젝트 `.venv`를 연결한 로컬 symlink를 사용하며 커밋하지 않는다.
+
+### Replacement and removal disposition
+
+| 원 구현/호출 | 처분 | 현재 소비자·근거 |
+| --- | --- | --- |
+| writer의 행별 idle timeout만으로 flush | `removed` | 같은 `_run`의 첫 행 기준 deadline으로 교체; batch/durable/close 분기는 유지 |
+| 최초 선택의 inline WS row 변환 | `consolidated` | 같은 owner `_completed_ws_rows`; 최초 선택과 발행 후 갱신 두 호출이 직접 사용, 호환 wrapper 없음 |
+| 최종 freeze의 준비 분봉 단회 재사용 | `consolidated` | 같은 `_final_entry_machine_inputs`가 좁은 발행 대기와 기존 새 호가/canonical 검증을 직접 소비 |
+| native loader/consumer/원 안전 검사 | `retained` | 기존 prepare·AI 전·제출 전 호출을 유지; 계측은 판단/유효성 cache가 아님 |
+| 기존 분당 성능 sink | `retained` | 기존 `kiwoom_sniper_v2`의 `log_snapshot` 호출, 추가 publisher/cron/등록 없음 |
+| test import/IPC 격리 | `retained` | 기존 conftest를 확장; 생산 변경 차단과 원 child/native 테스트 유지 |
+
+새 모듈·engine root 파일·entrypoint·worker·등록·일정 변경은 없다. 직접/동적 caller를 확인했고 새 helper는 기존 caller에 직접 연결했다. Kiwoom 외부 요청·응답 parser·FID·REG/REMOVE·인증·계좌/주문 계약은 바꾸지 않았다. row 변환은 이미 정규화된 내부 completed-bar projection의 기존 변환을 재사용한 것이다.
+
+### Validation and remaining acceptance
+
+- 원 `6d8891ac3`의 두 함수만 주입한 격리 회귀는 **2 FAIL**로 원 결함을 재현했다. idle/drain 전 projection이 없고, 정규장 후보의 source_allowed가 false였다. 새 API의 추가 budget 인자는 원 함수 어댑터에서 제거해 서명 차이를 실패로 세지 않았다.
+- 같은 실시간 간격의 격리 기록기 재현: 수정 전 502ms 동안0/종료 후25건; 수정 후 508ms 동안24/종료 후25건, writer error0. 숫자는 임시 출력 경로의 저장량이며 주문 수나 실제 시장 수용이 아니다.
+- 최종 회귀·compile·diff·문서 parser 결과는 동일 작업의 아래 최종 검증 기록에서 고정한다. 원 collection 실패·초기 회귀 실패·수정 전 실패를 덮어쓰지 않는다.
+- 소스 증가는 시간 상한, 원 deadline 내 준비/발행 handoff, 기존 sink의 호출별 계측에 필요한 것이다. 파일 이동·압축·새 wrapper로 단순화했다고 주장하지 않는다. non-test source와 test/docs의 추가·삭제는 최종 결과에서 각각 기록한다.
+- 코드 closure와 실제 배포·현재 PID 소비·자연 후보→원천→AI→Main 제출 수용은 별개다. 통합 배포 시 기존 native 정책 인계·reviewed-code inventory/P5를 정확한 후보에서 새로 검증해야 한다. 현재 PID나 과거 PASS를 새 코드 소비로 재사용하지 않는다.
+- [현재 실행 owner와 기존 Due/시장별 수용 창](../checklists/2026-10-23-stage2-todo-checklist.md#장중-제출-원천종료-수리-인계)을 OPEN으로 유지한다. `_AL`/SOR 정규·통합 애프터 회귀와 `_NX`/명시NXT 자연 수용, 실체결/경제성은 각각 구분한다. 정책 긴 지연 원인 규명은 새 코드의 실제 계측을 소비한 뒤 같은 owner에서 이어간다.
+
+최종 재리뷰: 관련12개 전체 파일과 생산 쓰기 차단5사례를 포함해 **1055 PASS / FAIL0 / SKIP0**다. Python compile, `git diff --check`, print-only backlog parser PASS, 오늘 `MainEntrySourceTerminalRepair1022`의 파싱 owner는1개다. 정규장·애프터·준비 중 분 경계 변경, 원 wall/monotonic deadline 만료, 준비/발행 hash 손상, epoch 변경, stale 호가, 다른 원천 결손, concurrent digest 계측 및 기존 source/claim/transport/native child 계약을 검증했다. 초기 실패는 보존했고 마지막 재리뷰 범위의 미해결 코드 finding은0이다. 실행코드 +377/-139(순증238), tests +288/-1(순증287), 문서는 본 검토만 추가하며 이동/삭제 파일0이다. 상당수 diff는 기존 함수에 계측 span을 씌운 들여쓰기이며, native 검증·소비 분기의 별도 구현은 추가하지 않았다.
+
+검증 근거는 `/home/ubuntu/KORStockScan/tmp/source-flush-recheck-repair-20261023/`의 최종 pytest XML/로그, 원 함수 재현2FAIL, 실제 간격 저장 재현 JSON과 결과 JSON이다. 배포·P5·현재 PID 반영·정책 긴 지연의 실제 원인 판정은 이 코드 완료로 닫지 않는다. 같은 현재 체크리스트 owner/기존 창을 유지한다.
+
+문서 수용: 기준 커밋의 당일 체크리스트에 인접한 동일ID OPEN header가2개였고 canonical 운영 문서는 이미1개였다. 기존 native preserve_checklist로 원 strict91d9874a…의 immutable bytes를 검증·보존한 뒤, 후보에서는 오래된 Due10/23 header만 제거하고 내용/Acceptance/현재 Due10/26·시장별 창은 주 owner 아래 유지했다. 후보 원문은 Git6d8891ac3와 tmp/candidate-checklist-before.md에 보존했다. 새 작업 ID나 추가 실행 권한은 없다.

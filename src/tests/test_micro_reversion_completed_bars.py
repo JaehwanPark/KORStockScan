@@ -567,3 +567,40 @@ def test_excluded_row_revokes_full_prefix_claim(tmp_path):
     result=reader.read_shared_completed_bars('005930_AL',now=now,root=tmp_path,snapshot_path=bind(tmp_path,p,now),allow_partial_history=True)
     assert len(result['stk_min_pole_chart_qry'])==1
     assert result['_completed_bar_source']['complete_session_prefix'] is False
+
+
+def test_continuous_sub_batch_input_publishes_completed_bar_before_idle(tmp_path, monkeypatch):
+    """Deterministic arrivals: no empty queue, full batch, wall-clock sleep or close."""
+    from src.engine.scalping.micro_reversion import completed_bars, path_journal
+    now = BASE + timedelta(seconds=122)
+    monkeypatch.setattr(completed_bars.time, 'time', lambda: now.timestamp())
+    projection = CompletedBarProjection(tmp_path/'bars')
+    writer = NonBlockingPathJournalWriter(tmp_path/'stream.jsonl', max_batch_size=256,
+        flush_interval_sec=.05, completed_bar_projection=projection,
+        source_integrity=lambda: INTEGRITY)
+    class Arrivals:
+        clock = 0.
+        rows = [point(1,10),point(2,60),point(3,121)] + [point(i,121+i*.001) for i in range(4,26)]
+        def get(self, timeout):
+            self.clock += .02
+            row = self.rows.pop(0)
+            if not self.rows: writer._stop_requested.set()
+            return row
+        def task_done(self): pass
+        def empty(self): return not self.rows
+        def qsize(self): return len(self.rows)
+    arrivals = Arrivals(); writer._queue = arrivals
+    monkeypatch.setattr(path_journal.time, 'monotonic', lambda: arrivals.clock)
+    observed = []; consume = projection.consume
+    def project(*args, **kwargs):
+        observed.append(arrivals.qsize())
+        consume(*args, **kwargs)
+    monkeypatch.setattr(projection, 'consume', project)
+    writer._run()
+    assert observed[0] == 21, 'flush must happen at the first-record deadline, before idle/drain'
+    result = reader.read_shared_completed_bars('005930_AL', now=now,
+        root=tmp_path/'bars', snapshot_path=bind(tmp_path, projection, now), allow_partial_history=True)
+    assert result['_completed_bar_source']['latest_completed_bar']['source_time']=='20260921160100'
+    assert writer.metrics().persisted_envelope_count == 25
+    assert not writer.metrics().capture_degraded
+    assert writer.metrics().journal_writer_error_count == 0

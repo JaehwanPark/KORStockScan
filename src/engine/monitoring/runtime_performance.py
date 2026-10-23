@@ -10,7 +10,7 @@ import time
 from copy import deepcopy
 from collections import deque, OrderedDict
 from pathlib import Path
-from threading import Lock
+from threading import Lock, get_native_id
 from contextlib import contextmanager
 from contextvars import ContextVar
 
@@ -38,6 +38,49 @@ _MAIN_PHASE = {'name': 'not_observed', 'epoch': None, 'perf': None, 'code': None
 _MAIN_PHASE_HISTORY = deque(maxlen=256)
 _HTTP_SETTLEMENTS = deque(maxlen=128)
 _ENTRY_TIMING_GAPS = 0
+_POLICY_CALL = ContextVar('policy_validation_call', default=None)
+_POLICY_SEQUENCE = 0
+_POLICY_VALIDATIONS = deque(maxlen=128)
+_POLICY_SLOW_VALIDATIONS = deque(maxlen=32)
+
+
+@contextmanager
+def policy_validation(stage):
+    """Bounded causal timings in the existing sink; never a validity cache."""
+    global _POLICY_SEQUENCE
+    started, cpu = time.perf_counter(), time.thread_time()
+    with _LOCK:
+        _POLICY_SEQUENCE += 1
+        call_id = _POLICY_SEQUENCE
+    facts = dict(call_id=call_id, parent_call_id=(_POLICY_CALL.get() or {}).get('call_id'), stage=stage,
+                 started_epoch=time.time(), native_thread_id=get_native_id(), status='pass')
+    token = _POLICY_CALL.set(facts)
+    try:
+        yield facts
+    except BaseException as exc:
+        facts.update(status='error', error_type=type(exc).__name__, reason=str(exc)[:256])
+        raise
+    finally:
+        _POLICY_CALL.reset(token)
+        parent = _POLICY_CALL.get()
+        if parent is not None:
+            for key in ('source_digest_reads', 'source_digest_bytes'):
+                parent[key] = parent.get(key, 0) + facts.get(key, 0)
+        elapsed = max(0., time.perf_counter() - started)
+        cpu = max(0., time.thread_time() - cpu)
+        facts.update(elapsed_seconds=elapsed, thread_cpu_seconds=cpu,
+                     non_cpu_wall_seconds=max(0., elapsed-cpu))
+        with _LOCK:
+            _POLICY_VALIDATIONS.append(dict(facts))
+            if elapsed >= 1 or facts['status'] == 'error':
+                _POLICY_SLOW_VALIDATIONS.append(dict(facts))
+
+
+def record_policy_digest_read(byte_count):
+    facts = _POLICY_CALL.get()
+    if facts is not None:
+        facts['source_digest_reads'] = facts.get('source_digest_reads', 0) + 1
+        facts['source_digest_bytes'] = facts.get('source_digest_bytes', 0) + byte_count
 
 
 def record_entry_gap():
@@ -518,6 +561,8 @@ def snapshot():
         settlements = list(_HTTP_SETTLEMENTS)
         timing_gaps = _ENTRY_TIMING_GAPS
         failures = [dict(stage=k[0], reason=k[1], count=v[0]) for k, v in _FAILURES.items()]
+        policy_validations = list(_POLICY_VALIDATIONS)
+        policy_slow = list(_POLICY_SLOW_VALIDATIONS)
         selected = [dict(v) for v in _SELECTED_READY.values()]
         raw_ready_count = len(_READY)
         raw_ready_recent = deepcopy(list(_READY.values())[-32:])
@@ -559,6 +604,9 @@ def snapshot():
         forbidden_uses='policy_promotion_order_authority_or_economic_claim',
         signal_denominator='native_ready_seen_at_ingress_and_claimed_missing_joins_not_inferred',
         metrics=metrics, preparation_failures=failures,
+        policy_validation=dict(recent=policy_validations, slow_or_failed=policy_slow,
+            retained_limits=dict(recent=128, slow_or_failed=32),
+            non_cpu_wall_semantics='includes_io_lock_and_scheduling_not_io_attribution'),
         observation_queue=_OBSERVATION_HEALTH() if _OBSERVATION_HEALTH else {'status': 'not_installed'},
         ai_circuit=circuit,
         provider_attempt_settlements=settlements,

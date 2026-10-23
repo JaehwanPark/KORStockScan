@@ -69,9 +69,11 @@ def pytest_configure(config):
         if any(path == root or path.is_relative_to(root) or root.is_relative_to(path) for root in roots):
             raise RuntimeError('unit_test_writable_root_overlaps_production')
         path.mkdir(parents=True, exist_ok=True)
+    # Multiprocessing regression fixtures use native POSIX semaphores.
+    # Production data/logs remain outside this IPC-only writable directory.
     sys.dont_write_bytecode = True
     _landlock(ctypes.CDLL(None, use_errno=True), scratch[0],
-              test_roots=tuple(scratch) + (Path('/dev/null'),))
+              test_roots=tuple(scratch) + (Path('/dev/null'), Path('/dev/shm')))
     import requests
     from src.utils import constants
 
@@ -94,6 +96,12 @@ def pytest_configure(config):
     # never production logs, including late background-worker completion.
     logger.LOGS_DIR = root / "logs"
     logger.LEGACY_LOGS_DIR = root / "legacy_logs"
+    # This owner creates its default directories at import, before fixtures.
+    # Keep that import under the same scratch boundary; never weaken the guard.
+    from src.utils import constants
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(constants, "DATA_DIR", root / "data")
+        import src.engine.log_archive_service  # noqa: F401
 
 
 @pytest.fixture(autouse=True)

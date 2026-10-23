@@ -860,24 +860,30 @@ class NonBlockingPathJournalWriter:
 
     def _run(self) -> None:
         batch: list[PathJournalPoint] = []
+        flush_deadline = None
         stopping = False
         manifest_needs_refresh = not self._storage_policy.manifest_path(
             self._path
         ).exists()
         while not stopping:
+            timeout = (self._flush_interval_sec if flush_deadline is None
+                       else max(0.0, flush_deadline - time.monotonic()))
             try:
-                item = self._queue.get(timeout=self._flush_interval_sec)
+                item = self._queue.get(timeout=timeout)
             except queue.Empty:
                 item = None
                 if self._stop_requested.is_set():
                     stopping = True
             if isinstance(item, (MarketPathPoint, MarketStreamPoint, MarketDepthPoint)):
+                if not batch:
+                    flush_deadline = time.monotonic() + self._flush_interval_sec
                 batch.append(item)
                 self._queue.task_done()
                 if self._stop_requested.is_set() and self._queue.empty():
                     stopping = True
             if batch and (
                 stopping or item is None or len(batch) >= self._max_batch_size
+                or time.monotonic() >= flush_deadline
             ):
                 started = time.monotonic()
                 try:
@@ -1011,6 +1017,7 @@ class NonBlockingPathJournalWriter:
                     with self._lock:
                         self._last_latency_ms = latency_ms
                     batch.clear()
+                    flush_deadline = None
         if self._shard_count > 0:
             self._refresh_manifest()
 

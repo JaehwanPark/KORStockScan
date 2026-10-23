@@ -1229,3 +1229,155 @@ def test_refresh_error_still_records_elapsed_phase_and_keeps_original(monkeypatc
     assert original==before and fields['entry_machine_input_failure_phase']=='local_refresh'
     assert fields['entry_machine_input_local_refresh_ms']>=0
     assert fields['entry_machine_input_error']=='source_changed'
+
+
+@pytest.fixture(params=['regular', 'aftermarket', 'regular_rollover'])
+def pending_ws_candle(tmp_path, monkeypatch, request):
+    """A real native projection, missing only the latest completed minute."""
+    from src.tests.test_micro_reversion_completed_bars import BASE, INTEGRITY, point, bind
+    BASE = BASE.replace(hour=9) if request.param.startswith('regular') else BASE
+    session = 'krx_regular' if request.param.startswith('regular') else 'krx_nxt_aftermarket'
+    venue = 'KRX' if request.param.startswith('regular') else 'KRX_NXT_INTEGRATED'
+    native_session = 'SOR_REGULAR' if request.param.startswith('regular') else 'SOR_AFTERMARKET'
+    from src.engine.scalping.micro_reversion.completed_bars import CompletedBarProjection
+    from src.trading.market import shared_ws_snapshot as shared
+    from src.engine.scalping.entry_candle_context import _completed_ws_rows
+    import json
+    clock = [899.9 if request.param == 'regular_rollover' else 901.1]
+    monkeypatch.setattr(handlers.time, 'time', lambda: BASE.timestamp()+clock[0])
+    monkeypatch.setattr(handlers.time, 'perf_counter', lambda: clock[0])
+    monkeypatch.setattr(shared, 'COMPLETED_BARS_ROOT', tmp_path)
+    projection = CompletedBarProjection(tmp_path)
+    def pt(seq, seconds):
+        stamp = (BASE+timedelta(seconds=seconds)).isoformat()
+        return replace(point(seq, seconds), symbol='123456', source_item='123456_AL',
+                       session_bucket=native_session, exchange_timestamp=stamp, local_receive_timestamp=stamp)
+    projection.consume([pt(1, 10)] + [pt(i, (i-1)*60+1) for i in range(2, 16)],
+        integrity=INTEGRITY, journal_path='offline.jsonl', now_ts=BASE.timestamp()+841.1)
+    def snapshot():
+        now = BASE+timedelta(seconds=clock[0])
+        p = bind(tmp_path, projection, now)
+        value = json.loads(p.read_text())
+        value['shared_transport_producer']['registered_items'] = ['123456_AL']
+        p.write_text(json.dumps(value))
+        monkeypatch.setattr(shared, 'SNAPSHOT_PATH', p)
+        return now
+    now = snapshot()
+    selected = shared.read_shared_completed_bars('123456_AL', now=now,
+        allow_partial_history=True, require_fresh_snapshot=True)
+    def ws():
+        return _chart_route_ws('_AL', at=BASE.timestamp()+clock[0]-.01)
+    current = ws()
+    current['evaluation_attempt_id'] = 'original-attempt'
+    meta = dict(api_id='WS_0B_completed_1m', decision_input_profile='reduced_completed_v1',
+        completed_only=True, explicit_request_code=True, request_code='123456_AL', entry_candle_request_code='123456_AL',
+        multi_timeframe_auxiliary_fetch=False, completed_bar_source=selected['_completed_bar_source'],
+        entry_candle_route_binding=dict(schema='entry_candle_request_route_binding_v1',
+            request_code='123456_AL', session=session, broker_route='SOR', transport_epoch=2))
+    # The chart fixture's transport is 1; the native writer fixture owns 2.
+    def native_ws():
+        value = ws(); value['market_data_transport_epoch'] = 2
+        for row in value['realtime_type_snapshots_by_route']['_AL|krx_nxt_integrated'].values():
+            row['transport_epoch'] = 2
+        value['evaluation_attempt_id'] = 'original-attempt'
+        return value
+    current = native_ws()
+    context = build_entry_candle_context(None, '123456', current, venue,
+        session, now_ts=now, recent_candles=_completed_ws_rows(selected, limit=13, observed=True),
+        source_meta=meta, broker_route='SOR')
+    expected = [] if request.param == 'regular_rollover' else ['candle_latest_completed_missing']
+    assert context['completed_candle_timing']['blockers'] == expected
+    clock[0] = 901.1
+    def publish():
+        projection.consume([pt(16, 901)], integrity=INTEGRITY,
+            journal_path='offline.jsonl', now_ts=BASE.timestamp()+clock[0])
+        snapshot()
+    return clock, current, context, native_ws, publish
+
+
+@pytest.mark.parametrize('mode', ['ready', 'expired', 'stale_quote', 'transport_changed', 'clock_rollback', 'corrupt_publication', 'source_epoch_changed'])
+def test_final_freeze_waits_for_native_publication_with_original_budget(pending_ws_candle, monkeypatch, mode):
+    from src.engine import ai_engine_openai as engine
+    from src.engine.scalping.entry_deadline import EntryDeadline
+    clock, ws, context, latest, publish = pending_ws_candle
+    original = deepcopy((ws, context)); epoch = engine.time.time()+.2
+    perf = clock[0]+.2; budget = EntryDeadline(epoch, perf)
+    sleeps, refreshes, reads = [], [], []
+    from src.trading.market import shared_ws_snapshot as shared
+    native_read = shared.read_shared_completed_bars
+    def read(*args, **kwargs):
+        reads.append(True)
+        return native_read(*args, **kwargs)
+    monkeypatch.setattr(shared, 'read_shared_completed_bars', read)
+    def sleep(seconds):
+        sleeps.append(seconds); clock[0] += seconds
+        if len(sleeps) == 1 and mode not in {'expired', 'clock_rollback'}:
+            publish()
+            if mode in {'corrupt_publication', 'source_epoch_changed'}:
+                import json
+                from src.trading.market import shared_ws_snapshot as shared
+                from src.engine.scalping.micro_reversion.completed_bars import digest
+                path = shared.COMPLETED_BARS_ROOT/'2026-09-21/123456_AL'/(context['completed_candle_timing']['source_proof']['session']+'.json')
+                value = json.loads(path.read_text())
+                if mode == 'corrupt_publication':
+                    value['bars'][-2]['close'] += 1  # Leave the original hash invalid.
+                else:
+                    value.pop('content_sha256')
+                    value['source_epoch'] = value['integrity']['observer_epoch'] = 8
+                    value['content_sha256'] = digest(value)
+                    frame = json.loads(shared.SNAPSHOT_PATH.read_text())
+                    frame['shared_transport_producer']['completed_bar_integrity']['observer_epoch'] = 8
+                    shared.SNAPSHOT_PATH.write_text(json.dumps(frame))
+                path.write_text(json.dumps(value))
+    monkeypatch.setattr(engine.time, 'sleep', sleep)
+    if mode == 'clock_rollback':
+        wall = engine.time.time
+        monkeypatch.setattr(engine.time, 'time', lambda: wall()-(10 if sleeps else 0))
+    def refresh(w, ticks, c):
+        refreshes.append(True)
+        value = latest()
+        if len(refreshes) > 1 and mode == 'transport_changed':
+            value['market_data_transport_epoch'] = 3
+        if len(refreshes) > 1 and mode == 'stale_quote':
+            value = deepcopy(ws)
+            for row in value['realtime_type_snapshots_by_route']['_AL|krx_nxt_integrated'].values():
+                row['observed_epoch'] -= 5
+        return value, ticks, c, {}
+    frozen, _, result, fields = engine._final_entry_machine_inputs(ws, [], context,
+        refresher=refresh, deadline_epoch=epoch, entry_budget=budget)
+    assert (ws, context) == original
+    assert budget == EntryDeadline(epoch, perf)
+    if mode == 'ready':
+        assert snapshot_module.ai_input_preflight(result)['source_allowed'] is True, (snapshot_module.ai_input_preflight(result), fields, result.get('source_quality'))
+    assert fields['entry_machine_input_candle_wait_deadline_epoch'] == epoch
+    if mode in {'expired', 'clock_rollback'}:
+        assert fields['entry_machine_input_error'] == 'entry_machine_input_deadline_expired'
+        assert len(refreshes) == 1 and len(reads) == 1
+    elif mode in {'corrupt_publication', 'source_epoch_changed'}:
+        expected = 'completed_bar_source_contract_invalid' if mode == 'corrupt_publication' else 'candle_ws_publication_generation_changed'
+        assert fields['entry_machine_input_error'] == expected
+        assert len(refreshes) == 1
+    elif mode == 'transport_changed':
+        assert fields['entry_machine_input_error'] == 'entry_machine_transport_epoch_changed'
+    else:
+        assert len(refreshes) == 2 and frozen['evaluation_attempt_id'] == 'original-attempt'
+        assert fields['entry_machine_input_candle_wait_state'] == 'ready'
+        preflight = snapshot_module.ai_input_preflight(result)
+        assert preflight['source_allowed'] is (mode == 'ready'), preflight
+        assert result['completed_candle_timing']['status'] == 'validated'
+        assert fields.get('entry_machine_input_error') is None
+
+
+@pytest.mark.parametrize('fault', ['no_deadline', 'rest', 'other_blocker', 'bad_provenance', 'damaged_timing', 'bad_binding'])
+def test_publication_wait_does_not_recover_unrelated_source_failures(pending_ws_candle, monkeypatch, fault):
+    from src.engine.scalping import entry_candle_context as candle
+    from src.engine.scalping.entry_deadline import EntryDeadline
+    clock, ws, context, _, _ = pending_ws_candle
+    if fault == 'damaged_timing': context['completed_candle_timing']['sha256'] = '0'*64
+    if fault == 'bad_binding': context['source_quality']['blockers'].append('candle_request_route_binding_invalid')
+    if fault == 'rest': context['completed_candle_timing']['source_proof']['source'] = 'ka10080'
+    if fault == 'other_blocker': context['completed_candle_timing']['blockers'].append('candle_completed_ws_clock_invalid')
+    if fault == 'bad_provenance': context['ai_market_snapshot_v1']['ai_input_preflight_v1']['source_blockers'].append('bbo_stale')
+    monkeypatch.setattr(candle.time, 'sleep', lambda _: pytest.fail('unrelated failure must not wait'))
+    budget = None if fault == 'no_deadline' else EntryDeadline(candle.time.time()+.2, clock[0]+.2)
+    assert candle.wait_for_completed_entry_candle(context, ws, budget=budget, fields={}) is context

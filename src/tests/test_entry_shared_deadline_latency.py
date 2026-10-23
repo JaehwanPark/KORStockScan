@@ -720,3 +720,93 @@ def test_executor_queue_clock_excludes_local_warmup_bookkeeping(monkeypatch):
         engine._http_deadline_executor.shutdown(wait=True)
     settled = R._HTTP_SETTLEMENTS[-1]['stage_monotonic']
     assert clocks['warmup_finished'] <= settled['executor_enqueued'] <= settled['executor_started']
+
+
+def test_policy_diagnostics_keep_nested_failure_and_bounded_slow_samples(monkeypatch):
+    monkeypatch.setattr(R, '_POLICY_VALIDATIONS', deque(maxlen=128))
+    monkeypatch.setattr(R, '_POLICY_SLOW_VALIDATIONS', deque(maxlen=32))
+    with R.policy_validation('policy_prepare') as parent:
+        with R.policy_validation('policy_load') as child:
+            R.record_policy_digest_read(257)
+        assert child['parent_call_id'] == parent['call_id']
+    assert parent['source_digest_bytes'] == 257
+    for _ in range(140):
+        with pytest.raises(ValueError, match='native_failure'):
+            with R.policy_validation('policy_consumer'):
+                raise ValueError('native_failure')
+    data = R.snapshot()['policy_validation']
+    assert len(data['recent']) == 128 and len(data['slow_or_failed']) == 32
+    assert all(row['status'] == 'error' and row['reason'] == 'native_failure' for row in data['recent'])
+    assert all(row['thread_cpu_seconds'] >= 0 and row['non_cpu_wall_seconds'] >= 0 for row in data['recent'])
+    assert R._POLICY_CALL.get() is None
+
+
+def test_loader_diagnostics_distinguish_hit_and_exact_dependency_invalidation(tmp_path, monkeypatch):
+    from src.engine.scalping import mechanistic_entry_runtime_policy as N
+    monkeypatch.setattr(R, '_POLICY_VALIDATIONS', deque(maxlen=128))
+    monkeypatch.setattr(N, '_CURRENT_CACHE', {})
+    monkeypatch.setattr(N, '_CURRENT_FLIGHTS', {})
+    path = tmp_path/'native-source.json'; path.write_text('{"version":1}')
+    def native(root, day):
+        N._read(path)
+        return {'bundle_sha256': 'a'*64}
+    monkeypatch.setattr(N, '_load_current_uncached', native)
+    first = N._load_current(tmp_path, '2026-10-23', _immutable=True)
+    assert N._load_current(tmp_path, '2026-10-23', _immutable=True) is first
+    path.write_text('{"version":200}')
+    assert N._load_current(tmp_path, '2026-10-23', _immutable=True) is not first
+    rows = R.snapshot()['policy_validation']['recent']
+    loads = [r for r in rows if r['stage']=='policy_load']
+    assert [r['miss_reason'] for r in loads] == ['cold', None, 'dependency_changed']
+    assert any(r.get('changed_dependency') == str(path) for r in rows)
+    assert all(r['dependency_count']==1 for r in rows if r['stage']=='policy_dependencies')
+
+
+def test_consumer_diagnostics_distinguish_reuse_and_extra_dependency(tmp_path, monkeypatch):
+    from src.engine.scalping import reversal_evaluation_context as E
+    from src.engine.scalping import reversal_current_backend as D
+    from src.engine.scalping import reversal_auxiliary_intraday as I
+    from src.engine.automation import intraday_release_handoff as H
+    from src.engine.infrastructure import runtime_release_router as router
+    monkeypatch.setattr(R, '_POLICY_VALIDATIONS', deque(maxlen=128))
+    bundle = {'bundle_sha256':'b'*64, 'continuous_reversal':{
+        'schema':'continuous_reversal_policy_v6', 'family_sha256':'f', 'release_commit':'c'}}
+    @contextmanager
+    def verified(**kwargs): yield bundle
+    monkeypatch.setattr(E.N, 'verified_evaluation', verified)
+    monkeypatch.setattr(router, 'selected_release', lambda root: (tmp_path, 'c'))
+    monkeypatch.setattr(H, '_identity', lambda pid: dict(pid=pid,start_ticks='1',cwd=str(tmp_path/'src')))
+    monkeypatch.setattr(D, 'backend', lambda: SimpleNamespace(_GENERATION='f'))
+    monkeypatch.setattr(E, '_CONFIGURED', None); monkeypatch.setattr(E, '_CONSUMED', None)
+    monkeypatch.setattr(E, 'configure_policy_content', lambda *a,**kw: None)
+    paths = [tmp_path/f'consumer-{i}' for i in range(3)]
+    monkeypatch.setattr(E, '_extra_paths', lambda *a: paths)
+    calls = []
+    monkeypatch.setattr(I, 'record_pid_consumption', lambda *a: calls.append(True))
+    E.prepare(data_root=tmp_path, day='2026-10-23')
+    E.prepare(data_root=tmp_path, day='2026-10-23')
+    paths[0].write_text('changed')
+    E.prepare(data_root=tmp_path, day='2026-10-23')
+    rows = [r for r in R.snapshot()['policy_validation']['recent'] if r['stage']=='policy_consumer']
+    assert [r['miss_reason'] for r in rows] == ['cold',None,'extra_dependency_changed']
+    assert all(r['lock_wait_seconds'] >= 0 for r in rows)
+    assert len(calls)==2
+
+
+def test_digest_read_bytes_and_concurrent_policy_spans_are_call_local(tmp_path, monkeypatch):
+    from src.engine.scalping import mechanistic_entry_runtime_policy as N
+    monkeypatch.setattr(R, '_POLICY_VALIDATIONS', deque(maxlen=128))
+    monkeypatch.setattr(N, '_HASH_CACHE', OrderedDict())
+    monkeypatch.setattr(N, '_HASH_FLIGHTS', {})
+    monkeypatch.setattr(N, '_HASH_BYTES', 0)
+    paths = [tmp_path/str(i) for i in range(2)]
+    for i, path in enumerate(paths): path.write_bytes(bytes([i])*(31+i))
+    def read(path):
+        with R.policy_validation('policy_load') as facts:
+            N._cached_source_hash(str(path), N._signature(path))
+            return dict(facts)
+    with ThreadPoolExecutor(max_workers=2) as pool: rows = list(pool.map(read, paths))
+    assert sorted(r['source_digest_bytes'] for r in rows) == [31,32]
+    assert all(r['source_digest_reads']==1 and r['parent_call_id'] is None for r in rows)
+    assert len({r['call_id'] for r in rows}) == 2
+    assert R._POLICY_CALL.get() is None
