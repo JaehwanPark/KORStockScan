@@ -4790,9 +4790,10 @@ REVIEWED_ENTRY_COST_PRE_SENTINEL_SCOPE_VARIANTS = REVIEWED_ENTRY_COST_DEPENDENCY
 REVIEWED_SENTINEL_SCOPE_HASHES = {'src/engine/automation/main_market_weakness_research.py': 'ad97af89ce2480978e7c5286b05af8d9cb30dd81fad8d62152f7258eb646912b',
  'src/engine/automation/main_trailing_source_assembler.py': 'b951b49987a039de6b9746f40ae9f3190facb4c42dd28265a1585d02c52ef413',
  'src/engine/automation/main_trailing_source_reuse.py': 'bdbfff175232f9595b5180bd64b1f288f659e8964d4f7306311d7c45f3c940ba',
+ 'src/engine/automation/ordered_intraday_deploy.py': 'fcc7c6935434dc1b2e03598bec6fb721997b23cd4c39b6776fa1dfc2afa46423',
  'src/engine/buy_funnel_sentinel.py': '40b489fff0e1b82edbf36b734424ca7826dbc2c4c8a3b27ee9069c9381e7df2a',
  'src/engine/holding_exit_sentinel.py': '7ae845b51d16bf425337e4758d1f83047f1f4e1c3479d39875523f0e2748012a',
- 'src/engine/infrastructure/startup_validation_code_context.py': '016b4d59e80fbd6d2bb9dda13bdeb8e6abacae5decfec27240c8bf704648e612',
+ 'src/engine/infrastructure/startup_validation_code_context.py': '355a1eb29a8e7584872f7446cd7b78af4375a72c8d53fe482f2023afab311e59',
  'src/engine/kiwoom_sniper_v2.py': '02ecf7b4a55042fbcd2a7b4f59bf8602bed6020730f0a8bb326b41d5d6418866',
  'src/engine/kiwoom_websocket.py': 'ef70d8fc0fd74416fc1e7a9c27dca68663a1f057b7e2b14041b255a66a9af377',
  'src/engine/monitoring/sentinel_event_scope.py': '5a06206336713a85bbf28e479ae39482cd77549ee9296b9a92b90ef7f61aa559',
@@ -4842,6 +4843,16 @@ REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
                                                             'c7fc0eacb9ec937d28c507a4b7586d1d71425a3719a08c1d8ada65e0404071f9',
                                                             'e78122825224eee72bb3301fd2df7c22230645c5b88103fd32009a186316909b'],
  'src/engine/scalping/market_weakness_research.py': ['8e124bee20aadb75fc399b752973434f9ccd0df7c1de675ca5b70af2aa8ab59c']}.items()}}
+REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
+    name: REVIEWED_ENTRY_COST_PAIRS.get(name, ()) + tuple((old, REVIEWED_SENTINEL_SCOPE_HASHES[name])
+        for old in before) for name, before in {'src/engine/automation/ordered_intraday_deploy.py': ['404b870046364da476c4df9abb0007312123ea4b4331459f67da6d3c53e183e6',
+                                                      '4358273a4a70f58de9dd0bf960e2b146cfd1b5c389a3643cae5b8dda7ffc5756',
+                                                      '64e4e2a29ed8fcc47a2e2eaca4fde8a1f492964db98973f1aba37c4ed199ca21',
+                                                      '92d30c0ec38266d9fe1cc7abd144c71b7d0227b88fb42d4beb384096bbeb31ab',
+                                                      'a6cdc6bebdf22f47a6736d0b7201fd988ad69ffacfe81ee5b40d77bbae5218ed',
+                                                      'afa9ca5839c59670f4c38f6898089cd8c743157b87ead058e393d5f78d4e07ab',
+                                                      'd56d407f1515ee8a8bfd307f469b175b794f490120aec2b2fe2f98165d5488af',
+                                                      'e01bfae9c239223c409da878d2e45a66bccbe6c5b37684f9951badfb4d12c5ae']}.items()}}
 REVIEWED_ENTRY_COST_DEPENDENCY_VARIANTS = {
     (key[0], REVIEWED_SENTINEL_SCOPE_HASHES.get(key[0], key[1])): {
         **value, 'dependencies': {**value['dependencies'], **REVIEWED_SENTINEL_SCOPE_HASHES},

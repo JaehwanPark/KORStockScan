@@ -491,7 +491,7 @@ def pin_collector_shutdown(workspace, identity):
     payload, raw = R._startup_receipt(path)
     snapshot = payload.get('collector_snapshot') or {}
     if snapshot.get('collector_lifecycle') == 'closed':
-        return _pin_market_closed_collector(Path(workspace), identity, path, payload, raw)
+        return _pin_closed_collector(Path(workspace), identity, path, payload, raw)
     if (snapshot.get('process_pid') != identity['pid']
             or snapshot.get('process_start_ticks') != identity['start_ticks']
             or snapshot.get('collector_lifecycle') != 'running'
@@ -505,13 +505,12 @@ def pin_collector_shutdown(workspace, identity):
                 enqueued_count=snapshot['enqueued_count'])
 
 
-def _pin_market_closed_collector(workspace, identity, path, payload, raw):
-    """Bind a native market-close receipt before stopping an old supervisor.
+def _pin_closed_collector(workspace, identity, path, payload, raw):
+    """Bind an already closed native epoch without requiring Main to be closed.
 
-    Legacy collectors lack actor fields. Their existing WS frame binds the
-    epoch to PID/start/boot/root/commit; the native engine terminal proves why
-    collection ended. Neither a clock cutoff nor PID absence grants closure.
-    The caller separately verifies live or native closed policy consumption.
+    A modern observer-only latency canary can end before its live Main. Legacy
+    closures still require market-close and WS actor proof. Both require exact
+    native writer reconciliation before any restart request.
     """
     from src.engine.error_detectors.process_health import _is_expected_thread_terminal
     selected, _ = R._startup_receipt(workspace/'data/runtime/runtime_release_selection.json')
@@ -525,9 +524,10 @@ def _pin_market_closed_collector(workspace, identity, path, payload, raw):
     closed = datetime.fromisoformat(str(payload.get('generated_at') or ''))
     ended = datetime.fromisoformat(str(terminal.get('last_beat') or ''))
     epoch = snapshot.get('sequence_epoch')
+    canary_stop = snapshot.get('canary_auto_stop_reason')
     if (any(value.tzinfo is None for value in (recorded, closed, ended))
             or not recorded <= closed <= now
-            or not recorded <= ended <= closed
+            or not recorded <= ended <= now
             or any(value.astimezone(H.KST).date() != now.date() for value in (recorded, closed, ended))
             or selected.get('actual_pid_consumed') is not True
             or receipt.get('pid') != identity['pid'] or receipt.get('start_ticks') != identity['start_ticks']
@@ -536,15 +536,36 @@ def _pin_market_closed_collector(workspace, identity, path, payload, raw):
             or type(epoch) is not int or epoch <= 0
             or (heartbeat.get('main_loop') or {}).get('pid') != identity['pid']
             or circuit.get('pid') != identity['pid'] or circuit.get('process_start_ticks') != identity['start_ticks']
-            or terminal.get('alive') is not False
-            or type(terminal.get('unresolved_scalping_count')) is not int
-            or terminal['unresolved_scalping_count'] != 0 or terminal.get('unresolved_scalping_codes') != ''
-            or not _is_expected_thread_terminal('sniper_engine', terminal, now_ts=now.timestamp())):
-        raise ValueError('deployment_market_closed_collector_unproven')
+            or (not canary_stop and (not ended <= closed or terminal.get('alive') is not False
+                or type(terminal.get('unresolved_scalping_count')) is not int
+                or terminal['unresolved_scalping_count'] != 0 or terminal.get('unresolved_scalping_codes') != ''
+                or not _is_expected_thread_terminal('sniper_engine', terminal, now_ts=now.timestamp())))):
+        raise ValueError('deployment_closed_collector_actor_or_terminal_unproven')
     pin = dict(path=str(path), sha256=_digest(raw), pid=identity['pid'],
         start_ticks=identity['start_ticks'], sequence_epoch=epoch,
-        enqueued_count=snapshot['enqueued_count'], basis='native_market_close',
-        terminal=terminal)
+        enqueued_count=snapshot['enqueued_count'],
+        basis='native_observer_canary_stop' if canary_stop else 'native_market_close', terminal=terminal)
+    if canary_stop:
+        from src.engine.scalping.micro_reversion import canary_monitor as C
+        guard_path = Path(selected['release_root'])/'configs'/C.DEFAULT_GUARD_PATH.name
+        if guard_path.is_symlink() or not stat.S_ISREG(guard_path.stat().st_mode):
+            raise ValueError('deployment_canary_guard_config_unproven')
+        guard = C.load_canary_guard(guard_path)
+        evaluated = json.loads(json.dumps(C.evaluate_canary_snapshot(snapshot, guard)))
+        reasons = set(evaluated.get('stop_reasons') or ()) - {'prior_auto_stop:'+str(canary_stop)}
+        if (not isinstance(canary_stop, str) or not reasons
+                or set(canary_stop.split(';')) != reasons
+                or any(not reason.startswith(('producer_callback_latency_p95_exceeded:',
+                    'producer_callback_latency_p99_exceeded:')) for reason in reasons)
+                or evaluated.get('stop_required') is not True or evaluated.get('latency_guard_armed') is not True
+                or payload.get('canary_guard') != evaluated
+                or payload.get('guard_config_sha256') != guard.config_sha256
+                or payload.get('baseline_id') != guard.baseline_id
+                or H._sha(guard_path) != guard.config_sha256
+                or snapshot.get('process_pid') != identity['pid']
+                or snapshot.get('process_start_ticks') != identity['start_ticks']):
+            raise ValueError('deployment_observer_canary_close_unproven')
+        pin['guard_config_source'] = dict(path=str(guard_path), sha256=guard.config_sha256)
     if 'process_pid' in snapshot or 'process_start_ticks' in snapshot:
         if (snapshot.get('process_pid') != identity['pid']
                 or snapshot.get('process_start_ticks') != identity['start_ticks']
@@ -574,13 +595,22 @@ def _pin_market_closed_collector(workspace, identity, path, payload, raw):
 
 def verify_collector_shutdown(pin):
     """Process exit is insufficient: require its immutable, native closed epoch."""
-    from src.engine.scalping.micro_reversion.observer_source_quality import main_raw_epoch_validation
+    from src.engine.scalping.micro_reversion.observer_source_quality import (
+        main_raw_epoch_validation, source_close_verified, source_loss_counters, CANARY_FORBIDDEN_TRUE_FIELDS)
     path = Path(pin['path'])
     payload, raw = R._startup_receipt(path)
     snapshot = payload.get('collector_snapshot') or {}
     epochs = snapshot.get('reconciled_sequence_epochs') or []
-    market_closed = pin.get('basis') == 'native_market_close'
-    if market_closed:
+    if (not isinstance(epochs, list) or not epochs
+            or any(type(epoch) is not int or epoch <= 0 for epoch in epochs)):
+        raise ValueError('deployment_collector_closed_epochs_invalid')
+    already_closed = pin.get('basis') in {'native_market_close', 'native_observer_canary_stop'}
+    guard = pin.get('guard_config_source')
+    if pin.get('basis') == 'native_observer_canary_stop' and not isinstance(guard, dict):
+        raise ValueError('deployment_canary_guard_config_missing')
+    if guard and (Path(guard['path']).is_symlink() or H._sha(guard['path']) != guard['sha256']):
+        raise ValueError('deployment_canary_guard_config_changed')
+    if already_closed:
         actor = pin.get('actor_source')
         if (_digest(raw) != pin['sha256']
                 or actor is not None and _digest(R._startup_receipt(Path(actor['path']))[1]) != actor['sha256']
@@ -588,7 +618,7 @@ def verify_collector_shutdown(pin):
                     or snapshot.get('process_start_ticks') != pin['start_ticks']
                     or snapshot.get('source_contract') != 'main_market_source_v1')):
             raise ValueError('deployment_market_closed_collector_changed')
-    if (not market_closed and (snapshot.get('process_pid') != pin['pid']
+    if (not already_closed and (snapshot.get('process_pid') != pin['pid']
             or snapshot.get('process_start_ticks') != pin['start_ticks'])
             or pin['sequence_epoch'] not in epochs
             or snapshot.get('enqueued_count', -1) < pin['enqueued_count']):
@@ -600,14 +630,30 @@ def verify_collector_shutdown(pin):
     for day in dates:
         receipt = path.parent / 'closed' / f"{day}-{snapshot['sequence_epoch']}.json"
         closed, raw = R._startup_receipt(receipt)
+        native = main_raw_epoch_validation(closed, source_date=day)
+        # A latency canary deliberately remains semantically ineligible. The
+        # deployment consumes byte closure only, never rewrites that guard or
+        # grants research/trading admission to the stopped epoch.
+        canary_drained = (pin.get('basis') == 'native_observer_canary_stop'
+            and closed.get('canary_guard') == payload.get('canary_guard')
+            and closed.get('guard_config_sha256') == guard['sha256']
+            and closed.get('baseline_id') == payload.get('baseline_id')
+            and native.get('status') == 'main_raw_epoch_contract_invalid'
+            and snapshot.get('source_contract') == 'main_market_source_v1'
+            and snapshot.get('collector_lifecycle') == 'closed' and source_close_verified(snapshot)
+            and all(type(snapshot.get(k)) is int and snapshot[k] == 0 for k in source_loss_counters(snapshot))
+            and snapshot.get('broker_order_forbidden') is True
+            and all(snapshot.get(k) is False for k in CANARY_FORBIDDEN_TRUE_FIELDS))
         if (closed.get('collector_snapshot') != snapshot
-                or not main_raw_epoch_validation(closed, source_date=day).get('eligible')):
+                or not (canary_drained or native.get('eligible'))):
             raise ValueError('deployment_collector_closed_epoch_invalid')
         proofs.append(dict(path=str(receipt), sha256=_digest(raw), source_date=day))
     if 'closed_receipts' in pin and proofs != pin['closed_receipts']:
         raise ValueError('deployment_collector_closed_receipts_changed')
     return dict(status='verified', pid=pin['pid'], start_ticks=pin['start_ticks'],
-                sequence_epochs=epochs, receipts=proofs)
+                sequence_epochs=epochs, receipts=proofs,
+                source_admission='native_semantics_unchanged',
+                observer_canary_stopped=pin.get('basis') == 'native_observer_canary_stop')
 
 
 class Deployment:

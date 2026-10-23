@@ -210,6 +210,24 @@ REVIEWED_PREPARATION_HISTORY.setdefault('src/engine/automation/main_market_weakn
 REVIEWED_PREPARATION_HISTORY.setdefault('src/engine/scalping/market_weakness_research.py', set()).update({('8e124bee20aadb75fc399b752973434f9ccd0df7c1de675ca5b70af2aa8ab59c',
   'a98076e2d27f17fc50b25335d9b79b4019d828c4d4b8ade2aa985911af1d5677')})
 
+# Exact observer-canary byte-closure deployment repair; original policy/custody stay unchanged.
+REVIEWED_PREPARATION_HISTORY.setdefault('src/engine/automation/ordered_intraday_deploy.py', set()).update({('404b870046364da476c4df9abb0007312123ea4b4331459f67da6d3c53e183e6',
+  'fcc7c6935434dc1b2e03598bec6fb721997b23cd4c39b6776fa1dfc2afa46423'),
+ ('4358273a4a70f58de9dd0bf960e2b146cfd1b5c389a3643cae5b8dda7ffc5756',
+  'fcc7c6935434dc1b2e03598bec6fb721997b23cd4c39b6776fa1dfc2afa46423'),
+ ('64e4e2a29ed8fcc47a2e2eaca4fde8a1f492964db98973f1aba37c4ed199ca21',
+  'fcc7c6935434dc1b2e03598bec6fb721997b23cd4c39b6776fa1dfc2afa46423'),
+ ('92d30c0ec38266d9fe1cc7abd144c71b7d0227b88fb42d4beb384096bbeb31ab',
+  'fcc7c6935434dc1b2e03598bec6fb721997b23cd4c39b6776fa1dfc2afa46423'),
+ ('a6cdc6bebdf22f47a6736d0b7201fd988ad69ffacfe81ee5b40d77bbae5218ed',
+  'fcc7c6935434dc1b2e03598bec6fb721997b23cd4c39b6776fa1dfc2afa46423'),
+ ('afa9ca5839c59670f4c38f6898089cd8c743157b87ead058e393d5f78d4e07ab',
+  'fcc7c6935434dc1b2e03598bec6fb721997b23cd4c39b6776fa1dfc2afa46423'),
+ ('d56d407f1515ee8a8bfd307f469b175b794f490120aec2b2fe2f98165d5488af',
+  'fcc7c6935434dc1b2e03598bec6fb721997b23cd4c39b6776fa1dfc2afa46423'),
+ ('e01bfae9c239223c409da878d2e45a66bccbe6c5b37684f9951badfb4d12c5ae',
+  'fcc7c6935434dc1b2e03598bec6fb721997b23cd4c39b6776fa1dfc2afa46423')})
+
 def reviewed_preparation_pair(relative, old, current):
     return (REVIEWED_PREPARATION_SOURCES.get(relative) == (old, current)
             or (old, current) in REVIEWED_PREPARATION_HISTORY.get(relative, ()))

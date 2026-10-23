@@ -1702,3 +1702,61 @@ def test_summary_migration_rejection_prevents_hold_and_drain(driver, monkeypatch
     assert calls == ['summary_preflight', 'failed']
     assert before == (d.selection.read_bytes(), checklist.read_bytes())
     assert not d.hold.exists() and not d.flag.exists()
+
+
+@pytest.mark.parametrize('damage',[None,'pid','start','missing_actor','source_contract',
+    'reason','guard','guard_config','missing_closed','loss','closed_changed',
+    'heartbeat_actor','future_close','previous_day','unconsumed','other_stop','epochs','source_date','changed_after_pin'])
+def test_verified_observer_canary_close_is_not_a_market_close_requirement(tmp_path,market_closed_collector,damage):
+    from src.engine.scalping.micro_reversion import canary_monitor as C
+    identity,payload,receipt,selection,frame,heartbeat,persist=market_closed_collector
+    config=Path(selection['release_root'])/'configs'/C.DEFAULT_GUARD_PATH.name
+    config.parent.mkdir(parents=True);config.write_bytes(C.DEFAULT_GUARD_PATH.read_bytes())
+    snapshot=payload['collector_snapshot'];reason='producer_callback_latency_p99_exceeded:5.000000>2.000000'
+    snapshot.update(process_pid=identity['pid'],process_start_ticks=identity['start_ticks'],
+        producer_0b_callback_count=1000,producer_callback_latency_p95_ms=0.1,
+        producer_callback_latency_p99_ms=5.0,canary_auto_stop_reason=reason)
+    guard=C.load_canary_guard(config)
+    payload.update(guard_config_sha256=guard.config_sha256,baseline_id=guard.baseline_id,
+        canary_guard=json.loads(json.dumps(C.evaluate_canary_snapshot(snapshot,guard))))
+    heartbeat['threads']['sniper_engine'].update(alive=True,last_beat='2026-08-08T20:00:59+09:00')
+    if damage=='pid':snapshot['process_pid']+=1
+    elif damage=='start':snapshot['process_start_ticks']='999'
+    elif damage=='missing_actor':snapshot.pop('process_pid')
+    elif damage=='source_contract':snapshot['source_contract']='unknown'
+    elif damage=='reason':snapshot['canary_auto_stop_reason']='unknown_stop'
+    elif damage=='guard':payload['canary_guard']['stop_required']=False
+    elif damage=='guard_config':config.write_bytes(config.read_bytes()+b'\n# changed\n')
+    elif damage=='loss':snapshot['writer_dropped_envelope_count']=1
+    elif damage=='heartbeat_actor':heartbeat['ai_circuit']['pid']=999
+    elif damage=='future_close':payload['generated_at']='2026-08-08T20:02:00+09:00'
+    elif damage=='previous_day':selection['actual_pid_receipt']['recorded_at_kst']='2026-08-07T10:00:00+09:00'
+    elif damage=='unconsumed':selection['actual_pid_consumed']=False
+    elif damage=='epochs':snapshot['reconciled_sequence_epochs'].append('unknown')
+    elif damage=='source_date':payload['source_date']='2026-08-09'
+    elif damage=='other_stop':
+        snapshot['canary_auto_stop_reason']='nonzero_stop_metric:writer_error_count=1'
+        payload['canary_guard']=json.loads(json.dumps(C.evaluate_canary_snapshot(snapshot,guard)))
+    persist()
+    if damage=='missing_closed':receipt.unlink()
+    elif damage=='closed_changed':
+        changed=json.loads(receipt.read_bytes());changed['collector_snapshot']['enqueued_count']+=1;receipt.write_text(json.dumps(changed))
+    if damage not in (None,'changed_after_pin'):
+        with pytest.raises((ValueError,FileNotFoundError)):D.pin_collector_shutdown(tmp_path,identity)
+    else:
+        pin=D.pin_collector_shutdown(tmp_path,identity)
+        assert pin['basis']=='native_observer_canary_stop'
+        assert D.verify_collector_shutdown(pin)['status']=='verified'
+        from src.engine.scalping.micro_reversion.observer_source_quality import main_raw_epoch_validation
+        assert main_raw_epoch_validation(payload,source_date='2026-08-08')['eligible'] is False
+        without_guard=dict(pin);without_guard.pop('guard_config_source')
+        with pytest.raises(ValueError):D.verify_collector_shutdown(without_guard)
+        changed=json.loads(receipt.read_bytes());changed['canary_guard']['stop_required']=False
+        receipt.write_text(json.dumps(changed))
+        with pytest.raises(ValueError):D.verify_collector_shutdown(pin)
+        persist()
+        if damage=='changed_after_pin':
+            config.write_bytes(config.read_bytes()+b'\n# later change\n')
+            with pytest.raises(ValueError):D.verify_collector_shutdown(pin)
+    assert not (tmp_path/'restart.flag').exists()
+    assert not (tmp_path/'data/runtime/operator_startup_hold.json').exists()

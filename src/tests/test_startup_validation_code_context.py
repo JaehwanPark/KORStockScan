@@ -1340,7 +1340,8 @@ def test_main_preparation_independently_binds_postclose_workflow_revision(damage
     'src/engine/automation/main_trailing_source_reuse.py',
     'src/engine/automation/main_trailing_source_assembler.py',
     'src/engine/automation/main_market_weakness_research.py',
-    'src/engine/scalping/market_weakness_research.py'])
+    'src/engine/scalping/market_weakness_research.py',
+    'src/engine/automation/ordered_intraday_deploy.py'])
 @pytest.mark.parametrize('damage', [None,'unreviewed','wrong_origin'])
 def test_main_preparation_independently_reviews_sentinel_route_sources(relative,damage):
     import subprocess
