@@ -5056,6 +5056,24 @@ REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
     for name, current in REVIEWED_HOLDING_STREAM_HASHES.items()}}
 
 
+# Original issued-policy origins already accepted by the consumed 9e820 reader.
+REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
+    name: REVIEWED_ENTRY_COST_PAIRS.get(name, ()) + pairs for name, pairs in {'src/engine/automation/main_trailing_source_assembler.py': (('921fcb2621dfd444e029fe6ddd8bd9c1d933c4fbbc0f4dda2ec0b3ae97939fa8',
+                                                              '1aa864f4fd5db4f3ef4d14b6983617c9ac41cc208e792497cf34134b4e99bc52'),),
+ 'src/engine/automation/pre_submit_delay_research_review.py': (('159b04fa4b5486e43feba9ca2dee73b7e1f9052926f729cb6169ff0ff89ad2ac',
+                                                                '79fd3246300d7636c2e8d0c4ba33cbd2d26cf6cbc9a431b1d87f02e0725076d0'),),
+ 'src/engine/infrastructure/startup_validation_code_context.py': (('5e78314e2105d6a8c645bda55aed36036db797ef447dc5085c87dd3cf91d8bed',
+                                                                   '5a881b096932962604f6aab3a995378d0246ea30e7cb3c17e3ef7e3b93b2288d'),),
+ 'src/engine/kiwoom_sniper_v2.py': (('522bc4a71a1375144db798b2e451fcee03a44e80d57323c7996fa365bf20c71c',
+                                     'bbbe478a566caa33fe2fcf8889d3e9c05dd15409e10f70eb97caaef76595e365'),),
+ 'src/engine/lifecycle/research_json_stream.py': (('53bd6a0cec6435ff0cfb399ad75fc9edd0b479463c06dea77bc5cae5e59db4b6',
+                                                   'cfaf531c495730a6ae2f159601153749f8dc53ab297576250e03de61decf796b'),),
+ 'src/engine/scalping/holding_decision_context.py': (('783f95ab9cd3ef2813151949cdf6aa2c2ab6ed3a1443ae60d6600d21dcd52898',
+                                                      'afbcc348707d87032e8dcdc01c2c84c7712fa69e8cbe387342c3708fdd09e49b'),),
+ 'src/utils/pipeline_event_logger.py': (('fde49c9a27dfc5c858d765353a0a898ac45728d57ecfa0526c4a6df4fef4c99e',
+                                         '402e7391e0083ee87fdcaa248e9a46aaabd960d8b967a3df419d67b8b735b624'),)}.items()}}
+
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
