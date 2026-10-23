@@ -61,6 +61,21 @@ def check(case, **kwargs):
         owner_context=case.owner, payload=case.payload, **kwargs)
 
 
+def test_policy_revalidation_clock_survives_physical_terminal(case):
+    error = ValueError("auxiliary_decision_generation_changed")
+    error.entry_submit_revalidation = {"entered_epoch": 104.9, "checked_epoch": 105.2,
+        "original_signal_epoch": 100., "native_load_ms": 300.}
+    def fail():
+        raise error
+    with pytest.raises(guard.EntrySendGuardBlocked) as blocked:
+        guard.check_entry_send_context(replace(case.context, binding_reader=fail),
+            api_id="kt10000", owner_context=case.owner, payload=case.payload)
+    result = blocked.value.receipt
+    assert not result["allowed"]
+    assert result["revalidation_error"] == str(error)
+    assert result["entry_submit_revalidation"] == error.entry_submit_revalidation
+
+
 def transport(case, monkeypatch, responses):
     posts = []
     def post(*args, **kwargs):

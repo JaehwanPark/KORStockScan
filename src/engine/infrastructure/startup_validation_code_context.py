@@ -284,6 +284,33 @@ REVIEWED_PREPARATION_HISTORY.setdefault('src/engine/scalping/initial_quantity_mo
  ('ef78c5ae7aa9dd7eab7e7ce3575329943713750fc70b248f6e992766511fd114',
   '87f78306653fc9f51d890a3531752301589782639b1832ad38a24f7c29c4215d')})
 
+# Reviewed final-submit view and fresh native successor; no policy change.
+REVIEWED_PREPARATION_HISTORY.setdefault('src/engine/sniper_state_handlers.py', set()).update({('2e69e440301dbc3bf4ec7020abc29b4a37b0dfd5dd624480378c7eab491c45d9',
+  '56a0613b596418c0ade581aabedef12d38371ff7d4d2af9fffea2cc00665dd20'),
+ ('8a0c18d2c097b063a8349907f39e6057d43b7ad9ef173e5f6c4e1be48f8b21f9',
+  '56a0613b596418c0ade581aabedef12d38371ff7d4d2af9fffea2cc00665dd20'),
+ ('b3b2965f65f33e5e5bf52fd960757d6bdbe6b5a63e6844bd95f5dc1d5353ea1d',
+  '56a0613b596418c0ade581aabedef12d38371ff7d4d2af9fffea2cc00665dd20'),
+ ('bd2c589431b0f507b2bbbba31cfc700a22dcab07b914313dc101add2cc9c9686',
+  '56a0613b596418c0ade581aabedef12d38371ff7d4d2af9fffea2cc00665dd20'),
+ ('eaca4d2d23d2764c42e3f7cc2f73d04db0b29bb8115cabac4f10cf48e89d57aa',
+  '56a0613b596418c0ade581aabedef12d38371ff7d4d2af9fffea2cc00665dd20'),
+ ('edfd4af04194182dff2a3ced3952dbfc5dc989d85906409c0172fabadb381419',
+  '56a0613b596418c0ade581aabedef12d38371ff7d4d2af9fffea2cc00665dd20')})
+REVIEWED_PREPARATION_HISTORY.setdefault('src/engine/scalping/reversal_evaluation_context.py', set()).update({('b5753ae20f5d8385f7ccf942131d591d5b4feb2dd1f7c278903c74f504201d72',
+  '7a20e1c32f0a4b54ebb25ae8970939184cbe9cef2e590adf68fb2791561e2458'),
+ ('c3d732d937787fd881ebf8f47437f4164ba01582611bc332fe23fd784ed3fc43',
+  '7a20e1c32f0a4b54ebb25ae8970939184cbe9cef2e590adf68fb2791561e2458'),
+ ('fb5d1ffb46da13d69390c84c3d2e83de03842bebb3978d3a22bbf6fb6bb4d654',
+  '7a20e1c32f0a4b54ebb25ae8970939184cbe9cef2e590adf68fb2791561e2458')})
+REVIEWED_PREPARATION_HISTORY.setdefault('src/engine/monitoring/runtime_performance.py', set()).update({('3414c2eee58fc8c5547b11ad6786f1775b20d4cfb6e9b0ce78ed16e17a34e5d4',
+  'ad937198678bef9cc5ef62e6aa41d9b980a0427d456608a94a1317b4fcd3cb39')})
+REVIEWED_PREPARATION_HISTORY.setdefault('src/trading/entry/physical_send_guard.py', set()).update({('73b332cc40d021cd1b62b00cf140b8ee2abdca19007fd161d4b17ab57056e946',
+  '1d5d6f7feb0fba4062d770db52dc74d0a8fca8dbdd10b48e0485c9ec80865c27')})
+REVIEWED_PREPARATION_HISTORY.setdefault('src/engine/monitoring/policy_generation_code_handoff.py', set()).update({('4db24d4d542b8cc6142c1b85e0839bfce6a7116aaae5f49e2b0d90e4174e3d62',
+  '41ebbc34a2fd015a0cd76ae525c1e6e859edbaa6dc4e4e88e4cc76a44a7a9bef'),
+ ('b65c616d024460c825d73472311ddf995282069cd58dfdec9241447d4285d841',
+  '41ebbc34a2fd015a0cd76ae525c1e6e859edbaa6dc4e4e88e4cc76a44a7a9bef')})
 
 def reviewed_preparation_pair(relative, old, current):
     return (REVIEWED_PREPARATION_SOURCES.get(relative) == (old, current)

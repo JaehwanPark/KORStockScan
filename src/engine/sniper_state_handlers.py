@@ -61617,12 +61617,7 @@ def _main_initial_physical_send_context(
             if not remaining.intersection(assessment["matched_policy_refs"]):
                 raise ValueError("reversal_all_requested_signals_invalidated")
         from src.engine.scalping.reversal_evaluation_context import validate_submit
-        validate_submit(DATA_DIR, current, now=time.time())
-        bundle_hash = current.get("machine_bundle_sha256") or current.get("policy_bundle_hash")
-        if bundle_hash:
-            from src.engine.scalping.mechanistic_entry_runtime_policy import validate_attempt_generation
-            if not validate_attempt_generation(bundle_hash, data_root=DATA_DIR)["allowed"]:
-                raise ValueError("initial_send_policy_generation_changed")
+        validate_submit(DATA_DIR, current, now=time.time(), check_generation=True)
         return (canonical_binding({"machine": projected,
                                    "ai_decision_trace_id": stock.get("last_watching_ai_decision_trace_id")}),
                 canonical_binding(_entry_quote_time_policy().active_contract_dict()))
@@ -70709,6 +70704,8 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             validate_submit(DATA_DIR, stock.get("last_watching_ai_machine_primary_fields") or {}, now=time.time())
         except (OSError, ValueError, KeyError, TypeError) as exc:
             _log_entry_pipeline(stock, code, "auxiliary_binding_submit_recheck", reason=str(exc),
+                entry_submit_revalidation=json.dumps(getattr(exc, 'entry_submit_revalidation', {}),
+                    sort_keys=True, separators=(',', ':')),
                 actual_order_submitted=False, broker_order_forbidden=True)
             _set_async_terminal(stock, 'auxiliary_binding_submit_recheck')
             return False
@@ -84193,7 +84190,7 @@ def handle_watching_state(
                         except Exception as exc:
                             from src.engine.monitoring.runtime_performance import failure
                             failure('async_native_ack', type(exc).__name__, emit_log=False)
-                    if (claim and result.generation_kind == 'fixed_watch'
+                    if (claim and result.generation_kind in {'fixed_watch', 'scanner'}
                             and stock.get('status') == 'WATCHING'
                             and stock.get('_scanner_scheduler_lane') != 'COMMIT'
                             and not stock.get('_fixed_watch_async_claim')

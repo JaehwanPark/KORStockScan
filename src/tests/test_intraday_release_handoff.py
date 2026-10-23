@@ -2202,6 +2202,24 @@ def test_postclose_recovery_handoff_keeps_complete_reviewed_generation(tmp_path,
 
 
 @pytest.mark.parametrize('family',['main_stop','holding_vote','pre_submit_delay'])
+@pytest.mark.parametrize('generation',['consumed_observer_io','consumed_index_sentinel'])
+@pytest.mark.parametrize('fault',[None,'successor_mix'])
+def test_pre_submit_keeps_consumed_preparation_and_rejects_mixed_successor(tmp_path,family,generation,fault):
+    test_entry_cost_handoff_keeps_exact_complete_generation(
+        tmp_path,family,fault,generation,'src/engine/sniper_state_handlers.py')
+
+
+@pytest.mark.parametrize('family',['main_stop','holding_vote','pre_submit_delay'])
+@pytest.mark.parametrize('dependency',['src/engine/sniper_state_handlers.py',
+    'src/engine/scalping/reversal_evaluation_context.py',
+    'src/engine/monitoring/runtime_performance.py','src/trading/entry/physical_send_guard.py',
+    'src/engine/monitoring/policy_generation_code_handoff.py'])
+def test_pre_submit_handoff_rejects_unreviewed_dependency(tmp_path,family,dependency):
+    test_entry_cost_handoff_keeps_exact_complete_generation(
+        tmp_path,family,'committed_change','current',dependency)
+
+
+@pytest.mark.parametrize('family',['main_stop','holding_vote','pre_submit_delay'])
 @pytest.mark.parametrize('fault',[None,'missing','dirty','committed_change','parent_mix'])
 @pytest.mark.parametrize('generation',['current','consumed_pre_startup','consumed_pre_shutdown','consumed_pre_native_label','consumed_pre_coordination','consumed_pre_prepared_validation','consumed_pre_prepared_repair','consumed_pre_main_preparation','consumed_pre_prepared_start','consumed_pre_first_turn','consumed_pre_expiry_health','consumed_pre_signed_surge','consumed_pre_preassessment','consumed_pre_prestart','consumed_pre_prepared_owner'])
 def test_entry_cost_handoff_keeps_exact_complete_generation(tmp_path,family,fault,generation,
@@ -2215,6 +2233,7 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(tmp_path,family,faul
     subprocess.run(['git','-C',str(root),'checkout','-q','75e0fbbf7'],check=True)
     hashes=({'current':handoff.REVIEWED_NATIVE_BUY_COST_PROFILE,
         'consumed_observer_io':handoff.REVIEWED_OBSERVER_IO_ENTRY_COST_HASHES,
+        'prepared_pre_submit':handoff.REVIEWED_PRE_SUBMIT_ENTRY_COST_HASHES,
         'consumed_index_sentinel':handoff.REVIEWED_ENTRY_COST_HASHES,
         'consumed_sentinel':handoff.REVIEWED_ENTRY_COST_DEPLOYED_SENTINEL_HASHES,
         'consumed_pre_finalization':handoff.REVIEWED_PRE_FINALIZATION_HASHES,
@@ -2236,7 +2255,7 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(tmp_path,family,faul
     for name in hashes:
         content=((canonical/name).read_bytes() if generation=='current' else
             subprocess.check_output(['git','-C',str(canonical),'show',
-                {'consumed_observer_io':'a2ca8e7d8','consumed_index_sentinel':'926ebca82','consumed_sentinel':'2b7ca0380','consumed_native_preopen':'9a8e59bfc','consumed_pre_finalization':'91e5d2702','consumed_pre_startup':'90bf2d11f','consumed_pre_shutdown':'70fc572f8',
+                {'prepared_pre_submit':'b2dbb0862','consumed_observer_io':'a2ca8e7d8','consumed_index_sentinel':'926ebca82','consumed_sentinel':'2b7ca0380','consumed_native_preopen':'9a8e59bfc','consumed_pre_finalization':'91e5d2702','consumed_pre_startup':'90bf2d11f','consumed_pre_shutdown':'70fc572f8',
                  'consumed_pre_native_label':'b1519a2d4','consumed_pre_coordination':'3dd9f1bf5','consumed_pre_prepared_validation':'bf330ae92','consumed_pre_prepared_repair':'81f43b8ba','consumed_pre_main_preparation':'8644e15fc','consumed_pre_prepared_start':'3b951f1f1','consumed_pre_first_turn':'e9ee2c8ea','consumed_pre_expiry_health':'9476e9ecd','consumed_pre_signed_surge':'bf26ddf0e','consumed_pre_preassessment':'fc51a179b','consumed_pre_prestart':'64ec63a87','consumed_pre_prepared_owner':'d346aa3af'}[generation]+':'+name]))
         (root/name).write_bytes(content)
     name='src/engine/automation/intraday_release_handoff.py'
@@ -2244,6 +2263,7 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(tmp_path,family,faul
     source=dependency
     path=root/source
     if fault=='missing':path.unlink()
+    elif fault=='successor_mix':path.write_bytes((canonical/source).read_bytes())
     elif fault=='parent_mix':
         # The immediate adapter predecessor is a valid complete issued profile.
         # Mix an earlier adapter instead to exercise an unreviewed combination.
@@ -2443,3 +2463,10 @@ def test_native_buy_cost_handoff_keeps_exact_reviewed_generation(tmp_path,family
 def test_native_buy_cost_handoff_preserves_consumed_observer(tmp_path,family,fault):
     test_entry_cost_handoff_keeps_exact_complete_generation(
         tmp_path,family,fault,'consumed_observer_io',dependency='src/engine/lifecycle/broker_cost_allocation.py')
+
+
+@pytest.mark.parametrize('family', ['pre_submit_delay', 'main_stop', 'holding_vote'])
+@pytest.mark.parametrize('fault', [None, 'dirty', 'committed_change'])
+def test_native_buy_cost_preserves_prepared_submit_profile(tmp_path,family,fault):
+    test_entry_cost_handoff_keeps_exact_complete_generation(tmp_path,family,fault,'prepared_pre_submit',
+        dependency='src/engine/lifecycle/broker_cost_allocation.py')

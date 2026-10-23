@@ -533,7 +533,8 @@ def test_post_aux_guard_successor_does_not_transitively_promote_older_reports(tm
     *[(family,'REVIEWED_SHUTDOWN_CONSUMED_SUCCESSORS') for family in validation.PLANS],
     *[(family,review_map) for family in ('rising_missed','holding_vote') for review_map in (
         'REVIEWED_NATIVE_SELECTION_SUCCESSORS','REVIEWED_NATIVE_SELECTION_SOURCE_SUCCESSORS',
-        'REVIEWED_NATIVE_SELECTION_CONSUMED_SUCCESSORS','REVIEWED_ENTRY_ROUTE_SOURCE_SUCCESSORS')],
+        'REVIEWED_NATIVE_SELECTION_CONSUMED_SUCCESSORS','REVIEWED_ENTRY_ROUTE_SOURCE_SUCCESSORS',
+        'REVIEWED_PRE_SUBMIT_CONSUMED_SUCCESSORS')],
     *[(family,'REVIEWED_QUANTITY_CAPTURE_SUCCESSORS') for family in ('rising_missed','holding_vote')],
     ('entry_cancel_wait','REVIEWED_BUY_IDENTITY_SUCCESSORS'),
     *[(family,'REVIEWED_ENTRY_RECEIPT_SUCCESSORS') for family in ('entry_cancel_wait','rising_missed','holding_vote')],

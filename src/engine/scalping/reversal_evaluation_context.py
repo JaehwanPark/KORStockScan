@@ -61,21 +61,49 @@ def _prepared_v6_claim(policy, active, *, data_root, day):
         return valid
 
 
-def validate_submit(data_root,fields,*,now):
-    """Read-only final boundary; preserve frozen auxiliary reader contracts."""
+def validate_submit(data_root,fields,*,now,check_generation=False):
+    """Use one fresh immutable view for independent final submit validators.
+
+    Never share this view across provider/order I/O. The original generation
+    validator still runs; its nested load avoids copying the whole policy.
+    """
     from datetime import datetime
     from zoneinfo import ZoneInfo
     from contextlib import ExitStack
     from src.engine.monitoring.runtime_performance import entry_stage
     from src.engine.scalping import reversal_auxiliary_intraday as auxiliary
+    started = time.perf_counter()
     assessment=fields.get('entry_mechanistic_policy_decision') or {}
-    if not assessment.get('auxiliary_registry_sha256'):return
+    expected = (fields.get('machine_bundle_sha256') or fields.get('policy_bundle_hash')) if check_generation else None
+    if not assessment.get('auxiliary_registry_sha256') and not expected:return
     day=datetime.fromtimestamp(now,ZoneInfo('Asia/Seoul')).date().isoformat()
-    with N.signature_pass(),ExitStack() as boundary:
-        with entry_stage('entry_submit_native_load'):
-            active=boundary.enter_context(N.verified_evaluation(data_root=Path(data_root),target_date=day))
-        with entry_stage('entry_submit_auxiliary'):
-            auxiliary.validate_decision(data_root,dict(continuous_reversal_assessment=assessment),active,now=now)
+    loaded = checked = None
+    active = None
+    try:
+        with N.signature_pass(),ExitStack() as boundary:
+            with entry_stage('entry_submit_native_load'):
+                active=boundary.enter_context(N.verified_evaluation(data_root=Path(data_root),target_date=day))
+            loaded = time.perf_counter()
+            if assessment.get('auxiliary_registry_sha256'):
+                with entry_stage('entry_submit_auxiliary'):
+                    checked = now + max(0., time.perf_counter() - started)
+                    auxiliary.validate_decision(data_root,dict(continuous_reversal_assessment=assessment),active,now=checked)
+            if expected:
+                with entry_stage('entry_submit_generation'):
+                    generation = N.validate_attempt_generation(expected, data_root=Path(data_root),
+                        now=datetime.fromtimestamp(now + max(0.,time.perf_counter()-started),ZoneInfo('Asia/Seoul')))
+                    if not generation['allowed']:
+                        raise ValueError('initial_send_policy_generation_changed')
+    except (OSError,ValueError,KeyError,TypeError) as exc:
+        # Enrich the existing terminal, retaining the original reason. A generic
+        # frozen-validator error alone does not prove a policy generation change.
+        exc.entry_submit_revalidation = dict(
+            entered_epoch=now, checked_epoch=checked,
+            native_load_ms=None if loaded is None else max(0.,loaded-started)*1000,
+            elapsed_ms=max(0.,time.perf_counter()-started)*1000,
+            original_signal_epoch=(assessment.get('event') or {}).get('epoch'),
+            expected_bundle_sha256=expected, current_bundle_sha256=(active or {}).get('bundle_sha256'))
+        raise
 
 
 def validate_before_provider(policy, *, data_root, model):

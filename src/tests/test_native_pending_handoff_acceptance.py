@@ -83,8 +83,10 @@ class DeferredExecutor:
 
 
 @pytest.fixture
-def lane(monkeypatch):
+def lane(monkeypatch, request):
     clock = Clock()
+    nonfixed = getattr(request, 'param', None) == 'nonfixed_regular'
+    if nonfixed:clock.advance(3600)
     for module in (H, R, D, A, SOURCE):
         monkeypatch.setattr(module, 'time', clock)
     for name in ('_READY', '_SELECTED_READY', '_LIFECYCLE_PENDING', '_NATIVE_VISIT_HINTS', '_SIGNALS'):
@@ -108,7 +110,8 @@ def lane(monkeypatch):
         wait_results.append(resolution['original_result'].request_id)
     monkeypatch.setattr(H, '_handle_watching_state_impl', terminal_wait)
 
-    code, item, venue, market = '034020', '034020_NX', 'NXT', 'PRE'
+    code, item, venue, market = (('007810','007810_AL','SOR','REGULAR') if nonfixed
+                                else ('034020', '034020_NX', 'NXT', 'PRE'))
     band = N.C.cell_key(code, market, 50000)
     scope = (code, venue, item, market, '2026-10-15', band)
     bid = 'fixture_momentum'
@@ -131,20 +134,27 @@ def lane(monkeypatch):
     wake = ControlledEvent(clock)
     coordinator.completion_event = coordinator.ai_dispatcher.completion_event = wake
     R.set_native_ready_event(wake)
-    route = W.session_route(clock.time(), code)
+    route = (dict(bucket='krx_regular',item=item,route='krx_nxt_integrated',venue='KRX') if nonfixed
+             else W.session_route(clock.time(), code))
     stock = dict(id=1, code=code, name='fixture', status='WATCHING', buy_qty=0,
         watch_origin=W.WATCH_ORIGIN, watch_admission_id='fixture-watch',
-        watch_generation_id=W.generation_id(clock.time(), route), broker_route=venue,
+        watch_generation_id=None if nonfixed else W.generation_id(clock.time(), route), broker_route=venue,
         market_session_bucket=route['bucket'])
+    if nonfixed:
+        for key in ('watch_origin','watch_generation_id','watch_admission_id'):stock.pop(key,None)
+        stock.update(scanner_promotion_id='fixture-promotion',effective_venue='KRX',
+            venue_resolution='explicit_session_cohort',source_signature='VALUE_TOP')
     ws = dict(curr=50000, quote_stale=False, context_stale=False,
         last_realtime_type_item={'0B': item, '0D': item}, market_session_bucket=route['bucket'],
         market_data_transport_epoch=1, last_realtime_type_ts={'0D': clock.time()},
-        realtime_type_snapshots_by_route={'NX|nxt_only': {'0D': {
-            'item': item, 'transport_epoch': 1, 'observed_epoch': clock.time()}}})
+        realtime_type_snapshots_by_route={('AL|krx_nxt_integrated' if nonfixed else 'NX|nxt_only'): {'0D': {
+            'item': item, 'transport_epoch': 1, 'observed_epoch': clock.time(),
+            'market_route':route['route'],'route_sequence':1}}})
     requests = []
 
     def emit(seq):
-        event_id = f'2026-10-15:NXT:NXT_PREMARKET:{code}:1:{seq}'
+        session = 'SOR_REGULAR' if nonfixed else 'NXT_PREMARKET'
+        event_id = f'2026-10-15:{venue}:{session}:{code}:1:{seq}'
         event = dict(epoch=clock.time(), event_id=event_id, signal_id=event_id,
             native_epoch=1, native_sequence=seq, symbol=code, source_item=item,
             venue=venue, market=market, confirmation_price=50000, entry_ask=50000,
@@ -169,7 +179,10 @@ def lane(monkeypatch):
         old_event = emit(1)
         visit()
         old_claim = claim()
-        generation = A.FixedWatchGeneration.from_claim(code, old_claim)
+        if nonfixed:
+            from src.engine.scalping.scanner_runtime_scheduler import ScannerGeneration
+            generation=ScannerGeneration(code,'fixture-promotion',1,1,'KRX',clock.time(),clock.time(),50000,'VALUE_TOP')
+        else:generation = A.FixedWatchGeneration.from_claim(code, old_claim)
         context = A.ScannerAsyncEvalContext.create(generation=generation, cache_key='original',
             submitted_epoch=clock.time(), deadline_epoch=D.claim_deadline_epoch(old_claim),
             stock_snapshot={**stock, '_continuous_reversal_pending_claim': old_claim},
@@ -179,8 +192,8 @@ def lane(monkeypatch):
         request = A.ScannerAsyncEvalRequest(context=context, prepare=forbidden, evaluate=forbidden)
         assert coordinator.submit(request).accepted
         requests.append(request)
-        stock.update(_fixed_watch_async_claim=deepcopy(old_claim),
-            _continuous_reversal_pending_claim=deepcopy(old_claim),
+        if not nonfixed:stock['_fixed_watch_async_claim']=deepcopy(old_claim)
+        stock.update(_continuous_reversal_pending_claim=deepcopy(old_claim),
             _scanner_async_generation_id=generation.generation_id,
             _scanner_async_cache_key=context.cache_key)
         assert coordinator.wait_for_completion(1.0)  # consume the original native wake
@@ -198,7 +211,8 @@ def lane(monkeypatch):
         assert len(notifications) == 1
         visit()
         H.handle_watching_state(stock, code, ws, None, now_ts=clock.time(),
-            scanner_async_eval_coordinator=coordinator, scanner_async_commit_phase=True)
+            scanner_async_eval_coordinator=coordinator, scanner_async_commit_phase=True,
+            scanner_async_generation=requests[0].context.generation if nonfixed else None)
         assert not coordinator.has_completed_result()
         assert '_fixed_watch_async_claim' not in stock
         assert '_scanner_async_generation_id' not in stock
@@ -427,6 +441,28 @@ def test_unsent_native_pass_releases_arm_before_first_successor_revisit(lane, mo
     assert D.claim_deadline_epoch(old_claim) == old_event['epoch'] + 5
     assert lane.clock.time() == ready_at and not lane.wake.blocked_seconds
     assert len(lane.requests) == 1  # Never restart or resend the old provider request.
+
+
+@pytest.mark.parametrize('lane',['nonfixed_regular'],indirect=True)
+def test_nonfixed_regular_unsent_pass_revisits_fresh_successor_without_old_pass(lane,monkeypatch):
+    old_event,old_claim,request,successor=_complete_unsent_pass(lane,monkeypatch)
+    assert (request.context.request_id,'accepted_to_entry_path','commit_allowed') in lane.dispositions, lane.dispositions
+    assert not lane.stock.get('entry_armed')
+    assert lane.wake.is_set()
+    assert R.prioritize_native_watches([],now=lane.clock.time(),all_targets=[lane.stock],
+        processed_target_ids={id(lane.stock)},revisited_target_ids=set())==[lane.stock]
+    lane.visit()
+    old_deadline=dict(lane.stock['_async_entry_decision_deadline'])
+    refresh=H._resolve_watching_state_change_refresh(lane.stock,lane.ws,
+        now_ts=lane.clock.time(),last_ai_time=lane.clock.time(),cooldown_sec=60)
+    assert refresh['allowed'] and refresh['event_id']==successor['event_id']
+    fresh=lane.stock['_continuous_reversal_pending_claim']
+    assert fresh['token']!=old_claim['token'] and fresh['snapshot'][0]['source_item']=='007810_AL'
+    assert fresh['snapshot'][0]['venue']=='SOR'
+    assert D.claim_deadline_epoch(fresh)==successor['epoch']+5
+    assert D.claim_deadline_epoch(old_claim)==old_event['epoch']+5
+    assert lane.stock['_async_entry_decision_deadline']==old_deadline
+    assert lane.stock['last_watching_ai_decision_trace_id']=='original-trace'
 
 
 @pytest.mark.parametrize('protection', [

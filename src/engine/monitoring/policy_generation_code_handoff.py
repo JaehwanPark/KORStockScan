@@ -376,10 +376,15 @@ REVIEWED_NATIVE_SELECTION_CONSUMED_SUCCESSORS = {
 # Review: docs/audits/postclose-root-cause-recovery-review-2026-10-19.md.
 REVIEWED_ENTRY_ROUTE_SOURCE_SUCCESSORS = {
     'rising_missed': ('b1fb8b69fb938893d36c8b16192bbd0cd5e414f169b8304374d781cc54248ab5',
-                      '6d493cf1a74732175bfeb2e27af9c53de44d8a001bc0b1d01296888671da22de'),
+                      'b8583110470210c0d71035a472d95bc8379ea5d53b56e7217897f397e4490a56'),
     'holding_vote': ('b37bdd2ec37e69e281fad273e3b9d07dab8aaf559c5a7841b9d4473141beb9ee',
-                     '2e0f07b39199681be1f55a4645e9dcd72438519e955546236a436f9cdee35e36'),
+                     'a3cc6a2a30d98cc9445c40b9a51cd07203d0cc01693fd6474a5be24d343c1205'),
 }
+# Exact actually consumed parent; original report and independent current fixture are mandatory.
+REVIEWED_PRE_SUBMIT_CONSUMED_SUCCESSORS = {'holding_vote': ('f658caee8304f4461764301dc54774aef42c2867ff0bb340dc4f39b92fc28179',
+                  'a3cc6a2a30d98cc9445c40b9a51cd07203d0cc01693fd6474a5be24d343c1205'),
+ 'rising_missed': ('6d493cf1a74732175bfeb2e27af9c53de44d8a001bc0b1d01296888671da22de',
+                   'b8583110470210c0d71035a472d95bc8379ea5d53b56e7217897f397e4490a56')}
 
 def _historical_fixture(contract, data, family, *, late_report=None):
     """Preserve a prior fixture without using it to certify the successor."""
@@ -515,7 +520,8 @@ def current_fixture_observation(observed, data):
                     or actual_pair == REVIEWED_NATIVE_SELECTION_SUCCESSORS.get(family)
                     or actual_pair == REVIEWED_NATIVE_SELECTION_SOURCE_SUCCESSORS.get(family)
                     or actual_pair == REVIEWED_NATIVE_SELECTION_CONSUMED_SUCCESSORS.get(family)
-                    or actual_pair == REVIEWED_ENTRY_ROUTE_SOURCE_SUCCESSORS.get(family))
+                    or actual_pair == REVIEWED_ENTRY_ROUTE_SOURCE_SUCCESSORS.get(family)
+                    or actual_pair == REVIEWED_PRE_SUBMIT_CONSUMED_SUCCESSORS.get(family))
     if reader_match:
         pair = actual_pair
     if not pair or actual_pair != pair:

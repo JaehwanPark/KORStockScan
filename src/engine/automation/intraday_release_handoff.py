@@ -4938,17 +4938,46 @@ REVIEWED_OBSERVER_IO_DEPENDENCY_VARIANTS = {
     } for key, value in REVIEWED_ENTRY_COST_DEPENDENCY_VARIANTS.items()
 }
 
+# Keep the actually consumed observer profile intact for Main preparation.
+# Any submit-repair member selects one complete reviewed successor, never a mix.
+REVIEWED_PRE_SUBMIT_HASHES = {'src/engine/infrastructure/startup_validation_code_context.py': '52a87252121e687de0674cfea5ef565cb183032b0962e8fbee90a7d656b59fe5',
+ 'src/engine/monitoring/policy_generation_code_handoff.py': '41ebbc34a2fd015a0cd76ae525c1e6e859edbaa6dc4e4e88e4cc76a44a7a9bef',
+ 'src/engine/monitoring/runtime_performance.py': 'ad937198678bef9cc5ef62e6aa41d9b980a0427d456608a94a1317b4fcd3cb39',
+ 'src/engine/scalping/reversal_evaluation_context.py': '7a20e1c32f0a4b54ebb25ae8970939184cbe9cef2e590adf68fb2791561e2458',
+ 'src/engine/sniper_state_handlers.py': '56a0613b596418c0ade581aabedef12d38371ff7d4d2af9fffea2cc00665dd20',
+ 'src/trading/entry/physical_send_guard.py': '1d5d6f7feb0fba4062d770db52dc74d0a8fca8dbdd10b48e0485c9ec80865c27'}
+REVIEWED_PRE_SUBMIT_ENTRY_COST_HASHES = {**REVIEWED_OBSERVER_IO_ENTRY_COST_HASHES, **REVIEWED_PRE_SUBMIT_HASHES}
+REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
+    name: REVIEWED_ENTRY_COST_PAIRS.get(name, ()) + tuple((old, current)
+        for old in dict.fromkeys([*(origin for origin, target in REVIEWED_ENTRY_COST_PAIRS.get(name, ())
+            if target == REVIEWED_OBSERVER_IO_ENTRY_COST_HASHES.get(name)),
+            REVIEWED_OBSERVER_IO_ENTRY_COST_HASHES.get(name, previous[name])]))
+    for name, current in REVIEWED_PRE_SUBMIT_HASHES.items()
+    for previous in [{'src/engine/infrastructure/startup_validation_code_context.py': 'ee715b40b27ddd814128f7c49945d2dfbba08e65cf6c7c23c4a8cbd73594b171',
+ 'src/engine/monitoring/policy_generation_code_handoff.py': '4db24d4d542b8cc6142c1b85e0839bfce6a7116aaae5f49e2b0d90e4174e3d62',
+ 'src/engine/monitoring/runtime_performance.py': '3414c2eee58fc8c5547b11ad6786f1775b20d4cfb6e9b0ce78ed16e17a34e5d4',
+ 'src/engine/scalping/reversal_evaluation_context.py': 'fb5d1ffb46da13d69390c84c3d2e83de03842bebb3978d3a22bbf6fb6bb4d654',
+ 'src/engine/sniper_state_handlers.py': 'b3b2965f65f33e5e5bf52fd960757d6bdbe6b5a63e6844bd95f5dc1d5353ea1d',
+ 'src/trading/entry/physical_send_guard.py': '73b332cc40d021cd1b62b00cf140b8ee2abdca19007fd161d4b17ab57056e946'}]}}
+REVIEWED_PRE_SUBMIT_DEPENDENCY_VARIANTS = {
+    (key[0], REVIEWED_PRE_SUBMIT_HASHES.get(key[0], key[1])): {
+        **value, 'dependencies': {**value['dependencies'], **REVIEWED_PRE_SUBMIT_HASHES},
+        'contract_extensions': {origin: {name: REVIEWED_PRE_SUBMIT_HASHES.get(os.path.normpath(name), digest)
+            for name, digest in paths.items()} for origin, paths in value['contract_extensions'].items()},
+    } for key, value in REVIEWED_OBSERVER_IO_DEPENDENCY_VARIANTS.items()
+}
+
 # Exact native BUY cost consumer; preserve the already consumed observer profile.
-REVIEWED_NATIVE_BUY_COST_HASHES = {'src/engine/infrastructure/startup_validation_code_context.py': 'd986bde23b08bcdef9112f0b243acb58f6f374595b56a7317b51db5cde41af30',
+REVIEWED_NATIVE_BUY_COST_HASHES = {'src/engine/infrastructure/startup_validation_code_context.py': '9e8a1f1f4d5c7e3f851d43d9c43b07f0e31d6a5dd843bca7e7185c0a818ae0a3',
  'src/engine/lifecycle/broker_cost_allocation.py': '7d2954281bc187ba3778ce3587631a6980929536856a73111cbf78ac8f8fdfea',
  'src/engine/scalping/initial_quantity_monitor_projection.py': '87f78306653fc9f51d890a3531752301589782639b1832ad38a24f7c29c4215d'}
-REVIEWED_NATIVE_BUY_COST_PROFILE = {**REVIEWED_OBSERVER_IO_ENTRY_COST_HASHES, **REVIEWED_NATIVE_BUY_COST_HASHES}
+REVIEWED_NATIVE_BUY_COST_PROFILE = {**REVIEWED_PRE_SUBMIT_ENTRY_COST_HASHES, **REVIEWED_NATIVE_BUY_COST_HASHES}
 REVIEWED_NATIVE_BUY_COST_VARIANTS = {
     (key[0], REVIEWED_NATIVE_BUY_COST_HASHES.get(key[0], key[1])): {
         **value, 'dependencies': {**value['dependencies'], **REVIEWED_NATIVE_BUY_COST_HASHES},
         'contract_extensions': {origin: {name: REVIEWED_NATIVE_BUY_COST_HASHES.get(os.path.normpath(name), sha)
             for name, sha in paths.items()} for origin, paths in value['contract_extensions'].items()},
-    } for key, value in REVIEWED_OBSERVER_IO_DEPENDENCY_VARIANTS.items()
+    } for key, value in REVIEWED_PRE_SUBMIT_DEPENDENCY_VARIANTS.items()
 }
 REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
     name: REVIEWED_ENTRY_COST_PAIRS.get(name, ()) + tuple((origin, current) for origin in
@@ -5130,15 +5159,22 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     deployed_sentinel = all((root / name).is_file() and hashlib.sha256(candidate_bytes(name)).hexdigest() == digest
         for name, digest in REVIEWED_DEPLOYED_SENTINEL_SCOPE_HASHES.items())
     observer_io_present = (root / 'src/engine/monitoring/observer_artifact_io.py').exists()
+    pre_submit_present = any((root / name).is_file()
+        and hashlib.sha256(candidate_bytes(name)).hexdigest() == sha
+        for name, sha in REVIEWED_PRE_SUBMIT_HASHES.items()
+        if name not in {'src/engine/infrastructure/startup_validation_code_context.py',
+                        'src/engine/monitoring/policy_generation_code_handoff.py'})
     native_buy_cost = any((root / name).is_file() and hashlib.sha256(candidate_bytes(name)).hexdigest() == sha
         for name, sha in REVIEWED_NATIVE_BUY_COST_HASHES.items())
     prepared_hashes = (REVIEWED_NATIVE_BUY_COST_PROFILE if native_buy_cost else
+        REVIEWED_PRE_SUBMIT_ENTRY_COST_HASHES if pre_submit_present else
         REVIEWED_OBSERVER_IO_ENTRY_COST_HASHES if observer_io_present else
         REVIEWED_ENTRY_COST_DEPLOYED_SENTINEL_HASHES if deployed_sentinel else
         REVIEWED_ENTRY_COST_HASHES if sentinel_scope_present else
         REVIEWED_PRE_FINALIZATION_HASHES if consumed_finalization else
         REVIEWED_NATIVE_PREOPEN_HASHES if native_preopen else REVIEWED_ENTRY_COST_PRE_SENTINEL_SCOPE_HASHES)
     prepared_variants = (REVIEWED_NATIVE_BUY_COST_VARIANTS if native_buy_cost else
+        REVIEWED_PRE_SUBMIT_DEPENDENCY_VARIANTS if pre_submit_present else
         REVIEWED_OBSERVER_IO_DEPENDENCY_VARIANTS if observer_io_present else
         REVIEWED_ENTRY_COST_DEPLOYED_SENTINEL_VARIANTS if deployed_sentinel else
         REVIEWED_ENTRY_COST_DEPENDENCY_VARIANTS if sentinel_scope_present else
