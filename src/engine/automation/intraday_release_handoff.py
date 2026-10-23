@@ -5340,7 +5340,7 @@ REVIEWED_CLOSED_SCANNER_PREVIOUS_VARIANTS = {
     } for key, value in REVIEWED_SCANNER_PREFLIGHT_VARIANTS.items()
 }
 
-REVIEWED_CLOSED_SCANNER_HASHES = {**REVIEWED_CLOSED_SCANNER_PREVIOUS_HASHES, 'src/engine/infrastructure/startup_validation_code_context.py': '036d6db60e92ca0656ad555db8bc5842e1b175c61893ea6030a3391b66d4f619', 'src/engine/error_detectors/artifact_freshness.py': '6f9cf859a4adf8e27b6465d38cf4eb536b16631381e94af199ecf84554ca7ffa', 'src/engine/scalping/reversal_code_handoff.py': '0c096ae9f75e8539e6b9d4df84cc5c8d2ce20d4abc523f07fbcfb51796e4470c'}
+REVIEWED_CLOSED_SCANNER_HASHES = {**REVIEWED_CLOSED_SCANNER_PREVIOUS_HASHES, 'src/engine/infrastructure/startup_validation_code_context.py': '5890164cb152c1f408347ea5703b699b5c8ec8cdf225819314c52bbc76776681', 'src/engine/error_detectors/artifact_freshness.py': '6f9cf859a4adf8e27b6465d38cf4eb536b16631381e94af199ecf84554ca7ffa', 'src/engine/scalping/reversal_code_handoff.py': 'de1ac1086dcaac8d0d5737cc5b0d49374342e19ecd69d698aa43cb2133e3a124'}
 REVIEWED_CLOSED_SCANNER_PROFILE = {**REVIEWED_SCANNER_PREFLIGHT_PROFILE, **REVIEWED_CLOSED_SCANNER_HASHES}
 REVIEWED_CLOSED_SCANNER_VARIANTS = {
     (key[0], REVIEWED_CLOSED_SCANNER_HASHES.get(key[0], key[1])): {

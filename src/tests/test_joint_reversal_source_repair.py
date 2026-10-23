@@ -814,7 +814,12 @@ def test_postclose_midnight_handoff_requires_stopped_exact_native_ancestry(tmp_p
         attempt=report.parent/'attempt.json';verification=report.parent/'verification.json'
         attempt.write_text('{}');verification.write_text('{}')
         report.write_text(json.dumps(dict(main_run_id='wrong' if damage=='controller_run' else body['run_id'],attempt_path=str(attempt),verification_attempt_path=str(verification))))
-        monkeypatch.setattr(controller,'done_terminal_receipt_issues',lambda *a,**k:['current_contract_failed'] if damage=='controller_invalid' else [])
+        def verify_origin(command,**kwargs):
+            assert command[0]==str(origin/'.venv/bin/python')
+            assert kwargs['cwd']==origin and kwargs['env']['PYTHONPATH']==str(origin)
+            assert 'started_after_ns=0' in command[3] and 'generation_only=True' not in command[3]
+            return json.dumps(['current_contract_failed'] if damage=='controller_invalid' else [])
+        monkeypatch.setattr(H.subprocess,'check_output',verify_origin)
     if damage=='restart':(tmp_path/'restart.flag').touch()
     if damage=='hold':(data/'runtime/operator_startup_hold.json').write_text('{}')
     monkeypatch.setattr(D,'_main_pids',lambda:[42] if damage=='main_live' else [])

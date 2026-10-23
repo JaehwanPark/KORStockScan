@@ -329,7 +329,6 @@ def _postclose_origin_receipt(data_root,day,source_date,origin_root,origin_commi
         # A completed calculation may still require a detector-only code repair.
         # Authenticate its existing workflow and whole-chain owner; never turn
         # a stored success string into a new completion or PID observation.
-        from src.engine.automation import postclose_done_controller as controller
         workflow=failed.get('workflow_source') or {}
         script=origin_root/'deploy/run_threshold_cycle_postclose.sh'
         report_path=root/'report/postclose_done_controller'/('postclose_done_controller_'+source_date+'.json')
@@ -338,8 +337,19 @@ def _postclose_origin_receipt(data_root,day,source_date,origin_root,origin_commi
                 or workflow.get('script')!=str(script) or workflow.get('sha256')!=P.file_hash(script)):
             raise ValueError('active_policy_postclose_workflow_evidence_invalid')
         report,report_raw,report_identity=D._owned_metadata(report_path)
-        if (report.get('main_run_id')!=failed['run_id']
-                or controller.done_terminal_receipt_issues(report_path,source_date,started_after_ns=0)
+        # The selected predecessor owns this terminal. Running its verification
+        # in candidate code would demand the successor receipt being issued.
+        script_code = '''from pathlib import Path
+import json,sys
+from src.engine.automation.postclose_done_controller import done_terminal_receipt_issues
+from src.engine.infrastructure.validation_digest_session import postclose_session
+with postclose_session(Path(sys.argv[1]),sys.argv[2]):
+    print(json.dumps(done_terminal_receipt_issues(Path(sys.argv[3]),sys.argv[2],started_after_ns=0)))
+'''
+        issues=json.loads(subprocess.check_output(
+            [str(origin_root/'.venv/bin/python'),'-B','-c',script_code,str(root),source_date,str(report_path)],
+            cwd=origin_root,env={**os.environ,'PYTHONPATH':str(origin_root)},text=True,timeout=300))
+        if (report.get('main_run_id')!=failed['run_id'] or issues!=[]
                 or D._owned_metadata(report_path)[1:]!=(report_raw,report_identity)):
             raise ValueError('active_policy_postclose_completed_evidence_invalid')
         for name in (Path(report['attempt_path']),Path(report['verification_attempt_path']),script):
