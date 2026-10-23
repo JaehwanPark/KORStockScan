@@ -28,7 +28,8 @@ _NAMES += ('entry_refresh', 'entry_evaluation', 'entry_policy', 'entry_machine_a
            'entry_machine_capture', 'entry_economics', 'entry_wire', 'entry_native_check',
            'entry_native_load', 'entry_native_claim', 'entry_native_auxiliary',
            'entry_annotation', 'entry_trace_prepare', 'entry_trace_append',
-           'entry_outcome_append', 'entry_error_processing')
+           'entry_outcome_append', 'entry_error_processing',
+           'entry_submit_native_load', 'entry_submit_auxiliary', 'entry_submit_generation')
 _ENTRY_TIMINGS = ContextVar('entry_local_stage_timings', default=None)
 _NATIVE_VISIT_HINTS = OrderedDict()
 _NATIVE_VISIT_TOKENS = {}

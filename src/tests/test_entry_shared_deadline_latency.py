@@ -39,7 +39,7 @@ def test_submit_boundary_uses_immutable_view_and_keeps_all_independent_guards(mo
             if fault == 'pointer':
                 raise ValueError('machine_policy_generation_changed_during_evaluation')
     def check(root, policy, active, *, now):
-        assert active is bundle and now == 100.
+        assert active is bundle and 100. <= now < 101.
         with pytest.raises(TypeError):
             active['nested']['values'].append(2)
         calls.append('fresh_auxiliary_and_original_deadline')
@@ -55,6 +55,93 @@ def test_submit_boundary_uses_immutable_view_and_keeps_all_independent_guards(mo
         context.validate_submit(Path('fixture'), fields, now=100.)
     assert calls == ['fresh_native_load','fresh_auxiliary_and_original_deadline','pointer_exit_check']
     assert native._SIGNATURE_PASS.get() is None
+
+
+@pytest.mark.parametrize('matches', [True, False])
+def test_generation_only_physical_boundary_keeps_native_check(monkeypatch, matches):
+    from src.engine.scalping import mechanistic_entry_runtime_policy as N
+    from src.engine.scalping import reversal_evaluation_context as E
+    from src.engine.scalping import reversal_auxiliary_intraday as I
+    calls = []
+    @contextmanager
+    def view(**kw):
+        calls.append('load')
+        yield {'bundle_sha256': 'a'*64}
+    def generation(*args, **kwargs):
+        calls.append('generation')
+        return {'allowed': matches}
+    monkeypatch.setattr(N, 'verified_evaluation', view)
+    monkeypatch.setattr(N, 'validate_attempt_generation', generation)
+    monkeypatch.setattr(I, 'validate_decision', lambda *a, **kw: pytest.fail('no auxiliary registry'))
+    with R.entry_timing_frame() as timings:
+        if matches:
+            E.validate_submit('fixture', {'machine_bundle_sha256': 'a'*64}, now=100., check_generation=True)
+        else:
+            with pytest.raises(ValueError, match='initial_send_policy_generation_changed'):
+                E.validate_submit('fixture', {'machine_bundle_sha256': 'a'*64}, now=100., check_generation=True)
+    assert calls == ['load', 'generation']
+    assert 'entry_submit_native_load' in timings and 'entry_submit_generation' in timings
+
+
+@pytest.mark.parametrize('failure', [None, 'generation', 'revoked', 'pointer'])
+def test_physical_boundary_shares_view_without_skipping_generation_or_revocation(monkeypatch, failure):
+    from src.engine.scalping import reversal_auxiliary_intraday as I
+    from src.engine.scalping import mechanistic_entry_runtime_policy as N
+    from src.engine.scalping import reversal_evaluation_context as E
+    calls=[]
+    bundle=N._freeze({'bundle_sha256':'a'*64})
+    @contextmanager
+    def view(**kw):
+        calls.append('load')
+        # Use the native context variable and the real generation validator.
+        token=N._VERIFIED_EVALUATION.set((str(Path('fixture').absolute()),'1970-01-01',bundle,None))
+        try:
+            yield bundle
+            calls.append('exit')
+            if failure=='pointer':raise ValueError('machine_policy_generation_changed_during_evaluation')
+        finally:N._VERIFIED_EVALUATION.reset(token)
+    def load(**kw):
+        assert N._VERIFIED_EVALUATION.get()[2] is bundle
+        calls.append('generation')
+        return bundle
+    def aux(*args,**kw):
+        calls.append('auxiliary')
+        if failure=='revoked':raise ValueError('auxiliary_decision_generation_revoked')
+    monkeypatch.setattr(N,'verified_evaluation',view)
+    monkeypatch.setattr(N,'load_effective',load)
+    monkeypatch.setattr(I,'validate_decision',aux)
+    fields={'machine_bundle_sha256':('b' if failure=='generation' else 'a')*64,
+        'entry_mechanistic_policy_decision':{'auxiliary_registry_sha256':'c'*64}}
+    if failure:
+        with pytest.raises(ValueError):E.validate_submit('fixture',fields,now=100.,check_generation=True)
+    else:E.validate_submit('fixture',fields,now=100.,check_generation=True)
+    assert calls.count('load')==1 and calls.count('auxiliary')==1
+    assert calls.count('generation')==(0 if failure=='revoked' else 1)
+    assert N._VERIFIED_EVALUATION.get() is None and N._SIGNATURE_PASS.get() is None
+
+
+def test_submit_clock_advances_through_slow_load_and_keeps_original_error(monkeypatch):
+    from src.engine.scalping import reversal_auxiliary_intraday as I
+    from src.engine.scalping import mechanistic_entry_runtime_policy as N
+    from src.engine.scalping import reversal_evaluation_context as E
+    clock=[10.]
+    monkeypatch.setattr(E.time,'perf_counter',lambda:clock[0])
+    @contextmanager
+    def view(**kw):
+        clock[0]+=.3
+        yield N._freeze({'bundle_sha256':'a'*64})
+    def auxiliary(root,policy,active,*,now):
+        assert now==pytest.approx(105.2)
+        raise ValueError('auxiliary_decision_generation_changed')
+    monkeypatch.setattr(N,'verified_evaluation',view)
+    monkeypatch.setattr(I,'validate_decision',auxiliary)
+    fields={'entry_mechanistic_policy_decision':{'auxiliary_registry_sha256':'b'*64,'event':{'epoch':100.}}}
+    with pytest.raises(ValueError,match='auxiliary_decision_generation_changed') as caught:
+        E.validate_submit('fixture',fields,now=104.9)
+    facts=caught.value.entry_submit_revalidation
+    assert facts['entered_epoch']==104.9 and facts['checked_epoch']==pytest.approx(105.2)
+    assert facts['original_signal_epoch']==100. and facts['native_load_ms']==pytest.approx(300.)
+    assert N._SIGNATURE_PASS.get() is None
 
 
 @pytest.mark.parametrize('version', ['v5', 'v6'])

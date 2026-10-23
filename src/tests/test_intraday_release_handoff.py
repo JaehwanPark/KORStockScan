@@ -2202,6 +2202,16 @@ def test_postclose_recovery_handoff_keeps_complete_reviewed_generation(tmp_path,
 
 
 @pytest.mark.parametrize('family',['main_stop','holding_vote','pre_submit_delay'])
+@pytest.mark.parametrize('dependency',['src/engine/sniper_state_handlers.py',
+    'src/engine/scalping/reversal_evaluation_context.py',
+    'src/engine/monitoring/runtime_performance.py','src/trading/entry/physical_send_guard.py',
+    'src/engine/monitoring/policy_generation_code_handoff.py'])
+def test_pre_submit_handoff_rejects_unreviewed_dependency(tmp_path,family,dependency):
+    test_entry_cost_handoff_keeps_exact_complete_generation(
+        tmp_path,family,'committed_change','current',dependency)
+
+
+@pytest.mark.parametrize('family',['main_stop','holding_vote','pre_submit_delay'])
 @pytest.mark.parametrize('fault',[None,'missing','dirty','committed_change','parent_mix'])
 @pytest.mark.parametrize('generation',['current','consumed_pre_startup','consumed_pre_shutdown','consumed_pre_native_label','consumed_pre_coordination','consumed_pre_prepared_validation','consumed_pre_prepared_repair','consumed_pre_main_preparation','consumed_pre_prepared_start','consumed_pre_first_turn','consumed_pre_expiry_health','consumed_pre_signed_surge','consumed_pre_preassessment','consumed_pre_prestart','consumed_pre_prepared_owner'])
 def test_entry_cost_handoff_keeps_exact_complete_generation(tmp_path,family,fault,generation,

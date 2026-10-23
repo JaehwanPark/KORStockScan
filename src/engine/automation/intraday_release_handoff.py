@@ -4869,13 +4869,27 @@ REVIEWED_ENTRY_COST_DEPLOYED_SENTINEL_VARIANTS = REVIEWED_ENTRY_COST_DEPENDENCY_
 REVIEWED_DEPLOYED_SENTINEL_SCOPE_HASHES = REVIEWED_SENTINEL_SCOPE_HASHES
 REVIEWED_SENTINEL_SCOPE_HASHES = {**REVIEWED_SENTINEL_SCOPE_HASHES,
     'src/engine/monitoring/submission_bottleneck_monitor.py': '808deb51627b4ed17561f168ad2cad808f0181aaac7a754377493912e71d9e57',
-    'src/engine/infrastructure/startup_validation_code_context.py': 'eebb9048c5500a5c184c7dcca4810db89ec266722611fa07e4f4c90f66aad1cf'}
+    'src/engine/sniper_state_handlers.py': '56a0613b596418c0ade581aabedef12d38371ff7d4d2af9fffea2cc00665dd20',
+    'src/engine/scalping/reversal_evaluation_context.py': '7a20e1c32f0a4b54ebb25ae8970939184cbe9cef2e590adf68fb2791561e2458',
+    'src/engine/monitoring/runtime_performance.py': 'ad937198678bef9cc5ef62e6aa41d9b980a0427d456608a94a1317b4fcd3cb39',
+    'src/trading/entry/physical_send_guard.py': '1d5d6f7feb0fba4062d770db52dc74d0a8fca8dbdd10b48e0485c9ec80865c27',
+    'src/engine/monitoring/policy_generation_code_handoff.py': '5ce451bad1b80f17c74b037bbc17abc565b5f0d3643435ddfe8b90af12782998',
+    'src/engine/infrastructure/startup_validation_code_context.py': 'acd047e3ea9e20a971f1511b7e72d8e0767221aad2575f172c54ecde3423bb5b'}
 REVIEWED_ENTRY_COST_HASHES = {**REVIEWED_ENTRY_COST_HASHES, **REVIEWED_SENTINEL_SCOPE_HASHES}
+# These two dependencies were absent from the earlier full-profile inventory.
+# Bind only their exact reviewed, actually consumed predecessor bytes.
+REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
+    name: REVIEWED_ENTRY_COST_PAIRS.get(name, ()) + ((old, REVIEWED_SENTINEL_SCOPE_HASHES[name]),)
+    for name, old in {
+        'src/engine/scalping/reversal_evaluation_context.py': 'fb5d1ffb46da13d69390c84c3d2e83de03842bebb3978d3a22bbf6fb6bb4d654',
+        'src/trading/entry/physical_send_guard.py': '73b332cc40d021cd1b62b00cf140b8ee2abdca19007fd161d4b17ab57056e946',
+        'src/engine/monitoring/policy_generation_code_handoff.py': 'b65c616d024460c825d73472311ddf995282069cd58dfdec9241447d4285d841',
+    }.items()}}
 REVIEWED_ENTRY_COST_PAIRS = {name: pairs + tuple((old, REVIEWED_SENTINEL_SCOPE_HASHES[name])
     for old in dict.fromkeys([*(old for old, target in pairs
-        if target == REVIEWED_DEPLOYED_SENTINEL_SCOPE_HASHES.get(name)),
-        REVIEWED_DEPLOYED_SENTINEL_SCOPE_HASHES[name]]))
-    if name in ('src/engine/monitoring/submission_bottleneck_monitor.py', 'src/engine/infrastructure/startup_validation_code_context.py') else pairs
+        if target == REVIEWED_ENTRY_COST_DEPLOYED_SENTINEL_HASHES.get(name)),
+        REVIEWED_ENTRY_COST_DEPLOYED_SENTINEL_HASHES[name]]))
+    if name in ('src/engine/monitoring/submission_bottleneck_monitor.py', 'src/engine/infrastructure/startup_validation_code_context.py', 'src/engine/sniper_state_handlers.py', 'src/engine/monitoring/runtime_performance.py') else pairs
     for name, pairs in REVIEWED_ENTRY_COST_PAIRS.items()}
 REVIEWED_ENTRY_COST_DEPENDENCY_VARIANTS = {
     (key[0], REVIEWED_SENTINEL_SCOPE_HASHES.get(key[0], key[1])): {

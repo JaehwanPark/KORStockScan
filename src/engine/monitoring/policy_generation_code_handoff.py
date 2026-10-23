@@ -355,10 +355,14 @@ REVIEWED_SHUTDOWN_CONSUMED_SUCCESSORS = {'auxiliary': ('581c21738b7a098e1900fcec
 
 # Exact native selection diagnostics; the prior report generations stay sealed.
 REVIEWED_NATIVE_SELECTION_SUCCESSORS = {
+    'entry_cancel_wait': ('47eb1ef2e45d3c48e663f6b3df505bc95da07fc6bcd168394441840af4764fff',
+                          '60620f4b8fbe73f3c0506eed8f49c27c031d74a643b68667ca7421c6512d6f57'),
+    'auxiliary': ('4de7ce95386f5c05863e8e3fb56899c71ef16da99bdf75cd0e3aa426a150eeac',
+                  '507700d07f88f668f1b467678615656db7af893e0c3e6dbf8148d5c918ed9120'),
     'rising_missed': ('8c2725f4e329c95b79a74df8167bc5bbab80d6e08fe80fb6d7e4aaaa4d4c6e8d',
-                      'b1fb8b69fb938893d36c8b16192bbd0cd5e414f169b8304374d781cc54248ab5'),
+                      'b8583110470210c0d71035a472d95bc8379ea5d53b56e7217897f397e4490a56'),
     'holding_vote': ('48b92485c831e215a1d7fe1ef8664113d68186e040a768087cbcb18ab0892ac3',
-                     '5a0c5cfb039defc00eac4d057638b7b7ac2f394b86f6a030fd08a76b84d814ee'),
+                     '4d79d641bb1cd952594e4794f04d65c62e638cd0f1824322c6b3ecfd0121e40d'),
 }
 REVIEWED_NATIVE_SELECTION_SOURCE_SUCCESSORS = {
     family: (REVIEWED_SHUTDOWN_SOURCE_SUCCESSORS[family][0], pair[1])
@@ -367,6 +371,15 @@ REVIEWED_NATIVE_SELECTION_SOURCE_SUCCESSORS = {
 REVIEWED_NATIVE_SELECTION_CONSUMED_SUCCESSORS = {
     family: (REVIEWED_SHUTDOWN_SUCCESSORS[family][1], pair[1])
     for family, pair in REVIEWED_NATIVE_SELECTION_SUCCESSORS.items()
+}
+
+# Exact actually consumed predecessor for the policy-preserving submit repair.
+# An independent current fixture and original report/fixture remain mandatory.
+REVIEWED_PRE_SUBMIT_CONSUMED_SUCCESSORS = {
+    'rising_missed': ('6d493cf1a74732175bfeb2e27af9c53de44d8a001bc0b1d01296888671da22de',
+                      'b8583110470210c0d71035a472d95bc8379ea5d53b56e7217897f397e4490a56'),
+    'holding_vote': ('2e0f07b39199681be1f55a4645e9dcd72438519e955546236a436f9cdee35e36',
+                     '4d79d641bb1cd952594e4794f04d65c62e638cd0f1824322c6b3ecfd0121e40d'),
 }
 
 def _historical_fixture(contract, data, family, *, late_report=None):
@@ -502,7 +515,8 @@ def current_fixture_observation(observed, data):
                     or actual_pair == REVIEWED_SHUTDOWN_CONSUMED_SUCCESSORS.get(family)
                     or actual_pair == REVIEWED_NATIVE_SELECTION_SUCCESSORS.get(family)
                     or actual_pair == REVIEWED_NATIVE_SELECTION_SOURCE_SUCCESSORS.get(family)
-                    or actual_pair == REVIEWED_NATIVE_SELECTION_CONSUMED_SUCCESSORS.get(family))
+                    or actual_pair == REVIEWED_NATIVE_SELECTION_CONSUMED_SUCCESSORS.get(family)
+                    or actual_pair == REVIEWED_PRE_SUBMIT_CONSUMED_SUCCESSORS.get(family))
     if reader_match:
         pair = actual_pair
     if not pair or actual_pair != pair:
@@ -544,7 +558,8 @@ def current_fixture_observation(observed, data):
                                REVIEWED_SHUTDOWN_CONSUMED_SUCCESSORS,
                                REVIEWED_NATIVE_SELECTION_SUCCESSORS,
                                REVIEWED_NATIVE_SELECTION_SOURCE_SUCCESSORS,
-                               REVIEWED_NATIVE_SELECTION_CONSUMED_SUCCESSORS)) else None)
+                               REVIEWED_NATIVE_SELECTION_CONSUMED_SUCCESSORS,
+                               REVIEWED_PRE_SUBMIT_CONSUMED_SUCCESSORS)) else None)
         historical_fixture = _historical_fixture(contract, data, family, late_report=late_report)
         if (integrated_match or readonly_match or cleanup_match or custody_match or reader_match or frozen_match) and historical_fixture is None:
             raise ValueError('successor_integrated_historical_fixture_required')
