@@ -195,3 +195,33 @@ baseline `fc51a179bfa63ff35390f5dbd3cbb7191229d0f3`에서 기존 source3파일�
 선택9a8의 연구 코드 `bc81483cf3fa51b1ba5802a34b311a9af43dfc4c414af0dd8fd2e0aa28bf6ec4`/설치 binding은 정상이나 이번 검토 코드와 다르다. 통합 배포 owner가 이 수리 commit을 선택하고 기존 optional installer를 재결속해야 정기 연구가 같은 코드를 소비한다. 매매/PID 전환은 이번에 실행하지 않았다. 다음 source23→10/24 야간의 무보정 자연 수용은 기존 MainMarketWeaknessPostcloseObservation1008에서 OPEN으로 유지한다. 운영 계약은 [§16](../proposals/main-market-weakness-postclose-source-binding-and-candidate-repair-plan-2026-10-13.md#16-2026-10-23-과거-15거래일의-제한-복구와-역사-검증)이다.
 
 증거: `tmp/weakness-binding-recovery-20261023/final-consumer-verification.json`, `checkpoint-completion/result.json`, `legacy-response-contract-classification.json`, `final-research-regression.log`, `historical-real-cases.json`, `recovery.log`, `supplemental-recovery.log`와 원본/실패 기록.
+
+## 2026-10-23 역사 코드 복원·정리 보호·요약 의존 검사 수리
+
+사용자의 복원·수리·영향5일 재검증 지시에 따라 삭제된 역사 코드2곳을 복원하고 같은 `MainMarketWeaknessPostcloseObservation1008`에서 원인→수리→회귀→native 소비를 확인했다. Main/정책/selector·PID·정기 cron/설치·야간 quota·outbox는 유지했다. 원 상세 실패와 삭제 journal, 이전15일 복구564.683초 및 후속 조회 기록을 보존했다.
+
+- **최초 위반:** 정리 보호 그래프와 삭제 직전 대사는 startup/machine/bootstrap 소비에 의존했고 optional 연구의 cumulative→날짜 cursor→source manifest→역사 코드 의존성을 누락했다. historical `operating_pointer` 제외가 이 살아 있는 소비까지 제거했다. 기존 요약 검사는 설치/calendar·세대·source scope/cursor 상태만 대사해 상세 현재성10/15 실패에도 `verified/findings=[]`를 반환했다. 검토 대상은 과거 raw-response/라벨 결손과 구분되는 현재 보존·탐지 결함이다.
+- **복원:** 보관 Git ref의7e1a826318e7b8418afd2e2436b79bf2febf8f67(`main-market-weakness-20261009-v1`,1,002파일)와59c92909783e967397a8d774bab60cd22ec78c96(`holding-sentinel-performance-20261016-59c929097`,1,145파일)를 원 native inventory의 SHA256과2147개 모두 먼저 대사했다. 원 경로·공유 mount를 복원하고 Git worktree 잠금을 설정했다. inode/mtime/ctime을 과거 값으로 만들거나 원 영수증을 바꾸지 않았다. 잠금 해제는 현재 연구/증빙이 이 원 코드를 더 이상 소비하지 않는다는 동일 owner의 증거가 생긴 뒤다.
+- **기존 owner 수리:** `lifecycle/research_storage.weakness_dependency_inventory`가 현재 누적 포인터·날짜 cursor·봉인된 manifest의 date/generation/authority/code와 의존 stat를 대사한다. 정리는 missing/stale 경로도 보호하며, 요약은 같은 폐쇄의 현재성을 사용한다. 원천·역사 코드 전체 hashing은 native 연구 owner에 남긴다. metadata는 파일2MiB·기존 shared64MiB 합계·256날짜/65,536참조·depth64 내 nonblocking regular-file read로 제한하고 변경/상충/예산 초과는 성공 처리하지 않는다. 현재15일 metadata15,063,759B·고유 receipt10,115개이며 raw stream을 health에서 읽지 않는다.
+- **정리 소비와 경쟁 조건:** 실제 `tmp/storage-live-usage-20261023/usage_refs.py`의 graph와 `release_cleanup.py`의 삭제 직전 references가 이 폐쇄를 보호한다. 기존 `tmp/source-disk-cleanup-20261022/worktree-audit/execute_worktrees.py`는 release-set 잠금 아래 연구 writer 잠금도 삭제 끝까지 보유해 새 결과 게시와 경쟁하지 않는다. 현재 selected926의 startup/machine/bootstrap 읽기 검증과 두 잠금을 보유한 실제 references 조회에서 두 코드 원본1,002/1,145경로가 `current_research_dependency`로 보호됐다. 삭제는 호출하지 않았다.
+- **리뷰·회귀:** 실제 선택 원본을 먼저 import한 재현에서 missing/changed/복원 후 새 inode3건의 잘못된 `verified`를 확인했다. 수리 후 producer/manifest/cursor→요약→semantic alert, 정리 graph/삭제 직전 소비/연구 lock, missing·변조·다른 세대/권한·symlink/FIFO·예산·기존 역사 missing/새 증빙 출현을 검증했다. 최초 검토의 manifest generation 필드 가정을 실제 descriptor digest 계약으로 바로잡고, 삭제 중 새 게시 경쟁을 writer lock으로 보완한 뒤 재리뷰했다. 최종580 pytest·compile·diff 검사를 통과했다. 최초 baseline pytest의 import 격리 미흡과 read-only 정리 검증의 control-directory helper 경로 누락은 별도 보존하고 정확한 import/동일 native caller로 재검증했다. 이를 production 재계산 실패로 합치지 않는다.
+
+영향10/8·12·14·15·16만 선택 릴리스의 기존 A reader(code5ea7e987)와 native `process_date`로 새 dependency 세대에 재결속했다. 다른10일 cursor 바이트와 직접 source-plan/dependency/observation/listing/snapshot은 유지했다. 새 보존 결함에 대한 이번 승인 복구는 기존600초 한도 내134.539초·6단계·worker1/nice19·peak128.1MiB였다. 물리 read1,342,435,328B, 논리 rchar6,666,221,302B이며 정기9회/예약540초나 이전 복구의 예산/attempt를 초기화하지 않았다. 무변경 전체15일 replay 없이 누적·알림 등 무효화된 후행 소비만 갱신했다.
+
+| 최종 native 소비 | 결과 |
+| --- | --- |
+| attempt | `3266b64c4d52454da1c00f80c22c5ffe` / `operator_historical_code_restoration_five_day_recovery` |
+| generation | `8337812bbe4313ba97d5d6a55731784517bd4f455583c008a771273e069a6fac` |
+| 비교 SHA | `1fffeaaa1c3b0af871e3e161b48fa9bcc79555b3119756917a6bc63ceddc1797` |
+| 알림 SHA | `c4a0ad50d9849aaf324eeaf40f05fb08e0436c9456f58684e18787a14e5c83c3` |
+| 상세 현재성 | 선택926 실제 A reader로 current15/15·migration/pending/invalidated0 |
+| 실제 registry 관측 | effective verified2,433·미검증0; 고유 주문/매매 수가 아님 |
+| 비교/알림 | 후보273·267 uncertainty_unresolved/6 source_gap·전향 resolved273개 모두0·적격0/not_eligible·Telegram0 |
+
+새 비교는 generation을 제외한273개 후보의 정의/결과·기준 시점과 이전 비교가 모두 동일했다. native cumulative→알림 immutable receipt→attempt→night summary/last completed의 같은 세대와 hash를 확인했다. 수리한 요약 consumer는 현재 자료를 통과시키고, 실제 자료에서 두 코드 의존성 부재를 주입한 읽기 전용 음성 검사에서는 정확히 영향5일과 `optional_research_dependencies_not_current`를 검출했다. 기존 raw-response 증빙14부재/81불합격·오래된 registry 항목 없는50행·epoch/path/horizon null·기계 role 미지원은 복원된 연결 결함과 분리하며 유효 표본으로 만들지 않았다.
+
+Replacement/removal: 기존 metadata-only `native_validated`/완료 predicate는 dependency 소비를 포함한 판정으로 consolidated; 기존 A의 full currentness/역사 hash·C issuer/validator와 정리의 기타 보호/역사 분류는 retained다. startup trace를 optional 연구 보호의 대리로 삼던 경로는 replaced이며 actual graph/locked references는 shared collector를 소비한다. 원 삭제/failed receipt와 과거 release는 retained evidence다. 임시 read-only 검증 helper alias는 실제 references 종료 후 removed; 정식 caller는 동일 owner만 유지한다. 새 production module/worker/cron/report producer/매매 entrypoint/장중 logger0이다. baseline926 대비 non-test source2파일+147/-4, tests2파일+121/-0, 운영 tmp caller3파일+19/-1이며 문서 추가는 별도다. source 순증은 기존 저장 owner의 의존 폐쇄와 안전한 bounded read에 필요하다. 운영 caller는 기존 ignored tmp owner이므로 별도 패치와 원 bytes도 보존한다.
+
+**배포와 자연 수용:** Main은 선택926/PID1982231/start36273583으로 유지했다. 연구 A 코드와 설치 지문은5ea7로 동일해 재결속 설치 변경은 필요하지 않았다. 정리 호출부·공유 workspace helper는 적용했고 새 요약 detector 코드는 검토 후보/작업공간에 있으며 immutable 선택 릴리스에는 아직 반영하지 않았다. 통합 배포는 기존 review/P5/권한 계약으로 분리한다. 이번 결과는 수리 보조 복구이며 source23의10/23 21:40→10/24 05:40(06:30 종료) 정기 무보정 자연 연구 수용은 같은 체크리스트 owner의 OPEN이다. 매매·provider·broker·threshold·holding·수동 veto와 주문 권한은 변경하지 않았다.
+
+증거: [복원](../../tmp/weakness-binding-recovery-20261023/restoration/result.json), [native 복구](../../tmp/weakness-binding-recovery-20261023/restoration/recovery-result.json), [최종 소비](../../tmp/weakness-binding-recovery-20261023/restoration/final-verification.json), [선택 A reader](../../tmp/weakness-binding-recovery-20261023/restoration/selected-reader-verification.json), [실제 정리 보호](../../tmp/weakness-binding-recovery-20261023/restoration/cleanup-validation/current-native-protection.json), [원 실패 재현](../../tmp/weakness-binding-recovery-20261023/restoration/original-detector-exact-import.log), [580 회귀](../../tmp/weakness-binding-recovery-20261023/restoration/final-regression.log), [운영 caller 패치](../../tmp/weakness-binding-recovery-20261023/restoration/operating-callers.patch). 운영 계약은 [정리 S2](../proposals/runtime-and-research-storage-cleanup-plan-2026-10-05.md#s2-미참조-releaseworktree)에 유지한다.

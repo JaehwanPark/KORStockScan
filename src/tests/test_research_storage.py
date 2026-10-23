@@ -1,9 +1,127 @@
 """External dedup and physical/semantic evidence generations."""
 import hashlib
 import json
+from pathlib import Path
 import pytest
 from src.engine.lifecycle import research_storage as store
 from src.engine.lifecycle.research_input_budget import health
+
+
+def weakness_dependencies(tmp_path):
+    """Native-shaped sealed manifest, mutable cursor and bound cumulative."""
+    from src.engine.automation import main_market_weakness_research as A
+    R = A.R
+    day = '2026-10-08'
+    data = tmp_path/'data'
+    root = A.namespace(data)
+    code = tmp_path/'historical-reader/src/owner.py'
+    code.parent.mkdir(parents=True)
+    code.write_bytes(b'original code\r\n')
+    refs = [A.stat_receipt(code)]
+    descriptor = dict(source_date=day, code=A.code_hash(), sources=[])
+    generation = R.digest(descriptor)
+    manifest = root/day/generation/'source_manifest.json'
+    A.atomic(manifest, R.seal(dict(schema=R.VERSION+':source_manifest', **descriptor,
+        partitions=[], source_dependency_receipts=refs, shared_object_receipts=[], **R.AUTH)))
+    cursor = dict(schema=R.VERSION+':cursor', source_date=day, source_descriptor=descriptor,
+        generation=generation, status='completed', manifest_path=str(manifest),
+        partitions=[], source_dependency_receipts=refs, shared_object_receipts=[], **R.AUTH)
+    A.atomic(root/day/'cursor.json', cursor)
+    scope = dict(through_date=day, source_dates=[day])
+    cumulative = R.seal(dict(schema=R.VERSION+':cumulative', generation='cumulative',
+        source_scope=scope, sources=[dict(source_date=day, generation=generation)],
+        source_cursor_states=A.source_cursor_states(root, [day]),
+        pending_source_dates=[], invalidated_source_dates=[], **R.AUTH))
+    A.atomic(root/'cumulative/current.json', cumulative)
+    return A, data, code, cursor, cumulative
+
+
+@pytest.mark.parametrize('damage', ['none','missing','changed','restored','missing_manifest','cursor_omission','new_generation','authority','symlink','fifo'])
+def test_native_weakness_retention_keeps_references_and_rejects_changed_dependencies(tmp_path, damage):
+    import os
+    A, data, code, cursor, cumulative = weakness_dependencies(tmp_path)
+    root = A.namespace(data)
+    cp = root/'2026-10-08/cursor.json'
+    if damage == 'missing': code.unlink()
+    if damage == 'changed': code.write_bytes(b'changed code')
+    if damage == 'restored':
+        saved = code.read_bytes(); code.unlink(); code.write_bytes(saved)
+    if damage == 'missing_manifest': Path(cursor['manifest_path']).unlink()
+    if damage == 'cursor_omission': cursor['source_dependency_receipts'] = []
+    if damage == 'new_generation': cursor['generation'] = 'other'
+    if damage == 'authority': cursor['runtime_effect'] = True
+    if damage in {'cursor_omission','new_generation','authority'}: A.atomic(cp, cursor)
+    if damage == 'symlink':
+        moved = cp.with_suffix('.saved'); cp.rename(moved); cp.symlink_to(moved)
+    if damage == 'fifo': cp.unlink(); os.mkfifo(cp)
+    if damage in {'missing_manifest','cursor_omission','new_generation','authority','symlink','fifo'}:
+        with pytest.raises((ValueError,FileNotFoundError)):
+            store.weakness_dependency_inventory(data, cumulative)
+        return
+    result = store.weakness_dependency_inventory(data, cumulative)
+    assert str(code) in result['paths']
+    assert str(Path(cursor['manifest_path'])) in result['paths']
+    assert result['current'] == (damage == 'none')
+    assert result['affected_source_dates'] == ([] if damage == 'none' else ['2026-10-08'])
+    assert result['metadata_bytes'] < 16384 and result['receipt_count'] == 1
+
+
+@pytest.mark.parametrize('damage', ['missing','changed','restored','none'])
+def test_optional_summary_consumes_actual_native_dependency_inventory(tmp_path, monkeypatch, damage):
+    from datetime import datetime
+    from src.engine.error_detectors import artifact_freshness as F
+    A, data, code, _, cumulative = weakness_dependencies(tmp_path)
+    root = A.namespace(data)
+    for name, value in [('installation.json',dict(enabled=True)),
+            ('night_summary.json',dict(status='completed', source_date='2026-10-08')),
+            ('last_completed_computation.json',dict(source_date='2026-10-08', cumulative_generation='cumulative'))]:
+        A.atomic(root/name, A.R.seal(dict(**value, **A.R.AUTH)))
+    monkeypatch.setattr(A,'verify_installed_calendar',lambda _:True)
+    monkeypatch.setattr(A,'research_source_scope',lambda *a,**k:cumulative['source_scope'])
+    if damage in {'missing','restored'}:
+        saved = code.read_bytes(); code.unlink()
+        if damage == 'restored': code.write_bytes(saved)
+    elif damage == 'changed': code.write_bytes(b'new bytes')
+    result = F._optional_weakness_semantics(tmp_path, datetime.fromisoformat('2026-10-23T10:00:00+09:00'))
+    if damage == 'none':
+        assert result['status'] == 'verified' and result['native_validated']
+    else:
+        assert result['status'] == 'source_invalid'
+        assert result['findings'] == ['optional_research_dependencies_not_current']
+        assert not result['native_validated'] and not result['observation_complete']
+        alert = F._semantic_alert_candidates('main_market_weakness_research',result,result['source_date'])[0]
+        assert alert['stage'] == 'main_market_weakness_research'
+    assert result['dependency_inventory_bytes'] < 16384
+    assert result['runtime_effect'] is False
+
+
+@pytest.mark.parametrize('appeared', [False, True])
+def test_native_historical_missing_contract_stays_valid_until_source_appears(tmp_path, appeared):
+    A,data,code,cursor,_=weakness_dependencies(tmp_path)
+    code.unlink()
+    refs=[dict(path=str(code),status='missing')]
+    cursor['source_dependency_receipts']=refs
+    A.atomic(A.namespace(data)/'2026-10-08/cursor.json',cursor)
+    manifest=A.read_json(cursor['manifest_path']);manifest['source_dependency_receipts']=refs
+    A.atomic(cursor['manifest_path'],A.R.seal(manifest))
+    if appeared:code.write_bytes(b'new available proof')
+    value=store.weakness_dependency_inventory(data)
+    assert value['current'] is (not appeared)
+    assert str(code) in value['paths']
+
+
+def test_retention_metadata_budget_fails_closed_without_reading_raw(tmp_path, monkeypatch):
+    _,data,_,_,_=weakness_dependencies(tmp_path)
+    monkeypatch.setattr(store,'LIMIT_BYTES',1)
+    with pytest.raises(ValueError,match='inventory_byte_bound'):
+        store.weakness_dependency_inventory(data)
+
+
+def test_current_reader_change_invalidates_but_keeps_historical_origin(tmp_path, monkeypatch):
+    A,data,code,_,_=weakness_dependencies(tmp_path)
+    monkeypatch.setattr(A,'code_hash',lambda:'changed-reader')
+    value=store.weakness_dependency_inventory(data)
+    assert not value['current'] and str(code) in value['paths']
 
 
 def test_late_conflict_invalidates_earlier_record_and_retry_is_counted(tmp_path):

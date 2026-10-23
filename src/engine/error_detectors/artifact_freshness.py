@@ -2681,10 +2681,19 @@ def _optional_weakness_semantics(root, now):
             scope_current = (native.research_source_scope(root/'data', through_date=scope['through_date']) == scope
                 and native.source_cursor_states(base, scope['source_dates']) == cumulative.get('source_cursor_states'))
         result['source_scope_current'] = scope_current
-        result['native_validated'] = bool(result['installed_calendar_valid'] and scope_current)
-        result['validation_mode'] = 'bounded_native_receipts_calendar_and_cursor_scope'
+        from src.engine.lifecycle.research_storage import weakness_dependency_inventory
+        dependencies = weakness_dependency_inventory(root/'data', cumulative or None)
+        result['dependency_receipts_current'] = dependencies['current']
+        result['dependency_affected_source_dates'] = dependencies['affected_source_dates']
+        result['dependency_inventory_bytes'] = dependencies['metadata_bytes']
+        result['dependency_receipt_count'] = dependencies['receipt_count']
+        if not dependencies['current']:
+            result['findings'].append('optional_research_dependencies_not_current')
+        result['native_validated'] = bool(result['installed_calendar_valid'] and scope_current
+            and dependencies['current'])
+        result['validation_mode'] = 'bounded_native_receipts_calendar_cursor_scope_and_dependencies'
         result['raw_source_revalidation'] = 'owned_by_native_research'
-        result['observation_complete'] = bool(attempt and cumulative and scope_current and result['installed_calendar_valid'])
+        result['observation_complete'] = bool(attempt and cumulative and result['native_validated'])
         result['status'] = ('source_invalid' if result['findings'] else
             'source_gap' if result['source_quality']=='incomplete' else
             'verified' if result['observation_complete'] else 'unobservable')

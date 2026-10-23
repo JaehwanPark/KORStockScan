@@ -8,13 +8,14 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 import hashlib
 import json
+import os
 from pathlib import Path
 import sqlite3
 import stat
 import tempfile
 from .research_disk_budget import temporary, INDEX_LIMIT
 
-from .research_input_budget import Claim
+from .research_input_budget import Claim, LIMIT_BYTES
 from .holding_window_generation import byte_generation, source_stat
 
 SCHEMA = 'bounded_research_evidence_tree_v1'
@@ -24,6 +25,139 @@ FANOUT = 256
 INDEX_CACHE_BYTES = 8 * 1024 * 1024
 TEMP_DISK_BYTES = 4 * 1024 * 1024 * 1024
 _INLINE = ContextVar('bounded_research_inline_tree',default=False)
+
+
+def weakness_dependency_inventory(data_root, cumulative=None):
+    """Read native cursor dependencies for retention and bounded health checks.
+
+    Keep missing/changed references in the protection set. No raw stream,
+    historical code hash, artifact rewrite or trading consumer is invoked.
+    """
+    from src.engine.automation import main_market_weakness_research as native
+    from datetime import date
+    root = native.namespace(Path(data_root).resolve())
+    pointer = root / 'cumulative/current.json'
+    if pointer.is_symlink():
+        raise ValueError('weakness_dependency_metadata_symlink')
+    if not pointer.exists() and not (root / 'last_completed_computation.json').exists():
+        return dict(current=True, paths=[], affected_source_dates=[], source_days=0,
+                    metadata_bytes=0, receipt_count=0)
+    paths, receipts, metadata = set(), {}, {}
+    used = 0
+
+    def read(path):
+        nonlocal used
+        path = Path(path)
+        if not path.is_absolute() or not path.is_relative_to(root):
+            raise ValueError('weakness_dependency_metadata_path_invalid')
+        if any(p.is_symlink() for p in [path, *path.parents] if p.is_relative_to(root)):
+            raise ValueError('weakness_dependency_metadata_symlink')
+        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
+        with os.fdopen(fd, 'rb') as handle:
+            before = os.fstat(handle.fileno())
+            if not stat.S_ISREG(before.st_mode) or not 0 < before.st_size <= 2*1024**2:
+                raise ValueError('weakness_dependency_metadata_invalid')
+            used += before.st_size
+            if used > LIMIT_BYTES:
+                raise ValueError('weakness_dependency_inventory_byte_bound')
+            raw = handle.read(before.st_size + 1)
+            if (len(raw) != before.st_size or source_stat(before) != source_stat(path.lstat())
+                    or source_stat(before) != source_stat(os.fstat(handle.fileno()))):
+                raise ValueError('weakness_dependency_metadata_changed')
+        metadata[str(path)] = source_stat(before)
+        paths.add(str(path))
+        try:
+            value = json.loads(raw)
+        except RecursionError:
+            raise ValueError('weakness_dependency_metadata_depth_invalid') from None
+        if not isinstance(value, dict):
+            raise ValueError('weakness_dependency_metadata_object_required')
+        return value
+
+    current = native.check_seal(read(pointer))
+    if cumulative is not None and cumulative != current:
+        raise ValueError('weakness_dependency_cumulative_changed')
+    if (current.get('schema') != native.R.VERSION + ':cumulative'
+            or any(current.get(k) != v for k, v in native.R.AUTH.items())):
+        raise ValueError('weakness_dependency_authority_invalid')
+    days = current.get('source_scope', {}).get('source_dates')
+    if (not isinstance(days, list) or len(days) > 256 or days != sorted(set(days))
+            or any(not isinstance(d, str) or date.fromisoformat(d).isoformat() != d for d in days)):
+        raise ValueError('weakness_dependency_source_scope_invalid')
+    sources = {r['source_date']: r for r in current.get('sources', [])}
+    states = {r['source_date']: r for r in current.get('source_cursor_states', [])}
+    if (not set(sources).issubset(days) or set(states) != set(days)
+            or len(sources) != len(current.get('sources', []))
+            or len(states) != len(current.get('source_cursor_states', []))):
+        raise ValueError('weakness_dependency_source_binding_invalid')
+    affected = set()
+
+    def collect(value, day, depth=0):
+        if depth > 64:
+            raise ValueError('weakness_dependency_metadata_depth_invalid')
+        if isinstance(value, dict):
+            if isinstance(value.get('path'), str):
+                name = value['path']
+                if not Path(name).is_absolute():
+                    raise ValueError('weakness_dependency_path_invalid')
+                paths.add(name)
+                if value.get('status') == 'missing' or all(k in value for k in
+                        ('device','inode','size','mtime_ns','ctime_ns')):
+                    key = native.R.digest(value)
+                    if key not in receipts:
+                        receipts[key] = (value, native.receipts_current([value]))
+                    if not receipts[key][1]:
+                        affected.add(day)
+            for child in value.values():
+                collect(child, day, depth+1)
+        elif isinstance(value, list):
+            for child in value:
+                collect(child, day, depth+1)
+        elif isinstance(value, str) and value.startswith('/'):
+            paths.add(value)
+        if len(paths) > 65536 or len(receipts) > 65536:
+            raise ValueError('weakness_dependency_inventory_reference_bound')
+
+    executing_code = native.code_hash()
+    for day in days:
+        path = root / day / 'cursor.json'
+        paths.add(str(path))
+        if not path.exists() and day not in sources:
+            continue  # An unstarted date has no produced dependencies yet.
+        cursor = read(path)
+        for field in ('source_dependency_receipts','shared_object_receipts'):
+            rows = cursor.get(field, [])
+            if not isinstance(rows, list) or any(not isinstance(r, dict)
+                    or not isinstance(r.get('path'), str)
+                    or (r.get('status') != 'missing' and any(type(r.get(k)) is not int
+                        or r[k] < 0 for k in ('device','inode','size','mtime_ns','ctime_ns')))
+                    for r in rows):
+                raise ValueError('weakness_dependency_receipt_invalid')
+        expected = states.get(day, {})
+        if (cursor.get('source_date') != day
+                or any(cursor.get(k) != expected.get(k) for k in ('generation','status'))
+                or cursor.get('source_descriptor', {}).get('code') != expected.get('code')
+                or any(cursor.get(k) != v for k, v in native.R.AUTH.items())):
+            raise ValueError('weakness_dependency_cursor_binding_invalid')
+        if expected.get('code') != executing_code:
+            affected.add(day)
+        if day in sources:
+            manifest = native.check_seal(read(cursor['manifest_path']))
+            descriptor = cursor.get('source_descriptor', {})
+            if (manifest.get('source_date') != day
+                    or manifest.get('schema') != native.R.VERSION + ':source_manifest'
+                    or any(manifest.get(k) != v for k, v in native.R.AUTH.items())
+                    or cursor.get('generation') != sources[day]['generation']
+                    or native.R.digest(descriptor) != cursor.get('generation')
+                    or any(manifest.get(k) != v for k, v in descriptor.items())
+                    or any(manifest.get(k, []) != cursor.get(k, []) for k in
+                           ('source_dependency_receipts','shared_object_receipts','partitions'))):
+                raise ValueError('weakness_dependency_manifest_binding_invalid')
+        collect(cursor, day)
+    if any(source_stat(Path(p).lstat()) != sig for p, sig in metadata.items()):
+        raise ValueError('weakness_dependency_inventory_changed')
+    return dict(current=not affected, paths=sorted(paths), affected_source_dates=sorted(affected),
+                source_days=len(days), metadata_bytes=used, receipt_count=len(receipts))
 
 
 @contextmanager
