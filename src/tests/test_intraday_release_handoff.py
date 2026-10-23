@@ -2404,6 +2404,7 @@ def test_consumed_sentinel_profile_retains_exact_native_handoff(tmp_path,family,
 
 @pytest.mark.parametrize('family', ['pre_submit_delay','main_stop','holding_vote'])
 @pytest.mark.parametrize('dependency', [
+    'src/engine/lifecycle/research_storage.py',
     'src/engine/monitoring/observer_artifact_io.py',
     'src/engine/error_detectors/artifact_freshness.py',
     'src/engine/monitoring/submission_bottleneck_monitor.py',

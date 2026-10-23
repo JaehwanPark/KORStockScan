@@ -4885,13 +4885,13 @@ REVIEWED_ENTRY_COST_DEPENDENCY_VARIANTS = {
     } for key, value in REVIEWED_ENTRY_COST_DEPLOYED_SENTINEL_VARIANTS.items()
 }
 
-# Observer IO/P5/b67 and logical-archive repair form one complete reviewed profile.
-# Keep the actually consumed926 profile for historical/predecessor readers.
-# The new reader has no historical implementation or compatibility wrapper.
+# Observer IO/P5/b67, logical-archive and research retention form one reviewed profile.
+# Preserve actually consumed historical profiles; the shared IO owner has no wrapper.
 REVIEWED_OBSERVER_IO_HASHES = {'src/engine/automation/entry_cancel_wait_tuning.py': '49c1f36ca4082714705e0e558fa6a931cba7f394fb7f1dca83090884db86dfb4',
  'src/engine/automation/ordered_intraday_deploy.py': '7f52b1d056bf13f16791c4d5d41e8ca4ba4a9715a77176403c1dff97e95d0026',
- 'src/engine/error_detectors/artifact_freshness.py': '365c0fc8c392143a1645fe3c18edaeaa0f72fd238a4757100ed22c65309f75f9',
- 'src/engine/infrastructure/startup_validation_code_context.py': '7b169b913a367565c66ee9bbc89f047e4ef8ff898d8e70776f1c606412d8eaeb',
+ 'src/engine/error_detectors/artifact_freshness.py': '6f853e28cf95b2f6513ad6650350c6574ddeeb5b99f5d2d2d5756d34ebf14ed9',
+ 'src/engine/infrastructure/startup_validation_code_context.py': 'ee715b40b27ddd814128f7c49945d2dfbba08e65cf6c7c23c4a8cbd73594b171',
+ 'src/engine/lifecycle/research_storage.py': '448514a835975dd28266a985492ff3c352a566b71e18426214498b1f9fd1bf13',
  'src/engine/monitoring/observer_artifact_io.py': '4653b9d9785e129b403b28d4c96c99bba3251dec986779bc8c4d182e5c862cc7',
  'src/engine/monitoring/policy_generation_code_handoff.py': '4db24d4d542b8cc6142c1b85e0839bfce6a7116aaae5f49e2b0d90e4174e3d62',
  'src/engine/monitoring/submission_bottleneck_monitor.py': 'f8d68d78e8423db51d4a2f8786c786ea1a53def58f43cb3019d6d79a58dc5902',
@@ -4917,6 +4917,7 @@ REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
                                                       'f64db72754c88c8bab262e275fe3ab68440b32656a5b74ab9c4f0f0044b94ebf'],
  'src/engine/infrastructure/startup_validation_code_context.py': ['355a1eb29a8e7584872f7446cd7b78af4375a72c8d53fe482f2023afab311e59',
                                                                   'eebb9048c5500a5c184c7dcca4810db89ec266722611fa07e4f4c90f66aad1cf'],
+ 'src/engine/lifecycle/research_storage.py': ['18c0644ea2a6805b9027b2bce4bc7a1b89dbc5e10925d104b38a05a9423b4c35'],
  'src/engine/monitoring/policy_generation_code_handoff.py': ['47db04eba70a27e3fbb5c4078e828be38920859efbf4224e3049582776ff6d5f',
                                                              '4c23315cdd2585bab300b493aae73e8204ab5aa38279b70196b6c34a8779421b',
                                                              '64c1d33b10b5e3999f12825dbcb850ad7520c7c117d8542e6da6e127234192dc',

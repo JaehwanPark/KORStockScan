@@ -1353,6 +1353,7 @@ def test_main_preparation_independently_reviews_sentinel_route_sources(relative,
 
 
 @pytest.mark.parametrize('relative', [
+    'src/engine/lifecycle/research_storage.py',
     'src/engine/error_detectors/artifact_freshness.py',
     'src/engine/monitoring/submission_bottleneck_monitor.py',
     'src/engine/automation/ordered_intraday_deploy.py',

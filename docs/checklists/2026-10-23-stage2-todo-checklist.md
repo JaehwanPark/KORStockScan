@@ -210,6 +210,7 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
 ## 장중 제출 원천·종료 수리 인계
 
 - [ ] `[MainEntrySourceTerminalRepair1022] 사전 계좌자료 생산과 제출 종료 사유 전달 수리·실제 소비 확인` (`Due: 2026-10-23`, `Slot: INTRADAY`, `TimeWindow: 08:00~20:00`, `Track: RuntimeStability`)
+  - 추가 통합 승인: a761822e8의 과거 약세 연구 dependency 보존·현재성 검사를 동일 후보에 결합한다.82ec 후보 P5는 통과했으나 새 실행 commit의 증거로 재사용하지 않으며, 정확한 코드 inventory·native/P5·배포 순서를 새로 검증한다.
   - 최종 통합: observer187209a2e·P5 e9d30fa98·b67c4e090/선행33f15를 통합하고, 독립 native/P5 inventory를 완전한 exact successor로 결속한다. 기존926/2b7 원 코드·증거와 정책/수동 제외/guard는 보존한다. 원인·수정·실제 배포/PID 결과는 같은 검토에서 별도 확인한다.
   - P5 포인터 수리: 정지 전 exact candidate P5 path/SHA·날짜·실행root/commit·원selector·PASS를 고정하고 발행 직전 재검증, 상속된 이전P5 필드를 교체한다. 원 publisher의 실패 회귀를 재현하고 변조/다른세대/선택변경 차단과 기존 execute·stopped recovery·lock/CAS 계약을 검증한다. selected prepared P5는 별도 유지하며 수동 운영selector 수정0. [동일 검토](../audits/postclose-root-cause-recovery-review-2026-10-19.md#candidate-p5-pointer-binding-repair-2026-10-23).
   - observer reader 통합: 동일 reader8정의를 monitoring.observer_artifact_io의4함수로 통합하고 두 owner가 직접 호출한다. 옛 reader 재수출/forwarder0, 기존크기·압축·publication lock·PID/boot 계약 유지. 영향1816회귀/compile/위치/diff PASS; 별도P5 결속 수리와 통합 배포·실제PID 소비는 후속 검증한다. [동일 검토](../audits/postclose-root-cause-recovery-review-2026-10-19.md#observer-artifact-reader-consolidation-2026-10-23).

@@ -238,7 +238,7 @@ REVIEWED_PREPARATION_HISTORY.setdefault('src/engine/automation/ordered_intraday_
  ('e01bfae9c239223c409da878d2e45a66bccbe6c5b37684f9951badfb4d12c5ae',
   'fcc7c6935434dc1b2e03598bec6fb721997b23cd4c39b6776fa1dfc2afa46423')})
 
-# Exact observer IO/P5/b67 and logical-archive source-only successors.
+# Exact observer IO/P5/b67, logical-archive and research-retention successors.
 for _relative, _origins in {'src/engine/automation/entry_cancel_wait_tuning.py': (['bdfaaeaac7768f703d181314be45afaf2ecfc983001a6364a60a41ae54882c4e'],
                                                        '49c1f36ca4082714705e0e558fa6a931cba7f394fb7f1dca83090884db86dfb4'),
  'src/engine/automation/ordered_intraday_deploy.py': (['404b870046364da476c4df9abb0007312123ea4b4331459f67da6d3c53e183e6',
@@ -252,7 +252,9 @@ for _relative, _origins in {'src/engine/automation/entry_cancel_wait_tuning.py':
                                                        'fcc7c6935434dc1b2e03598bec6fb721997b23cd4c39b6776fa1dfc2afa46423'],
                                                       '7f52b1d056bf13f16791c4d5d41e8ca4ba4a9715a77176403c1dff97e95d0026'),
  'src/engine/error_detectors/artifact_freshness.py': (['3a58f8ac3220ea8d64247cf17a756d2658c7815cd3d57744303f80bc40d34dcc'],
-                                                      '365c0fc8c392143a1645fe3c18edaeaa0f72fd238a4757100ed22c65309f75f9'),
+                                                      '6f853e28cf95b2f6513ad6650350c6574ddeeb5b99f5d2d2d5756d34ebf14ed9'),
+ 'src/engine/lifecycle/research_storage.py': (['18c0644ea2a6805b9027b2bce4bc7a1b89dbc5e10925d104b38a05a9423b4c35'],
+                                              '448514a835975dd28266a985492ff3c352a566b71e18426214498b1f9fd1bf13'),
  'src/engine/monitoring/policy_generation_code_handoff.py': (['b65c616d024460c825d73472311ddf995282069cd58dfdec9241447d4285d841'],
                                                              '4db24d4d542b8cc6142c1b85e0839bfce6a7116aaae5f49e2b0d90e4174e3d62'),
  'src/engine/monitoring/submission_bottleneck_monitor.py': (['00e5a75bdbf7fa812145212820094baa7e04638d5a9c18d4e8011b3b7165abae',

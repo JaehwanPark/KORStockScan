@@ -4850,6 +4850,9 @@ def test_optional_research_native_receipts_calendar_scope_and_generation(tmp_pat
     from src.engine.error_detectors import artifact_freshness as detector
     from src.engine.automation import main_market_weakness_research as native
     from src.engine.scalping import continuous_reversal_postclose as reports
+    from src.engine.lifecycle import research_storage
+    monkeypatch.setattr(research_storage, 'weakness_dependency_inventory', lambda *a: dict(
+        current=True, affected_source_dates=[], metadata_bytes=0, receipt_count=0))
     base=native.namespace(tmp_path/'data');base.mkdir(parents=True)
     def put(name,value):
         p=base/name;p.parent.mkdir(parents=True,exist_ok=True)
