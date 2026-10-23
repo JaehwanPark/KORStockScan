@@ -67,6 +67,7 @@ from src.engine.sniper_time import (
     scalping_session_venue_provenance,
 )
 from src.utils.constants import DATA_DIR, TRADING_RULES
+from src.utils import pipeline_event_logger as pipeline_observation
 from src.utils.pipeline_event_logger import emit_pipeline_event
 from src.scanners.scanner_source_census import (
     observe_cycle,
@@ -1314,24 +1315,6 @@ def _lookup_attention_source_age_sec(target, *, now=None):
     return round((observed_at - source_at).total_seconds(), 6)
 
 
-ZERO_CONTEXT_FORBIDDEN_USES = (
-    "threshold_mutation,provider_route_change,order_price_relaxation,"
-    "quantity_or_cap_change,broker_guard_bypass,stale_quote_bypass,"
-    "hard_safety_guard_bypass,real_execution_quality_approval"
-)
-
-
-def _zero_context_value_missing(value) -> bool:
-    if value is None:
-        return True
-    text = str(value).strip().lower()
-    return (
-        text == ""
-        or text in {"-", "none", "null", "nan", "nat", "not_evaluated"}
-        or text.startswith("not_applicable")
-    )
-
-
 def _zero_context_value_state(
     value, *, missing: bool = False, not_applicable: bool = False
 ) -> str:
@@ -1340,37 +1323,9 @@ def _zero_context_value_state(
         return "non_zero"
     if not_applicable:
         return "not_applicable_zero"
-    if missing or _zero_context_value_missing(value):
+    if missing or pipeline_observation.zero_context_value_missing(value):
         return "missing_defaulted_zero"
     return "actual_zero"
-
-
-def _zero_context_observation_fields(
-    *, domain: str, blocker: str, states: dict
-) -> dict:
-    zero_states = {str(key): str(value) for key, value in (states or {}).items()}
-    blocking_states = [
-        value
-        for value in zero_states.values()
-        if value in {"missing_defaulted_zero", "stale_defaulted_zero"}
-    ]
-    return {
-        "zero_context_observed": bool(zero_states),
-        "zero_context_domain": str(domain or "unknown"),
-        "zero_context_blocker": str(blocker or "unknown"),
-        "zero_context_primary_state": (
-            blocking_states[0]
-            if blocking_states
-            else (
-                next(iter(zero_states.values()))
-                if zero_states
-                else "not_applicable_zero"
-            )
-        ),
-        "zero_context_defaulted_zero_field_count": len(blocking_states),
-        "zero_context_forbidden_uses": ZERO_CONTEXT_FORBIDDEN_USES,
-        **{f"zero_context_{key}_state": value for key, value in zero_states.items()},
-    }
 
 
 def _safe_positive_int(value, default=0):
@@ -3626,7 +3581,7 @@ def _scanner_zero_context_fields(
 ):
     cntr_str_available = bool(target.get("CntrStrAvailable", False))
     first_seen_not_applicable = source_guard_context == "first_seen_not_applicable"
-    return _zero_context_observation_fields(
+    return pipeline_observation.zero_context_observation_fields(
         domain="scanner_source_guard",
         blocker=source_guard.get("reason") or "candidate_observed",
         states={

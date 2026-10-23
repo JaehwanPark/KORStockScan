@@ -11,6 +11,77 @@ import pytest
 from src.utils import pipeline_event_logger as logger_mod
 
 
+@pytest.mark.parametrize(
+    "value, missing",
+    [
+        (None, True),
+        ("", True),
+        (" - ", True),
+        ("NULL", True),
+        (float("nan"), True),
+        ("not_evaluated", True),
+        ("not_applicable_cap", True),
+        (0, False),
+        ("0", False),
+        (False, False),
+        ("inf", False),
+        ("unknown", False),
+    ],
+)
+def test_zero_context_missing_preserves_zero_and_nonmissing_tokens(value, missing):
+    assert logger_mod.zero_context_value_missing(value) is missing
+
+
+@pytest.mark.parametrize(
+    "states, primary, defaulted",
+    [
+        ({}, "not_applicable_zero", 0),
+        (
+            {"qty": "guard_intended_zero", "cap": "not_applicable_zero"},
+            "guard_intended_zero",
+            0,
+        ),
+        (
+            {
+                "qty": "actual_zero",
+                "quote": "stale_defaulted_zero",
+                "ratio": "missing_defaulted_zero",
+            },
+            "stale_defaulted_zero",
+            2,
+        ),
+        (
+            {"ratio": "missing_defaulted_zero", "quote": "stale_defaulted_zero"},
+            "missing_defaulted_zero",
+            2,
+        ),
+    ],
+)
+def test_zero_context_fields_preserve_order_counts_and_input(
+    states, primary, defaulted
+):
+    before = list(states.items())
+    fields = logger_mod.zero_context_observation_fields(
+        domain="", blocker=None, states=states
+    )
+    assert list(states.items()) == before
+    assert fields["zero_context_primary_state"] == primary
+    assert fields["zero_context_defaulted_zero_field_count"] == defaulted
+    assert fields["zero_context_observed"] is bool(states)
+    assert fields["zero_context_domain"] == fields["zero_context_blocker"] == "unknown"
+    if states:
+        assert list(fields)[-len(states) :] == [
+            f"zero_context_{key}_state" for key in states
+        ]
+    else:
+        assert len(fields) == 6
+    assert fields["zero_context_forbidden_uses"] == (
+        "threshold_mutation,provider_route_change,order_price_relaxation,"
+        "quantity_or_cap_change,broker_guard_bypass,stale_quote_bypass,"
+        "hard_safety_guard_bypass,real_execution_quality_approval"
+    )
+
+
 def _reset_logger_state(monkeypatch):
     logger_mod._flush_producer_summary_at_exit()
     monkeypatch.setattr(logger_mod, "_PRODUCER_COMPACTOR", None)

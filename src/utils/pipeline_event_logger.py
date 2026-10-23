@@ -600,6 +600,52 @@ def drain_pipeline_event_summary_before_termination() -> None:
 atexit.register(_flush_producer_summary_at_exit)
 
 
+ZERO_CONTEXT_FORBIDDEN_USES = (
+    "threshold_mutation,provider_route_change,order_price_relaxation,"
+    "quantity_or_cap_change,broker_guard_bypass,stale_quote_bypass,"
+    "hard_safety_guard_bypass,real_execution_quality_approval"
+)
+
+
+def zero_context_value_missing(value) -> bool:
+    if value is None:
+        return True
+    text = str(value).strip().lower()
+    return (
+        text == ""
+        or text in {"-", "none", "null", "nan", "nat", "not_evaluated"}
+        or text.startswith("not_applicable")
+    )
+
+
+def zero_context_observation_fields(
+    *, domain: str, blocker: str, states: dict
+) -> dict:
+    zero_states = {str(key): str(value) for key, value in (states or {}).items()}
+    blocking_states = [
+        value
+        for value in zero_states.values()
+        if value in {"missing_defaulted_zero", "stale_defaulted_zero"}
+    ]
+    return {
+        "zero_context_observed": bool(zero_states),
+        "zero_context_domain": str(domain or "unknown"),
+        "zero_context_blocker": str(blocker or "unknown"),
+        "zero_context_primary_state": (
+            blocking_states[0]
+            if blocking_states
+            else (
+                next(iter(zero_states.values()))
+                if zero_states
+                else "not_applicable_zero"
+            )
+        ),
+        "zero_context_defaulted_zero_field_count": len(blocking_states),
+        "zero_context_forbidden_uses": ZERO_CONTEXT_FORBIDDEN_USES,
+        **{f"zero_context_{key}_state": value for key, value in zero_states.items()},
+    }
+
+
 def sanitize_pipeline_field(value) -> str:
     return str(value).replace(" ", "|")
 
