@@ -4839,6 +4839,37 @@ def observation_health_projection(result):
                 and 'indexed_source_window_proof_invalid:probe' not in failed
                 and 'source_window_not_complete:probe' not in failed):
             return True
+        if (source_name == 'traces'
+                and source.get('coverage_basis') == 'native_index_projection_or_exact_raw_offset_size_sha256'):
+            from src.engine.automation.main_trailing_source_store import encode
+            generation = obj(source.get('native_index_generation'))
+            metadata = generation.get('source_stat')
+            raw_bytes, index_bytes, reads = (source.get(k) for k in ('bytes_read','index_bytes_read','read_count'))
+            return (set(generation) == {'schema','path','size','namespace','source_stat','catchup_end',
+                    'raw_records','selected_records','prefix_chain_sha256','append_chain_sha256','whole_file_sha256','sha256'}
+                and generation.get('schema') == 'main_trailing_indexed_source_v1:generation'
+                and generation.get('path') == f'ai_decision_trace_{day}.jsonl'
+                and generation.get('namespace') == 'ai_decision_trace'
+                and isinstance(metadata, list) and len(metadata) == 5 and all(count(v) for v in metadata)
+                and count(metadata[1],minimum=1)
+                and count(identity.get('device')) and count(identity.get('inode'),minimum=1)
+                and identity == {'device':metadata[0],'inode':metadata[1]}
+                and count(source.get('source_size'),minimum=1)
+                and count(generation.get('size'),minimum=1) and generation['size'] == metadata[2] == source['source_size']
+                and count(generation.get('catchup_end'),maximum=generation['size'])
+                and count(generation.get('raw_records')) and count(generation.get('selected_records'),maximum=generation['raw_records'])
+                and count(source.get('recent_count'),maximum=generation['selected_records'])
+                and generation.get('whole_file_sha256') is False
+                and all(sha(generation.get(k)) for k in ('sha256','prefix_chain_sha256','append_chain_sha256'))
+                and generation['sha256'] == hashlib.sha256(encode({k:v for k,v in generation.items() if k!='sha256'})).hexdigest()
+                and source.get('status') == 'complete' and source.get('window_covered') is True
+                and source.get('tail_truncated') is False and source.get('incomplete_last_line') is False
+                and count(source.get('malformed_rows'),maximum=0) and count(source.get('missing_timestamp_rows'),maximum=0)
+                and count(raw_bytes,maximum=maximum) and count(index_bytes,maximum=maximum)
+                and raw_bytes+index_bytes <= maximum and raw_bytes <= generation['size']
+                and count(reads,maximum=source['recent_count']) and ((reads == 0) == (raw_bytes == 0))
+                and (source['recent_count'] == 0 or index_bytes > 0) and not source.get('reason')
+                and 'adjacent_partition' not in source)
         base = (source.get('incomplete_last_line') is False
             and count(source.get('malformed_rows'), maximum=0) and count(source.get('missing_timestamp_rows'), maximum=0)
             and count(source.get('recent_count')) and count(source.get('read_count'), minimum=1, maximum=1)

@@ -4861,6 +4861,30 @@ REVIEWED_ENTRY_COST_DEPENDENCY_VARIANTS = {
     } for key, value in REVIEWED_ENTRY_COST_PRE_SENTINEL_SCOPE_VARIANTS.items()
 }
 
+
+# Preserve the actually consumed2b7 profile. The index-only health successor
+# must supply every reviewed scope dependency; partial/mixed sets remain invalid.
+REVIEWED_ENTRY_COST_DEPLOYED_SENTINEL_HASHES = REVIEWED_ENTRY_COST_HASHES
+REVIEWED_ENTRY_COST_DEPLOYED_SENTINEL_VARIANTS = REVIEWED_ENTRY_COST_DEPENDENCY_VARIANTS
+REVIEWED_DEPLOYED_SENTINEL_SCOPE_HASHES = REVIEWED_SENTINEL_SCOPE_HASHES
+REVIEWED_SENTINEL_SCOPE_HASHES = {**REVIEWED_SENTINEL_SCOPE_HASHES,
+    'src/engine/monitoring/submission_bottleneck_monitor.py': '808deb51627b4ed17561f168ad2cad808f0181aaac7a754377493912e71d9e57',
+    'src/engine/infrastructure/startup_validation_code_context.py': 'eebb9048c5500a5c184c7dcca4810db89ec266722611fa07e4f4c90f66aad1cf'}
+REVIEWED_ENTRY_COST_HASHES = {**REVIEWED_ENTRY_COST_HASHES, **REVIEWED_SENTINEL_SCOPE_HASHES}
+REVIEWED_ENTRY_COST_PAIRS = {name: pairs + tuple((old, REVIEWED_SENTINEL_SCOPE_HASHES[name])
+    for old in dict.fromkeys([*(old for old, target in pairs
+        if target == REVIEWED_DEPLOYED_SENTINEL_SCOPE_HASHES.get(name)),
+        REVIEWED_DEPLOYED_SENTINEL_SCOPE_HASHES[name]]))
+    if name in ('src/engine/monitoring/submission_bottleneck_monitor.py', 'src/engine/infrastructure/startup_validation_code_context.py') else pairs
+    for name, pairs in REVIEWED_ENTRY_COST_PAIRS.items()}
+REVIEWED_ENTRY_COST_DEPENDENCY_VARIANTS = {
+    (key[0], REVIEWED_SENTINEL_SCOPE_HASHES.get(key[0], key[1])): {
+        **value, 'dependencies': {**value['dependencies'], **REVIEWED_SENTINEL_SCOPE_HASHES},
+        'contract_extensions': {origin: {name: REVIEWED_SENTINEL_SCOPE_HASHES.get(os.path.normpath(name), digest)
+            for name, digest in paths.items()} for origin, paths in value['contract_extensions'].items()},
+    } for key, value in REVIEWED_ENTRY_COST_DEPLOYED_SENTINEL_VARIANTS.items()
+}
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -4868,7 +4892,7 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     allowed = {
         # Report-only lifecycle classification; delay qualification/selection
         # and every other monitor function remain byte/AST bound.
-        'src/engine/monitoring/submission_bottleneck_monitor.py': {'_reversal_lifecycle_diagnostic'},
+        'src/engine/monitoring/submission_bottleneck_monitor.py': {'_reversal_lifecycle_diagnostic', 'observation_health_projection'},
         'src/engine/ai_engine_openai.py': {'_final_entry_machine_inputs'},
         'src/engine/sniper_state_handlers.py': {'_resolve_watching_state_change_refresh', '_get_live_entry_arm'},
         'src/engine/scalping/pre_submit_delay_tuning.py': {'_verify_runtime_code_contract', 'prepare_runtime_policy'},
@@ -5031,10 +5055,14 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     sentinel_scope_present = ((root / 'src/engine/monitoring/sentinel_event_scope.py').exists()
         or any((root / name).is_file() and hashlib.sha256(candidate_bytes(name)).hexdigest() == sha
                for name, sha in REVIEWED_SENTINEL_SCOPE_HASHES.items()))
-    prepared_hashes = (REVIEWED_ENTRY_COST_HASHES if sentinel_scope_present else
+    deployed_sentinel = all((root / name).is_file() and hashlib.sha256(candidate_bytes(name)).hexdigest() == digest
+        for name, digest in REVIEWED_DEPLOYED_SENTINEL_SCOPE_HASHES.items())
+    prepared_hashes = (REVIEWED_ENTRY_COST_DEPLOYED_SENTINEL_HASHES if deployed_sentinel else
+        REVIEWED_ENTRY_COST_HASHES if sentinel_scope_present else
         REVIEWED_PRE_FINALIZATION_HASHES if consumed_finalization else
         REVIEWED_NATIVE_PREOPEN_HASHES if native_preopen else REVIEWED_ENTRY_COST_PRE_SENTINEL_SCOPE_HASHES)
-    prepared_variants = (REVIEWED_ENTRY_COST_DEPENDENCY_VARIANTS if sentinel_scope_present else
+    prepared_variants = (REVIEWED_ENTRY_COST_DEPLOYED_SENTINEL_VARIANTS if deployed_sentinel else
+        REVIEWED_ENTRY_COST_DEPENDENCY_VARIANTS if sentinel_scope_present else
         REVIEWED_PRE_FINALIZATION_VARIANTS if consumed_finalization else
         REVIEWED_NATIVE_PREOPEN_VARIANTS if native_preopen else REVIEWED_ENTRY_COST_PRE_SENTINEL_SCOPE_VARIANTS)
     entry_cost_hashes = (prepared_hashes if prepared_owner_present

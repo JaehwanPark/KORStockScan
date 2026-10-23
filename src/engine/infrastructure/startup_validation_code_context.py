@@ -140,6 +140,16 @@ REVIEWED_PREPARATION_HISTORY['deploy/run_threshold_cycle_postclose.sh'] = {('c5e
 REVIEWED_PREPARATION_HISTORY.setdefault('src/engine/scalping/reversal_code_handoff.py', set()).update({('b77b63fa5afe9b3dff59266cecce73f92880b5256b12c32343a70aeddba63aa9', '852d31cba14cfcb68cfb73603de07b30643969c5e476ddca6dde1f2d3a6fc589'), ('54b9c0efc38700a0cb8722694cdf84b9df8aa478a28f529b2b618f5532559b5a', '852d31cba14cfcb68cfb73603de07b30643969c5e476ddca6dde1f2d3a6fc589'), ('8681d10376f4228bbe5b9d1d012d3510e8abd89470036077c3c0bc69fad63471', '852d31cba14cfcb68cfb73603de07b30643969c5e476ddca6dde1f2d3a6fc589')})
 REVIEWED_PREPARATION_HISTORY.setdefault('src/engine/scalping/reversal_auxiliary_tuning.py', set()).update({('a8ac3de954b2d6e89e3a46bb49501edc0d35df47621900a1d22b6d8492672412', '0e8f31ed349a6ef17f5f588f8b4bf4180b2f819ab85077a1d51641662611a40a')})
 
+# Exact indexed-reader health successor; historical targets remain independent.
+REVIEWED_PREPARATION_HISTORY.setdefault('src/engine/monitoring/submission_bottleneck_monitor.py', set()).update({
+    (old, '808deb51627b4ed17561f168ad2cad808f0181aaac7a754377493912e71d9e57') for old in (
+        '00e5a75bdbf7fa812145212820094baa7e04638d5a9c18d4e8011b3b7165abae',
+        '0cacfa688b336befe533f2010b3bfaea40d5d2fe778e4ca48d7347071114527e',
+        '6e1588b8e5709563f15cdea0705babe7357fed62a27061365ec5ac2425fc2085',
+        '9c51124b5c07b8ae9039e2e70d1f36da0e3b542136dd24d2ff66ccab642b4ccb',
+        'a5a8b7be30b63d0e7990a5761a60a6e0225a563272b15a24c8ccf9fc013f21d8')
+})
+
 # Reviewed9a8 -> sentinel/972 source-contract integration; no policy changes.
 REVIEWED_PREPARATION_HISTORY.setdefault('src/engine/buy_funnel_sentinel.py', set()).update({('4918513346f28c8908b0fe18085663ef662ba2dc03349b4b7822ff1656b908d1',
   '40b489fff0e1b82edbf36b734424ca7826dbc2c4c8a3b27ee9069c9381e7df2a'),

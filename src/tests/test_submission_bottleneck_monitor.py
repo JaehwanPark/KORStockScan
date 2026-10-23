@@ -5501,6 +5501,60 @@ def test_lineage_native_index_reads_exact_entry_rows_outside_large_irrelevant_su
     assert source['bytes_read'] < path.stat().st_size/2
 
 
+@pytest.mark.parametrize('legacy', [False, True])
+@pytest.mark.parametrize('damage', [None, 'seal', 'path', 'namespace', 'stat', 'size', 'chain',
+    'selected_count', 'whole_file', 'budget', 'reads', 'missing_clock', 'partial', 'reason',
+    'extra', 'bool_identity', 'raw_without_read', 'negative_stat'])
+def test_indexed_lineage_source_reaches_bounded_health_without_raw_scan(tmp_path, monkeypatch, legacy, damage):
+    from src.engine.automation import main_trailing_source_store as store
+    monkeypatch.setattr(store, 'maintain', lambda *a: None)
+    if legacy:
+        project = store.project
+        def old_projection(*args):
+            value = project(*args)
+            if value is not None: value.pop('lineage_projection_version', None)
+            return value
+        monkeypatch.setattr(store, 'project', old_projection)
+    result, gap, machine, lineage = _bounded_outcome_health_fixture(partial=False)
+    now = monitor.stamp(result['as_of'])
+    path = tmp_path/'ai_decision_trace'/f'ai_decision_trace_{now.date()}.jsonl'
+    path.parent.mkdir(); path.touch()
+    for index in range(2):
+        row = dict(schema='ai_decision_trace_v1', decision_stage='entry_screen',
+            decision_trace_id='trace-'+str(index), decision_ts=now.isoformat())
+        before=store.signature(path.stat()); raw=json.dumps(row).encode()+b'\n'
+        with path.open('ab') as stream: stream.write(raw)
+        assert store.record_append(tmp_path,path,before=before,after=store.signature(path.stat()),raw=raw,row=row)
+    rows, source = monitor._indexed_entry_trace_rows(tmp_path,path,now,tail_bytes=16384,window_sec=605)
+    assert len(rows)==2 and source['read_count']==2*int(legacy)
+    generation=source['native_index_generation']
+    if damage=='seal': generation['sha256']='f'*64
+    elif damage=='path': generation['path']=f'ai_decision_trace_{(now-timedelta(days=1)).date()}.jsonl'
+    elif damage=='namespace': generation['namespace']='ai_decision_requests'
+    elif damage=='stat': generation['source_stat'][1]+=1
+    elif damage=='size': generation['size']+=1
+    elif damage=='chain': generation['append_chain_sha256']='invalid'
+    elif damage=='selected_count': generation['selected_records']=0
+    elif damage=='whole_file': generation['whole_file_sha256']=True
+    elif damage=='budget': source['index_bytes_read']=8*1024*1024+1
+    elif damage=='reads': source['read_count']=True
+    elif damage=='missing_clock': source['missing_timestamp_rows']=1
+    elif damage=='partial': source['status']='partial'; source['window_covered']=False
+    elif damage=='reason': source['reason']='source_generation_changed'
+    elif damage=='extra': generation['unverified_extension']={}
+    elif damage=='bool_identity': source['source_identity']['device']=True
+    elif damage=='raw_without_read': source['bytes_read']=1; source['read_count']=0
+    elif damage=='negative_stat': generation['source_stat'][3]=-1
+    if damage not in (None,'seal'):
+        generation['sha256']=hashlib.sha256(store.encode({k:v for k,v in generation.items() if k!='sha256'})).hexdigest()
+    lineage['source_windows']['traces']=source
+    original=json.dumps(result,sort_keys=True)
+    health=monitor.observation_health_projection(result)
+    assert health['status']==('warning_pending' if damage is None else 'not_eligible'),health
+    assert health['full_coverage_proven'] is False and health['current_observation_verified'] is False
+    assert json.dumps(result,sort_keys=True)==original
+
+
 @pytest.mark.parametrize('cumulative', [False, True])
 @pytest.mark.parametrize('damage', [None, 'no_breach', 'ready', 'predicate_missing', 'source',
     'epoch', 'scope', 'registration', 'route', 'bundle', 'branch_phase', 'late'])

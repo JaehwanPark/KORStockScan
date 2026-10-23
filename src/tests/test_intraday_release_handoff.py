@@ -2214,6 +2214,7 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(tmp_path,family,faul
     subprocess.run(['git','clone','-q','--shared','--no-checkout',str(canonical),str(root)],check=True)
     subprocess.run(['git','-C',str(root),'checkout','-q','75e0fbbf7'],check=True)
     hashes=({'current':handoff.REVIEWED_ENTRY_COST_HASHES,
+        'consumed_sentinel':handoff.REVIEWED_ENTRY_COST_DEPLOYED_SENTINEL_HASHES,
         'consumed_pre_finalization':handoff.REVIEWED_PRE_FINALIZATION_HASHES,
         'consumed_native_preopen':handoff.REVIEWED_NATIVE_PREOPEN_HASHES,
         'consumed_pre_startup':handoff.REVIEWED_ENTRY_COST_PRE_STARTUP_HASHES,
@@ -2233,7 +2234,7 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(tmp_path,family,faul
     for name in hashes:
         content=((canonical/name).read_bytes() if generation=='current' else
             subprocess.check_output(['git','-C',str(canonical),'show',
-                {'consumed_native_preopen':'9a8e59bfc','consumed_pre_finalization':'91e5d2702','consumed_pre_startup':'90bf2d11f','consumed_pre_shutdown':'70fc572f8',
+                {'consumed_sentinel':'2b7ca0380','consumed_native_preopen':'9a8e59bfc','consumed_pre_finalization':'91e5d2702','consumed_pre_startup':'90bf2d11f','consumed_pre_shutdown':'70fc572f8',
                  'consumed_pre_native_label':'b1519a2d4','consumed_pre_coordination':'3dd9f1bf5','consumed_pre_prepared_validation':'bf330ae92','consumed_pre_prepared_repair':'81f43b8ba','consumed_pre_main_preparation':'8644e15fc','consumed_pre_prepared_start':'3b951f1f1','consumed_pre_first_turn':'e9ee2c8ea','consumed_pre_expiry_health':'9476e9ecd','consumed_pre_signed_surge':'bf26ddf0e','consumed_pre_preassessment':'fc51a179b','consumed_pre_prestart':'64ec63a87','consumed_pre_prepared_owner':'d346aa3af'}[generation]+':'+name]))
         (root/name).write_bytes(content)
     name='src/engine/automation/intraday_release_handoff.py'
@@ -2391,3 +2392,10 @@ def test_postclose_workflow_review_retains_current_and_native_predecessor_closur
 def test_sentinel_route_successor_keeps_complete_reviewed_source_group(tmp_path,family,dependency,fault):
     test_entry_cost_handoff_keeps_exact_complete_generation(
         tmp_path,family,fault,'current',dependency=dependency)
+
+
+@pytest.mark.parametrize('family',['main_stop','holding_vote','pre_submit_delay'])
+@pytest.mark.parametrize('fault',[None,'missing','parent_mix'])
+def test_consumed_sentinel_profile_retains_exact_native_handoff(tmp_path,family,fault):
+    test_entry_cost_handoff_keeps_exact_complete_generation(tmp_path,family,fault,'consumed_sentinel',
+        dependency='src/engine/monitoring/submission_bottleneck_monitor.py')
