@@ -4131,6 +4131,67 @@ def test_closed_observation_rechecks_native_terminal_after_actor_verification(tm
     assert result.details['submission_bottleneck_monitor_status'] == 'fail'
 
 
+@pytest.mark.parametrize('damage', [None, 'recent_event', 'new_loss', 'actor', 'missing_terminal',
+    'snapshot_stale', 'projection', 'current_machine', 'native_birth', 'generation',
+    'missing_cohort', 'event_clock', 'input_schema'])
+def test_closed_market_retains_only_verified_noncurrent_scanner_population(tmp_path, monkeypatch, damage):
+    from copy import deepcopy
+    from src.engine.monitoring import submission_bottleneck_monitor as monitor
+    from src.tests.test_submission_bottleneck_monitor import _health_birth_fixture
+    fixture, heartbeat, _ = _market_closed_quiet_observer_fixture(tmp_path, monkeypatch)
+    mod, root, _, path, report, _, selection, _ = fixture
+    at = datetime.fromisoformat(report['as_of'])
+    actor = [str(selection['actual_pid_receipt']['pid']), selection['actual_pid_receipt']['start_ticks']]
+    birth, _ = _health_birth_fixture(at, actor)
+    birth['process_cwd'] = selection['actual_pid_receipt']['process_cwd']
+    native_birth = deepcopy(birth)
+    if damage == 'native_birth': native_birth['boot_epoch'] += 1
+    monkeypatch.setattr(monitor, '_attest_health_actor_birth', lambda *args: deepcopy(native_birth))
+    report['observer_generation']['actor_birth_proof'] = birth
+    report['machine_semantics']['tail_truncated'] = True
+    for name in ('source_gap_semantics', 'machine_semantics'):
+        original = report[name]
+        token = monitor._HEALTH_BIRTH.set(birth)
+        try: original['current_health_cohort'] = monitor._health_cohort(deepcopy(original), actor, at)
+        finally: monitor._HEALTH_BIRTH.reset(token)
+    report['blocker'] = 'missing_stale_or_noncurrent_sentinel_evidence'
+    inp = report['input_provenance']
+    inp.update(row_count=2, latest_event_at=(at-timedelta(seconds=900)).isoformat(),
+        latest_event_age_seconds=900.0, latest_event_status='observed_recent_event', loaded_recent_event_count=2)
+    if damage == 'recent_event':
+        inp.update(latest_event_at=(at-timedelta(seconds=60)).isoformat(), latest_event_age_seconds=60.0)
+    elif damage == 'new_loss':
+        report['source_gap_semantics']['current_health_cohort']['view']['issues'] = {'new_current_loss': 1}
+    elif damage == 'actor':
+        report['machine_semantics']['current_health_cohort']['actor'] = ['999', '999']
+    elif damage == 'snapshot_stale':
+        inp.update(snapshot_as_of=(at-timedelta(seconds=421)).isoformat(), snapshot_age_seconds=421.0)
+    elif damage == 'current_machine':
+        report['machine_semantics']['current_health_cohort']['view']['observation_count'] = 1
+    elif damage == 'generation': report['observer_generation']['git_commit'] = 'f'*40
+    elif damage == 'missing_cohort': report['source_gap_semantics'].pop('current_health_cohort')
+    elif damage == 'event_clock': inp['latest_event_age_seconds'] += 1
+    elif damage == 'input_schema': inp['schema'] = 'unknown'
+    report['observer_generation']['sha256'] = monitor._observer_seal(report['observer_generation'])
+    report['observation_health'] = monitor.observation_health_projection(report)
+    if damage == 'projection': report['observation_health']['unmet_conditions'] = []
+    path.write_text(json.dumps(report))
+    completed = datetime.fromisoformat(report['observer_generation']['completed_at']).timestamp()
+    os.utime(path, (completed, completed))
+    if damage == 'missing_terminal': heartbeat.unlink()
+    before = path.read_bytes()
+    result = mod.ArtifactFreshnessDetector(dry_run=True).check()
+    assert path.read_bytes() == before
+    assert result.details.get('submission_bottleneck_monitor_current_observation_verified') is not True
+    if damage is not None:
+        assert result.severity == 'fail'
+    else:
+        assert result.severity == 'warning', (result.summary, report['observation_health'])
+        assert result.details['submission_bottleneck_monitor_status'] == 'closed_window_observation_only'
+        assert report['observation_health']['unmet_conditions'] == ['current_input_provenance_invalid']
+        assert report['entry_execution_tuning_semantics']['entry_split']['primary_operating_ev_pct'] is None
+
+
 def test_live_heartbeat_progress_does_not_invalidate_observer_publication(tmp_path, monkeypatch):
     mod, root, _, path, _, _, _, _ = _quiet_current_observer_fixture(tmp_path, monkeypatch)
     heartbeat = root/'tmp/error_detector_heartbeat.json'

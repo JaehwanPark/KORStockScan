@@ -3910,14 +3910,52 @@ class ArtifactFreshnessDetector(BaseDetector):
                             current_observation_verified=False, full_coverage_proven=False,
                             runtime_effect=False, allowed_runtime_apply=False)
                         continue
+                    retained_scanner_input = False
                     if (aid == observer_id and dimensions.get('closed_window')
-                            and observation_health.get('reason') == 'bounded_no_applicable_observations'
+                            and observation_health.get('reason') == 'bounded_source_quality_observation'
+                            and observation_health.get('unmet_conditions') == ['current_input_provenance_invalid']
+                            and details.get(f'{aid}_observation_health_projection_match') is True):
+                        from src.engine.monitoring.submission_bottleneck_monitor import observation_health_projection
+                        payload = observer_snapshot[0]
+                        provenance = payload.get('input_provenance') or {}
+                        cohorts = [(payload.get(name) or {}).get('current_health_cohort') or {}
+                            for name in ('source_gap_semantics', 'machine_semantics')]
+                        views = [cohort.get('view') or {} for cohort in cohorts]
+                        age = provenance.get('latest_event_age_seconds')
+                        window = observation_health.get('assessment_window_seconds')
+                        # A retained scanner population is not the current actor
+                        # population. Keep its exact bounded diagnostic only when
+                        # both native current cohorts prove no applicable input.
+                        retained_scanner_input = (
+                            payload.get('evaluation_cohort') == 'scanner_promotions'
+                            and payload.get('status') == 'unobservable' and payload.get('scopes') == {}
+                            and payload.get('blocker') == 'missing_stale_or_noncurrent_sentinel_evidence'
+                            and type(provenance.get('row_count')) is int and provenance['row_count'] > 0
+                            and provenance.get('latest_event_status') == 'observed_recent_event'
+                            and type(age) in (int, float) and type(window) is int and age > window
+                            and all(cohort.get('schema') == 'submission_monitor_current_health_cohort_v1'
+                                    and cohort.get('actor') == observation_health.get('assessment_actor')
+                                    for cohort in cohorts)
+                            and views[0].get('status') == 'unobservable'
+                            and isinstance(views[0].get('observed'), dict)
+                            and all(type(value) is int and value == 0 for value in views[0]['observed'].values())
+                            and type(views[1].get('observation_count')) is int
+                            and views[1]['observation_count'] == 0
+                            # Reuse the native projection to prove that only the
+                            # retained row population prevents quiet coverage.
+                            # Never rewrite the report or its declared health.
+                            and observation_health_projection({**payload, 'input_provenance':
+                                {**provenance, 'row_count': 0}})['unmet_conditions'] == [])
+                    if (aid == observer_id and dimensions.get('closed_window')
+                            and ((observation_health.get('reason') == 'bounded_no_applicable_observations'
+                                  and observation_health.get('unmet_conditions') == []) or retained_scanner_input)
                             and observation_health.get('status') == 'warning_pending'
-                            and observation_health.get('unmet_conditions') == []
                             and details.get(f'{aid}_observation_health_projection_match') is True):
                         details[f'{aid}_status'] = 'closed_window_observation_only'
                         details[f'{aid}_current_observation_verified'] = False
-                        warnings.append(f'{aid}: native market close; bounded empty observation retained; '
+                        warnings.append(f'{aid}: native market close; bounded '
+                            + ('noncurrent scanner population' if retained_scanner_input else 'empty observation')
+                            + ' retained; '
                             'partial validation and historical source gaps remain unverified')
                         continue
                     if (aid == 'submission_bottleneck_monitor' and 0 <= age_sec <= max_stale
