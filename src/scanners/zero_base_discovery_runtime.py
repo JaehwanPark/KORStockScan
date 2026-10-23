@@ -309,6 +309,9 @@ class ZeroBaseDiscoveryRuntime:
                         "zero_base_route": claim.get("route"),
                         "zero_base_claim_count": claim.get("claim_count"),
                         "zero_base_claim_observed_epoch": claim.get("observed_epoch"),
+                        "zero_base_discovery_volume": claim.get("discovery_volume"),
+                        "zero_base_source_kind": claim.get("source_kind"),
+                        "physical_probe_lease_id": claim.get("physical_probe_lease_id"),
                     },
                 )
             attempted = self.event_bus.publish_with_dispatch_count(
