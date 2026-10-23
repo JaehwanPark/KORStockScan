@@ -923,7 +923,12 @@ _SELL_RECEIPT_SNAPSHOT_KEYS = (
     "scalp_live_simulator",
     "scalp_trailing_trusted_peak_price",
     "scalp_trailing_peak_position_key",
+    "scalp_trailing_observation_position_key",
     "scalp_trailing_observation_sequence",
+    "scalp_trailing_observation_stream_contract",
+    "scalp_trailing_observation_buy_fill_identity",
+    "scalp_trailing_observation_source_gap",
+    "scalp_trailing_observation_admission_failure",
     "scale_in_incremental_realized_delta_pct",
     "last_add_position_episode_id",
     "last_add_scale_in_decision_id",
@@ -1324,6 +1329,10 @@ _SELL_COMPLETE_RESET_KEYS = (
     "scalp_trailing_observation_position_key",
     "scalp_trailing_observation_state",
     "scalp_trailing_observation_sequence",
+    "scalp_trailing_observation_stream_contract",
+    "scalp_trailing_observation_buy_fill_identity",
+    "scalp_trailing_observation_source_gap",
+    "scalp_trailing_observation_admission_failure",
     "scalp_holding_source_position_token",
     *_GENERAL_ENTRY_MARGIN_POSITION_KEYS,
     *_FAST_EXIT_DECISION_RESET_KEYS,
@@ -2942,6 +2951,18 @@ def _build_sell_lifecycle_outbox_leg(
             "code": str(code or "").strip()[:6],
         }
     )
+    if stage == 'sell_completed' and target_stock.get('scalp_trailing_observation_stream_contract'):
+        # Freeze attempted observations into the native terminal outbox before
+        # position reset. Queue admission never substitutes for append proof.
+        event_fields = dict(event_fields)
+        event_fields['trailing_observation_close'] = json.dumps(dict(
+            contract=target_stock['scalp_trailing_observation_stream_contract'],
+            position_key=target_stock.get('scalp_trailing_observation_position_key'),
+            buy_fill_identity=target_stock.get('scalp_trailing_observation_buy_fill_identity'),
+            expected_count=target_stock.get('scalp_trailing_observation_sequence'),
+            source_gap=bool(target_stock.get('scalp_trailing_observation_source_gap')),
+            admission_failure=target_stock.get('scalp_trailing_observation_admission_failure')),
+            sort_keys=True, separators=(',', ':'))
     leg = {
         "schema": _SELL_PARTIAL_LIFECYCLE_OUTBOX_SCHEMA,
         "stage": stage,

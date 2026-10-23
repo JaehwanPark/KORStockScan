@@ -94,6 +94,27 @@ def test_quote_envelope_limit_includes_final_source_hash(monkeypatch):
     assert replay.quote_projection(event['ws_data'], **kwargs)['reason'] == 'shared_quote_envelope_budget_exceeded'
 
 
+@pytest.mark.parametrize('fault', [None, 'sha', 'size', 'oversize', 'trailing_bytes', 'truncated', 'bad_base64', 'unknown_codec'])
+def test_quote_storage_is_lossless_bounded_and_keeps_semantic_hash(fault):
+    import base64
+    import json
+    raw = quote(1, '2026-10-08T09:00:01')
+    packed = replay.encode_quote(raw)
+    assert len(json.dumps(packed)) < len(json.dumps(raw))
+    if fault == 'sha': packed['raw_sha256'] = 'b'*64
+    if fault == 'size': packed['raw_bytes'] -= 1
+    if fault == 'oversize': packed['raw_bytes'] = replay.MAX_QUOTE_ENVELOPE_BYTES+1
+    if fault == 'trailing_bytes': packed['payload'] = base64.b64encode(base64.b64decode(packed['payload'])+b'garbage').decode()
+    if fault == 'truncated': packed['payload'] = packed['payload'][:-4]
+    if fault == 'bad_base64': packed['payload'] = '****'
+    if fault == 'unknown_codec': packed['codec'] = 'unknown'
+    if fault:
+        with pytest.raises(ValueError): replay.decode_quote(packed)
+    else:
+        for value in (raw, json.dumps(raw), packed, json.dumps(packed)):
+            assert replay.decode_quote(value) == raw
+
+
 def test_parent_carry_all_market_types_and_forged_override_rejected():
     v = vector()
     bundle = typed.initial_bundle(v, parent_sha256=market_values_hash(v),

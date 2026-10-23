@@ -1766,3 +1766,47 @@ def test_append_outcomes_conserve_completed_and_bound_owner_diagnostics():
     assert stats['completed'] == stats['append_confirmed'] + stats['intentionally_not_written'] + stats['append_unobservable'] == 3
     assert stats['queued'] == stats['completed'] + stats['append_failed'] + stats['pending_items'] == 4
     assert stats['failed'] == 1 and len(stats['outcomes_by_owner']) == 4
+
+
+def test_trailing_queue_freezes_inputs_reserves_capacity_and_reports_writer_failure(monkeypatch):
+    from src.engine.scalping.universal_trailing_replay import decode_quote
+    from src.tests.test_main_all_scope_trailing import quote
+    class Executor:
+        def __init__(self): self.jobs=[]
+        def submit(self, callback): self.jobs.append(callback)
+        def drain(self):
+            while self.jobs: self.jobs.pop(0)()
+    executor = Executor()
+    queue = logger_mod.BoundedObservationQueue(executor, max_items=32, max_bytes=128*1024)
+    monkeypatch.setattr(logger_mod, '_TRAILING_OBSERVATION_SINK', queue.submit)
+    saved=[]
+    def emit(*args, **kwargs):
+        saved.append(kwargs)
+        return dict(structured_append_succeeded=len(saved) != 299)
+    monkeypatch.setattr(logger_mod,'emit_pipeline_event',emit)
+    raw = quote(1,'2026-10-08T09:00:01')
+    for start in range(0,320,4):
+        for seq in range(start+1,start+5):
+            fields=dict(universal_trailing_quote=raw, event_sequence=seq, evaluation_at_epoch=raw['known_at'])
+            result=logger_mod.enqueue_trailing_observation('Test','123456',7,fields)
+            assert result == dict(status='queued',structured_append_succeeded=False)
+            fields['event_sequence'] = -1
+        assert logger_mod.enqueue_trailing_observation('Test','123456',7,fields)['status']=='unavailable'
+        # Exhausting trailing's reservation never consumes Main-stop's slot.
+        assert queue.submit(lambda:dict(structured_append_succeeded=True),observation_category='main_stop')['status']=='queued'
+        assert not saved or len(saved)==start
+        executor.drain()
+    assert [r['fields']['event_sequence'] for r in saved]==list(range(1,321))
+    assert all(decode_quote(r['fields']['universal_trailing_quote'])==raw for r in saved)
+    text_fields=logger_mod._project_fields_for_text('scalp_trailing_input_transition', saved[-1]['fields'])
+    assert 'universal_trailing_quote' not in text_fields
+    assert text_fields['universal_trailing_quote_source_sha256']==raw['source_sha256']
+    assert logger_mod._project_fields_for_compact_stream('scalp_trailing_input_transition', saved[-1]['fields'])==saved[-1]['fields']
+    assert all(r['observed_at_epoch']==raw['known_at'] for r in saved)
+    assert queue.close(timeout=0)
+    stats=queue.snapshot()
+    assert stats['append_failed']==1 and stats['pending_items']==stats['pending_bytes']==0
+    assert stats['peak_items']==5 and stats['peak_bytes']<queue.max_bytes
+    assert logger_mod.enqueue_trailing_observation('Test','123456',7,fields)['status']=='unavailable'
+    monkeypatch.setattr(logger_mod,'_TRAILING_OBSERVATION_SINK',None)
+    assert logger_mod.enqueue_trailing_observation('Test','123456',7,fields)['reason']=='trailing_observation_sink_missing'

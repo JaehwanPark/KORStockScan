@@ -2068,7 +2068,7 @@ def test_holding_quote_uses_0d_clock_instead_of_fresh_transport_or_carried_age(a
     assert age is None
 
 
-@pytest.mark.parametrize('fault', [None, 'within_best', 'insufficient', 'stale', 'future', 'crossed',
+@pytest.mark.parametrize('fault', [None, 'native_iso', 'naive_iso', 'future_iso', 'invalid_iso', 'bool_clock', 'within_best', 'insufficient', 'stale', 'future', 'crossed',
     'conflict', 'out_of_order', 'bad_cost', 'future_cost', 'unknown_fee', 'explicit_invalid'])
 def test_frozen_fee_and_full_visible_depth_feed_exit_vote_without_actual_cost_claim(monkeypatch, fault):
     from src.engine.ai.holding_exit_vote import build_path_vote_input, path_vote_input_gaps
@@ -2080,6 +2080,14 @@ def test_frozen_fee_and_full_visible_depth_feed_exit_vote_without_actual_cost_cl
             allocation='frozen_configured_round_trip_rate_on_sell_model_only'))
     ws = _ws(now)
     ws['orderbook'] = dict(bids=[dict(price=10299, volume=200),dict(price=10298,volume=100)])
+    if fault == 'native_iso':
+        # freeze_entry_operating_context emits an aware ISO clock, including
+        # the native 2026-10-23 record 49480 that exposed this contract gap.
+        stock['_trailing_entry_cost_model']['known_at'] = datetime.fromtimestamp(now.timestamp()-60, KST).isoformat()
+    if fault == 'naive_iso': stock['_trailing_entry_cost_model']['known_at'] = '2026-07-23T09:59:30'
+    if fault == 'future_iso': stock['_trailing_entry_cost_model']['known_at'] = datetime.fromtimestamp(now.timestamp()+1, KST).isoformat()
+    if fault == 'invalid_iso': stock['_trailing_entry_cost_model']['known_at'] = 'unknown'
+    if fault == 'bool_clock': stock['_trailing_entry_cost_model']['known_at'] = True
     if fault == 'within_best': stock.update(buy_qty=20, broker_holding_qty=20)
     if fault == 'insufficient': ws['orderbook']['bids'][1]['volume'] = 1
     if fault in ('stale','future'):
@@ -2102,12 +2110,15 @@ def test_frozen_fee_and_full_visible_depth_feed_exit_vote_without_actual_cost_cl
         holding_context=ctx, market='REGULAR',session_key='2026-07-23',position_key='record:1',
         buy_fill_identity='b'*64,route='KRX',transport_epoch='1',source_generation='native:1',
         quote_observed_at=now.timestamp())
-    if fault in (None,'within_best'):
-        vwap = (200*10299+20*10298)/220 if fault is None else 10299
+    if fault in (None,'native_iso','within_best'):
+        vwap = (200*10299+20*10298)/220 if fault != 'within_best' else 10299
         expected = (vwap*(1-.0023)/10000-1)*100
         assert pnl['estimated_net_executable_pnl_pct'] == pytest.approx(round(expected,4))
-        assert (pnl['estimated_slippage_bps'] > 0) is (fault is None)
-        assert pnl['cost_estimate_source']['depth_levels'] == (2 if fault is None else 1)
+        assert (pnl['estimated_slippage_bps'] > 0) is (fault != 'within_best')
+        assert pnl['cost_estimate_source']['depth_levels'] == (2 if fault != 'within_best' else 1)
+        assert pnl['cost_estimate_source']['cost_known_at'] == now.timestamp()-60
+        if fault == 'native_iso':
+            assert stock['_trailing_entry_cost_model']['known_at'].endswith('+09:00')
         assert payload['flow']['execution_pnl']['cost_estimate_source'] == pnl['cost_estimate_source']
         assert pnl['cost_estimate_source']['actual_broker_cost'] is False
         assert pnl['cost_estimate_source']['actual_fill'] is False

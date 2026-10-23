@@ -29,6 +29,33 @@ def _digest(node):
     return hashlib.sha256(ast.dump(node, include_attributes=False).encode()).hexdigest()
 
 
+def _without_trailing_registration(function, *, startup):
+    expected = {
+        'from src.utils.pipeline_event_logger import configure_trailing_observation_sink',
+        'configure_trailing_observation_sink(_SCANNER_OBSERVATION_QUEUE.submit)' if startup
+        else 'configure_trailing_observation_sink(None)',
+    }
+    body = function.body if startup else next(n for n in function.body if isinstance(n, ast.Try)).body
+    found = [n for n in body if ast.unparse(n) in expected]
+    assert len(found) == 2 and {ast.unparse(n) for n in found} == expected
+    for node in found: body.remove(node)
+    return function
+
+
+def test_trailing_observer_only_adds_sink_registration_to_selected_native_main():
+    import subprocess
+    from pathlib import Path
+    source = subprocess.check_output(['git','show',
+        'a2ca8e7d8d6b77456b509f6f7133a6ba2911e562:src/engine/kiwoom_sniper_v2.py'],
+        cwd=Path(main.__file__).resolve().parents[2],text=True)
+    baseline = {n.name:n for n in ast.parse(source).body if isinstance(n,ast.FunctionDef)}
+    for name in ('run_sniper','close_observation_sources','_run_sniper_iterations'):
+        current = ast.parse(inspect.getsource(getattr(main,name))).body[0]
+        if name != '_run_sniper_iterations':
+            _without_trailing_registration(current, startup=name == 'run_sniper')
+        assert _digest(current) == _digest(baseline[name])
+
+
 def _native_loop():
     function = ast.parse(inspect.getsource(main._run_sniper_iterations)).body[0]
     assert len(function.body) == 2  # docstring, original loop
@@ -69,6 +96,7 @@ def test_shutdown_successor_preserves_consumed_native_loop_and_startup_body():
     current=ast.parse(inspect.getsource(main._run_sniper_iterations)).body[0]
     assert _digest(current)==_digest(old['_run_sniper_iterations'])
     current=ast.parse(inspect.getsource(main.run_sniper)).body[0]
+    _without_trailing_registration(current, startup=True)
     current.body=[n for n in current.body if not (isinstance(n,ast.Expr)
         and isinstance(n.value,ast.Call) and ast.unparse(n.value)=='_ZERO_BASE_PROBE_CLOSING.clear()')]
     parent=next(n for n in current.body if isinstance(n,ast.Try)
@@ -98,6 +126,7 @@ def test_native_shutdown_executes_drain_then_socket_then_sources(drained):
 
 def test_live_startup_consumes_native_iterator_with_original_exception_and_cleanup_boundary():
     function = ast.parse(inspect.getsource(main.run_sniper)).body[0]
+    _without_trailing_registration(function, startup=True)
     parent = next(node for node in function.body if isinstance(node, ast.Try)
                   and any(isinstance(child, ast.For) and isinstance(child.iter, ast.Call)
                           and isinstance(child.iter.func, ast.Name)

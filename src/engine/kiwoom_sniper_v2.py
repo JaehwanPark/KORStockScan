@@ -15926,6 +15926,8 @@ def close_observation_sources():
         configure_quantity_sink(None)
         from src.engine.scalping.main_stop_policy import configure_source_sink as configure_stop_sink
         configure_stop_sink(None)
+        from src.utils.pipeline_event_logger import configure_trailing_observation_sink
+        configure_trailing_observation_sink(None)
         from src.engine.scalping.reversal_anchor_index import configure_sink as configure_anchor_sink
         configure_anchor_sink(None)
     finally:
@@ -15967,6 +15969,8 @@ def run_sniper(is_test_mode=False):
     configure_quantity_sink(_SCANNER_OBSERVATION_QUEUE.submit,recover_pending=True)
     from src.engine.scalping.main_stop_policy import configure_source_sink as configure_stop_sink
     configure_stop_sink(_SCANNER_OBSERVATION_QUEUE.submit)
+    from src.utils.pipeline_event_logger import configure_trailing_observation_sink
+    configure_trailing_observation_sink(_SCANNER_OBSERVATION_QUEUE.submit)
     from src.engine.scalping.reversal_anchor_index import configure_sink as configure_anchor_sink
     configure_anchor_sink(_SCANNER_OBSERVATION_QUEUE.submit)
     run_sniper.last_fifo_time = 0

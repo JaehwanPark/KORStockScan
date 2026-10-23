@@ -990,6 +990,40 @@ def test_final_sell_snapshot_preserves_tp_signal_and_buy_fill_generation():
     }
 
 
+def test_trailing_close_survives_native_sell_snapshot_outbox_and_position_reset(monkeypatch, tmp_path):
+    import json
+    from src.engine import sniper_execution_receipts as receipts
+    from src.engine.scalping.universal_trailing_replay import OBSERVATION_STREAM
+    stock = _receipt_stock(
+        last_watching_ai_decision_trace_id='analyze_target:005930:1792717200000:aaaaaaaa',
+        scalp_trailing_observation_stream_contract=OBSERVATION_STREAM,
+        scalp_trailing_observation_position_key='record:7',
+        scalp_trailing_observation_buy_fill_identity=BUY_IDENTITY,
+        scalp_trailing_observation_sequence=321,
+        scalp_trailing_observation_source_gap=True,
+        scalp_trailing_observation_admission_failure='observation_category_budget_exceeded')
+    frozen = receipts._normalized_receipt_snapshot(
+        receipts._receipt_snapshot(stock, receipts._SELL_RECEIPT_SNAPSHOT_KEYS))
+    leg = receipts._build_sell_lifecycle_outbox_leg(frozen, code='005930', target_id=7,
+        now=datetime(2026,10,23,10,tzinfo=ZoneInfo('Asia/Seoul')),stage='sell_completed',
+        event_fields=dict(actual_order_submitted=True,broker_order_forbidden=False,
+                          order_no='1234',execution_no='5678',sell_qty=1))
+    assert receipts._standard_sell_partial_lifecycle_outbox_leg_valid(leg)
+    stock.clear()
+    # Exercise the actual durable-leg consumer, not the generic holding logger.
+    from src.utils import pipeline_event_logger as logger
+    monkeypatch.setattr(logger,'DATA_DIR',tmp_path)
+    monkeypatch.setattr(logger,'log_info',lambda *a,**kw:None)
+    monkeypatch.setattr(logger,'_get_producer_compactor',lambda:None)
+    assert receipts._emit_standard_sell_partial_lifecycle_outbox_leg(leg)
+    saved=[json.loads(line) for p in (tmp_path/'pipeline_events').glob('*.jsonl')
+           for line in p.read_text().splitlines()]
+    close=json.loads(saved[0]['fields']['trailing_observation_close'])
+    assert close == dict(contract=OBSERVATION_STREAM,position_key='record:7',
+        buy_fill_identity=BUY_IDENTITY,expected_count=321,source_gap=True,
+        admission_failure='observation_category_budget_exceeded')
+
+
 def test_runtime_pass_keeps_immediate_path_and_veto_observation_failure_cannot_block_safety(monkeypatch):
     from src.engine import sniper_state_handlers as handlers
     start = datetime(2026, 9, 25, 9, tzinfo=ZoneInfo("Asia/Seoul")).timestamp()
