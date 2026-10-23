@@ -55,6 +55,7 @@ from src.utils import kiwoom_utils
 from src.utils.constants import DATA_DIR
 from src.utils.jsonl_io import existing_or_gzip_path
 from src.utils.logger import log_error, log_info
+from src.utils import pipeline_event_logger as pipeline_observation
 from src.utils.pipeline_event_logger import emit_pipeline_event
 from src.engine.monitoring.entry_attempt_identity import (
     bind_submit_attempt_machine_lineage,
@@ -3656,24 +3657,6 @@ def _general_entry_margin_budget_log_fields(
     }
 
 
-ZERO_CONTEXT_FORBIDDEN_USES = (
-    "threshold_mutation,provider_route_change,order_price_relaxation,"
-    "quantity_or_cap_change,broker_guard_bypass,stale_quote_bypass,"
-    "hard_safety_guard_bypass,real_execution_quality_approval"
-)
-
-
-def _zero_context_value_missing(value) -> bool:
-    if value is None:
-        return True
-    text = str(value).strip().lower()
-    return (
-        text == ""
-        or text in {"-", "none", "null", "nan", "nat", "not_evaluated"}
-        or text.startswith("not_applicable")
-    )
-
-
 def _zero_context_value_state(
     value,
     *,
@@ -3689,39 +3672,11 @@ def _zero_context_value_state(
         return "not_applicable_zero"
     if stale:
         return "stale_defaulted_zero"
-    if _zero_context_value_missing(value):
+    if pipeline_observation.zero_context_value_missing(value):
         return "missing_defaulted_zero"
     if guard_intended:
         return "guard_intended_zero"
     return "actual_zero"
-
-
-def _zero_context_observation_fields(
-    *, domain: str, blocker: str, states: dict
-) -> dict:
-    zero_states = {str(key): str(value) for key, value in (states or {}).items()}
-    blocking_states = [
-        value
-        for value in zero_states.values()
-        if value in {"missing_defaulted_zero", "stale_defaulted_zero"}
-    ]
-    return {
-        "zero_context_observed": bool(zero_states),
-        "zero_context_domain": str(domain or "unknown"),
-        "zero_context_blocker": str(blocker or "unknown"),
-        "zero_context_primary_state": (
-            blocking_states[0]
-            if blocking_states
-            else (
-                next(iter(zero_states.values()))
-                if zero_states
-                else "not_applicable_zero"
-            )
-        ),
-        "zero_context_defaulted_zero_field_count": len(blocking_states),
-        "zero_context_forbidden_uses": ZERO_CONTEXT_FORBIDDEN_USES,
-        **{f"zero_context_{key}_state": value for key, value in zero_states.items()},
-    }
 
 
 def _scanner_watch_zero_context_fields(
@@ -3743,7 +3698,7 @@ def _scanner_watch_zero_context_fields(
         if missing_or_zero and _safe_int(strength_history_count, 0) <= 0
         else strength_history_count
     )
-    return _zero_context_observation_fields(
+    return pipeline_observation.zero_context_observation_fields(
         domain="ws_quote",
         blocker=reason_text,
         states={
@@ -3751,19 +3706,21 @@ def _scanner_watch_zero_context_fields(
                 (ws_data or {}).get("curr"),
                 stale=stale,
                 not_applicable=not missing_or_zero
-                and _zero_context_value_missing((ws_data or {}).get("curr")),
+                and pipeline_observation.zero_context_value_missing(
+                    (ws_data or {}).get("curr")
+                ),
             ),
             "ws_received_type_count": _zero_context_value_state(
                 received_type_value,
                 stale=stale,
                 not_applicable=not missing_or_zero
-                and _zero_context_value_missing(received_type_value),
+                and pipeline_observation.zero_context_value_missing(received_type_value),
             ),
             "ws_strength_history_count": _zero_context_value_state(
                 strength_history_value,
                 stale=stale,
                 not_applicable=not missing_or_zero
-                and _zero_context_value_missing(strength_history_value),
+                and pipeline_observation.zero_context_value_missing(strength_history_value),
             ),
         },
     )
@@ -3779,7 +3736,7 @@ def _strength_momentum_zero_context_fields(
         or "stale" in reason_text
     )
     missing_context = reason_text == "insufficient_history"
-    return _zero_context_observation_fields(
+    return pipeline_observation.zero_context_observation_fields(
         domain="strength_momentum",
         blocker=reason_text or "risk_context_only",
         states={
@@ -3797,13 +3754,15 @@ def _strength_momentum_zero_context_fields(
                 gate.get("window_buy_ratio"),
                 stale=stale,
                 not_applicable=missing_context
-                and _zero_context_value_missing(gate.get("window_buy_ratio")),
+                and pipeline_observation.zero_context_value_missing(
+                    gate.get("window_buy_ratio")
+                ),
             ),
             "sample_count": _zero_context_value_state(
                 gate.get("tick_window_sample_count", gate.get("sample_count")),
                 stale=stale,
                 not_applicable=missing_context
-                and _zero_context_value_missing(
+                and pipeline_observation.zero_context_value_missing(
                     gate.get("tick_window_sample_count", gate.get("sample_count"))
                 ),
             ),
@@ -3823,7 +3782,7 @@ def _quantity_zero_context_fields(
     guard_intended: bool = False,
 ) -> dict:
     cap_not_applicable = str(cap_qty or "").strip().lower().startswith("not_applicable")
-    return _zero_context_observation_fields(
+    return pipeline_observation.zero_context_observation_fields(
         domain=domain,
         blocker=blocker,
         states={

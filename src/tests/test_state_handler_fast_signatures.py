@@ -4627,6 +4627,50 @@ def test_zero_context_strength_momentum_fields_split_insufficient_history():
     assert "stale_quote_bypass" in fields["zero_context_forbidden_uses"]
 
 
+def test_zero_context_consumers_share_fields_without_merging_state_classifiers():
+    from src.scanners import scalping_scanner as scanner
+    from src.utils import pipeline_event_logger as observation
+
+    assert scanner.pipeline_observation is handlers.pipeline_observation is observation
+    for consumer in (scanner, handlers):
+        for old in (
+            "_zero_context_value_missing",
+            "_zero_context_observation_fields",
+            "ZERO_CONTEXT_FORBIDDEN_USES",
+        ):
+            assert not hasattr(consumer, old)
+    assert (
+        scanner._zero_context_value_state(0, missing=True) == "missing_defaulted_zero"
+    )
+    assert handlers._zero_context_value_state(0, stale=True) == "stale_defaulted_zero"
+    assert (
+        handlers._zero_context_value_state(0, guard_intended=True)
+        == "guard_intended_zero"
+    )
+    fields = handlers._quantity_zero_context_fields(
+        domain="entry",
+        blocker="cap",
+        qty=0,
+        template_qty=5,
+        would_qty=None,
+        effective_qty=0,
+        cap_qty="not_applicable_cap",
+        guard_intended=True,
+    )
+    assert [
+        fields[f"zero_context_{key}_state"]
+        for key in ("qty", "template_qty", "would_qty", "effective_qty", "cap_qty")
+    ] == [
+        "guard_intended_zero",
+        "non_zero",
+        "missing_defaulted_zero",
+        "guard_intended_zero",
+        "not_applicable_zero",
+    ]
+    assert fields["zero_context_primary_state"] == "missing_defaulted_zero"
+    assert fields["zero_context_defaulted_zero_field_count"] == 1
+
+
 def test_emit_scanner_watching_runtime_skip_carries_fast_precheck_observed_fields(
     monkeypatch,
 ):
