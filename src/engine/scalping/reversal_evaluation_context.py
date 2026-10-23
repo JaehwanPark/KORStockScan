@@ -169,30 +169,37 @@ def _identities(paths):
 
 def prepare(*, data_root, day):
     global _CONFIGURED, _CONSUMED
-    allow_retry=N._VERIFIED_EVALUATION.get() is None
-    # Share ancestor resolution only inside this synchronous validation. Every
-    # file signature is still read, and the pass rechecks symlink/dir custody.
-    # Never extend the pass across provider I/O or the next evaluation boundary.
-    for attempt in range(2):
-        try:
-            with N.signature_pass():
-                return _prepare_verified(data_root=data_root, day=day)
-        except BaseException as exc:
-            cleared=False
-            if _LOCK.acquire(blocking=False):
-                try:
-                    _CONFIGURED = _CONSUMED = None
-                    cleared=True
-                finally:
-                    _LOCK.release()
-            if (attempt==0 and allow_retry and cleared and isinstance(exc,ValueError)
-                    and str(exc)=='machine_policy_consumer_source_changed'):
-                # Launcher PID attestation can publish the selector during
-                # first consumption. Discard that entire pass and validate
-                # every source, handoff and guard afresh exactly once. No old
-                # view, receipt or decision survives into the retry.
-                continue
-            raise
+    from src.engine.monitoring.runtime_performance import policy_validation
+    with policy_validation('policy_prepare') as facts:
+        facts.update(target_date=day)
+        allow_retry=N._VERIFIED_EVALUATION.get() is None
+        # Share ancestor resolution only inside this synchronous validation. Every
+        # file signature is still read, and the pass rechecks symlink/dir custody.
+        # Never extend the pass across provider I/O or the next evaluation boundary.
+        for attempt in range(2):
+            facts['attempt_count'] = attempt+1
+            try:
+                with N.signature_pass():
+                    result = _prepare_verified(data_root=data_root, day=day)
+                    facts['bundle_sha256'] = result.get('bundle_sha256') if isinstance(result, dict) else None
+                    return result
+            except BaseException as exc:
+                cleared=False
+                if _LOCK.acquire(blocking=False):
+                    try:
+                        _CONFIGURED = _CONSUMED = None
+                        cleared=True
+                    finally:
+                        _LOCK.release()
+                if (attempt==0 and allow_retry and cleared and isinstance(exc,ValueError)
+                        and str(exc)=='machine_policy_consumer_source_changed'):
+                    facts['retry_reason'] = str(exc)
+                    # Launcher PID attestation can publish the selector during
+                    # first consumption. Discard that entire pass and validate
+                    # every source, handoff and guard afresh exactly once. No old
+                    # view, receipt or decision survives into the retry.
+                    continue
+                raise
 
 
 def configure_policy_content(bundle, *, data_root, day, read_only=False):
@@ -243,50 +250,76 @@ def _prepare_verified(*, data_root, day):
             raise ValueError('auxiliary_pid_release_mismatch')
         key = (str(Path(data_root).resolve()), day, bundle['bundle_sha256'],
                identity['pid'], identity['start_ticks'], identity['cwd'], commit)
-        if not _LOCK.acquire(timeout=1.0):
-            raise ValueError('machine_policy_configuration_in_progress')
-        consumer_started = time.perf_counter()
-        try:
-            configured = _CONFIGURED
-            # Keep a strong reference: object identity cannot be recycled into
-            # a new verification generation after eviction/failure.
-            if (configured is None or configured[0] != key or configured[1] is not bundle
-                    or getattr(D.backend(), '_GENERATION', None) != bundle['continuous_reversal'].get('family_sha256')):
-                _CONFIGURED = None
-                configure_policy_content(bundle, data_root=data_root, day=day)
-                _CONFIGURED = (key, bundle)
-            extra = _identities(_extra_paths(data_root, day, commit))
-            consumed = _CONSUMED
-            if (consumed is None or consumed[0] != key or consumed[1] is not bundle
-                    or consumed[2] != extra or not N.dependencies_unchanged(consumed[3])):
-                _CONSUMED = None
-                dependencies = {}
-                token = N._READ_DEPENDENCIES.set(dependencies)
-                try:
-                    if commit != bundle['continuous_reversal'].get('release_commit'):
-                        # The legacy reader has a process-lifetime handoff set.
-                        # A changed handoff must not hide behind that old set.
-                        path, consumed_path = H._paths(day, commit)
-                        handoff = H.verify(day, commit)
-                        consumed_receipt = H._read(consumed_path)
-                        if (handoff.get('status') != 'pass'
-                                or consumed_receipt.get('actual_pid_consumed') is not True
-                                or consumed_receipt.get('pid_identity') != identity
-                                or consumed_receipt.get('handoff_sha256') != H._sha(path)):
-                            raise ValueError('auxiliary_base_code_handoff_missing')
-                    I.record_pid_consumption(data_root, bundle)
-                finally:
-                    N._READ_DEPENDENCIES.reset(token)
-                after = _identities(_extra_paths(data_root, day, commit))
-                # Receipt creation is expected; source/selector changes are not.
-                if any(extra[p] != after[p] for p in list(extra)[:-2]):
-                    raise ValueError('machine_policy_consumer_source_changed')
-                if not N.dependencies_unchanged(dependencies):
-                    raise ValueError('machine_policy_consumer_dependency_changed')
-                _CONSUMED = (key, bundle, after, dependencies)
-            return bundle
-        finally:
-            _LOCK.release()
-            observe('policy_consumer_check', time.perf_counter() - consumer_started)
-            observe('policy_prepare', time.perf_counter() - started,
-                    generation=bundle['bundle_sha256'])
+        lock_started = time.perf_counter()
+        acquired = _LOCK.acquire(timeout=1.0)
+        from src.engine.monitoring.runtime_performance import policy_validation
+        with policy_validation('policy_consumer') as facts:
+            facts.update(bundle_sha256=bundle['bundle_sha256'], commit=commit,
+                         lock_wait_seconds=time.perf_counter()-lock_started)
+            if not acquired:
+                raise ValueError('machine_policy_configuration_in_progress')
+            consumer_started = time.perf_counter()
+            try:
+                configured = _CONFIGURED
+                facts['configured_reused'] = False
+                # Keep a strong reference: object identity cannot be recycled into
+                # a new verification generation after eviction/failure.
+                if (configured is None or configured[0] != key or configured[1] is not bundle
+                        or getattr(D.backend(), '_GENERATION', None) != bundle['continuous_reversal'].get('family_sha256')):
+                    _CONFIGURED = None
+                    configured_started = time.perf_counter()
+                    try:
+                        configure_policy_content(bundle, data_root=data_root, day=day)
+                    finally:
+                        facts['configuration_seconds'] = time.perf_counter()-configured_started
+                    _CONFIGURED = (key, bundle)
+                facts['configured_reused'] = configured is _CONFIGURED
+                identities_started = time.perf_counter()
+                extra = _identities(_extra_paths(data_root, day, commit))
+                facts['extra_identity_seconds'] = time.perf_counter()-identities_started
+                consumed = _CONSUMED
+                reason = ('cold' if consumed is None else 'identity_changed' if consumed[0] != key
+                          else 'bundle_view_changed' if consumed[1] is not bundle
+                          else 'extra_dependency_changed' if consumed[2] != extra
+                          else 'dependency_changed' if not N.dependencies_unchanged(consumed[3]) else None)
+                facts.update(cache_status='miss' if reason else 'hit', miss_reason=reason)
+                if reason:
+                    _CONSUMED = None
+                    dependencies = {}
+                    token = N._READ_DEPENDENCIES.set(dependencies)
+                    try:
+                        if commit != bundle['continuous_reversal'].get('release_commit'):
+                            # The legacy reader has a process-lifetime handoff set.
+                            # A changed handoff must not hide behind that old set.
+                            path, consumed_path = H._paths(day, commit)
+                            handoff_started = time.perf_counter()
+                            try:
+                                handoff = H.verify(day, commit)
+                                consumed_receipt = H._read(consumed_path)
+                                if (handoff.get('status') != 'pass'
+                                        or consumed_receipt.get('actual_pid_consumed') is not True
+                                        or consumed_receipt.get('pid_identity') != identity
+                                        or consumed_receipt.get('handoff_sha256') != H._sha(path)):
+                                    raise ValueError('auxiliary_base_code_handoff_missing')
+                            finally:
+                                facts['handoff_verify_seconds'] = time.perf_counter()-handoff_started
+                        consumption_started = time.perf_counter()
+                        try:
+                            I.record_pid_consumption(data_root, bundle)
+                        finally:
+                            facts['consumption_record_seconds'] = time.perf_counter()-consumption_started
+                    finally:
+                        N._READ_DEPENDENCIES.reset(token)
+                    after = _identities(_extra_paths(data_root, day, commit))
+                    # Receipt creation is expected; source/selector changes are not.
+                    if any(extra[p] != after[p] for p in list(extra)[:-2]):
+                        raise ValueError('machine_policy_consumer_source_changed')
+                    if not N.dependencies_unchanged(dependencies):
+                        raise ValueError('machine_policy_consumer_dependency_changed')
+                    _CONSUMED = (key, bundle, after, dependencies)
+                return bundle
+            finally:
+                _LOCK.release()
+                observe('policy_consumer_check', time.perf_counter() - consumer_started)
+                observe('policy_prepare', time.perf_counter() - started,
+                        generation=bundle['bundle_sha256'])
