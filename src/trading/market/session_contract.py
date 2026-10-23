@@ -403,17 +403,27 @@ def _aftermarket_buy_eligibility_blocker(
     route: str,
     eligibility: SymbolVenueEligibility | None,
 ) -> str | None:
-    # ka10099/ka10100 prove NXT listing but provide no KRX aftermarket axis.
-    # Preserve that PARTIAL source; only the explicitly requested NXT route can
-    # consume it, with complete current-day provenance and no other blocker.
-    nxt_source_complete = bool(
-        route == BROKER_ORDER_ROUTE_NXT
-        and eligibility is not None
-        and eligibility.quality_state == "PARTIAL"
-        and set(eligibility.blockers) == {"krx_aftermarket_eligibility_unknown"}
+    if (eligibility is None or eligibility.trade_date != session_context.trade_date
+            or eligibility.source_trade_date != session_context.trade_date.isoformat()):
+        return ORDER_TYPE_PREFLIGHT_ELIGIBILITY_UNKNOWN
+    observed = eligibility.observed_at_kst
+    if (not isinstance(observed, datetime) or observed.utcoffset() is None
+            or observed.date() != session_context.trade_date
+            or observed > session_context.observed_at_kst):
+        return ORDER_TYPE_PREFLIGHT_ELIGIBILITY_UNKNOWN
+    missing_axes = set()
+    if eligibility.krx_aftermarket_eligible is None:
+        missing_axes.add("krx_aftermarket_eligibility_unknown")
+    if eligibility.nxt_eligible is None:
+        missing_axes.add("nxt_enable_unknown")
+    # A partial official listing can prove one route without inventing the
+    # other venue's value. SOR needs a positively supported venue, not two
+    # fully known axes. Other source/exclusion blockers remain unconditional.
+    partial_source_complete = bool(
+        eligibility.quality_state == "PARTIAL"
+        and missing_axes
+        and set(eligibility.blockers) == missing_axes
         and eligibility.krx_regular_eligible is True
-        and eligibility.krx_aftermarket_eligible is None
-        and isinstance(eligibility.nxt_eligible, bool)
         and eligibility.source_id in {"ka10099", "ka10100"}
         and len(eligibility.source_revision) == 40
         and all(c in "0123456789abcdef" for c in eligibility.source_revision)
@@ -421,18 +431,10 @@ def _aftermarket_buy_eligibility_blocker(
         and len(eligibility.source_sha256) == 64
         and all(c in "0123456789abcdef" for c in eligibility.source_sha256)
         and eligibility.source_trade_date == session_context.trade_date.isoformat()
-        and isinstance(eligibility.observed_at_kst, datetime)
-        and eligibility.observed_at_kst.utcoffset() is not None
-        and eligibility.observed_at_kst.date() == session_context.trade_date
-        and eligibility.observed_at_kst <= session_context.observed_at_kst
     )
-    if (
-        eligibility is None
-        or eligibility.trade_date != session_context.trade_date
-        or (not nxt_source_complete and (
-            eligibility.quality_state != SOURCE_QUALITY_VALID
-            or eligibility.blockers
-        ))
+    if not partial_source_complete and (
+        eligibility.quality_state != SOURCE_QUALITY_VALID
+        or eligibility.blockers or missing_axes
     ):
         return ORDER_TYPE_PREFLIGHT_ELIGIBILITY_UNKNOWN
     if route == BROKER_ORDER_ROUTE_KRX:
@@ -444,12 +446,11 @@ def _aftermarket_buy_eligibility_blocker(
             eligibility.krx_aftermarket_eligible,
             eligibility.nxt_eligible,
         )
+    if route == BROKER_ORDER_ROUTE_SOR and any(value is True for value in route_eligibility):
+        return None
     if any(value is None for value in route_eligibility):
         return ORDER_TYPE_PREFLIGHT_ELIGIBILITY_UNKNOWN
-    # SOR selects an eligible venue; it does not require both venues to
-    # accept the symbol. Unknown axes above remain fail-closed.
-    route_allowed = any(route_eligibility) if route == BROKER_ORDER_ROUTE_SOR else all(route_eligibility)
-    if not route_allowed:
+    if not all(route_eligibility):
         return ORDER_TYPE_PREFLIGHT_ROUTE_INELIGIBLE
     return None
 

@@ -29,6 +29,84 @@ BLOCKER_SOURCE_INCOMPLETE = "aftermarket_eligibility_source_incomplete"
 BLOCKER_ELIGIBILITY_UNKNOWN = "aftermarket_eligibility_unknown"
 BLOCKER_PROVENANCE_PARTIAL = "aftermarket_eligibility_provenance_partial"
 
+KRX_AFTERMARKET_RULE_EFFECTIVE_DATE = date(2026, 9, 14)
+KRX_AFTERMARKET_LISTING_RULE = "krx_aftermarket_listing_scope_20260914_v1"
+# The current Main listing request covers the KOSPI and KOSDAQ stock markets.
+# ETF/ETN and other product markets are not admitted by that request contract.
+_MAIN_STOCK_MARKETS = {"0", "10"}
+_KRX_EXCLUDED_STATES = (
+    "거래정지", "정리매매", "단기과열", "30분단위", "30분 단위",
+    "투자경고", "투자위험", "이상급등", "관리종목", "초저유동",
+    "투자주의환기", "투자유의", "정규장미거래", "정규장 미거래",
+    "당일미거래", "당일 미거래",
+)
+
+
+def official_listing_venue_fields(item: dict, *, trade_date, nxt_eligible) -> dict:
+    """Derive local listing eligibility from documented fields and KRX rules.
+
+    This is a product/reported-exclusion preflight, not a broker certification
+    of current trading status. The broker and existing live halt/quote guards
+    retain dynamic restrictions, including close-time suspensions/no trades.
+    NXT membership never determines whether an ordinary KRX stock is listed.
+    Original raw fields/hash and unknown NXT membership remain unchanged.
+    """
+    day = _coerce_date(trade_date)
+    audit = _text(item.get("auditInfo"))
+    state = _text(item.get("state"))
+    warning = _text(item.get("orderWarning"))
+    market = _text(item.get("marketCode"))
+    blockers = []
+    if "환기" in audit or "관리" in audit:
+        blockers.append("audit_info_excluded")
+    elif audit not in {"", "정상"}:
+        blockers.append("audit_info_unknown")
+    if "관리" in state:
+        blockers.append("management_state_excluded")
+    if not warning:
+        blockers.append("order_warning_missing")
+    elif warning != "0":
+        blockers.append("order_warning_excluded")
+    if day is None:
+        blockers.append(BLOCKER_TRADE_DATE_INVALID)
+    current_rule = day is not None and day >= KRX_AFTERMARKET_RULE_EFFECTIVE_DATE
+    if current_rule:
+        if not market:
+            blockers.append("market_code_missing")
+        elif market not in _MAIN_STOCK_MARKETS:
+            blockers.append("krx_aftermarket_product_excluded")
+        if not audit:
+            blockers.append("audit_info_missing")
+        if not state:
+            blockers.append("stock_state_missing")
+        elif any(label in state for label in _KRX_EXCLUDED_STATES):
+            blockers.append("krx_aftermarket_state_excluded")
+    product_eligible = not blockers
+    if current_rule:
+        excluded = any(reason.endswith("_excluded") for reason in blockers)
+        krx = False if excluded else None if blockers else True
+    else:
+        # Preserve the pre-introduction listing contract for historical readers.
+        krx = None
+    if nxt_eligible is None:
+        blockers.append("nxt_enable_unknown")
+    if krx is None:
+        blockers.append("krx_aftermarket_eligibility_unknown")
+    return {
+        "eligible": product_eligible,
+        "krx_regular_eligible": (True if day is not None and
+                                 (not current_rule or market in _MAIN_STOCK_MARKETS) else None),
+        "nxt_eligible": nxt_eligible,
+        "krx_aftermarket_eligible": krx,
+        "eligible_venues_json": [venue for venue, allowed in
+                                 ((VENUE_KRX, krx), (VENUE_NXT, nxt_eligible)) if allowed is True],
+        "quality_state": (QUALITY_UNKNOWN if krx is None and nxt_eligible is None else
+                          QUALITY_PARTIAL if krx is None or nxt_eligible is None else QUALITY_VALID),
+        "blocked_reasons": list(dict.fromkeys(blockers)),
+        "krx_aftermarket_ruleset": KRX_AFTERMARKET_LISTING_RULE if current_rule else None,
+        "broker_dynamic_restrictions_verified": False,
+    }
+
 
 @dataclass(frozen=True)
 class SymbolVenueEligibility:

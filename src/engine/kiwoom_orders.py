@@ -55,12 +55,6 @@ class _LocalBuyNoCallToken(str):
 _LOCAL_BUY_NO_CALL_TOKEN = _LocalBuyNoCallToken("process_local_buy_no_call_v1")
 KST = ZoneInfo("Asia/Seoul")
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-_AFTERMARKET_SOR_CANARY_SCHEMA = "krx_aftermarket_sor_canary_approval_v1"
-_AFTERMARKET_SOR_RUNTIME_POLICY_SCHEMA = "krx_aftermarket_sor_runtime_policy_v1"
-_AFTERMARKET_SOR_CANARY_SYMBOL_SCOPE = "ALL_EXISTING_GUARD_ELIGIBLE_SYMBOLS"
-_AFTERMARKET_SOR_CANARY_OFFICIAL_COMMIT = (
-    "234560d213acd8871ae344b5481aecd2f30287fa"
-)
 KRX_REGULAR_OPEN = datetime_time(hour=9, minute=0)
 KRX_REGULAR_CLOSE = datetime_time(hour=15, minute=30)
 _DEFENSIVE_BUY_TIME_BLOCK_OVERRIDE_REASONS = frozenset(
@@ -83,301 +77,6 @@ def _owner_registry_context(value):
             client_intent_id=str(value.get("client_intent_id") or ""),
         )
     return None
-
-
-def _aftermarket_sor_canary_approval_path(trade_date) -> Path:
-    return (
-        PROJECT_ROOT
-        / "data/runtime/krx_aftermarket_sor_canary_approval"
-        / f"krx_aftermarket_sor_canary_approval_{trade_date.isoformat()}.json"
-    )
-
-
-def _runtime_release_identity() -> tuple[str, str]:
-    selection_path = PROJECT_ROOT / "data/runtime/runtime_release_selection.json"
-    payload = json.loads(selection_path.read_text(encoding="utf-8"))
-    if payload.get("schema") != "runtime_release_selection_v1":
-        raise ValueError("runtime_release_selection_schema_invalid")
-    release_root = str(payload.get("release_root") or "").strip()
-    commit = str(payload.get("git_commit") or "").strip().lower()
-    if Path(release_root).resolve() != PROJECT_ROOT.resolve():
-        raise ValueError("runtime_release_selection_root_mismatch")
-    if len(commit) != 40 or any(char not in "0123456789abcdef" for char in commit):
-        raise ValueError("runtime_release_selection_commit_invalid")
-    return release_root, commit
-
-
-def _session_contract_sha256() -> str:
-    return hashlib.sha256(Path(session_contract.__file__).read_bytes()).hexdigest()
-
-
-def _approval_payload_sha256(payload: dict) -> str:
-    content = dict(payload)
-    content.pop("artifact_sha256", None)
-    encoded = json.dumps(
-        content,
-        ensure_ascii=True,
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode("utf-8")
-    return hashlib.sha256(encoded).hexdigest()
-
-
-def _aftermarket_sor_runtime_policy_eligibility(
-    *,
-    code,
-    now,
-    route_resolution,
-    owner_context,
-    venue_eligibility,
-):
-    """Resolve a date-scoped post-canary policy without a second quantity cap."""
-
-    enabled = str(
-        os.getenv("KORSTOCKSCAN_KRX_AFTERMARKET_SOR_POLICY_ENABLED") or ""
-    ).strip().lower() in {"1", "true", "yes", "on"}
-    if not enabled:
-        return None, {"aftermarket_sor_runtime_policy_enabled": False}
-    provenance = {
-        "aftermarket_sor_runtime_policy_enabled": True,
-        "aftermarket_sor_runtime_policy_valid": False,
-        "aftermarket_sor_runtime_policy_reason": "policy_not_loaded",
-    }
-    context = _owner_registry_context(owner_context)
-    if context is None or context.owner_type != "main_scalping":
-        provenance["aftermarket_sor_runtime_policy_reason"] = (
-            "main_scalping_owner_context_required"
-        )
-        return None, provenance
-    if ":ENTRY_BUY:" not in f":{context.client_intent_id.upper()}:":
-        provenance["aftermarket_sor_runtime_policy_reason"] = (
-            "initial_entry_buy_action_required"
-        )
-        return None, provenance
-    if (
-        route_resolution.get("requested_dmst_stex_tp") != "SOR"
-        or route_resolution.get("effective_dmst_stex_tp") != "SOR"
-    ):
-        provenance["aftermarket_sor_runtime_policy_reason"] = "explicit_sor_route_required"
-        return None, provenance
-    if venue_eligibility is None:
-        provenance["aftermarket_sor_runtime_policy_reason"] = (
-            "current_symbol_eligibility_required"
-        )
-        return None, provenance
-    policy_path = Path(
-        str(os.getenv("KORSTOCKSCAN_KRX_AFTERMARKET_SOR_POLICY_FILE") or "")
-    )
-    expected_sha = str(
-        os.getenv("KORSTOCKSCAN_KRX_AFTERMARKET_SOR_POLICY_SHA256") or ""
-    ).strip().lower()
-    try:
-        encoded = policy_path.read_bytes()
-        policy = json.loads(encoded.decode("utf-8"))
-        if not isinstance(policy, dict):
-            raise ValueError("policy_payload_invalid")
-        content = dict(policy)
-        policy_content_sha256 = str(content.pop("policy_content_sha256") or "")
-        actual_content_sha256 = hashlib.sha256(
-            json.dumps(
-                content, ensure_ascii=True, sort_keys=True, separators=(",", ":")
-            ).encode("utf-8")
-        ).hexdigest()
-        if not expected_sha or hashlib.sha256(encoded).hexdigest() != expected_sha:
-            raise ValueError("policy_file_sha256_mismatch")
-        if policy_content_sha256 != actual_content_sha256:
-            raise ValueError("policy_content_sha256_mismatch")
-        required = {
-            "schema_version": _AFTERMARKET_SOR_RUNTIME_POLICY_SCHEMA,
-            "active_date": now.astimezone(KST).date().isoformat(),
-            "runtime_apply_allowed": True,
-            "allowed_runtime_apply": True,
-            "source_quality_passed": True,
-            "route": "SOR",
-            "allowed_order_types": ["0", "00", "6"],
-            "market_order_remap": {"3": "6"},
-            "quantity_policy_owner": "position_sizing_dynamic_formula",
-            "existing_cap_unchanged": True,
-            "existing_cooldown_unchanged": True,
-            "hard_guards_preserved": True,
-        }
-        for key, expected in required.items():
-            if policy.get(key) != expected:
-                raise ValueError(f"policy_field_mismatch:{key}")
-        if (
-            (policy.get("canary_acceptance") or {}).get("status")
-            != "passed_broker_acceptance"
-        ):
-            raise ValueError("canary_acceptance_not_passed")
-    except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
-        provenance["aftermarket_sor_runtime_policy_reason"] = str(exc)[:160]
-        return None, provenance
-    provenance.update(
-        {
-            "aftermarket_sor_runtime_policy_valid": True,
-            "aftermarket_sor_runtime_policy_reason": "post_canary_policy_valid",
-            "aftermarket_sor_runtime_policy_version": policy.get("policy_version"),
-            "aftermarket_sor_runtime_policy_sha256": expected_sha,
-            "aftermarket_sor_quantity_policy_owner": policy.get(
-                "quantity_policy_owner"
-            ),
-        }
-    )
-    return venue_eligibility, provenance
-
-
-def _main_aftermarket_sor_canary_eligibility(
-    *,
-    code,
-    qty,
-    now,
-    route_resolution,
-    owner_context,
-    venue_eligibility,
-):
-    """Load the exact-date operator approval for one main initial BUY.
-
-    The approval augments symbol route eligibility only. Existing main entry,
-    owner/custody, price freshness, quantity/cap, cooldown, and hard-safety
-    guards remain upstream and in the owner registry.
-    """
-
-    session = session_contract.resolve_market_session(now)
-    if (
-        session.session_regime
-        != session_contract.MARKET_SESSION_REGIME_KRX_NXT_AFTERMARKET
-    ):
-        return None, {
-            "aftermarket_sor_canary_approval_required": False,
-            "aftermarket_sor_canary_approval_reason": "outside_canary_session",
-        }
-
-    provenance = {
-        "aftermarket_sor_canary_approval_required": True,
-        "aftermarket_sor_canary_approval_valid": False,
-        "aftermarket_sor_canary_approval_reason": "approval_not_loaded",
-        "aftermarket_sor_canary_approval_id": "-",
-        "aftermarket_sor_canary_approval_sha256": "-",
-    }
-    context = _owner_registry_context(owner_context)
-    if context is None or context.owner_type != "main_scalping":
-        provenance["aftermarket_sor_canary_approval_reason"] = (
-            "main_scalping_owner_context_required"
-        )
-        return None, provenance
-    if ":ENTRY_BUY:" not in f":{context.client_intent_id.upper()}:":
-        provenance["aftermarket_sor_canary_approval_reason"] = (
-            "initial_entry_buy_action_required"
-        )
-        return None, provenance
-    if (
-        route_resolution.get("requested_dmst_stex_tp") != "SOR"
-        or route_resolution.get("effective_dmst_stex_tp") != "SOR"
-    ):
-        provenance["aftermarket_sor_canary_approval_reason"] = (
-            "explicit_sor_route_required"
-        )
-        return None, provenance
-
-    runtime_eligibility, runtime_provenance = _aftermarket_sor_runtime_policy_eligibility(
-        code=code,
-        now=now,
-        route_resolution=route_resolution,
-        owner_context=owner_context,
-        venue_eligibility=venue_eligibility,
-    )
-    if runtime_provenance.get("aftermarket_sor_runtime_policy_enabled"):
-        provenance.update(runtime_provenance)
-        return runtime_eligibility, provenance
-    if int(qty or 0) != 1:
-        provenance["aftermarket_sor_canary_approval_reason"] = (
-            "one_share_probe_quantity_required"
-        )
-        return None, provenance
-
-    approval_path = _aftermarket_sor_canary_approval_path(session.trade_date)
-    try:
-        approval = json.loads(approval_path.read_text(encoding="utf-8"))
-        if not isinstance(approval, dict):
-            raise ValueError("approval_payload_invalid")
-        artifact_sha256 = str(approval.get("artifact_sha256") or "").strip().lower()
-        if artifact_sha256 != _approval_payload_sha256(approval):
-            raise ValueError("approval_hash_mismatch")
-        release_root, release_commit = _runtime_release_identity()
-        effective_at = datetime.fromisoformat(str(approval["effective_at_kst"]))
-        expires_at = datetime.fromisoformat(str(approval["expires_at_kst"]))
-        if effective_at.tzinfo is None or expires_at.tzinfo is None:
-            raise ValueError("approval_time_zone_missing")
-        effective_at = effective_at.astimezone(KST)
-        expires_at = expires_at.astimezone(KST)
-        required = {
-            "schema": _AFTERMARKET_SOR_CANARY_SCHEMA,
-            "approval_id": "krx-aftermarket-sor-canary-2026-09-14",
-            "authority_source": "user_explicit_approval_2026-09-12",
-            "target_date": session.trade_date.isoformat(),
-            "code_release_root": release_root,
-            "code_commit": release_commit,
-            "market_session_contract_version": session.contract_version,
-            "market_session_contract_sha256": _session_contract_sha256(),
-            "owner_type": "main_scalping",
-            "symbol_scope": _AFTERMARKET_SOR_CANARY_SYMBOL_SCOPE,
-            "allowed_route": "SOR",
-            "max_order_qty": 1,
-            "existing_cap_unchanged": True,
-            "existing_cooldown_unchanged": True,
-            "hard_guards_preserved": True,
-            "krx_aftermarket_eligible": True,
-            "nxt_eligible": True,
-            "actual_canary_order_approved": True,
-            "runtime_effect": True,
-            "allowed_runtime_apply": True,
-            "rollback_owner": "main operator",
-            "official_reference_commit": _AFTERMARKET_SOR_CANARY_OFFICIAL_COMMIT,
-        }
-        for key, expected in required.items():
-            if approval.get(key) != expected:
-                raise ValueError(f"approval_field_mismatch:{key}")
-        if approval.get("allowed_order_types") != ["0", "00", "6"]:
-            raise ValueError("approval_order_types_invalid")
-        if approval.get("market_order_remap") != {"3": "6"}:
-            raise ValueError("approval_market_order_remap_invalid")
-        if effective_at != datetime(2026, 9, 14, 16, 0, tzinfo=KST):
-            raise ValueError("approval_effective_at_invalid")
-        if expires_at != datetime(2026, 9, 14, 19, 40, tzinfo=KST):
-            raise ValueError("approval_expires_at_invalid")
-        if not effective_at <= now.astimezone(KST) < expires_at:
-            raise ValueError("approval_outside_effective_window")
-        approval_id = str(approval["approval_id"])
-    except (KeyError, OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
-        provenance["aftermarket_sor_canary_approval_reason"] = str(exc)[:160]
-        return None, provenance
-
-    eligibility = session_contract.resolve_symbol_venue_eligibility(
-        str(code)[:6],
-        session.trade_date,
-        {
-            "source_id": approval_id,
-            "source_sha256": artifact_sha256,
-            "observed_at_kst": effective_at,
-            "quality_state": session_contract.SOURCE_QUALITY_VALID,
-            "krx_regular_eligible": True,
-            "krx_aftermarket_eligible": True,
-            "nxt_eligible": True,
-        },
-    )
-    provenance.update(
-        {
-            "aftermarket_sor_canary_approval_valid": True,
-            "aftermarket_sor_canary_approval_reason": "exact_date_approval_valid",
-            "aftermarket_sor_canary_approval_id": approval_id,
-            "aftermarket_sor_canary_approval_sha256": artifact_sha256,
-            "aftermarket_sor_canary_release_root": release_root,
-            "aftermarket_sor_canary_code_commit": release_commit,
-            "aftermarket_sor_canary_symbol_scope": approval["symbol_scope"],
-            "aftermarket_sor_canary_rollback_owner": approval["rollback_owner"],
-        }
-    )
-    return eligibility, provenance
 
 
 def _owner_registry_block_response(
@@ -2194,28 +1893,10 @@ def send_buy_order_market(
     resolved_dmst_stex_tp = order_resolution["effective_dmst_stex_tp"]
     normalized_type = order_resolution["effective_order_type"]
     normalized_price = order_resolution["effective_order_price"]
-    market_session = session_contract.resolve_market_session(order_now)
-    canary_provenance = {}
     effective_venue_eligibility = venue_eligibility
     if (effective_venue_eligibility is not None
             and effective_venue_eligibility.stock_code != clean_code):
         effective_venue_eligibility = None
-    if (
-        market_session.session_regime
-        == session_contract.MARKET_SESSION_REGIME_KRX_NXT_AFTERMARKET
-        and str(normalized_type) in {"0", "00", "3", "6"}
-        and resolved_dmst_stex_tp == "SOR"
-    ):
-        effective_venue_eligibility, canary_provenance = (
-            _main_aftermarket_sor_canary_eligibility(
-                code=clean_code,
-                qty=qty,
-                now=order_now,
-                route_resolution=order_resolution,
-                owner_context=owner_context,
-                venue_eligibility=effective_venue_eligibility,
-            )
-        )
     market_session, order_preflight = _resolve_submit_order_type_preflight(
         now=order_now,
         route_resolution=order_resolution,
@@ -2230,7 +1911,6 @@ def send_buy_order_market(
             route_resolution=order_resolution,
             side="buy",
         )
-        blocked.update(canary_provenance)
         return _local_buy_no_call_response(blocked)
     normalized_type = order_preflight.effective_order_type
     if order_preflight.remapped:
@@ -2252,7 +1932,6 @@ def send_buy_order_market(
     submit_provenance.update(
         _order_type_preflight_provenance(market_session, order_preflight)
     )
-    submit_provenance.update(canary_provenance)
 
     payload = {
         "dmst_stex_tp": resolved_dmst_stex_tp,

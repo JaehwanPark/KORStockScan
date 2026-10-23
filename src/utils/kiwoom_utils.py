@@ -2147,8 +2147,9 @@ def get_stock_eligibility_map_ka10099(
     ``ka10017(stk_cnd=10)``.
     """
 
-    source_revision = ("953e5dbff123f437ab4d11a78a95191a685eb51f" if runtime_prepare
-                       else "234560d213acd8871ae344b5481aecd2f30287fa")
+    from src.trading.market.aftermarket_eligibility import official_listing_venue_fields
+
+    source_revision = "953e5dbff123f437ab4d11a78a95191a685eb51f"
     observed_at = observed_at_kst or datetime.now(_KST)
     if isinstance(observed_at, datetime) and observed_at.tzinfo is not None:
         observed_at = observed_at.astimezone(_KST).isoformat(timespec="seconds")
@@ -2265,21 +2266,8 @@ def get_stock_eligibility_map_ka10099(
                 nxt_eligible = (
                     True if nxt_enable == "Y" else False if nxt_enable == "N" else None
                 )
-                blocked_reasons = []
-                if "환기" in audit_info or "관리" in audit_info:
-                    blocked_reasons.append("audit_info_excluded")
-                elif audit_info not in {"", "정상"}:
-                    blocked_reasons.append("audit_info_unknown")
-                if "관리" in stock_state:
-                    blocked_reasons.append("management_state_excluded")
-                if not order_warning:
-                    blocked_reasons.append("order_warning_missing")
-                elif order_warning != "0":
-                    blocked_reasons.append("order_warning_excluded")
-                product_quality_eligible = not blocked_reasons
-                if nxt_eligible is None:
-                    blocked_reasons.append("nxt_enable_unknown")
-                blocked_reasons.append("krx_aftermarket_eligibility_unknown")
+                venue_fields = official_listing_venue_fields(
+                    item, trade_date=source_trade_date, nxt_eligible=nxt_eligible)
                 raw_payload_sha256 = hashlib.sha256(
                     json.dumps(
                         item,
@@ -2292,11 +2280,7 @@ def get_stock_eligibility_map_ka10099(
                 snapshot = {
                     "trade_date": source_trade_date,
                     "stock_code": code,
-                    "eligible": product_quality_eligible,
-                    "krx_regular_eligible": True,
-                    "nxt_eligible": nxt_eligible,
-                    "krx_aftermarket_eligible": None,
-                    "eligible_venues_json": ["NXT"] if nxt_eligible is True else [],
+                    **venue_fields,
                     "audit_info": audit_info,
                     "state": stock_state,
                     "stock_state": stock_state,
@@ -2307,10 +2291,6 @@ def get_stock_eligibility_map_ka10099(
                     "source_revision": source_revision,
                     "observed_at_kst": observed_at,
                     "payload_sha256": raw_payload_sha256,
-                    "quality_state": (
-                        "PARTIAL" if nxt_eligible is not None else "UNKNOWN"
-                    ),
-                    "blocked_reasons": blocked_reasons,
                 }
                 previous = result.get(code)
                 if previous is not None and ((runtime_prepare and previous.get("quality_state") == "CONFLICT") or any(

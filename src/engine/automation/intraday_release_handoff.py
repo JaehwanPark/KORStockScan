@@ -5263,6 +5263,42 @@ REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
     for name, current in REVIEWED_NUMERIC_REPLAY_HASHES.items() if name in REVIEWED_NUMERIC_REPLAY_PREVIOUS}}
 
 
+# Exact reviewed listing/SOR successor; retain the complete consumed REST profile.
+REVIEWED_AFTERMARKET_LISTING_HASHES = {'src/engine/infrastructure/startup_validation_code_context.py': '13c2fb600b73fba453fe9b82b3dc79b6cfcf37ef7a4a07b94ce3939011343a30',
+ 'src/engine/kiwoom_orders.py': '8b256c9e5802ad9afdf3b8806ce77420c3b425b107bb4aa6abedcd2e73f6ccbc',
+ 'src/engine/sniper_state_handlers.py': 'b620eff5df4d7d71fc9a8cace747a260b0aad5b1be358e5ef32e2b1deab591f9',
+ 'src/trading/market/aftermarket_eligibility.py': '63d81fe30f23cca232304c84a3f4e0c4e9e23a2f447c74d6b356798471417d4a',
+ 'src/trading/market/session_contract.py': '52a9574a5e12b2437a727607c1f6fea93480861e1abb37076e9bb39ea920398c',
+ 'src/utils/kiwoom_utils.py': 'ef692b544c8ac01c90ab56413aa236935bb5740b7edfe27cf5c30217948c0e95'}
+REVIEWED_AFTERMARKET_LISTING_PREVIOUS = {'src/engine/infrastructure/startup_validation_code_context.py': 'e81848fa4e85f082005b905ff5e71390dc2bfec114be3ef9fd550bea2c4dceba',
+ 'src/engine/kiwoom_orders.py': '32e93c49a880e1f3a393ec0367cf1339dbc3ef00c689c821b45b159872c423d9',
+ 'src/engine/sniper_state_handlers.py': 'ea59d6365ae1707af457535650937c49977997d9bc516bb8cc141f07da6eea86',
+ 'src/trading/market/aftermarket_eligibility.py': 'f28f3dd45c2d9b1aee2dcb64898d8cbecb85798bb812b058741d7f011fb45a2b',
+ 'src/trading/market/session_contract.py': 'dfd0ff3b2a28d8d6581a44762e5b618ae807fdc1c45d7f8cd3128b76be83573c',
+ 'src/utils/kiwoom_utils.py': '498cfc4bc4ce9b1cbe13f0b70967da7f2dbb113c6d70563924b03c98d371b323'}
+REVIEWED_AFTERMARKET_LISTING_PROFILE = {**REVIEWED_NUMERIC_REPLAY_PROFILE, **REVIEWED_AFTERMARKET_LISTING_HASHES}
+REVIEWED_AFTERMARKET_LISTING_VARIANTS = {
+    key: {**value,
+        'selector_path': 'src/trading/market/aftermarket_eligibility.py',
+        'selector_sha256': REVIEWED_AFTERMARKET_LISTING_HASHES['src/trading/market/aftermarket_eligibility.py'],
+        'dependencies': {**value['dependencies'], **REVIEWED_AFTERMARKET_LISTING_HASHES},
+        'contract_extensions': {origin: {name: REVIEWED_AFTERMARKET_LISTING_HASHES.get(os.path.normpath(name), sha)
+            for name, sha in paths.items()} for origin, paths in value['contract_extensions'].items()},
+    } for key, value in REVIEWED_NUMERIC_REPLAY_VARIANTS.items()
+}
+# Trigger keys also bind the new reviewed consumer bytes, using the same full
+# dependency/contract generation; individual predecessor mixtures still fail.
+for (_trigger, _old_sha), _variant in tuple(REVIEWED_AFTERMARKET_LISTING_VARIANTS.items()):
+    if _trigger in REVIEWED_AFTERMARKET_LISTING_HASHES:
+        REVIEWED_AFTERMARKET_LISTING_VARIANTS[
+            (_trigger, REVIEWED_AFTERMARKET_LISTING_HASHES[_trigger])] = _variant
+REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
+    name: REVIEWED_ENTRY_COST_PAIRS.get(name, ()) + tuple((origin, current) for origin in
+        {REVIEWED_AFTERMARKET_LISTING_PREVIOUS[name]} |
+        {old for pair in REVIEWED_ENTRY_COST_PAIRS.get(name, ()) for old in pair})
+    for name, current in REVIEWED_AFTERMARKET_LISTING_HASHES.items()}}
+
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -5457,7 +5493,11 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         for name, sha in REVIEWED_NUMERIC_REPLAY_HASHES.items()
         if name not in {'src/engine/infrastructure/startup_validation_code_context.py',
                         'src/engine/automation/ordered_intraday_deploy.py'})
-    prepared_hashes = (REVIEWED_NUMERIC_REPLAY_PROFILE if numeric_replay else
+    aftermarket_listing = any((root / name).is_file()
+        and hashlib.sha256(candidate_bytes(name)).hexdigest() == sha
+        for name, sha in REVIEWED_AFTERMARKET_LISTING_HASHES.items())
+    prepared_hashes = (REVIEWED_AFTERMARKET_LISTING_PROFILE if aftermarket_listing else
+        REVIEWED_NUMERIC_REPLAY_PROFILE if numeric_replay else
         REVIEWED_AUXILIARY_CAPABILITY_PROFILE if auxiliary_capability else
         REVIEWED_MACHINE_REST_HISTORY_PROFILE if machine_rest_history else
         REVIEWED_HOLDING_STREAM_PROFILE if holding_stream else
@@ -5468,7 +5508,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         REVIEWED_ENTRY_COST_HASHES if sentinel_scope_present else
         REVIEWED_PRE_FINALIZATION_HASHES if consumed_finalization else
         REVIEWED_NATIVE_PREOPEN_HASHES if native_preopen else REVIEWED_ENTRY_COST_PRE_SENTINEL_SCOPE_HASHES)
-    prepared_variants = (REVIEWED_NUMERIC_REPLAY_VARIANTS if numeric_replay else
+    prepared_variants = (REVIEWED_AFTERMARKET_LISTING_VARIANTS if aftermarket_listing else
+        REVIEWED_NUMERIC_REPLAY_VARIANTS if numeric_replay else
         REVIEWED_AUXILIARY_CAPABILITY_VARIANTS if auxiliary_capability else
         REVIEWED_MACHINE_REST_HISTORY_VARIANTS if machine_rest_history else
         REVIEWED_HOLDING_STREAM_VARIANTS if holding_stream else

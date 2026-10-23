@@ -71,10 +71,14 @@ def _aftermarket_eligibility(*, krx=True, nxt=True, target_date=date(2026, 9, 14
         "005930",
         target_date,
         {
-            "source_id": "test-aftermarket-policy",
-            "source_sha256": "fixture-sha",
-            "quality_state": session_contract.SOURCE_QUALITY_VALID,
-            "observed_at_kst": f"{target_date.isoformat()}T15:59:00+09:00",
+            "trade_date": target_date.isoformat(),
+            "source_id": "ka10099",
+            "source_revision": "a" * 40,
+            "source_sha256": "b" * 64,
+            "quality_state": "PARTIAL" if krx is None or nxt is None else "VALID",
+            "blocked_reasons_json": (["krx_aftermarket_eligibility_unknown"] if krx is None else []) +
+                (["nxt_enable_unknown"] if nxt is None else []),
+            "observed_at_kst": datetime.combine(target_date, datetime.min.time(), tzinfo=session_contract.KST).replace(hour=15, minute=59),
             "krx_regular_eligible": True,
             "krx_aftermarket_eligible": krx,
             "nxt_eligible": nxt,
@@ -91,94 +95,8 @@ def _main_owner_context(action="ENTRY_BUY"):
     )
 
 
-def _install_aftermarket_canary_approval(monkeypatch, tmp_path, **overrides):
-    release_root = "/fixed/release"
-    release_commit = "a" * 40
-    contract_sha256 = "b" * 64
-    approval_path = tmp_path / "approval.json"
-    monkeypatch.setattr(
-        kiwoom_orders,
-        "_aftermarket_sor_canary_approval_path",
-        lambda _trade_date: approval_path,
-    )
-    monkeypatch.setattr(
-        kiwoom_orders,
-        "_runtime_release_identity",
-        lambda: (release_root, release_commit),
-    )
-    monkeypatch.setattr(
-        kiwoom_orders,
-        "_session_contract_sha256",
-        lambda: contract_sha256,
-    )
-    approval = {
-        "schema": "krx_aftermarket_sor_canary_approval_v1",
-        "approval_id": "krx-aftermarket-sor-canary-2026-09-14",
-        "authority_source": "user_explicit_approval_2026-09-12",
-        "target_date": "2026-09-14",
-        "effective_at_kst": "2026-09-14T16:00:00+09:00",
-        "expires_at_kst": "2026-09-14T19:40:00+09:00",
-        "code_release_root": release_root,
-        "code_commit": release_commit,
-        "market_session_contract_version": "market_session_contract_v2",
-        "market_session_contract_sha256": contract_sha256,
-        "owner_type": "main_scalping",
-        "symbol_scope": "ALL_EXISTING_GUARD_ELIGIBLE_SYMBOLS",
-        "allowed_route": "SOR",
-        "allowed_order_types": ["0", "00", "6"],
-        "market_order_remap": {"3": "6"},
-        "max_order_qty": 1,
-        "existing_cap_unchanged": True,
-        "existing_cooldown_unchanged": True,
-        "hard_guards_preserved": True,
-        "krx_aftermarket_eligible": True,
-        "nxt_eligible": True,
-        "actual_canary_order_approved": True,
-        "runtime_effect": True,
-        "allowed_runtime_apply": True,
-        "rollback_owner": "main operator",
-        "official_reference_commit": (
-            "234560d213acd8871ae344b5481aecd2f30287fa"
-        ),
-    }
-    approval.update(overrides)
-    approval["artifact_sha256"] = kiwoom_orders._approval_payload_sha256(approval)
-    approval_path.write_text(json.dumps(approval), encoding="utf-8")
-    return approval
 
 
-def _install_aftermarket_runtime_policy(monkeypatch, tmp_path, *, active_date):
-    path = tmp_path / "aftermarket-runtime-policy.json"
-    policy = {
-        "schema_version": "krx_aftermarket_sor_runtime_policy_v1",
-        "policy_version": "krx_aftermarket_sor_runtime_policy:2026-09-14",
-        "source_date": "2026-09-14",
-        "active_date": active_date,
-        "runtime_apply_allowed": True,
-        "allowed_runtime_apply": True,
-        "source_quality_passed": True,
-        "canary_acceptance": {"status": "passed_broker_acceptance"},
-        "route": "SOR",
-        "allowed_order_types": ["0", "00", "6"],
-        "market_order_remap": {"3": "6"},
-        "quantity_policy_owner": "position_sizing_dynamic_formula",
-        "existing_cap_unchanged": True,
-        "existing_cooldown_unchanged": True,
-        "hard_guards_preserved": True,
-    }
-    content = json.dumps(
-        policy, ensure_ascii=True, sort_keys=True, separators=(",", ":")
-    ).encode("utf-8")
-    policy["policy_content_sha256"] = hashlib.sha256(content).hexdigest()
-    encoded = json.dumps(policy).encode("utf-8")
-    path.write_bytes(encoded)
-    monkeypatch.setenv("KORSTOCKSCAN_KRX_AFTERMARKET_SOR_POLICY_ENABLED", "true")
-    monkeypatch.setenv("KORSTOCKSCAN_KRX_AFTERMARKET_SOR_POLICY_FILE", str(path))
-    monkeypatch.setenv(
-        "KORSTOCKSCAN_KRX_AFTERMARKET_SOR_POLICY_SHA256",
-        hashlib.sha256(encoded).hexdigest(),
-    )
-    return policy
 
 
 def _allow_buy_time_guards(monkeypatch):
@@ -652,7 +570,6 @@ def test_aftermarket_sor_buy_market_remaps_before_single_submit(
     monkeypatch, tmp_path
 ):
     _allow_buy_time_guards(monkeypatch)
-    approval = _install_aftermarket_canary_approval(monkeypatch, tmp_path)
     calls = []
 
     class DummyResponse:
@@ -672,6 +589,7 @@ def test_aftermarket_sor_buy_market_remaps_before_single_submit(
         dmst_stex_tp="SOR",
         owner_context=_main_owner_context(),
         now=datetime(2026, 9, 14, 16, 0, tzinfo=session_contract.KST),
+        venue_eligibility=_aftermarket_eligibility(),
     )
 
     assert calls == [
@@ -687,16 +605,13 @@ def test_aftermarket_sor_buy_market_remaps_before_single_submit(
     assert result["order_type_preflight_remapped"] is True
     assert result["order_type_preflight_effective_type"] == "6"
     assert result["market_session_observed_at"] == "2026-09-14T16:00:00+09:00"
-    assert result["aftermarket_sor_canary_approval_valid"] is True
-    assert result["aftermarket_sor_canary_approval_id"] == approval["approval_id"]
-    assert result["aftermarket_sor_canary_approval_sha256"] == approval["artifact_sha256"]
+    assert not any("canary_approval" in key for key in result)
 
 
-def test_aftermarket_post_canary_policy_uses_central_quantity_owner(
+def test_aftermarket_native_eligibility_preserves_central_quantity(
     monkeypatch, tmp_path
 ):
     _allow_buy_time_guards(monkeypatch)
-    _install_aftermarket_runtime_policy(monkeypatch, tmp_path, active_date="2026-09-15")
     calls = []
 
     class DummyResponse:
@@ -719,58 +634,9 @@ def test_aftermarket_post_canary_policy_uses_central_quantity_owner(
     )
 
     assert calls[0]["ord_qty"] == "2"
-    assert result["aftermarket_sor_runtime_policy_valid"] is True
-    assert result["aftermarket_sor_quantity_policy_owner"] == (
-        "position_sizing_dynamic_formula"
-    )
+    assert result["return_code"] == "0"
 
 
-@pytest.mark.parametrize(
-    ("qty", "action", "tamper_hash", "expected_reason"),
-    [
-        (2, "ENTRY_BUY", False, "one_share_probe_quantity_required"),
-        (1, "ENTRY_REPRICE_BUY", False, "initial_entry_buy_action_required"),
-        (1, "ENTRY_BUY", True, "approval_hash_mismatch"),
-    ],
-)
-def test_aftermarket_main_buy_canary_scope_blocks_before_broker(
-    monkeypatch,
-    tmp_path,
-    qty,
-    action,
-    tamper_hash,
-    expected_reason,
-):
-    _allow_buy_time_guards(monkeypatch)
-    approval = _install_aftermarket_canary_approval(monkeypatch, tmp_path)
-    if tamper_hash:
-        approval["rollback_owner"] = "tampered"
-        (
-            tmp_path / "approval.json"
-        ).write_text(json.dumps(approval), encoding="utf-8")
-    calls = []
-    monkeypatch.setattr(
-        kiwoom_orders,
-        "_post_kiwoom_with_auth_retry",
-        lambda *args, **kwargs: calls.append((args, kwargs)),
-    )
-
-    result = kiwoom_orders.send_buy_order_market(
-        "005930",
-        qty,
-        "TOKEN",
-        order_type="6",
-        dmst_stex_tp="SOR",
-        owner_context=_main_owner_context(action),
-        now=datetime(2026, 9, 14, 16, 0, tzinfo=session_contract.KST),
-        venue_eligibility=_aftermarket_eligibility(),
-    )
-
-    assert calls == []
-    assert result["return_code"] == "ORDER_TYPE_PREFLIGHT_BLOCKED"
-    assert result["broker_order_attempted"] is False
-    assert result["aftermarket_sor_canary_approval_valid"] is False
-    assert result["aftermarket_sor_canary_approval_reason"] == expected_reason
 
 
 def test_aftermarket_existing_holding_sell_market_remaps_before_single_submit(
@@ -906,8 +772,6 @@ def test_aftermarket_buy_unknown_eligibility_blocks_before_broker(monkeypatch):
 def test_explicit_nxt_uses_own_eligibility_without_sor_approval(monkeypatch, failure):
     _allow_buy_time_guards(monkeypatch)
     calls = []
-    monkeypatch.setattr(kiwoom_orders, "_main_aftermarket_sor_canary_eligibility",
-                        lambda **_kwargs: pytest.fail("NXT cannot consume SOR approval"))
     monkeypatch.setattr(kiwoom_orders, "_post_kiwoom_with_auth_retry",
         lambda _url, _headers, payload, _api_id, timeout=5: (
             calls.append(dict(payload)) or types.SimpleNamespace(status_code=200),
@@ -974,7 +838,7 @@ def test_broker_reject_does_not_reroute_or_retry_order_type(
         "now": datetime(2026, 9, 14, 16, 0, tzinfo=session_contract.KST),
     }
     if side == "buy":
-        _install_aftermarket_canary_approval(monkeypatch, tmp_path)
+        kwargs["venue_eligibility"] = _aftermarket_eligibility()
         kwargs["owner_context"] = _main_owner_context()
         result = kiwoom_orders.send_buy_order_market("005930", 1, "TOKEN", **kwargs)
         expected_qty = "1"
@@ -1969,32 +1833,31 @@ def test_real_deposit_cache_retains_its_own_receipt_and_original_clock(monkeypat
     assert len(posts) == 1
 
 
-@pytest.mark.parametrize("krx,nxt,current_policy,allowed", [
-    (True,False,True,True),(False,True,True,True),
-    (False,False,True,False),(None,True,True,False),
-    (True,None,True,False),(True,False,False,False),
+@pytest.mark.parametrize("krx,nxt,allowed", [
+    (True, False, True), (False, True, True), (False, False, False),
+    (None, True, True), (True, None, True), (None, False, False),
+    (False, None, False), (None, None, False),
 ])
-def test_sor_single_venue_keeps_exact_date_policy_and_unknown_guards(
-    monkeypatch,tmp_path,krx,nxt,current_policy,allowed):
+def test_sor_uses_supported_venue_without_legacy_trial_approval(monkeypatch, krx, nxt, allowed):
     _allow_buy_time_guards(monkeypatch)
-    _install_aftermarket_runtime_policy(monkeypatch,tmp_path,
-        active_date="2026-09-15" if current_policy else "2026-09-14")
-    monkeypatch.setattr(kiwoom_orders,"_aftermarket_sor_canary_approval_path",lambda _day:tmp_path/"missing-canary.json")
-    calls=[]
-    def post(url,headers,payload,api_id,timeout=5):
+    calls = []
+    monkeypatch.setenv("KORSTOCKSCAN_KRX_AFTERMARKET_SOR_POLICY_APPROVED", "1")
+    def post(url, headers, payload, api_id, timeout=5):
         calls.append(dict(payload))
-        return type("Response",(),{"status_code":200})(),{"return_code":"0","ord_no":"B-SOR"}
-    monkeypatch.setattr(kiwoom_orders,"_post_kiwoom_with_auth_retry",post)
-    result=kiwoom_orders.send_buy_order_market("005930",2,"fixture",
-        order_type="00",price=10000,dmst_stex_tp="SOR",owner_context=_main_owner_context(),
-        now=datetime(2026,9,15,17,0,tzinfo=session_contract.KST),
-        venue_eligibility=_aftermarket_eligibility(krx=krx,nxt=nxt,target_date=date(2026,9,15)))
+        return types.SimpleNamespace(status_code=200), {"return_code": "0", "ord_no": "B-SOR"}
+    monkeypatch.setattr(kiwoom_orders, "_post_kiwoom_with_auth_retry", post)
+    result = kiwoom_orders.send_buy_order_market("005930", 2, "fixture",
+        order_type="00", price=10000, dmst_stex_tp="SOR", owner_context=_main_owner_context(),
+        now=datetime(2026, 9, 15, 17, tzinfo=session_contract.KST),
+        venue_eligibility=_aftermarket_eligibility(krx=krx, nxt=nxt, target_date=date(2026, 9, 15)))
     assert bool(calls) is allowed
     if allowed:
-        assert calls == [dict(dmst_stex_tp="SOR",stk_cd="005930",ord_qty="2",ord_uv="10000",trde_tp="00",cond_uv="")]
-        assert result["aftermarket_sor_runtime_policy_valid"] is True
+        assert calls == [dict(dmst_stex_tp="SOR", stk_cd="005930", ord_qty="2",
+                              ord_uv="10000", trde_tp="00", cond_uv="")]
+        assert result["return_code"] == "0"
     else:
         assert not result.get("ord_no")
+        assert result["broker_order_attempted"] is False
 
 
 @pytest.mark.parametrize('hour', [8, 10, 17, 19])
@@ -2017,3 +1880,62 @@ def test_operator_default_route_is_sor_with_explicit_routes_and_preflight_preser
         session_contract.resolve_market_session(at.replace(hour=20)),
         result['effective_dmst_stex_tp'], 'sell', '0', existing_holding=True)
     assert closed.allowed is False
+
+
+@pytest.mark.parametrize('failure', [None, 'excluded', 'incomplete', 'wrong_symbol', 'stale', 'future'])
+def test_official_non_nxt_listing_persists_to_main_sor_submit(monkeypatch, tmp_path, failure):
+    """Exercise collection -> ORM row -> Main adapter -> native order preflight."""
+    from contextlib import contextmanager
+    from src.engine.infrastructure import market_eligibility_source as listing
+    from src.engine import sniper_state_handlers as handlers
+    records = {}
+    def merge(model):
+        records[model.stock_code] = {
+            column.name: getattr(model, column.name) for column in model.__table__.columns}
+    @contextmanager
+    def session():
+        yield types.SimpleNamespace(merge=merge, query=lambda *_: types.SimpleNamespace(
+            filter=lambda *_: types.SimpleNamespace(all=lambda: [])))
+    db = types.SimpleNamespace(get_session=session,
+        get_security_market_eligibility=lambda code, day: records.get(code))
+    now = datetime(2026, 10, 23, 17, tzinfo=session_contract.KST)
+    def fetch(**kwargs):
+        row = dict(code='005930' if kwargs['payload']['mrkt_tp'] == '0' else '036930',
+            nxtEnable='N', auditInfo='정상', state='투자경고' if failure == 'excluded' else '증거금30%',
+            orderWarning='0', marketCode=kwargs['payload']['mrkt_tp'])
+        return [dict(return_code=0, list=[row])], dict(last_http_status_code=200,
+            continuous_next_key_missing=False, continuous_page_limit_reached=failure == 'incomplete')
+    monkeypatch.setattr(kiwoom_orders.kiwoom_utils, 'fetch_kiwoom_api_continuous', fetch)
+    owner = listing.RuntimeMarketEligibilitySource(tmp_path / 'listing', now=lambda: now,
+        calendar=lambda day: True, token=lambda: 'fixture', log=lambda message: None)
+    owner.tick(db)
+    original = dict(records['005930'])
+    if failure == 'wrong_symbol':
+        records['005930']['stock_code'] = '036930'
+    elif failure == 'stale':
+        records['005930']['trade_date'] = date(2026, 10, 22)
+    elif failure == 'future':
+        records['005930']['observed_at_kst'] = now.replace(hour=18)
+    monkeypatch.setattr(handlers, 'DB', db)
+    evidence = handlers._entry_order_venue_eligibility('005930', now=now)
+    _allow_buy_time_guards(monkeypatch)
+    calls = []
+    monkeypatch.setattr(kiwoom_orders, '_post_kiwoom_with_auth_retry',
+        lambda url, headers, payload, api_id, timeout=5: (
+            calls.append(dict(payload)) or types.SimpleNamespace(status_code=200),
+            dict(return_code='0', ord_no='KRX-SOR')))
+    result = kiwoom_orders.send_buy_order_market('005930', 2, 'fixture', order_type='00',
+        price=10000, dmst_stex_tp='SOR', owner_context=_main_owner_context(),
+        now=now, venue_eligibility=evidence)
+    if failure:
+        assert calls == []
+        assert result['return_code'] == 'ORDER_TYPE_PREFLIGHT_BLOCKED'
+        assert result['broker_order_attempted'] is False
+    else:
+        assert original['krx_aftermarket_eligible'] is True
+        assert original['nxt_eligible'] is False
+        assert original['quality_state'] == 'VALID'
+        assert evidence.source_sha256 == original['payload_sha256']
+        assert calls == [dict(dmst_stex_tp='SOR', stk_cd='005930', ord_qty='2',
+                              ord_uv='10000', trde_tp='00', cond_uv='')]
+        assert result['return_code'] == '0'

@@ -1442,3 +1442,16 @@ def test_main_preparation_independently_reviews_numeric_replay(relative, damage)
     if damage == 'unreviewed': new = '0' * 64
     elif damage == 'wrong_origin': old = '0' * 64
     assert C.reviewed_preparation_pair(relative, old, new) is (damage is None)
+
+
+@pytest.mark.parametrize('relative', sorted(n for n in H.REVIEWED_AFTERMARKET_LISTING_HASHES
+    if n != 'src/engine/infrastructure/startup_validation_code_context.py'))
+@pytest.mark.parametrize('damage', [None, 'unreviewed', 'wrong_origin'])
+def test_main_preparation_reviews_aftermarket_listing_sources(relative, damage):
+    old = H.REVIEWED_AFTERMARKET_LISTING_PREVIOUS[relative]
+    new = hashlib.sha256((ROOT / relative).read_bytes()).hexdigest()
+    if damage == 'unreviewed':
+        new = '0' * 64
+    elif damage == 'wrong_origin':
+        old = '0' * 64
+    assert C.reviewed_preparation_pair(relative, old, new) is (damage is None)

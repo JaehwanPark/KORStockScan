@@ -72453,12 +72453,6 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 "effective_order_type": order_resolution["effective_order_type"],
                 "order_type_remapped": order_resolution["order_type_remapped"],
                 "order_type_remap_reason": order_resolution["order_type_remap_reason"],
-                "aftermarket_sor_canary_approval_id": res.get(
-                    "aftermarket_sor_canary_approval_id"
-                ),
-                "aftermarket_sor_canary_approval_valid": res.get(
-                    "aftermarket_sor_canary_approval_valid"
-                ),
                 "order_type_preflight_effective_type": res.get(
                     "order_type_preflight_effective_type"
                 ),
@@ -72945,14 +72939,6 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         best_bid=best_bid_at_submit,
         best_ask=best_ask_at_submit,
     )
-    aftermarket_canary = next(
-        (
-            order
-            for order in successful_orders
-            if str(order.get("aftermarket_sor_canary_approval_id") or "").strip()
-        ),
-        {},
-    )
     try:
         from src.engine.monitoring.runtime_performance import mark_signal, machine_signal_id
         performance_signal = machine_signal_id(stock.get('last_watching_ai_machine_primary_fields'))
@@ -73036,13 +73022,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         broker_route=bundle_broker_route,
         broker_route_resolution=bundle_route_resolution,
         effective_dmst_stex_tp=bundle_broker_route,
-        aftermarket_sor_canary_approval_id=aftermarket_canary.get(
-            "aftermarket_sor_canary_approval_id"
-        ),
-        aftermarket_sor_canary_approval_valid=aftermarket_canary.get(
-            "aftermarket_sor_canary_approval_valid"
-        ),
-        order_type_preflight_effective_type=aftermarket_canary.get(
+        order_type_preflight_effective_type=successful_orders[0].get(
             "order_type_preflight_effective_type"
         ),
         effective_venue=bundle_execution_cohort,
@@ -82012,10 +81992,9 @@ def _finalize_buy_order_submission(
 def _entry_order_venue_eligibility(code: str, *, now=None):
     """Bind a canonical local listing snapshot to one aftermarket entry.
 
-    Only a complete NXT axis may retain the source's unknown KRX axis. Missing,
-    stale, conflicting, future or otherwise partial evidence stays unknown.
-    This does not fetch a provider, infer eligibility from quotes, or grant the
-    independent SOR operator approval enforced by the order adapter.
+    Preserve each venue axis and the source blockers for the order adapter's
+    route-specific preflight. This read never fetches a provider or derives
+    listing permission from a quote. Session preflight owns date/source checks.
     """
     now_kst = now if now is not None else datetime.now(_KST)
     context = session_contract.resolve_market_session(now_kst)
@@ -82027,23 +82006,11 @@ def _entry_order_venue_eligibility(code: str, *, now=None):
         )
         snapshot = DB.get_security_market_eligibility(code, context.trade_date)
         evidence = resolve_symbol_venue_eligibility(code, context.trade_date, snapshot)
-        observed = evidence.observed_at_kst
-        complete_nxt_axis = (
-            evidence.quality_state == "PARTIAL"
-            and set(evidence.blockers) == {"krx_aftermarket_eligibility_unknown"}
-            and evidence.krx_regular_eligible is True
-            and evidence.krx_aftermarket_eligible is None
-            and isinstance(evidence.nxt_eligible, bool)
-        )
-        if ((not complete_nxt_axis and (
-                evidence.quality_state != "VALID" or evidence.blockers))
-                or observed is None or observed.date() != context.trade_date
-                or observed.timestamp() > now_kst.timestamp()):
-            return None
         return session_contract.resolve_symbol_venue_eligibility(
             evidence.stock_code, context.trade_date,
-            {**snapshot, "observed_at_kst": observed,
+            {**snapshot, "observed_at_kst": evidence.observed_at_kst,
              "quality_state": evidence.quality_state,
+             "blocked_reasons_json": list(evidence.blockers),
              "source_id": evidence.source_api_id})
     except (AttributeError, OSError, ValueError, TypeError):
         return None

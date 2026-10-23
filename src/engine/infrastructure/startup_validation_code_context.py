@@ -634,6 +634,43 @@ REVIEWED_PREPARATION_HISTORY.setdefault('src/engine/monitoring/policy_generation
   '62872a82eda5eae04541329a65dc062b4f99150360dfb24b7eeb8888214f0c25')})
 
 
+# Complete reviewed KRX/SOR successor over the consumed numeric/source repair.
+REVIEWED_PREPARATION_HISTORY.setdefault('src/engine/kiwoom_orders.py', set()).update({('32e93c49a880e1f3a393ec0367cf1339dbc3ef00c689c821b45b159872c423d9',
+  '8b256c9e5802ad9afdf3b8806ce77420c3b425b107bb4aa6abedcd2e73f6ccbc')})
+REVIEWED_PREPARATION_HISTORY.setdefault('src/engine/sniper_state_handlers.py', set()).update({('0fe0c01839a6186b0ef45aa8112075d13220ebc64f299656164aa007a84b1541',
+  'b620eff5df4d7d71fc9a8cace747a260b0aad5b1be358e5ef32e2b1deab591f9'),
+ ('2e69e440301dbc3bf4ec7020abc29b4a37b0dfd5dd624480378c7eab491c45d9',
+  'b620eff5df4d7d71fc9a8cace747a260b0aad5b1be358e5ef32e2b1deab591f9'),
+ ('56a0613b596418c0ade581aabedef12d38371ff7d4d2af9fffea2cc00665dd20',
+  'b620eff5df4d7d71fc9a8cace747a260b0aad5b1be358e5ef32e2b1deab591f9'),
+ ('6a8c1ad86951d2720a91175cda4565d6202e9ff63b0b220b6613166760c84f66',
+  'b620eff5df4d7d71fc9a8cace747a260b0aad5b1be358e5ef32e2b1deab591f9'),
+ ('8a0c18d2c097b063a8349907f39e6057d43b7ad9ef173e5f6c4e1be48f8b21f9',
+  'b620eff5df4d7d71fc9a8cace747a260b0aad5b1be358e5ef32e2b1deab591f9'),
+ ('b3b2965f65f33e5e5bf52fd960757d6bdbe6b5a63e6844bd95f5dc1d5353ea1d',
+  'b620eff5df4d7d71fc9a8cace747a260b0aad5b1be358e5ef32e2b1deab591f9'),
+ ('bc0e823b2f358509d07dd39bc0051a5e0a3f823c687d1a0580b279242ed66e54',
+  'b620eff5df4d7d71fc9a8cace747a260b0aad5b1be358e5ef32e2b1deab591f9'),
+ ('bd2c589431b0f507b2bbbba31cfc700a22dcab07b914313dc101add2cc9c9686',
+  'b620eff5df4d7d71fc9a8cace747a260b0aad5b1be358e5ef32e2b1deab591f9'),
+ ('e25983d9d6175fb628cc3d483ae8f522a4f336f8ce31f107d6a3cf757bd52847',
+  'b620eff5df4d7d71fc9a8cace747a260b0aad5b1be358e5ef32e2b1deab591f9'),
+ ('ea59d6365ae1707af457535650937c49977997d9bc516bb8cc141f07da6eea86',
+  'b620eff5df4d7d71fc9a8cace747a260b0aad5b1be358e5ef32e2b1deab591f9'),
+ ('eaca4d2d23d2764c42e3f7cc2f73d04db0b29bb8115cabac4f10cf48e89d57aa',
+  'b620eff5df4d7d71fc9a8cace747a260b0aad5b1be358e5ef32e2b1deab591f9'),
+ ('edfd4af04194182dff2a3ced3952dbfc5dc989d85906409c0172fabadb381419',
+  'b620eff5df4d7d71fc9a8cace747a260b0aad5b1be358e5ef32e2b1deab591f9')})
+REVIEWED_PREPARATION_HISTORY.setdefault('src/trading/market/aftermarket_eligibility.py', set()).update({('f28f3dd45c2d9b1aee2dcb64898d8cbecb85798bb812b058741d7f011fb45a2b',
+  '63d81fe30f23cca232304c84a3f4e0c4e9e23a2f447c74d6b356798471417d4a')})
+REVIEWED_PREPARATION_HISTORY.setdefault('src/trading/market/session_contract.py', set()).update({('3a4b68c7d8d613d6ab60e611b5b61f498be0b525b1e35e2bdf3d9d1d396b56a0',
+  '52a9574a5e12b2437a727607c1f6fea93480861e1abb37076e9bb39ea920398c'),
+ ('dfd0ff3b2a28d8d6581a44762e5b618ae807fdc1c45d7f8cd3128b76be83573c',
+  '52a9574a5e12b2437a727607c1f6fea93480861e1abb37076e9bb39ea920398c')})
+REVIEWED_PREPARATION_HISTORY.setdefault('src/utils/kiwoom_utils.py', set()).update({('498cfc4bc4ce9b1cbe13f0b70967da7f2dbb113c6d70563924b03c98d371b323',
+  'ef692b544c8ac01c90ab56413aa236935bb5740b7edfe27cf5c30217948c0e95')})
+
+
 def reviewed_preparation_pair(relative, old, current):
     return (REVIEWED_PREPARATION_SOURCES.get(relative) == (old, current)
             or (old, current) in REVIEWED_PREPARATION_HISTORY.get(relative, ()))

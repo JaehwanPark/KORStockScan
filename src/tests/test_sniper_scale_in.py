@@ -62,9 +62,11 @@ def test_entry_order_eligibility_binds_only_canonical_current_source(monkeypatch
         get_security_market_eligibility=lambda code, day: reads.append((code, day)) or source))
     result = state_handlers._entry_order_venue_eligibility("036930", now=now)
     assert reads == [("036930", now.date())]
-    if failure:
-        assert result is None
-    else:
+    checked = state_handlers.session_contract.resolve_order_type_preflight(
+        state_handlers.session_contract.resolve_market_session(now),
+        "NXT", "buy", "6", eligibility=result)
+    assert checked.allowed is (failure is None)
+    if not failure:
         assert result.stock_code == "036930"
         assert result.quality_state == "PARTIAL"
         assert result.source_revision == "a" * 40

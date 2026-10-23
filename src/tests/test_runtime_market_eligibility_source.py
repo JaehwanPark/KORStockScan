@@ -71,8 +71,8 @@ def test_runtime_only_explicit_eligibility_values(monkeypatch, value, expected):
     install_pages(monkeypatch, rows={'0': [item(nxt=value)]})
     rows, _ = K.get_stock_eligibility_map_ka10099('fixture', None, runtime_prepare=True)
     assert rows['005930']['nxt_eligible'] is expected
-    assert rows['005930']['krx_aftermarket_eligible'] is None
-    assert rows['005930']['quality_state'] == ('UNKNOWN' if expected is None else 'PARTIAL')
+    assert rows['005930']['krx_aftermarket_eligible'] is True
+    assert rows['005930']['quality_state'] == ('PARTIAL' if expected is None else 'VALID')
 
 
 def test_runtime_conflict_cannot_be_erased_by_later_duplicate(monkeypatch):
@@ -110,9 +110,9 @@ def test_current_day_storage_cache_and_next_day_collection(monkeypatch, db, tmp_
     first = owner.tick(db)
     assert first['status'] == 'pass' and first['stored_count'] == 2
     row = db.get_security_market_eligibility('005930', clock[0].date())
-    assert row['quality_state'] == 'PARTIAL' and row['nxt_eligible'] is True
-    assert row['krx_aftermarket_eligible'] is None
-    assert row['blocked_reasons_json'] == ['krx_aftermarket_eligibility_unknown']
+    assert row['quality_state'] == 'VALID' and row['nxt_eligible'] is True
+    assert row['krx_aftermarket_eligible'] is True
+    assert row['blocked_reasons_json'] == []
     assert len(row['payload_sha256']) == 64 and row['source_api_id'] == 'ka10099'
     assert owner.tick(db)['cache_hit'] is True and len(calls) == 2
     clock[0] += timedelta(days=1)
@@ -146,14 +146,15 @@ def test_collector_to_timezone_preserving_db_main_adapter_and_nxt_preflight(monk
     monkeypatch.setattr(handlers, 'DB', db)
     now = datetime(2026, 10, 14, 18, 45, 1, tzinfo=source.KST)
     evidence = handlers._entry_order_venue_eligibility('005930', now=now)
-    assert evidence.quality_state == 'PARTIAL'
+    assert evidence.quality_state == 'VALID'
     assert evidence.source_trade_date == '2026-10-14'
     context = contract.resolve_market_session(now)
     nxt = contract.resolve_order_type_preflight(context, 'NXT', 'buy', '3', eligibility=evidence)
     assert nxt.allowed and nxt.effective_order_type == '6'
-    assert not contract.resolve_order_type_preflight(context, 'SOR', 'buy', '3', eligibility=evidence).allowed
+    assert contract.resolve_order_type_preflight(context, 'SOR', 'buy', '3', eligibility=evidence).allowed
     records['005930']['quality_state'] = 'UNKNOWN'
-    assert handlers._entry_order_venue_eligibility('005930', now=now) is None
+    assert not contract.resolve_order_type_preflight(context, 'SOR', 'buy', '3',
+        eligibility=handlers._entry_order_venue_eligibility('005930', now=now)).allowed
 
 
 def test_same_day_complete_refresh_invalidates_missing_old_row_and_recovers(monkeypatch, db, tmp_path):
@@ -174,8 +175,8 @@ def test_same_day_complete_refresh_invalidates_missing_old_row_and_recovers(monk
     recovered = runtime(tmp_path / 'another-restart').tick(db)
     assert recovered['status'] == 'pass'
     row = db.get_security_market_eligibility('005930', '2026-10-14')
-    assert row['quality_state'] == 'PARTIAL' and row['nxt_eligible'] is True
-    assert row['blocked_reasons_json'] == ['krx_aftermarket_eligibility_unknown']
+    assert row['quality_state'] == 'VALID' and row['nxt_eligible'] is True
+    assert row['blocked_reasons_json'] == []
 
 
 def test_failures_retry_on_later_ticks_with_daily_limit(db, tmp_path):
