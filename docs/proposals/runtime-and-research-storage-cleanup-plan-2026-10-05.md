@@ -59,6 +59,8 @@
 ### S2. 미참조 release/worktree
 
 - 보호 집합 밖에서 service/PID/cron/rollback/manifest 참조가0이고 고유 source·logs·report가 없는 후보만 대상이다.
+- 정기 optional 연구는 startup/bootstrap trace와 별도의 실제 소비자다. release/tmp 정리는 [research_storage.weakness_dependency_inventory](../../src/engine/lifecycle/research_storage.py)의 현재 cumulative→날짜 cursor→봉인된 source manifest 의존 폐쇄를 보호 목록에 합친다. 원 코드·증빙이 missing/stale이어도 참조를 제외하지 않으며, metadata/date/generation/authority/예산 검증 실패는 정리 보류다. 검증된 Git ref가 있어도 현재 reader의 원 경로 소비를 대신하지 않는다.
+- 삭제 직전 runtime release-set 잠금 아래 같은 의존 폐쇄를 다시 읽고 기존 optional 연구 `worker.lock`을 삭제 창 끝까지 보유한다. hidden-root 검증에는 startup뿐 아니라 이 연구 의존 검사와 요약 consumer를 포함한다. 보호 원본의 복원 후에는 inode/ctime을 위조하지 않고 native owner가 영향 날짜만 재결속한다. 복원 코드 잠금 해제는 마지막 연구 소비가 원 코드를 더 이상 참조하지 않는다는 같은 owner의 검증 후에만 가능하다. 원 실패와 단계별 결과는 [현행 약세 연구 검토](../audits/main-market-weakness-source-completeness-and-status-review-2026-10-16.md#2026-10-23-역사-코드-복원정리-보호요약-의존-검사-수리)에 유지한다.
 - 각 HEAD를 날짜별 `refs/archive/disk-cleanup-20261005/...`에 남기고, dirty/untracked가 있으면 먼저 byte/hash 및 복원 가능한 별도 사본을 검증한다. 보관물을 같은 삭제 후보 안에 두지 않는다.
 - worktree는 Git 등록과 실제 경로를 함께 정리한다. 미등록 release는 같은 참조/고유 파일 검사를 별도로 통과해야 한다.
 - `.checkout-backups`는 원본 blob/스냅샷을 대사해 실제 중복이 입증된 항목만 제거한다. release 디렉터리 전체를 날짜 glob으로 지우지 않는다.

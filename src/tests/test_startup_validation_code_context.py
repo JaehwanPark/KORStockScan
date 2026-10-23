@@ -1353,3 +1353,21 @@ def test_main_preparation_independently_reviews_sentinel_route_sources(relative,
     if damage=='unreviewed':new='0'*64
     if damage=='wrong_origin':old='0'*64
     assert C.reviewed_preparation_pair(relative,old,new) is (damage is None)
+
+
+@pytest.mark.parametrize('relative', [
+    'src/engine/lifecycle/research_storage.py',
+    'src/engine/error_detectors/artifact_freshness.py',
+    'src/engine/monitoring/submission_bottleneck_monitor.py',
+    'src/engine/automation/ordered_intraday_deploy.py',
+    'src/engine/automation/entry_cancel_wait_tuning.py',
+    'src/engine/monitoring/policy_generation_code_handoff.py',
+    'src/engine/scalping/mechanistic_entry_runtime_policy.py'])
+@pytest.mark.parametrize('damage', [None,'unreviewed','wrong_origin'])
+def test_main_preparation_independently_reviews_observer_p5_b67_sources(relative,damage):
+    original=subprocess.check_output(['git','-C',str(ROOT),'show','926ebca82:'+relative])
+    old=hashlib.sha256(original).hexdigest()
+    new=hashlib.sha256((ROOT/relative).read_bytes()).hexdigest()
+    if damage=='unreviewed':new='0'*64
+    elif damage=='wrong_origin':old='0'*64
+    assert C.reviewed_preparation_pair(relative,old,new) is (damage is None)

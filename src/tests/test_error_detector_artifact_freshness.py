@@ -1457,7 +1457,7 @@ def test_semantic_object_rejects_replacement_fifo_before_read(tmp_path, monkeypa
             path.rename(path.with_suffix('.original'))
             os.mkfifo(path); replaced.append(True)
         return original_open(name, flags, *args, **kwargs)
-    monkeypatch.setattr(detector.os, 'open', opening)
+    monkeypatch.setattr(detector.observer_io.os, 'open', opening)
     with pytest.raises(ValueError, match='observer_regular_file_required'):
         detector._semantic_object(path, limit=1024)
     assert replaced == [True]
@@ -4558,14 +4558,14 @@ def test_current_health_birth_requires_independent_kernel_attestation(tmp_path, 
         monkeypatch.setattr(mod, '_observer_live_identity', absent)
         monkeypatch.setattr(handoff, 'closed_consumption_observation', lambda day: dict(
             pid_identity=dict(pid=receipt['pid'], start_ticks=receipt['start_ticks'], cwd=receipt['process_cwd'])))
-        original_bytes=monitor._observer_regular_bytes
+        original_bytes=monitor.observer_io.regular_bytes
         def kernel(path, *, limit):
             if path!=Path('/proc/stat'):
                 return original_bytes(path,limit=limit)
             assert limit==256*1024
             calls.append((receipt,at))
             return ('btime '+str(boot)+'\n').encode()
-        monkeypatch.setattr(monitor, '_observer_regular_bytes', kernel)
+        monkeypatch.setattr(monitor.observer_io, 'regular_bytes', kernel)
         monkeypatch.setattr(mod.os, 'sysconf', lambda key: hz)
     seal()
     report['observer_generation']['actor_birth_proof'] = declared
@@ -4590,7 +4590,8 @@ def test_current_health_birth_requires_independent_kernel_attestation(tmp_path, 
 
 
 @pytest.mark.parametrize('tamper', [None, 'source_issue', 'stale_input', 'wrong_actor'])
-def test_active_observer_consumer_warns_only_for_current_intact_bounded_report(tmp_path, monkeypatch, tamper):
+@pytest.mark.parametrize('trace_reader', ['raw', 'native_index'])
+def test_active_observer_consumer_warns_only_for_current_intact_bounded_report(tmp_path, monkeypatch, tamper, trace_reader):
     import copy
     from src.tests.test_submission_bottleneck_monitor import _bounded_outcome_health_fixture, _health_birth_fixture
     from src.engine.monitoring import submission_bottleneck_monitor as monitor
@@ -4598,6 +4599,20 @@ def test_active_observer_consumer_warns_only_for_current_intact_bounded_report(t
         report, *_ = _bounded_outcome_health_fixture(partial=False, outcome='unknown_pass')
         report.update(status='observing', blocker=None, scopes={'KRX|krx_regular|bundle': {}})
         report['input_provenance']['row_count'] = 1
+        if trace_reader == 'native_index':
+            from src.engine.automation import main_trailing_source_store as store
+            source = report['machine_semantics']['current_health_cohort']['view'][
+                'reversal_provider_lineage']['source_windows']['traces']
+            identity = source['source_identity']
+            generation = dict(schema=store.SCHEMA+':generation', namespace='ai_decision_trace',
+                path=f"ai_decision_trace_{report['date']}.jsonl", size=source['source_size'],
+                source_stat=[identity['device'], identity['inode'], source['source_size'], 1, 1],
+                catchup_end=0, raw_records=2, selected_records=2,
+                prefix_chain_sha256='0'*64, append_chain_sha256='a'*64, whole_file_sha256=False)
+            generation['sha256'] = hashlib.sha256(store.encode(generation)).hexdigest()
+            source.update(bytes_read=0, read_count=0, index_bytes_read=256, tail_truncated=False,
+                native_index_generation=generation, recent_count=2,
+                coverage_basis='native_index_projection_or_exact_raw_offset_size_sha256')
         return report
     mod, root, now, path, report, _, selection, seal = _quiet_current_observer_fixture(
         tmp_path, monkeypatch, payload_factory=payload)
@@ -4835,6 +4850,9 @@ def test_optional_research_native_receipts_calendar_scope_and_generation(tmp_pat
     from src.engine.error_detectors import artifact_freshness as detector
     from src.engine.automation import main_market_weakness_research as native
     from src.engine.scalping import continuous_reversal_postclose as reports
+    from src.engine.lifecycle import research_storage
+    monkeypatch.setattr(research_storage, 'weakness_dependency_inventory', lambda *a: dict(
+        current=True, affected_source_dates=[], metadata_bytes=0, receipt_count=0))
     base=native.namespace(tmp_path/'data');base.mkdir(parents=True)
     def put(name,value):
         p=base/name;p.parent.mkdir(parents=True,exist_ok=True)

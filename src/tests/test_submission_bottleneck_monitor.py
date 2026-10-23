@@ -4188,7 +4188,7 @@ def test_observer_read_open_race_fifo_replacement_uses_nonblocking_fd(tmp_path, 
     import os
     from pathlib import Path
     root, path, _, _ = _observer_selection_fixture(tmp_path, monkeypatch)
-    real_open = monitor.os.open
+    real_open = monitor.observer_io.os.open
     def replacement(selected, flags, *args, **kwargs):
         if Path(selected) == path:
             assert flags & os.O_NOFOLLOW
@@ -4197,7 +4197,7 @@ def test_observer_read_open_race_fifo_replacement_uses_nonblocking_fd(tmp_path, 
         return real_open(selected, flags, *args, **kwargs)
     monkeypatch.setattr(monitor.os, "open", replacement)
     with pytest.raises(ValueError, match="regular_file_required"):
-        monitor._observer_regular_bytes(path, limit=1024 * 1024)
+        monitor.observer_io.regular_bytes(path, limit=1024 * 1024)
 
 
 def test_observer_lease_does_not_reclassify_real_publication_failure(tmp_path, monkeypatch):
@@ -4556,7 +4556,7 @@ def test_observer_continuation_keeps_delay_cursor_and_accepted_source_clock():
 
 def test_observer_state_disappearance_during_read_is_not_a_first_run(tmp_path,monkeypatch):
     path=tmp_path/'state.json';path.write_text(json.dumps(dict(schema=monitor.SCHEMA,incidents={})))
-    real_read=monitor.os.read
+    real_read=monitor.observer_io.os.read
     def removed(fd,size):
         raw=real_read(fd,size)
         path.unlink(missing_ok=True)

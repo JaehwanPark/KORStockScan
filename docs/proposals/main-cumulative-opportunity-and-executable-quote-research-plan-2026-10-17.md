@@ -12,6 +12,14 @@
 
 다음 검증은 같은 정의를 유지한 신규 종료 원천과 현행 membership의 누적·날짜 분리 비교다. 짧은 연속 관측·연구 특징 미준비와 실제 선택 branch의 준비성, root/hold/조건 실패, 기계 이후 freshness/AI/종료를 구분한다. 신규 등록 자체를 수집 결함으로 단정하지 않는다. 일정과 남은 수용은 [당일 checklist의 MachinePatternOpportunityResearch1023](../checklists/2026-10-23-stage2-todo-checklist.md#기계판정-자연-수용), 계산·반례·현재 PID 현황은 [연구 검토](../audits/main-machine-pattern-dual-track-research-review-2026-10-21.md#정규장-점검과-source22-반등-후속-연구--2026-10-23)가 소유한다. 운영 등록·정책 발행·배포/재기동·주문 권한으로 전환하지 않는다.
 
+### 정규장135개 실제 경로 추적 후 방향
+
+135개는 현재 정책의 source22 반사실 미포착이며 실제 과거 기계판정 부재135건이 아니다. 실제 e815 정책·lease/native identity·PID/capture/lifecycle까지 연결한 결과는 운영 시간 전4·초기 probe 해제 뒤 목표21·알려진 root/패턴 조건 실패100·root 없음4·실제 기계판정 존재3·claim 전 무효화/목표 뒤 소비2·기존 initial fill 상태 결함1이다. native UNKNOWN80·root missing9는 중복 보조 진단이며 이 수를 수집 결함으로 전용하지 않는다.257개 State→보존 source 대조와 actual receipt parity는 불일치0이며 상류 broker/시장 전체 완전성은 미증명이다. [원인별 전체135개·수리/회귀·원문](../audits/main-machine-pattern-dual-track-research-review-2026-10-21.md#정규장-미포착135개-실제-경로-추적--2026-10-23).
+
+새 동결 A39~43은15초 회복/돌파/VWAP 회복·3초 유지·10틱 trade/bid 전진을 검증한다. 알려진 실제 lease 경계에서 관측 이력을 끊으며 UNKNOWN을 채우지 않는다. source21/22 전체 적격 정규장에 같은 비용·호가·목표/stop/30분을 적용했다.135개 중14개(첫 lease/고정 안13개), 기존 A17~38보다 새3개를 포착했지만 source22 현행80.38%→합집합51.64%·STOP1→30/TIMEOUT30→367로 악화돼 전역 채택하지 않는다. 새3개의 같은 lease ask→bid 목표도 확인했으나 독립 주문·체결·실현 수익으로 바꾸지 않는다. 사후 scope/임계치 재탐색은 하지 않았다.
+
+기존 receipt/spread 결함은 이미 수리된 원 owner를 재검증했고 새 production 수정은 없었다. 연구의 State reset/UNKNOWN quote-clock 결함만 보완·회귀했다. 다음 종료 source23은 기존 MachinePatternOpportunityResearch1023에서 A17~43의 원 정의·날짜/누적·scope별 W/STOP/TIMEOUT/U·추가 창·실행 여유를 비교한다. 이번135개 추적 완료와 그 미래 수용 OPEN을 구분하며 운영 정책·안전기준·배포/주문 권한은 그대로다.
+
 ### 제출직전 가드 연구 방향·단회 실행 — 2026-10-23
 
 기계 패턴의 미포착과 실제 AI PASS 뒤 차단은 별도 분모다. 같은 사용자 지시의 제출직전 연구는 [기존 가드 감사 §10](../audits/main-post-auxiliary-guards-cumulative-defect-review-2026-10-17.md)이 소유한다. 10:39 고정 source23 정규장에는 유효 PASS0이며, source22 정규장 유효 PASS7→자금6→broker 제출 관측1이다. 남은6건의 exact capture/transport epoch/sequence/관측 ask를 연결한 결과 W1/TIMEOUT5다. 과거 snapshot의 최다 가드 횟수를 현재 가드 실적이나 일괄 해제 근거로 다시 쓰지 않는다.
@@ -124,3 +132,6 @@ scope 자체 분모 `W/(W+STOP+TIMEOUT)`을 우선하고 동률은 W 수와 curr
 ## 7. 완료와 후속 인계
 
 두 연구와 호가 정합성의 수치·반례·관측 한계를 [최종 연구 검토](../audits/main-cumulative-opportunity-failure-and-nonfixed-quote-review-2026-10-17.md)에 기록한다. 운영 적용 가능한 최종 정책이나 배포 완료를 뜻하지 않는다. 연구 후보와 비상시감시 source/consume 계약 개선을 분리하여 기존 [정책 반영 계획](main-cumulative-research-policy-adoption-plan-2026-10-14.md)의 다음 구현에 인계한다. 문서·링크·print-only parser를 검증하고 외부 동기화는 실행하지 않는다.
+
+
+P0/P1 준비 중 실제 부모가 a2ca8e7d8로 전환되어 이를 통합했다. 이전 운영 profile을 유지한 exact successor 인계와42개 회귀를 추가했다. 후보766a1c3b3는 superseded이며, 최종 native parity/P5·기존 봉인 trailing 보고서의 코드 재검증·준비 root는 [같은 구현 리뷰](../audits/main-post-auxiliary-guards-cumulative-defect-review-2026-10-17.md#실제-부모-변경-후-통합-재리뷰--2026-10-23) 및 result.json에서 확인한다. 이 세션은 통합본 준비 범위를 유지한다.

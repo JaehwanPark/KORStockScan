@@ -307,3 +307,16 @@ AGENTS.md를 다시 읽고 현행 Plan Rebase §1–8·10/23 checklist·리뷰 �
 추가 리뷰에서 선택926 자체의 capability 회귀4건 실패도 [기존 릴리스에서 재현](../../tmp/pre-submit-fresh-repair-20261023/incumbent-capability-baseline.log)했다. 원 보고서와 현재 fixture는 적법하지만 latest reviewed generation 목록이 뒤처져 있었다. 기존 `policy_generation_code_handoff`의 original/source/consumed exact pairs를 현 fingerprint로 갱신하고, 실제 선택본의 상승·보유 fingerprint→후보만 추가로 허용했다. 현재 fixture와 원 fixture/report·원 source hash는 모두 필수다. 현재 프롬프트·임계값이나 역사 보고서 verdict를 바꾸지 않는다.
 
 최종 회귀: 진입/스케줄러/물리/기동887 PASS, capability/격리 관련1691 PASS(12 deselected), 인계30 PASS(5584 deselected), 독립 inventory9 PASS. 중복 포함 수치를 한 개의 고유 테스트 합계로 제시하지 않는다. 원 stale-clock 결함도 [기존 함수 주입으로 실패 재현](../../tmp/pre-submit-fresh-repair-20261023/original-clock-red.log)했다. compile/diff와 문서 parser는 후보 고정 시 확인한다. 선택926 대비 비테스트 소스+108/-24, 테스트+166/-14이며 신규 Python 모듈·runtime entrypoint·report producer는0이다. 이 구현 자체의 owner 문서 증가는 audit·계획·checklist에 한정되고, 함께 들어가는 그전 canonical 진행 이력은 구현 성장과 구분한다. native 인계의 코드 목록과 terminal clock 전파 때문에 순증했으며 중복 전체-policy load와 전용 scanner 누락 분기는 제거/통합했다.
+
+
+### 실제 부모 변경 후 통합 재리뷰 — 2026-10-23
+
+준비 중 별도 ordered owner가11:55 실제 선택을 `a2ca8e7d8d6b77456b509f6f7133a6ba2911e562`로 전환했고 PID2333464/start36885727이 기동했다. 이 세션의 배포/재기동은0이다. 첫 후보766a1c3b3는 새 observer/P5·digest-cache·연구 저장소 수리를 포함하지 않으므로 **superseded/non-deployable**로 보존한다. 새 통합본은 a2의 실제 소스·코드 계약·회귀를 이어받는다.
+
+첫 후보 P5는 원 intake에서 `entry_consumer_operator_market_generation_mixed:src/engine/sniper_state_handlers.py`로 실패했다. 후보 hash를 기존 현재 profile에 덮어써 Main preparation이 이전 소비 root를 재검증할 수 없었던 준비 코드 결함이다. 기존926와 a2의 완전한 profile은 **retained**하고, 새 제출 수리의 exact4-file 존재가 한 완전한 successor inventory를 선택하도록 기존 인계 owner에 연결했다. 부분 혼합은 거절한다. [원 후보 결함의 재현](../../tmp/pre-submit-fresh-repair-20261023/original-profile-red.log)과 이전 소비본/부분 혼합 회귀42 PASS로 검증했다. 원 P5 실패와 candidate receipt는 보존하며 임계값·경고 해제·stale PASS로 수리하지 않았다.
+
+capability 통합도 a2의 현행 계약으로 정리했다. native `verified` 계열에는 오래된 historical successor 목록을 최신값으로 강제할 필요가 없으며, 원 소스22 보고서가 `unverified`인 상승/보유 계열만 정확한 original/source/실제 소비 세대→후보 쌍과 독립 current fixture를 검증한다. 첫 단계의4건 회귀 실패는 목록/테스트 기대의 불일치이며 현재 원 보고서의 훼손 증거가 아니다. 앞선 blanket latest-map 교체는 새 통합본에서 제거했다. `REVIEWED_ENTRY_ROUTE_SOURCE_SUCCESSORS`와 실제 소비 parent만 보완했고 unknown pair는 계속 unverified다.
+
+a2 통합 회귀2301 PASS(진입/물리·native successor·capability·독립 기동·ordered 흐름), 인계42 PASS다. compile/diff·print-only backlog parser와 단일 current owner를 확인한다. 원 native5초/AI TTL·계좌/가격/수량·세대/revocation/포인터·Main/manual/retired custody는 동일하며 Main 변경을 허용하는 조건은 추가하지 않았다. 기존 code-only 인계는 native parity와 후보 P5로 다시 발급·확인한다.
+
+공용 handler byte 변경에 따른 장후 trailing code-contract 불일치는 예상된 보고서 유효성 차단으로 남긴다. 원 source22/PREOPEN/holding/policy를 보존하고 기존 `main_trailing_source_reuse`의17,996,003-byte 미증명 범위(32MiB 상한) preflight를 통과했다. 필요한 재생성은 해당 봉인 입력/새 report namespace/독립 currentness 영수증에 한정한다. 새로운 원장 복제·AI/주문 호출·EOD/장후 전체 재실행은 없다. 후보 최종 검증·준비 상태와 정확한 commit/root는 같은 result.json에 기록한다.

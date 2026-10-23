@@ -12,13 +12,13 @@ import re
 import time
 import stat
 import zlib
-from contextlib import contextmanager
 from collections import Counter
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from src.engine.monitoring import observer_artifact_io as observer_io
 from src.utils.constants import PROJECT_ROOT
 from src.utils.jsonl_io import existing_or_gzip_path
 from src.utils.market_day import is_krx_trading_day
@@ -41,72 +41,20 @@ def _today_kst_str(now_kst: datetime | None = None) -> str:
 
 
 
-def _observer_file_signature(info):
-    return tuple(getattr(info, "st_" + field) for field in (
-        "dev", "ino", "mode", "nlink", "uid", "gid", "size", "mtime_ns", "ctime_ns"))
 
 
-@contextmanager
-def _observer_regular_fd(path, *, max_bytes=None):
-    """Never block opening special files or follow a replacement symlink."""
-    path = Path(path)
-    before = path.lstat()
-    if not stat.S_ISREG(before.st_mode): raise ValueError("observer_regular_file_required")
-    if max_bytes is not None and before.st_size > max_bytes:
-        raise ValueError("observer_file_size_limit")
-    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
-    try:
-        opened = os.fstat(fd)
-        if not stat.S_ISREG(opened.st_mode): raise ValueError("observer_regular_file_required")
-        if _observer_file_signature(opened) != _observer_file_signature(before):
-            raise ValueError("observer_file_changed_before_read")
-        yield fd
-        if (_observer_file_signature(os.fstat(fd)) != _observer_file_signature(opened)
-                or _observer_file_signature(path.lstat()) != _observer_file_signature(opened)):
-            raise ValueError("observer_file_changed_during_read")
-    finally:
-        os.close(fd)
-
-
-def _observer_regular_bytes(path, *, limit):
-    with _observer_regular_fd(path, max_bytes=limit) as fd:
-        chunks, total = [], 0
-        while True:
-            chunk = os.read(fd, min(128 * 1024, limit + 1 - total))
-            if not chunk: break
-            chunks.append(chunk); total += len(chunk)
-            if total > limit: raise ValueError("observer_file_size_limit")
-        return b"".join(chunks)
-
-
-def _observer_json_object(encoded):
-    def pairs(values):
-        result = {}
-        for key, value in values:
-            if key in result: raise ValueError("observer_json_duplicate_key")
-            result[key] = value
-        return result
-    def number(value):
-        result = float(value)
-        if not math.isfinite(result): raise ValueError("observer_json_nonfinite")
-        return result
-    def invalid_constant(value):
-        raise ValueError("observer_json_nonfinite")
-    value = json.loads(encoded, object_pairs_hook=pairs, parse_float=number, parse_constant=invalid_constant)
-    if not isinstance(value, dict): raise ValueError("observer_json_object_required")
-    return value
 
 
 def _observer_small_object(path, *, limit=1024 * 1024, hash_only=False):
-    encoded = _observer_regular_bytes(path, limit=limit)
-    return ({} if hash_only else _observer_json_object(encoded), hashlib.sha256(encoded).hexdigest())
+    encoded = observer_io.regular_bytes(path, limit=limit)
+    return ({} if hash_only else observer_io.json_object(encoded), hashlib.sha256(encoded).hexdigest())
 
 
 def _submission_observer_snapshot(path):
     """Reuse one strict bounded report read, only while its exact inode is stable."""
-    before = _observer_file_signature(path.lstat())
+    before = observer_io.file_signature(path.lstat())
     payload, sha = _observer_small_object(path, limit=8 * 1024 * 1024)
-    if _observer_file_signature(path.lstat()) != before:
+    if observer_io.file_signature(path.lstat()) != before:
         raise ValueError('observer_report_changed_during_snapshot')
     return payload, sha, before
 
@@ -119,7 +67,7 @@ def _submission_observer_input_identity(path, root):
             ('report', report),
             ('selection', Path(root) / 'data/runtime/runtime_release_selection.json')):
         try:
-            identity = _observer_file_signature(candidate.lstat())
+            identity = observer_io.file_signature(candidate.lstat())
         except OSError as exc:
             identity = (type(exc).__name__, exc.errno)
         result[name] = dict(path=str(candidate), signature=identity)
@@ -240,7 +188,7 @@ def _submission_observer_transition_pending(root, artifact_path, now, *, max_sta
             return None
         snapshot = report_snapshot or _submission_observer_snapshot(Path(artifact_path))
         report, report_sha, report_signature = snapshot
-        if _observer_file_signature(Path(artifact_path).lstat()) != report_signature: return None
+        if observer_io.file_signature(Path(artifact_path).lstat()) != report_signature: return None
         report_mtime = report_signature[7] / 1_000_000_000
         age = now.timestamp() - report_mtime
         if age < 0: return None
@@ -430,12 +378,12 @@ def _submission_observer_actor_issue(payload):
     cohort_proofs = [value.get('actor_birth_proof') for value in cohorts if isinstance(value, dict)]
     if declared is not None or any(value is not None for value in cohort_proofs):
         try:
-            from src.engine.monitoring.submission_bottleneck_monitor import _attest_health_actor_birth, _observer_regular_bytes
+            from src.engine.monitoring.submission_bottleneck_monitor import _attest_health_actor_birth
             at = datetime.fromisoformat(str(payload.get('as_of')))
             if closed:
                 # The consumed start ticks remain sealed after exit. The boot
                 # epoch and tick rate still require an independent kernel read.
-                boot = _observer_regular_bytes(Path('/proc/stat'), limit=256*1024).decode()
+                boot = observer_io.regular_bytes(Path('/proc/stat'), limit=256*1024).decode()
                 epoch = int(next((line.split()[1] for line in boot.splitlines() if line.startswith('btime ')), None))
                 native = dict(declared, boot_epoch=epoch, clock_ticks_per_second=os.sysconf('SC_CLK_TCK'))
             else:
@@ -1318,7 +1266,7 @@ def _initial_quantity_semantics(root: Path, source_date: str, *, now_epoch=None)
         if not path.is_absolute() or actual.is_symlink():
             raise ValueError('quantity_semantic_path_invalid')
         metadata = actual.stat()
-        before = _observer_file_signature(metadata)
+        before = observer_io.file_signature(metadata)
         if metadata.st_size > limit:
             raise ValueError('semantic_artifact_untrusted_path_or_size')
         key = (str(path), str(actual), before)
@@ -1339,7 +1287,7 @@ def _initial_quantity_semantics(root: Path, source_date: str, *, now_epoch=None)
         if read_bytes > 32 * 1024 * 1024:
             raise ValueError('semantic_read_budget_oversize')
         if (existing_or_gzip_path(path) != actual
-                or _observer_file_signature(actual.stat()) != before):
+                or observer_io.file_signature(actual.stat()) != before):
             raise ValueError('semantic_generation_changed_during_read')
         if expected_sha is not None and sha != expected_sha:
             raise ValueError('quantity_semantic_bound_generation_changed')
@@ -1354,7 +1302,7 @@ def _initial_quantity_semantics(root: Path, source_date: str, *, now_epoch=None)
     try:
         for logical, actual, sha, before in references:
             st = actual.stat()
-            if existing_or_gzip_path(logical) != actual or before != _observer_file_signature(st):
+            if existing_or_gzip_path(logical) != actual or before != observer_io.file_signature(st):
                 raise ValueError("semantic_generation_changed_during_read")
         complete = not any("oversize" in x for x in result.get("findings", []))
         valid_contract = complete and result.get('status') != 'source_invalid'
@@ -1415,7 +1363,7 @@ def _read_semantic_object(path: Path, *, limit: int = 64 * 1024 * 1024,
         raise ValueError("semantic_artifact_untrusted_path_or_size")
     before = actual.stat()
     try:
-        with _observer_regular_fd(actual, max_bytes=limit) as fd:
+        with observer_io.regular_fd(actual, max_bytes=limit) as fd:
             with os.fdopen(os.dup(fd), 'rb') as physical:
                 handle = gzip.GzipFile(fileobj=physical, mode='rb') if actual.suffix == '.gz' else physical
                 try:
@@ -1939,8 +1887,8 @@ def _compact_diagnostic_price_path_semantics(root: Path, source_date: str) -> di
         if (labels.get("target_date") != source_date
                 or not owner.validate_compact_diagnostic_price_path(projection, labels, source_file_sha256=source_sha)):
             raise ValueError("compact_diagnostic_projection_contract_invalid")
-        if (_observer_file_signature(source_before) != _observer_file_signature(actual.stat())
-                or _observer_file_signature(projection_before) != _observer_file_signature(path.stat())
+        if (observer_io.file_signature(source_before) != observer_io.file_signature(actual.stat())
+                or observer_io.file_signature(projection_before) != observer_io.file_signature(path.stat())
                 or existing_or_gzip_path(logical) != actual):
             raise ValueError("compact_diagnostic_projection_generation_changed")
         return dict(status="observed", findings=[], status_counts=projection["status_counts"],
@@ -2453,8 +2401,6 @@ def _entry_cancel_wait_result_semantics(root, source_date, now=None, *, data_roo
 
 
 
-
-
 def _semantic_due_target(now):
     from src.engine.automation import next_preopen_readiness as readiness
     current = now.replace(tzinfo=ZoneInfo('Asia/Seoul')) if now.tzinfo is None else now.astimezone(ZoneInfo('Asia/Seoul'))
@@ -2681,10 +2627,19 @@ def _optional_weakness_semantics(root, now):
             scope_current = (native.research_source_scope(root/'data', through_date=scope['through_date']) == scope
                 and native.source_cursor_states(base, scope['source_dates']) == cumulative.get('source_cursor_states'))
         result['source_scope_current'] = scope_current
-        result['native_validated'] = bool(result['installed_calendar_valid'] and scope_current)
-        result['validation_mode'] = 'bounded_native_receipts_calendar_and_cursor_scope'
+        from src.engine.lifecycle.research_storage import weakness_dependency_inventory
+        dependencies = weakness_dependency_inventory(root/'data', cumulative or None)
+        result['dependency_receipts_current'] = dependencies['current']
+        result['dependency_affected_source_dates'] = dependencies['affected_source_dates']
+        result['dependency_inventory_bytes'] = dependencies['metadata_bytes']
+        result['dependency_receipt_count'] = dependencies['receipt_count']
+        if not dependencies['current']:
+            result['findings'].append('optional_research_dependencies_not_current')
+        result['native_validated'] = bool(result['installed_calendar_valid'] and scope_current
+            and dependencies['current'])
+        result['validation_mode'] = 'bounded_native_receipts_calendar_cursor_scope_and_dependencies'
         result['raw_source_revalidation'] = 'owned_by_native_research'
-        result['observation_complete'] = bool(attempt and cumulative and scope_current and result['installed_calendar_valid'])
+        result['observation_complete'] = bool(attempt and cumulative and result['native_validated'])
         result['status'] = ('source_invalid' if result['findings'] else
             'source_gap' if result['source_quality']=='incomplete' else
             'verified' if result['observation_complete'] else 'unobservable')
@@ -3896,7 +3851,7 @@ class ArtifactFreshnessDetector(BaseDetector):
                         source_day or today, _today_kst_str(now_dt))
                     if historical is not None:
                         try:
-                            unchanged = _observer_file_signature(artifact_path.lstat()) == observer_snapshot[2]
+                            unchanged = observer_io.file_signature(artifact_path.lstat()) == observer_snapshot[2]
                         except OSError:
                             unchanged = False
                         if unchanged:
@@ -4481,7 +4436,7 @@ class ArtifactFreshnessDetector(BaseDetector):
             if aid == 'submission_bottleneck_monitor':
                 snapshot = observer_snapshot or _submission_observer_snapshot(artifact_path)
                 payload, report_sha, signature = snapshot
-                if _observer_file_signature(artifact_path.lstat()) != signature:
+                if observer_io.file_signature(artifact_path.lstat()) != signature:
                     raise ValueError('observer_report_changed_after_snapshot')
             else:
                 payload = json.loads(artifact_path.read_text(encoding="utf-8"))
@@ -4502,7 +4457,7 @@ class ArtifactFreshnessDetector(BaseDetector):
             if generation_issue is None and payload.get('observer_generation') is None:
                 dimensions['generation'] = dict(status='legacy_generation_unverified', current_generation_verified=False)
             try:
-                report_unchanged = _observer_file_signature(artifact_path.lstat()) == signature
+                report_unchanged = observer_io.file_signature(artifact_path.lstat()) == signature
             except OSError:
                 report_unchanged = False
             if not report_unchanged:
@@ -4546,7 +4501,7 @@ class ArtifactFreshnessDetector(BaseDetector):
                                     limit=1024 * 1024, hash_only=True)
                                 if selection_sha != payload['observer_generation']['final_selection_sha256']:
                                     actor_issue = 'observer_generation_changed_after_assessment'
-                                elif _observer_file_signature(artifact_path.lstat()) != signature:
+                                elif observer_io.file_signature(artifact_path.lstat()) != signature:
                                     actor_issue = 'observer_report_changed_after_snapshot'
                             except (OSError, ValueError, TypeError, KeyError):
                                 actor_issue = 'observer_assessment_snapshot_unavailable'

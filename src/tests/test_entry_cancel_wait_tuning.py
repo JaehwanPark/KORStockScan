@@ -893,6 +893,42 @@ def test_native_census_projection_keeps_semantics_without_redecoding_full_source
     assert mod.validated_reconciliation_view(report,data_root=data)['status']=='source_invalid'
 
 
+@pytest.mark.parametrize('change', ['gzip','both','changed','corrupt','symlink','fifo','missing','budget'])
+def test_inline_census_compression_keeps_logical_source_and_original_report(tmp_path,monkeypatch,change):
+    import gzip,os
+    from src.engine.scalping import entry_split_order_plan as entry
+    from src.engine.pipeline_event_summary import CANCEL_WAIT_SUMMARY_STAGES,producer_summary_paths
+    report,_,_,_=_reconciliation_fixture(tmp_path,monkeypatch)
+    data=tmp_path/'data';paths=[]
+    for day,row in report['economic_state']['submission_reconciliation']['by_date'].items():
+        if not row['coverage_verified']:continue
+        census=entry._execution_projection_census(day,[],stages=CANCEL_WAIT_SUMMARY_STAGES|{'order_leg_sent'},data_root=data)
+        row['source_binding']['native_census_projection']=census['native_census_projection']
+        paths.append(producer_summary_paths(data/'pipeline_event_summaries',day)[0])
+    _reseal_reconciliation(report);original=json.dumps(report,sort_keys=True)
+    path=paths[0];raw=path.read_bytes();archive=path.with_name(path.name+'.gz')
+    archive.write_bytes(gzip.compress(raw if change!='changed' else raw+b'{}\n'))
+    if change!='both':path.unlink()
+    if change=='corrupt':archive.write_bytes(archive.read_bytes()[:-5])
+    elif change=='symlink':
+        target=archive.with_suffix('.saved');archive.rename(target);archive.symlink_to(target)
+    elif change=='fifo':archive.unlink();os.mkfifo(archive)
+    elif change=='missing':archive.unlink()
+    elif change=='budget':monkeypatch.setattr(mod,'MAX_RECONCILIATION_METADATA_BYTES',1)
+    monkeypatch.setattr(entry,'_execution_projection_census',lambda *a,**k:pytest.fail('replayed original census'))
+    view=mod.validated_reconciliation_view(report,data_root=data)
+    assert json.dumps(report,sort_keys=True)==original
+    if change in {'gzip','both'}:
+        assert view['status']=='incumbent_carry' and view['findings']==[]
+        from src.utils import jsonl_io
+        with monkeypatch.context() as cache:
+            cache.setattr(jsonl_io,'iter_jsonl_objects_strict',lambda *a,**k:pytest.fail('unchanged archive reread'))
+            assert mod.validated_reconciliation_view(report,data_root=data)==view
+        archive.write_bytes(gzip.compress(raw+b'{}\n'))
+        assert mod.validated_reconciliation_view(report,data_root=data)['status']=='source_invalid'
+    else:assert view['status'] in {'source_invalid','unobservable'}
+
+
 @pytest.mark.parametrize('mutation,reason', [
     ('false_zero','cancel_wait_false_historical_zero'),
     ('erase_unknown','cancel_wait_false_historical_zero'),

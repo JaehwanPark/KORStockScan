@@ -1782,22 +1782,41 @@ def _projected_census_matches(data_root, day, events, manifest, projection, diag
             or not re.fullmatch('[0-9a-f]{64}',str(source.get('source_content_sha256') or ''))
             or not 1<=len(physical)<=2):
         raise ValueError('cancel_wait_census_projection_invalid')
-    expected_names=set()
+    expected_names=set(); physical_changed=False
     for item in physical:
         compression=item.get('compression')
         if compression not in {'plain','gzip'} or compression in expected_names:
             raise ValueError('cancel_wait_census_projection_alias_invalid')
         expected_names.add(compression)
         path=logical if compression=='plain' else Path(str(logical)+'.gz')
-        before=path.lstat()
-        identity=[before.st_dev,before.st_ino,before.st_size,before.st_mtime_ns,before.st_ctime_ns]
-        if (not stat.S_ISREG(before.st_mode) or item.get('file_identity')!=identity
-                or item.get('stored_bytes')!=before.st_size
-                or not re.fullmatch('[0-9a-f]{64}',str(item.get('stored_sha256') or ''))):
+        if not re.fullmatch('[0-9a-f]{64}',str(item.get('stored_sha256') or '')):
             raise ValueError('cancel_wait_census_projection_source_changed')
+        try:before=path.lstat()
+        except FileNotFoundError:
+            physical_changed=True;continue
+        identity=[before.st_dev,before.st_ino,before.st_size,before.st_mtime_ns,before.st_ctime_ns]
+        if not stat.S_ISREG(before.st_mode):
+            raise ValueError('cancel_wait_census_projection_source_changed')
+        if item.get('file_identity')!=identity or item.get('stored_bytes')!=before.st_size:
+            physical_changed=True
     current={name for name,p in (('plain',logical),('gzip',Path(str(logical)+'.gz')))
         if p.exists() or p.is_symlink()}
-    if current!=expected_names:raise ValueError('cancel_wait_census_projection_alias_changed')
+    if physical_changed or current!=expected_names:
+        # Only a plaintext-to-archive transition may rebind an inline census.
+        # Authenticate the complete logical bytes through the existing strict
+        # source owner; do not regenerate events or rewrite historical seals.
+        if expected_names!={'plain'} or 'gzip' not in current:
+            raise ValueError('cancel_wait_census_projection_source_changed')
+        from src.utils.jsonl_io import iter_jsonl_objects_strict
+        observed_source={}
+        for _ in iter_jsonl_objects_strict(logical, provenance=observed_source,
+                max_decoded_bytes=MAX_RECONCILIATION_METADATA_BYTES,
+                max_line_bytes=MAX_RECONCILIATION_METADATA_BYTES):pass
+        fields=('source_content_sha256','source_content_bytes','source_line_count',
+                'source_nonempty_line_count','source_json_object_row_count')
+        if (observed_source.get('source_snapshot_stable') is not True
+                or any(observed_source.get(k)!=source.get(k) for k in fields)):
+            raise ValueError('cancel_wait_census_projection_source_changed')
     expected=Counter(projection.get('expected_stage_counts') or {})
     hashes=projection.get('expected_stage_hash_sums') or {}
     if (any(stage not in stages or type(n) is not int or n<0 for stage,n in expected.items())
@@ -2155,7 +2174,11 @@ def validated_reconciliation_view(payload, policy=None, *, data_root=None, read_
                     raise ValueError('execution_producer_census_size_invalid')
                 logical, _ = producer_summary_paths(Path(data_root)/'pipeline_event_summaries', d)
                 aliases = sum(p.exists() or p.is_symlink() for p in (logical, Path(str(logical)+'.gz')))
-                if binding.get('native_census_projection') is None:
+                projection=binding.get('native_census_projection')
+                archived_plain = (projection is not None
+                    and {r.get('compression') for r in (projection.get('source') or {}).get('physical_representations',[])}=={'plain'}
+                    and Path(str(logical)+'.gz').exists())
+                if projection is None or archived_plain:
                     decoded_budget += declared * max(1, aliases)
                 if decoded_budget > MAX_RECONCILIATION_METADATA_BYTES:
                     return {**result,'status':'source_invalid' if findings else 'unobservable',

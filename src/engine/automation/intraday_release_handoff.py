@@ -4869,27 +4869,13 @@ REVIEWED_ENTRY_COST_DEPLOYED_SENTINEL_VARIANTS = REVIEWED_ENTRY_COST_DEPENDENCY_
 REVIEWED_DEPLOYED_SENTINEL_SCOPE_HASHES = REVIEWED_SENTINEL_SCOPE_HASHES
 REVIEWED_SENTINEL_SCOPE_HASHES = {**REVIEWED_SENTINEL_SCOPE_HASHES,
     'src/engine/monitoring/submission_bottleneck_monitor.py': '808deb51627b4ed17561f168ad2cad808f0181aaac7a754377493912e71d9e57',
-    'src/engine/sniper_state_handlers.py': '56a0613b596418c0ade581aabedef12d38371ff7d4d2af9fffea2cc00665dd20',
-    'src/engine/scalping/reversal_evaluation_context.py': '7a20e1c32f0a4b54ebb25ae8970939184cbe9cef2e590adf68fb2791561e2458',
-    'src/engine/monitoring/runtime_performance.py': 'ad937198678bef9cc5ef62e6aa41d9b980a0427d456608a94a1317b4fcd3cb39',
-    'src/trading/entry/physical_send_guard.py': '1d5d6f7feb0fba4062d770db52dc74d0a8fca8dbdd10b48e0485c9ec80865c27',
-    'src/engine/monitoring/policy_generation_code_handoff.py': '5ce451bad1b80f17c74b037bbc17abc565b5f0d3643435ddfe8b90af12782998',
-    'src/engine/infrastructure/startup_validation_code_context.py': 'acd047e3ea9e20a971f1511b7e72d8e0767221aad2575f172c54ecde3423bb5b'}
+    'src/engine/infrastructure/startup_validation_code_context.py': 'eebb9048c5500a5c184c7dcca4810db89ec266722611fa07e4f4c90f66aad1cf'}
 REVIEWED_ENTRY_COST_HASHES = {**REVIEWED_ENTRY_COST_HASHES, **REVIEWED_SENTINEL_SCOPE_HASHES}
-# These two dependencies were absent from the earlier full-profile inventory.
-# Bind only their exact reviewed, actually consumed predecessor bytes.
-REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
-    name: REVIEWED_ENTRY_COST_PAIRS.get(name, ()) + ((old, REVIEWED_SENTINEL_SCOPE_HASHES[name]),)
-    for name, old in {
-        'src/engine/scalping/reversal_evaluation_context.py': 'fb5d1ffb46da13d69390c84c3d2e83de03842bebb3978d3a22bbf6fb6bb4d654',
-        'src/trading/entry/physical_send_guard.py': '73b332cc40d021cd1b62b00cf140b8ee2abdca19007fd161d4b17ab57056e946',
-        'src/engine/monitoring/policy_generation_code_handoff.py': 'b65c616d024460c825d73472311ddf995282069cd58dfdec9241447d4285d841',
-    }.items()}}
 REVIEWED_ENTRY_COST_PAIRS = {name: pairs + tuple((old, REVIEWED_SENTINEL_SCOPE_HASHES[name])
     for old in dict.fromkeys([*(old for old, target in pairs
-        if target == REVIEWED_ENTRY_COST_DEPLOYED_SENTINEL_HASHES.get(name)),
-        REVIEWED_ENTRY_COST_DEPLOYED_SENTINEL_HASHES[name]]))
-    if name in ('src/engine/monitoring/submission_bottleneck_monitor.py', 'src/engine/infrastructure/startup_validation_code_context.py', 'src/engine/sniper_state_handlers.py', 'src/engine/monitoring/runtime_performance.py') else pairs
+        if target == REVIEWED_DEPLOYED_SENTINEL_SCOPE_HASHES.get(name)),
+        REVIEWED_DEPLOYED_SENTINEL_SCOPE_HASHES[name]]))
+    if name in ('src/engine/monitoring/submission_bottleneck_monitor.py', 'src/engine/infrastructure/startup_validation_code_context.py') else pairs
     for name, pairs in REVIEWED_ENTRY_COST_PAIRS.items()}
 REVIEWED_ENTRY_COST_DEPENDENCY_VARIANTS = {
     (key[0], REVIEWED_SENTINEL_SCOPE_HASHES.get(key[0], key[1])): {
@@ -4897,6 +4883,88 @@ REVIEWED_ENTRY_COST_DEPENDENCY_VARIANTS = {
         'contract_extensions': {origin: {name: REVIEWED_SENTINEL_SCOPE_HASHES.get(os.path.normpath(name), digest)
             for name, digest in paths.items()} for origin, paths in value['contract_extensions'].items()},
     } for key, value in REVIEWED_ENTRY_COST_DEPLOYED_SENTINEL_VARIANTS.items()
+}
+
+# Observer IO/P5/b67, logical-archive and research retention form one reviewed profile.
+# Preserve actually consumed historical profiles; the shared IO owner has no wrapper.
+REVIEWED_OBSERVER_IO_HASHES = {'src/engine/automation/entry_cancel_wait_tuning.py': '49c1f36ca4082714705e0e558fa6a931cba7f394fb7f1dca83090884db86dfb4',
+ 'src/engine/automation/ordered_intraday_deploy.py': '7f52b1d056bf13f16791c4d5d41e8ca4ba4a9715a77176403c1dff97e95d0026',
+ 'src/engine/error_detectors/artifact_freshness.py': '6f853e28cf95b2f6513ad6650350c6574ddeeb5b99f5d2d2d5756d34ebf14ed9',
+ 'src/engine/infrastructure/startup_validation_code_context.py': 'ee715b40b27ddd814128f7c49945d2dfbba08e65cf6c7c23c4a8cbd73594b171',
+ 'src/engine/lifecycle/research_storage.py': '448514a835975dd28266a985492ff3c352a566b71e18426214498b1f9fd1bf13',
+ 'src/engine/monitoring/observer_artifact_io.py': '4653b9d9785e129b403b28d4c96c99bba3251dec986779bc8c4d182e5c862cc7',
+ 'src/engine/monitoring/policy_generation_code_handoff.py': '4db24d4d542b8cc6142c1b85e0839bfce6a7116aaae5f49e2b0d90e4174e3d62',
+ 'src/engine/monitoring/submission_bottleneck_monitor.py': 'f8d68d78e8423db51d4a2f8786c786ea1a53def58f43cb3019d6d79a58dc5902',
+ 'src/engine/scalping/mechanistic_entry_runtime_policy.py': '2b8653cc8f30209992c2ac34690846e3d5d7607114b95560aafbf1445d509c08'}
+REVIEWED_OBSERVER_IO_ENTRY_COST_HASHES = {**REVIEWED_ENTRY_COST_HASHES, **REVIEWED_OBSERVER_IO_HASHES}
+REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
+    name: REVIEWED_ENTRY_COST_PAIRS.get(name, ()) + tuple((old, REVIEWED_OBSERVER_IO_HASHES[name])
+        for old in origins)
+    for name, origins in {'src/engine/automation/entry_cancel_wait_tuning.py': ['38ba95d3965f11f4d31bee05c5a0e4ba28dd2fc7e05505104b491dbf390cd0fa',
+                                                       'bdfaaeaac7768f703d181314be45afaf2ecfc983001a6364a60a41ae54882c4e',
+                                                       'e3d227354e85ec9d2dc19cb96e533d1b9f4cb54c5cd2338f7c671eae84a91582'],
+ 'src/engine/automation/ordered_intraday_deploy.py': ['404b870046364da476c4df9abb0007312123ea4b4331459f67da6d3c53e183e6',
+                                                      '4358273a4a70f58de9dd0bf960e2b146cfd1b5c389a3643cae5b8dda7ffc5756',
+                                                      '64e4e2a29ed8fcc47a2e2eaca4fde8a1f492964db98973f1aba37c4ed199ca21',
+                                                      '92d30c0ec38266d9fe1cc7abd144c71b7d0227b88fb42d4beb384096bbeb31ab',
+                                                      'a6cdc6bebdf22f47a6736d0b7201fd988ad69ffacfe81ee5b40d77bbae5218ed',
+                                                      'afa9ca5839c59670f4c38f6898089cd8c743157b87ead058e393d5f78d4e07ab',
+                                                      'd56d407f1515ee8a8bfd307f469b175b794f490120aec2b2fe2f98165d5488af',
+                                                      'e01bfae9c239223c409da878d2e45a66bccbe6c5b37684f9951badfb4d12c5ae',
+                                                      'fcc7c6935434dc1b2e03598bec6fb721997b23cd4c39b6776fa1dfc2afa46423'],
+ 'src/engine/error_detectors/artifact_freshness.py': ['09c1d34cc554ef68060125590e84545e75a335add5ed2b87043b4a6a6b2eafb9',
+                                                      '3a58f8ac3220ea8d64247cf17a756d2658c7815cd3d57744303f80bc40d34dcc',
+                                                      'f64db72754c88c8bab262e275fe3ab68440b32656a5b74ab9c4f0f0044b94ebf'],
+ 'src/engine/infrastructure/startup_validation_code_context.py': ['355a1eb29a8e7584872f7446cd7b78af4375a72c8d53fe482f2023afab311e59',
+                                                                  'eebb9048c5500a5c184c7dcca4810db89ec266722611fa07e4f4c90f66aad1cf'],
+ 'src/engine/lifecycle/research_storage.py': ['18c0644ea2a6805b9027b2bce4bc7a1b89dbc5e10925d104b38a05a9423b4c35'],
+ 'src/engine/monitoring/policy_generation_code_handoff.py': ['47db04eba70a27e3fbb5c4078e828be38920859efbf4224e3049582776ff6d5f',
+                                                             '4c23315cdd2585bab300b493aae73e8204ab5aa38279b70196b6c34a8779421b',
+                                                             '64c1d33b10b5e3999f12825dbcb850ad7520c7c117d8542e6da6e127234192dc',
+                                                             '858f6f949015f1c27d0185a0183df7a331f7fda971830408a5cdf53d16b39b5a',
+                                                             'b65c616d024460c825d73472311ddf995282069cd58dfdec9241447d4285d841'],
+ 'src/engine/monitoring/submission_bottleneck_monitor.py': ['00e5a75bdbf7fa812145212820094baa7e04638d5a9c18d4e8011b3b7165abae',
+                                                            '0cacfa688b336befe533f2010b3bfaea40d5d2fe778e4ca48d7347071114527e',
+                                                            '6e1588b8e5709563f15cdea0705babe7357fed62a27061365ec5ac2425fc2085',
+                                                            '808deb51627b4ed17561f168ad2cad808f0181aaac7a754377493912e71d9e57',
+                                                            '9c51124b5c07b8ae9039e2e70d1f36da0e3b542136dd24d2ff66ccab642b4ccb',
+                                                            'a5a8b7be30b63d0e7990a5761a60a6e0225a563272b15a24c8ccf9fc013f21d8'],
+ 'src/engine/scalping/mechanistic_entry_runtime_policy.py': ['215ac04e8c50c5d18777617b262c7a73b77c2d4d134c26c6f4c88a31dc162867']}.items()}}
+REVIEWED_OBSERVER_IO_DEPENDENCY_VARIANTS = {
+    (key[0], REVIEWED_OBSERVER_IO_HASHES.get(key[0], key[1])): {
+        **value, 'dependencies': {**value['dependencies'], **REVIEWED_OBSERVER_IO_HASHES},
+        'contract_extensions': {origin: {name: REVIEWED_OBSERVER_IO_HASHES.get(os.path.normpath(name), digest)
+            for name, digest in paths.items()} for origin, paths in value['contract_extensions'].items()},
+    } for key, value in REVIEWED_ENTRY_COST_DEPENDENCY_VARIANTS.items()
+}
+
+# Keep the actually consumed observer profile intact for Main preparation.
+# Any submit-repair member selects one complete reviewed successor, never a mix.
+REVIEWED_PRE_SUBMIT_HASHES = {'src/engine/infrastructure/startup_validation_code_context.py': '52a87252121e687de0674cfea5ef565cb183032b0962e8fbee90a7d656b59fe5',
+ 'src/engine/monitoring/policy_generation_code_handoff.py': '41ebbc34a2fd015a0cd76ae525c1e6e859edbaa6dc4e4e88e4cc76a44a7a9bef',
+ 'src/engine/monitoring/runtime_performance.py': 'ad937198678bef9cc5ef62e6aa41d9b980a0427d456608a94a1317b4fcd3cb39',
+ 'src/engine/scalping/reversal_evaluation_context.py': '7a20e1c32f0a4b54ebb25ae8970939184cbe9cef2e590adf68fb2791561e2458',
+ 'src/engine/sniper_state_handlers.py': '56a0613b596418c0ade581aabedef12d38371ff7d4d2af9fffea2cc00665dd20',
+ 'src/trading/entry/physical_send_guard.py': '1d5d6f7feb0fba4062d770db52dc74d0a8fca8dbdd10b48e0485c9ec80865c27'}
+REVIEWED_PRE_SUBMIT_ENTRY_COST_HASHES = {**REVIEWED_OBSERVER_IO_ENTRY_COST_HASHES, **REVIEWED_PRE_SUBMIT_HASHES}
+REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
+    name: REVIEWED_ENTRY_COST_PAIRS.get(name, ()) + tuple((old, current)
+        for old in dict.fromkeys([*(origin for origin, target in REVIEWED_ENTRY_COST_PAIRS.get(name, ())
+            if target == REVIEWED_OBSERVER_IO_ENTRY_COST_HASHES.get(name)),
+            REVIEWED_OBSERVER_IO_ENTRY_COST_HASHES.get(name, previous[name])]))
+    for name, current in REVIEWED_PRE_SUBMIT_HASHES.items()
+    for previous in [{'src/engine/infrastructure/startup_validation_code_context.py': 'ee715b40b27ddd814128f7c49945d2dfbba08e65cf6c7c23c4a8cbd73594b171',
+ 'src/engine/monitoring/policy_generation_code_handoff.py': '4db24d4d542b8cc6142c1b85e0839bfce6a7116aaae5f49e2b0d90e4174e3d62',
+ 'src/engine/monitoring/runtime_performance.py': '3414c2eee58fc8c5547b11ad6786f1775b20d4cfb6e9b0ce78ed16e17a34e5d4',
+ 'src/engine/scalping/reversal_evaluation_context.py': 'fb5d1ffb46da13d69390c84c3d2e83de03842bebb3978d3a22bbf6fb6bb4d654',
+ 'src/engine/sniper_state_handlers.py': 'b3b2965f65f33e5e5bf52fd960757d6bdbe6b5a63e6844bd95f5dc1d5353ea1d',
+ 'src/trading/entry/physical_send_guard.py': '73b332cc40d021cd1b62b00cf140b8ee2abdca19007fd161d4b17ab57056e946'}]}}
+REVIEWED_PRE_SUBMIT_DEPENDENCY_VARIANTS = {
+    (key[0], REVIEWED_PRE_SUBMIT_HASHES.get(key[0], key[1])): {
+        **value, 'dependencies': {**value['dependencies'], **REVIEWED_PRE_SUBMIT_HASHES},
+        'contract_extensions': {origin: {name: REVIEWED_PRE_SUBMIT_HASHES.get(os.path.normpath(name), digest)
+            for name, digest in paths.items()} for origin, paths in value['contract_extensions'].items()},
+    } for key, value in REVIEWED_OBSERVER_IO_DEPENDENCY_VARIANTS.items()
 }
 
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
@@ -5071,11 +5139,21 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
                for name, sha in REVIEWED_SENTINEL_SCOPE_HASHES.items()))
     deployed_sentinel = all((root / name).is_file() and hashlib.sha256(candidate_bytes(name)).hexdigest() == digest
         for name, digest in REVIEWED_DEPLOYED_SENTINEL_SCOPE_HASHES.items())
-    prepared_hashes = (REVIEWED_ENTRY_COST_DEPLOYED_SENTINEL_HASHES if deployed_sentinel else
+    observer_io_present = (root / 'src/engine/monitoring/observer_artifact_io.py').exists()
+    pre_submit_present = any((root / name).is_file()
+        and hashlib.sha256(candidate_bytes(name)).hexdigest() == sha
+        for name, sha in REVIEWED_PRE_SUBMIT_HASHES.items()
+        if name not in {'src/engine/infrastructure/startup_validation_code_context.py',
+                        'src/engine/monitoring/policy_generation_code_handoff.py'})
+    prepared_hashes = (REVIEWED_PRE_SUBMIT_ENTRY_COST_HASHES if pre_submit_present else
+        REVIEWED_OBSERVER_IO_ENTRY_COST_HASHES if observer_io_present else
+        REVIEWED_ENTRY_COST_DEPLOYED_SENTINEL_HASHES if deployed_sentinel else
         REVIEWED_ENTRY_COST_HASHES if sentinel_scope_present else
         REVIEWED_PRE_FINALIZATION_HASHES if consumed_finalization else
         REVIEWED_NATIVE_PREOPEN_HASHES if native_preopen else REVIEWED_ENTRY_COST_PRE_SENTINEL_SCOPE_HASHES)
-    prepared_variants = (REVIEWED_ENTRY_COST_DEPLOYED_SENTINEL_VARIANTS if deployed_sentinel else
+    prepared_variants = (REVIEWED_PRE_SUBMIT_DEPENDENCY_VARIANTS if pre_submit_present else
+        REVIEWED_OBSERVER_IO_DEPENDENCY_VARIANTS if observer_io_present else
+        REVIEWED_ENTRY_COST_DEPLOYED_SENTINEL_VARIANTS if deployed_sentinel else
         REVIEWED_ENTRY_COST_DEPENDENCY_VARIANTS if sentinel_scope_present else
         REVIEWED_PRE_FINALIZATION_VARIANTS if consumed_finalization else
         REVIEWED_NATIVE_PREOPEN_VARIANTS if native_preopen else REVIEWED_ENTRY_COST_PRE_SENTINEL_SCOPE_VARIANTS)

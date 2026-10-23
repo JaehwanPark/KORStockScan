@@ -355,14 +355,10 @@ REVIEWED_SHUTDOWN_CONSUMED_SUCCESSORS = {'auxiliary': ('581c21738b7a098e1900fcec
 
 # Exact native selection diagnostics; the prior report generations stay sealed.
 REVIEWED_NATIVE_SELECTION_SUCCESSORS = {
-    'entry_cancel_wait': ('47eb1ef2e45d3c48e663f6b3df505bc95da07fc6bcd168394441840af4764fff',
-                          '60620f4b8fbe73f3c0506eed8f49c27c031d74a643b68667ca7421c6512d6f57'),
-    'auxiliary': ('4de7ce95386f5c05863e8e3fb56899c71ef16da99bdf75cd0e3aa426a150eeac',
-                  '507700d07f88f668f1b467678615656db7af893e0c3e6dbf8148d5c918ed9120'),
     'rising_missed': ('8c2725f4e329c95b79a74df8167bc5bbab80d6e08fe80fb6d7e4aaaa4d4c6e8d',
-                      'b8583110470210c0d71035a472d95bc8379ea5d53b56e7217897f397e4490a56'),
+                      'b1fb8b69fb938893d36c8b16192bbd0cd5e414f169b8304374d781cc54248ab5'),
     'holding_vote': ('48b92485c831e215a1d7fe1ef8664113d68186e040a768087cbcb18ab0892ac3',
-                     '4d79d641bb1cd952594e4794f04d65c62e638cd0f1824322c6b3ecfd0121e40d'),
+                     '5a0c5cfb039defc00eac4d057638b7b7ac2f394b86f6a030fd08a76b84d814ee'),
 }
 REVIEWED_NATIVE_SELECTION_SOURCE_SUCCESSORS = {
     family: (REVIEWED_SHUTDOWN_SOURCE_SUCCESSORS[family][0], pair[1])
@@ -373,14 +369,22 @@ REVIEWED_NATIVE_SELECTION_CONSUMED_SUCCESSORS = {
     for family, pair in REVIEWED_NATIVE_SELECTION_SUCCESSORS.items()
 }
 
-# Exact actually consumed predecessor for the policy-preserving submit repair.
-# An independent current fixture and original report/fixture remain mandatory.
-REVIEWED_PRE_SUBMIT_CONSUMED_SUCCESSORS = {
-    'rising_missed': ('6d493cf1a74732175bfeb2e27af9c53de44d8a001bc0b1d01296888671da22de',
+# Direct original source22 reports to the reviewed explicit-entry-route and
+# archived-source reader repairs. Only the shared entry handler changed for
+# rising; holding also changed the archived master-source equality reader.
+# Original reports/fixtures and independent current fixtures remain required.
+# Review: docs/audits/postclose-root-cause-recovery-review-2026-10-19.md.
+REVIEWED_ENTRY_ROUTE_SOURCE_SUCCESSORS = {
+    'rising_missed': ('b1fb8b69fb938893d36c8b16192bbd0cd5e414f169b8304374d781cc54248ab5',
                       'b8583110470210c0d71035a472d95bc8379ea5d53b56e7217897f397e4490a56'),
-    'holding_vote': ('2e0f07b39199681be1f55a4645e9dcd72438519e955546236a436f9cdee35e36',
-                     '4d79d641bb1cd952594e4794f04d65c62e638cd0f1824322c6b3ecfd0121e40d'),
+    'holding_vote': ('b37bdd2ec37e69e281fad273e3b9d07dab8aaf559c5a7841b9d4473141beb9ee',
+                     'a3cc6a2a30d98cc9445c40b9a51cd07203d0cc01693fd6474a5be24d343c1205'),
 }
+# Exact actually consumed parent; original report and independent current fixture are mandatory.
+REVIEWED_PRE_SUBMIT_CONSUMED_SUCCESSORS = {'holding_vote': ('f658caee8304f4461764301dc54774aef42c2867ff0bb340dc4f39b92fc28179',
+                  'a3cc6a2a30d98cc9445c40b9a51cd07203d0cc01693fd6474a5be24d343c1205'),
+ 'rising_missed': ('6d493cf1a74732175bfeb2e27af9c53de44d8a001bc0b1d01296888671da22de',
+                   'b8583110470210c0d71035a472d95bc8379ea5d53b56e7217897f397e4490a56')}
 
 def _historical_fixture(contract, data, family, *, late_report=None):
     """Preserve a prior fixture without using it to certify the successor."""
@@ -516,10 +520,19 @@ def current_fixture_observation(observed, data):
                     or actual_pair == REVIEWED_NATIVE_SELECTION_SUCCESSORS.get(family)
                     or actual_pair == REVIEWED_NATIVE_SELECTION_SOURCE_SUCCESSORS.get(family)
                     or actual_pair == REVIEWED_NATIVE_SELECTION_CONSUMED_SUCCESSORS.get(family)
+                    or actual_pair == REVIEWED_ENTRY_ROUTE_SOURCE_SUCCESSORS.get(family)
                     or actual_pair == REVIEWED_PRE_SUBMIT_CONSUMED_SUCCESSORS.get(family))
     if reader_match:
         pair = actual_pair
     if not pair or actual_pair != pair:
+        if (family in validation.PLANS and actual_pair[0] != actual_pair[1]
+                and observed.get('status') == 'unverified'
+                and observed.get('findings') == ['policy_generation_unverified']
+                and observed.get('missing_components') == []
+                and observed.get('observation_complete') is True
+                and observed.get('native_validated') is False):
+            return dict(observed, current_fixture_status='unverified',
+                        current_fixture_reason='successor_code_pair_unreviewed')
         return validation.current_fixture_observation(observed, data)
     if (observed.get('status') != 'unverified' or observed.get('findings') != ['policy_generation_unverified']
             or observed.get('missing_components') != [] or observed.get('observation_complete') is not True
@@ -558,8 +571,7 @@ def current_fixture_observation(observed, data):
                                REVIEWED_SHUTDOWN_CONSUMED_SUCCESSORS,
                                REVIEWED_NATIVE_SELECTION_SUCCESSORS,
                                REVIEWED_NATIVE_SELECTION_SOURCE_SUCCESSORS,
-                               REVIEWED_NATIVE_SELECTION_CONSUMED_SUCCESSORS,
-                               REVIEWED_PRE_SUBMIT_CONSUMED_SUCCESSORS)) else None)
+                               REVIEWED_NATIVE_SELECTION_CONSUMED_SUCCESSORS)) else None)
         historical_fixture = _historical_fixture(contract, data, family, late_report=late_report)
         if (integrated_match or readonly_match or cleanup_match or custody_match or reader_match or frozen_match) and historical_fixture is None:
             raise ValueError('successor_integrated_historical_fixture_required')
