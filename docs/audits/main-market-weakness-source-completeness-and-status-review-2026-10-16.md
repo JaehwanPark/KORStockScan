@@ -160,3 +160,38 @@ baseline `fc51a179bfa63ff35390f5dbd3cbb7191229d0f3`에서 기존 source3파일�
 관련416회귀(공용 trailing reader와 원 보존 사례 포함)+기존 registry/wire/transition85회귀 PASS, compile/diff와 문서 link/owner/print-only parser를 검증한다. 검증 범위에 남은 코드 finding은0이며, 위 과거 호환 증빙/경로 원천/기계 capability와 후속 자연 전향 수용은 별도 OPEN이다. **Main 배포/재기동·정기 installer/code 재결속은 하지 않았다.** 설치/selected는 기존 code이므로 통합 배포 owner가21:40 전 새 커밋 채택 및 optional native 설치 재결속을 확인해야 한다. 새코드의 단회 결과를 정기 채택이나 Main PID 소비로 전용하지 않는다.
 
 근거: [최종 소비·분모](../../tmp/weakness-effective-registry-repair-20261022/final-consumer-verification.json), [최종 복구](../../tmp/weakness-effective-registry-repair-20261022/reviewed-recovery/effective-registry-recovery-result.json), [과거 호환 증빙 결손](../../tmp/weakness-effective-registry-repair-20261022/historical-compatibility-diagnostics.json), [원 응답/실행 구분](../../tmp/weakness-effective-registry-repair-20261022/response-binding-failure-examples.json), [회귀](../../tmp/weakness-effective-registry-repair-20261022/reviewed-typed-regression-tests.log), [첫 실패](../../tmp/weakness-effective-registry-repair-20261022/recovery.log), [크기 제한 원인](../../tmp/weakness-effective-registry-repair-20261022/optimized-recovery.log).
+
+
+## 2026-10-23 15거래일 제한 복구와 역사 reader 결속
+
+사용자 승인에 따라9/29~10/22의15거래일을 현재 검토 코드로 재처리하고 daily→terminal→누적→알림→attempt/night summary의 같은 세대 소비를 확인했다. Main/정책/설치/cron·정기 야간 quota·수동 veto·outbox는 바꾸지 않았다. 현재 Main은9a8e59bfc/PID1134876/start35426396으로 유지됐다. 이 결과는 단회 source-only 복구이며 정기 코드 채택이나 자연 완주가 아니다.
+
+- **원인과 수리:** 판정 전 거부를 native 결속·라벨 누락으로 분류한 연구 reader와 machine-only probe의 자연 판정 혼입을 수리했다. source22의148행은 사전검사51/평가 계약 거부97이며,17행은 probe다. 원 오류·U를 보존하고 사건/ask/라벨을 생성하지 않는다. 실제 native 판정304행의 결속과 별개다. 알려지지 않은 결속 누락은 계속 검출한다.
+- **역사 결속:** 과거 I/G reader의 실제 검증은 원 당시 코드·원천을 요구한다. 현재 실행 적격 검사를 역사 연구에 그대로 적용하면서 누락된 현재 reader용 compatibility 증빙과 이후 코드 차이에서 탈락했다. 기존 native C owner로 exact bundle/source/old/new-reader 증빙9개를 발행했다. 원 코드 inventory/Git provenance·native overlay/inheritance 검증·lineage·registry/binding·물리 SHA를 봉인하고, 연구 A owner가 이를 현재 request/schema/wire/scope/시점에 대사한다. 현재 I/G/C/H·startup 검증과 provider/order 권한은 변경하지 않았다. 최초7조합 실제 기록 재현과 추가2조합의 원 native 검증을 통과했다. 보존된 f71c7d5f9 역사 reader worktree는 증빙 의존성이므로 잠금 보존한다.
+- **리뷰와 교체:** 기존 project_native_observation/project_trace/bind_trace_native/effective_auxiliary_contract를 보완했다. 전환 전 거부의 무조건 missing 분류는 제거했고, 현재 runtime 검사를 역사 연구의 대리 판정으로 사용하던 부분을 original native proof 소비로 교체했다. 같은 코드의 현재 입력은 기존 native validator를 유지한다. 원 C issuer·현재 Main validator·shared trailing project_trace consumer는 유지한다. 새 module/worker/CLI/cron/장중 logger/보고서 producer는0이다. 현재 실행 코드를 완화하는 검토안은 반영하지 않았다.
+- **검증:** 원 회귀에서 분류4FAIL을 보존했고 수리 후 관련592 pytest·compile·diff 검사를 통과했다. missing/수정된 코드·증빙·원천·registry·원 bundle/scope/응답 및 기존 실행 거부는 계속 제외한다. scope baseline은9a8e59bfcb4283416717311fc8ddd22d37aa7602다.
+
+- **규모:** baseline9a8e59bfc 대비 non-test source2파일 +132/-5, tests1파일 +175/-0, docs2파일 +44/-0(본 항목 포함), 이동0이다. 순증127 source 행은 기존 A/R owner의 역사 증빙 검증과 판정 전 거부 분리에 필요하며 새 진입점은 없다.
+
+| 최종 수용 | 결과 |
+| --- | --- |
+| 연구 코드 | `5ea7e987f646a3f16496d585d31b383609127784341c9a0a13021671fb873b11` |
+| 누적 generation | `43e541740d08be2e7576c1e2d23c80895262f4aec2a52b63670092390828b8fe` |
+| 비교 SHA | `80072bc10f058d94b31109c3018def8dba710cb9bd7ab95e3a59147032581b97` |
+| 알림 SHA | `4cead5264634b7a2a80a642efea983f76a2f4624419e71c84b4319ece52e3a9f` |
+| 날짜/현재성 | 15/15·검토 코드 current=true·migration/pending/invalidated0 |
+| registry 선언 native 관측 | 2,433행 effective verified·미검증0; 고유 매매/주문 수가 아님 |
+| 후보/알림 | 273후보·267 uncertainty_unresolved/6 source_gap·적격0·not_eligible·발송0 |
+| 전향 기준 | cutoff10/22 110개,10/23 163개; 전향 resolved273개 모두0 |
+| 자원 | 누적 연구 실행564.683/600초·단계60초·worker1/nice19·peak164.0MiB/512MiB |
+| 실행/조회 시간 | 연구 실행 예산과 코드 검토·읽기 전용 대사 경과시간을 구분한다. 정기9회/예약540초는 그대로다. |
+
+최초15일 계산479.460초 뒤10/8·12의61행에서 추가 증빙2개를 발견했다. 남은 동일 실행 예산으로 이 두 날짜만 재개하고 누적/알림을 갱신했다. 시간 제한에서 중단한10/15·22·8은 원 checkpoint의 실제 진전을 확인한 후 재개했으며 전체15일을 무변경 재실행하지 않았다. 로그와 최초 generation984e455d·후속 실패/부분 진행을 보존했다.
+
+원천 보존의 추가 검사가 stale cursor의 물리 descriptor를 비교해 실패한 기록도 남겼다. native 계산/누적/알림은 이미 완료했으며,10/21 gzip 전환·10/22 보고서/마스터 갱신은 모두 이번 실행 전임을ctime와 현재성으로 확인했다.10/21 native stream의 decoded bytes/SHA 및 마스터 semantic SHA도 동일했다. 검증 가정을 바로잡고 현재 source signature/세대·보호 대상 hash를 재확인했으며 원천/상태를 검사에 맞춰 수정하지 않았다.
+
+**남은 원천·의미 한계:** 기존 raw PASS95행은 실제 request/registry 증빙 누락이 아니라10/13의 원 raw-response 계약 증빙14행 부재와10/14의 계약 불합격81행(지원 fact78/인용3)이다. 이를 유효 PASS로 승격하지 않았다. 이와 별도로 오래된 PASS50행은 registry binding 항목이 없는 역사 자료다. source22 PASS48행은 결속 verified이며 W7/F21/U20, 기존 실행 거부9를 분리한다. source22의 약세 raw PASS10행은 F10이나 하루의 CF 진단이며 전향 우위·실현손익 또는 조정 수치의 근거가 아니다. 과거 epoch/path/horizon 결손과 기계 numeric role 미지원도 유지한다.
+
+선택9a8의 연구 코드 `bc81483cf3fa51b1ba5802a34b311a9af43dfc4c414af0dd8fd2e0aa28bf6ec4`/설치 binding은 정상이나 이번 검토 코드와 다르다. 통합 배포 owner가 이 수리 commit을 선택하고 기존 optional installer를 재결속해야 정기 연구가 같은 코드를 소비한다. 매매/PID 전환은 이번에 실행하지 않았다. 다음 source23→10/24 야간의 무보정 자연 수용은 기존 MainMarketWeaknessPostcloseObservation1008에서 OPEN으로 유지한다. 운영 계약은 [§16](../proposals/main-market-weakness-postclose-source-binding-and-candidate-repair-plan-2026-10-13.md#16-2026-10-23-과거-15거래일의-제한-복구와-역사-검증)이다.
+
+증거: `tmp/weakness-binding-recovery-20261023/final-consumer-verification.json`, `checkpoint-completion/result.json`, `legacy-response-contract-classification.json`, `final-research-regression.log`, `historical-real-cases.json`, `recovery.log`, `supplemental-recovery.log`와 원본/실패 기록.

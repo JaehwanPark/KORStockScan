@@ -1463,6 +1463,62 @@ def scope_contract(data_root, bundle_hash, cell_key, route, *, cache):
     return result
 
 
+def historical_auxiliary_sources(data_root, bundle, source, old_hashes):
+    """Verify original native validation for research, without launch authority."""
+    from src.engine.scalping import reversal_auxiliary_compatibility as C
+    from src.engine.scalping import reversal_auxiliary_intraday as I
+    from src.engine.scalping import reversal_auxiliary_registry as G
+    from src.engine.scalping import mechanistic_entry_runtime_policy as N
+
+    proof = C.validate(data_root, bundle, source, old_hashes, I.code_hashes())
+    evidence = I.read(proof["evidence_path"])
+    if evidence.get("schema") != "reviewed_historical_auxiliary_reader_parity_v1":
+        return None
+    original_path = evidence["original_reader_result_path"]
+    original = I.read(original_path)
+    inventory_path = original["code_inventory_path"]
+    inventory = I.read(inventory_path)
+    body = I.read(source)
+    bindings = body.get("bindings", body.get("auxiliary_registry_bindings", {}))
+    if (
+        file_hash(original_path) != evidence["original_reader_result_sha256"]
+        or file_hash(inventory_path) != original["code_inventory_sha256"]
+        or original.get("original_validation_status") != "pass"
+        or original.get("bundle_sha256") != bundle["bundle_sha256"]
+        or original.get("source_sha256") != proof["source_sha256"]
+        or original.get("reader_hashes") != old_hashes
+        or original.get("refs") != bindings
+        or original.get("original_reader_root") != inventory.get("root")
+        or original.get("original_reader_commit") != inventory.get("git_commit")
+        or not inventory.get("source_hashes")
+    ):
+        raise ValueError("historical_auxiliary_native_validation_invalid")
+    sources = dict(inventory["source_hashes"])
+    for item in proof["frozen_readers"]:
+        if sources.get(item["path"]) != old_hashes.get(Path(item["path"]).name):
+            raise ValueError("historical_auxiliary_reader_inventory_invalid")
+    for item in original["lineage_sources"]:
+        if sources.setdefault(item["path"], item["sha256"]) != item["sha256"]:
+            raise ValueError("historical_auxiliary_source_conflict")
+    for ident in set(bindings.values()):
+        value = G.load(data_root, ident)
+        if (value != original["values"].get(ident)
+                or G.binding(value) != original["bindings"].get(ident)):
+            raise ValueError("historical_auxiliary_registry_changed")
+    refs = []
+    for name, expected in sources.items():
+        path = Path(name)
+        before = stat_receipt(path)
+        if (N._source_hash(str(path), N._signature(path)) != expected
+                or before != stat_receipt(path)):
+            raise ValueError("historical_auxiliary_source_changed")
+        refs.append(before)
+    refs.extend(stat_receipt(path) for path in [
+        C.path(data_root, bundle, source, I.code_hashes()), proof["evidence_path"],
+        original_path, inventory_path])
+    return bindings, refs
+
+
 def effective_auxiliary_contract(data_root, record, row, *, cache):
     """Bind the actual request through existing registry/overlay owners only."""
 
@@ -1520,15 +1576,25 @@ def effective_auxiliary_contract(data_root, record, row, *, cache):
         if not proof or not receipts_current(proof[0]):
             value = G.load(data_root, ident)
             overlay = I.read(path) if overlay_id else None
-            if overlay:
+            original = overlay if overlay else I.read(path)
+            old_hashes = original.get("code_hashes", original.get("auxiliary_reader_code_hashes"))
+            historical = (historical_auxiliary_sources(data_root, bundle, path, old_hashes)
+                          if old_hashes != I.code_hashes() else None)
+            if historical:
+                bindings, historical_refs = historical
+                sources = []
+            elif overlay:
                 I.validate_record(data_root, overlay, bundle)
                 bindings = overlay["bindings"]
             else:
                 bindings = I.inherited(data_root, bundle)
-            sources = I.lineage_sources(data_root, bundle, overlay)
+            if not historical:
+                sources = I.lineage_sources(data_root, bundle, overlay)
             refs = row["auxiliary_source_refs"] + [
                 stat_receipt(s["path"]) for s in sources
             ]
+            if historical:
+                refs.extend(historical_refs)
             if overlay and overlay.get("code_hashes") != I.code_hashes():
                 from src.engine.scalping import reversal_auxiliary_compatibility as C
 
@@ -1732,7 +1798,11 @@ def bind_trace_native(row, db):
             raise ValueError("native_index_binding_changed")
         R.bind_native(row, observation)
     else:
-        row["native_binding_status"] = "exact_native_binding_missing"
+        row["native_binding_status"] = (
+            "not_adjudicated"
+            if row.get("pre_native_rejection_reason")
+            else "exact_native_binding_missing"
+        )
 
 
 def gzip_trace_records(source, source_date, listing, *, stop_at):
