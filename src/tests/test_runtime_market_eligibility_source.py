@@ -1,5 +1,5 @@
 """Startup listing preparation and canonical persistence without provider calls."""
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from contextlib import contextmanager
 import json
 from pathlib import Path
@@ -285,3 +285,31 @@ def test_current_krx_source_reaches_sor_consumer_without_nxt_inference(
     if expected:
         assert evidence.source_id == row["source_api_id"]
         assert evidence.source_sha256 == row["payload_sha256"]
+
+
+@pytest.mark.parametrize('partial', [False, True])
+def test_removed_master_symbols_are_raw_evidence_without_new_master_rows(monkeypatch, db, tmp_path, partial):
+    removed = source.REMOVED_MASTER_SYMBOLS
+    install_pages(monkeypatch, rows={'0':[item(c) for c in sorted(removed)]+[item('005930')],
+                                     '10':[item('036930')]})
+    fetch = K.fetch_kiwoom_api_continuous
+    if partial:
+        def incomplete(**kwargs):
+            responses, meta = fetch(**kwargs)
+            if kwargs['payload']['mrkt_tp']=='10': meta['last_http_status_code']=500
+            return responses, meta
+        monkeypatch.setattr(K, 'fetch_kiwoom_api_continuous', incomplete)
+    owner = runtime(tmp_path)
+    result = owner.tick(db)
+    assert result['status'] == ('partial' if partial else 'pass')
+    assert result['stored_count'] == 2
+    assert result['operator_removed_master_codes'] == sorted(removed)
+    assert set(result['source_rows']) == removed|{'005930','036930'}
+    day = date.fromisoformat(result['target_date'])
+    for code in removed:
+        assert db.get_security_market_eligibility(code,day) is None
+        assert source.master_symbol_removed('A'+code+'_AL')
+    assert not source.master_symbol_removed('005930')
+    assert db.get_security_market_eligibility('005930',day)['quality_state'] == ('UNKNOWN' if partial else 'VALID')
+    receipt = json.loads(next((tmp_path/'receipts').glob('*/latest.json')).read_text())
+    assert receipt['source_rows'] == result['source_rows']
