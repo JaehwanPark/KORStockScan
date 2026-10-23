@@ -531,10 +531,14 @@ def test_new_population_binds_rest_snapshot_and_resume_detects_mutation(tmp_path
     with pytest.raises(ValueError,match='snapshot_changed'):P.ensure_population(tmp_path,day,source_generation='rest-integration',expected_sha256=source['artifact_content_sha256'])
 
 
-def test_outcome_source_dependency_is_in_native_code_contract():
-    from src.engine.scalping.continuous_reversal_policy_v6 import contract_modules
+def test_outcome_source_binds_producer_and_consumer_code(tmp_path):
+    from pathlib import Path
     from src.trading.market import completed_history as H
-    assert H in contract_modules()
+    completed_history_fixture(tmp_path)
+    _,receipts=P.completed_bars(tmp_path,'2026-10-08')
+    rec=next(r for r in receipts if r['kind']=='rest_history')
+    assert rec['consumer_code_sha256']==P.file_hash(H.__file__)
+    assert json.loads(Path(rec['path']).read_bytes())['source_code_sha256']==P.file_hash(H.__file__)
 
 
 @pytest.mark.parametrize('change',[dict(runtime_effect=True),dict(allowed_runtime_apply=True),dict(decision_authority='runtime_apply'),dict(source_item='003010_NX'),dict(source_date='2026-10-07')])

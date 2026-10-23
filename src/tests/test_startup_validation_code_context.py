@@ -1407,3 +1407,14 @@ def test_main_preparation_reviews_continuous_holding_stream(relative,damage):
     if damage=='unreviewed':new='0'*64
     elif damage=='wrong_origin':old='0'*64
     assert C.reviewed_preparation_pair(relative,old,new) is (damage is None)
+
+
+@pytest.mark.parametrize('relative', sorted(n for n in H.REVIEWED_MACHINE_REST_HISTORY_HASHES
+    if n!='src/engine/infrastructure/startup_validation_code_context.py'))
+@pytest.mark.parametrize('damage', [None,'unreviewed','wrong_origin'])
+def test_main_preparation_reviews_rest_history_sources(relative,damage):
+    old=H.REVIEWED_MACHINE_REST_HISTORY_PREVIOUS[relative]
+    new=hashlib.sha256((ROOT/relative).read_bytes()).hexdigest()
+    if damage=='unreviewed':new='0'*64
+    elif damage=='wrong_origin':old='0'*64
+    assert C.reviewed_preparation_pair(relative,old,new) is (damage is None)

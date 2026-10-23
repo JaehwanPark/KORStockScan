@@ -5118,6 +5118,42 @@ REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
                                 '498cfc4bc4ce9b1cbe13f0b70967da7f2dbb113c6d70563924b03c98d371b323'),)}.items()}}
 
 
+# Exact reviewed offline REST outcome integration; retain the issued stream profile.
+REVIEWED_MACHINE_REST_HISTORY_HASHES = {'src/engine/infrastructure/startup_validation_code_context.py': '0ca493e04eecc4031d75de2d3dfcc076fca47fbc6fb874843f29ab51ff7adebe',
+ 'src/engine/scalping/continuous_reversal.py': '7c1d8a3f8f093ec3fde3d8deda7c411ddb3230bb3115086a28b5f811204879cc',
+ 'src/engine/scalping/continuous_reversal_branch_postclose.py': 'cf39f092eae8557ed031c82e4e24cfc32cc31279e60eb9069ae789e2500c43f8',
+ 'src/engine/scalping/continuous_reversal_operating_postclose.py': '60b420adf69789175491963858bad6ad26d38399d00294010de2079612e6b194',
+ 'src/engine/scalping/continuous_reversal_path_postclose.py': '7c8530c2419ca0465ec530c2cdde6125b4984326babd1ff2bbff05e32f150f5b',
+ 'src/engine/scalping/continuous_reversal_postclose.py': '212965dc89048c663bad5083d0f3a9fb21fb315825359a9a347428c20926d69c',
+ 'src/engine/scalping/continuous_reversal_registered_postclose.py': '65f2cd48607abfae735836d5f4c5f60bad9d8866e0d4386b1c8e22756516899d',
+ 'src/engine/scalping/reversal_cumulative_postclose.py': '990d9dd982e2fe6976fe070588e39e6a2aa46830344e3ea449ce77c93c4b68fc',
+ 'src/trading/market/completed_history.py': '381740faff9ca4c00ff6f117a076f444f9762985d1fb13a8d0e5b3581ff75ed5'}
+REVIEWED_MACHINE_REST_HISTORY_PREVIOUS = {'src/engine/infrastructure/startup_validation_code_context.py': '5a881b096932962604f6aab3a995378d0246ea30e7cb3c17e3ef7e3b93b2288d',
+ 'src/engine/scalping/continuous_reversal.py': '17b73fbd524814faa53895148364758716aac406ca41761768cb69d430178030',
+ 'src/engine/scalping/continuous_reversal_branch_postclose.py': '7525d0c8bb68b9eb57d4bdc29462b33d5f35bc6b62f48b41d9a2e0a2c58b4c4c',
+ 'src/engine/scalping/continuous_reversal_operating_postclose.py': '2fc75be21c110341ac4596f08f8a3bcdb42adfd4e3ba8322f601337b84ab8441',
+ 'src/engine/scalping/continuous_reversal_path_postclose.py': 'ce4f350b3e372e6287d86ed8e070f8eb4679282964ab2a64b6b626c364269af2',
+ 'src/engine/scalping/continuous_reversal_postclose.py': 'd294d3fab9ef36e29b0b15007b0d22c47e1572f3b36de25d72802873f2568dda',
+ 'src/engine/scalping/continuous_reversal_registered_postclose.py': 'e725b5d63af61268760ebdbf760d150f38f5d19790261d6f978f803a48f86b29',
+ 'src/engine/scalping/reversal_cumulative_postclose.py': '6adcd6526ca315d53e60d4817cda3cfec1b8ed8db30d624a1c212d6005dbba87',
+ 'src/trading/market/completed_history.py': 'dec2b7afcb5fdaab16980d046a124ddac384515b7e3400249d73acaacaf348e7'}
+REVIEWED_MACHINE_REST_HISTORY_PROFILE = {**REVIEWED_HOLDING_STREAM_PROFILE, **REVIEWED_MACHINE_REST_HISTORY_HASHES}
+REVIEWED_MACHINE_REST_HISTORY_VARIANTS = {
+    key: {**value,
+        'selector_path': 'src/engine/scalping/continuous_reversal_postclose.py',
+        'selector_sha256': REVIEWED_MACHINE_REST_HISTORY_HASHES['src/engine/scalping/continuous_reversal_postclose.py'],
+        'dependencies': {**value['dependencies'], **REVIEWED_MACHINE_REST_HISTORY_HASHES},
+        'contract_extensions': {origin: {name: REVIEWED_MACHINE_REST_HISTORY_HASHES.get(os.path.normpath(name), sha)
+            for name, sha in paths.items()} for origin, paths in value['contract_extensions'].items()},
+    } for key, value in REVIEWED_HOLDING_STREAM_VARIANTS.items()
+}
+REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
+    name: REVIEWED_ENTRY_COST_PAIRS.get(name, ()) + tuple((origin, current) for origin in
+        {REVIEWED_MACHINE_REST_HISTORY_PREVIOUS[name]} |
+        {old for pair in REVIEWED_ENTRY_COST_PAIRS.get(name, ()) for old in pair})
+    for name, current in REVIEWED_MACHINE_REST_HISTORY_HASHES.items()}}
+
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -5301,7 +5337,11 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     holding_stream = any((root / name).is_file() and hashlib.sha256(candidate_bytes(name)).hexdigest() == sha
         for name, sha in REVIEWED_HOLDING_STREAM_HASHES.items()
         if sha != REVIEWED_HOLDING_STREAM_PREVIOUS[name])
-    prepared_hashes = (REVIEWED_HOLDING_STREAM_PROFILE if holding_stream else
+    machine_rest_history = any((root / name).is_file()
+        and hashlib.sha256(candidate_bytes(name)).hexdigest() == sha
+        for name, sha in REVIEWED_MACHINE_REST_HISTORY_HASHES.items())
+    prepared_hashes = (REVIEWED_MACHINE_REST_HISTORY_PROFILE if machine_rest_history else
+        REVIEWED_HOLDING_STREAM_PROFILE if holding_stream else
         REVIEWED_NATIVE_BUY_COST_PROFILE if native_buy_cost else
         REVIEWED_PRE_SUBMIT_ENTRY_COST_HASHES if pre_submit_present else
         REVIEWED_OBSERVER_IO_ENTRY_COST_HASHES if observer_io_present else
@@ -5309,7 +5349,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         REVIEWED_ENTRY_COST_HASHES if sentinel_scope_present else
         REVIEWED_PRE_FINALIZATION_HASHES if consumed_finalization else
         REVIEWED_NATIVE_PREOPEN_HASHES if native_preopen else REVIEWED_ENTRY_COST_PRE_SENTINEL_SCOPE_HASHES)
-    prepared_variants = (REVIEWED_HOLDING_STREAM_VARIANTS if holding_stream else
+    prepared_variants = (REVIEWED_MACHINE_REST_HISTORY_VARIANTS if machine_rest_history else
+        REVIEWED_HOLDING_STREAM_VARIANTS if holding_stream else
         REVIEWED_NATIVE_BUY_COST_VARIANTS if native_buy_cost else
         REVIEWED_PRE_SUBMIT_DEPENDENCY_VARIANTS if pre_submit_present else
         REVIEWED_OBSERVER_IO_DEPENDENCY_VARIANTS if observer_io_present else

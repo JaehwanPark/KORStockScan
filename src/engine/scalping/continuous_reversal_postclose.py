@@ -118,7 +118,7 @@ def completed_bars(data_root,day,*,snapshot_sink=None,source=None):
             continue
         receipt_path=freeze(path,raw_bytes)
         if file_hash(receipt_path)!=hashlib.sha256(raw_bytes).hexdigest():raise ValueError('completed_source_snapshot_changed')
-        receipts.append(dict(path=str(receipt_path.resolve()),sha256=hashlib.sha256(raw_bytes).hexdigest(),kind=kind,source_date=day,origin_path=origin))
+        receipts.append(dict(path=str(receipt_path.resolve()),sha256=hashlib.sha256(raw_bytes).hexdigest(),kind=kind,source_date=day,origin_path=origin,**(dict(consumer_code_sha256=file_hash(H.__file__)) if kind=='rest_history' else {})))
         if kind=='rest_history':
             if value.get('status')!='verified':continue
             rows=H.outcome_rows(value,day=day)
