@@ -5264,14 +5264,16 @@ REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
 
 
 # Exact reviewed listing/SOR successor; retain the complete consumed REST profile.
-REVIEWED_AFTERMARKET_LISTING_HASHES = {'src/engine/infrastructure/startup_validation_code_context.py': '13c2fb600b73fba453fe9b82b3dc79b6cfcf37ef7a4a07b94ce3939011343a30',
+REVIEWED_AFTERMARKET_LISTING_HASHES = {'src/engine/infrastructure/startup_validation_code_context.py': 'c2ad2370a32236543bdc70991274a83a109ed48ccd24d1eac4a7206f987034f5',
  'src/engine/kiwoom_orders.py': '8b256c9e5802ad9afdf3b8806ce77420c3b425b107bb4aa6abedcd2e73f6ccbc',
+ 'src/engine/monitoring/policy_generation_code_handoff.py': '056582f3a61d683220910a86107018d5fea3467f5181a7a837498cf94df6d4c2',
  'src/engine/sniper_state_handlers.py': 'b620eff5df4d7d71fc9a8cace747a260b0aad5b1be358e5ef32e2b1deab591f9',
  'src/trading/market/aftermarket_eligibility.py': '63d81fe30f23cca232304c84a3f4e0c4e9e23a2f447c74d6b356798471417d4a',
  'src/trading/market/session_contract.py': '52a9574a5e12b2437a727607c1f6fea93480861e1abb37076e9bb39ea920398c',
  'src/utils/kiwoom_utils.py': 'ef692b544c8ac01c90ab56413aa236935bb5740b7edfe27cf5c30217948c0e95'}
 REVIEWED_AFTERMARKET_LISTING_PREVIOUS = {'src/engine/infrastructure/startup_validation_code_context.py': 'e81848fa4e85f082005b905ff5e71390dc2bfec114be3ef9fd550bea2c4dceba',
  'src/engine/kiwoom_orders.py': '32e93c49a880e1f3a393ec0367cf1339dbc3ef00c689c821b45b159872c423d9',
+ 'src/engine/monitoring/policy_generation_code_handoff.py': '62872a82eda5eae04541329a65dc062b4f99150360dfb24b7eeb8888214f0c25',
  'src/engine/sniper_state_handlers.py': 'ea59d6365ae1707af457535650937c49977997d9bc516bb8cc141f07da6eea86',
  'src/trading/market/aftermarket_eligibility.py': 'f28f3dd45c2d9b1aee2dcb64898d8cbecb85798bb812b058741d7f011fb45a2b',
  'src/trading/market/session_contract.py': 'dfd0ff3b2a28d8d6581a44762e5b618ae807fdc1c45d7f8cd3128b76be83573c',

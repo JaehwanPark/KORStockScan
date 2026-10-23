@@ -496,6 +496,10 @@ REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS['rising_missed'] += (('b1fb8b69fb938893d
 REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS['holding_vote'] += (('b37bdd2ec37e69e281fad273e3b9d07dab8aaf559c5a7841b9d4473141beb9ee', '9ccabcfbfb2f0bc9f408954a6dc76c0f88b9bdf7528f4e827c83804bbf15084f'),)
 REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS['auxiliary'] += (('507700d07f88f668f1b467678615656db7af893e0c3e6dbf8148d5c918ed9120', '8f7446efe983c1ad88ba90c3ca72114fe9e90d045356e8c7d74acd0d4ceb62fd'),)
 
+# Reviewed KRX listing/SOR entry-only successor; historical native reports remain unchanged.
+REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS['rising_missed'] += (('b1fb8b69fb938893d36c8b16192bbd0cd5e414f169b8304374d781cc54248ab5', 'd48f497b194c96ca5776bacf2910a08de4c0c3a6a323c5cde1d8a30c171c15e4'),)
+REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS['holding_vote'] += (('b37bdd2ec37e69e281fad273e3b9d07dab8aaf559c5a7841b9d4473141beb9ee', '7ea8d358191c970b16384b182f2feaa66c4486f1082f4c36cb54616df4485a81'),)
+
 def current_fixture_observation(observed, data):
     family = observed.get('family')
     pair = REVIEWED_SUCCESSORS.get(family)
