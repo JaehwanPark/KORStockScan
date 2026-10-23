@@ -5451,7 +5451,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     numeric_replay = (root / 'src/utils/numeric.py').exists() or any(
         (root / name).is_file() and hashlib.sha256(candidate_bytes(name)).hexdigest() == sha
         for name, sha in REVIEWED_NUMERIC_REPLAY_HASHES.items()
-        if name != 'src/engine/infrastructure/startup_validation_code_context.py')
+        if name not in {'src/engine/infrastructure/startup_validation_code_context.py',
+                        'src/engine/automation/ordered_intraday_deploy.py'})
     prepared_hashes = (REVIEWED_NUMERIC_REPLAY_PROFILE if numeric_replay else
         REVIEWED_AUXILIARY_CAPABILITY_PROFILE if auxiliary_capability else
         REVIEWED_MACHINE_REST_HISTORY_PROFILE if machine_rest_history else
