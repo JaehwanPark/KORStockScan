@@ -1855,14 +1855,22 @@ def _historical_stage_code_matches(report_dir, day, stage, value, *, legacy_main
             and preopen.get('status') == 'succeeded' else None)
         if re.fullmatch('[0-9a-f]{40}', str(commit))}
     if commits:
+        # Main P5 forbids process creation. Reuse its native read-only Git
+        # identity reader; commits locate roots, the original code digest still
+        # authenticates them. Bound metadata discovery separately from code IO.
+        from itertools import islice
+        from src.engine.infrastructure.startup_validation_code_context import _git_head
         try:
-            inventory = subprocess.check_output(['git', '-C', str(selected), 'worktree', 'list', '--porcelain'],
-                                                text=True, timeout=10)
-            for record in inventory.split('\n\n'):
-                fields = dict(line.split(' ', 1) for line in record.splitlines() if ' ' in line)
-                if fields.get('HEAD') in commits and matches(Path(fields.get('worktree', ''))):
+            for root in islice(managed.iterdir(), 4096):
+                if not admitted(root):
+                    continue
+                try:
+                    commit = _git_head(root)
+                except (OSError, ValueError, UnicodeError):
+                    continue
+                if commit in commits and matches(root):
                     return True
-        except (OSError, subprocess.SubprocessError):
+        except OSError:
             pass
     # Compatibility for old receipts without a direct locator. Keep the same
     # maximum code reads; never turn inventory overflow into whole-input loss.

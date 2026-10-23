@@ -1702,8 +1702,10 @@ def test_stage_code_origin_survives_release_inventory_growth(stage_environment, 
         calls.append(root)
         return 'sealed-producer-code' if root == origin and damage != 'code' else 'different-code'
     monkeypatch.setattr(h, '_stage_code', code)
+    from src.engine.infrastructure import startup_validation_code_context as context
+    monkeypatch.setattr(context, '_git_head', lambda root: ('b' if root == origin else 'a')*40)
     monkeypatch.setattr(h.subprocess, 'check_output', lambda *a, **kw:
-        f'worktree {origin}\nHEAD {"b"*40}\n\n')
+        pytest.fail('sealed-stage lookup attempted process creation'))
     value['stage_code_sha256'] = 'sealed-producer-code'
     if damage == 'output':
         output = next(iter(h.stage_artifacts(report, day, 'legacy_machine_report').values()))
