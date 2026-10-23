@@ -238,6 +238,36 @@ REVIEWED_PREPARATION_HISTORY.setdefault('src/engine/automation/ordered_intraday_
  ('e01bfae9c239223c409da878d2e45a66bccbe6c5b37684f9951badfb4d12c5ae',
   'fcc7c6935434dc1b2e03598bec6fb721997b23cd4c39b6776fa1dfc2afa46423')})
 
+# Exact observer IO/P5/b67 and logical-archive source-only successors.
+for _relative, _origins in {'src/engine/automation/entry_cancel_wait_tuning.py': (['bdfaaeaac7768f703d181314be45afaf2ecfc983001a6364a60a41ae54882c4e'],
+                                                       '49c1f36ca4082714705e0e558fa6a931cba7f394fb7f1dca83090884db86dfb4'),
+ 'src/engine/automation/ordered_intraday_deploy.py': (['404b870046364da476c4df9abb0007312123ea4b4331459f67da6d3c53e183e6',
+                                                       '4358273a4a70f58de9dd0bf960e2b146cfd1b5c389a3643cae5b8dda7ffc5756',
+                                                       '64e4e2a29ed8fcc47a2e2eaca4fde8a1f492964db98973f1aba37c4ed199ca21',
+                                                       '92d30c0ec38266d9fe1cc7abd144c71b7d0227b88fb42d4beb384096bbeb31ab',
+                                                       'a6cdc6bebdf22f47a6736d0b7201fd988ad69ffacfe81ee5b40d77bbae5218ed',
+                                                       'afa9ca5839c59670f4c38f6898089cd8c743157b87ead058e393d5f78d4e07ab',
+                                                       'd56d407f1515ee8a8bfd307f469b175b794f490120aec2b2fe2f98165d5488af',
+                                                       'e01bfae9c239223c409da878d2e45a66bccbe6c5b37684f9951badfb4d12c5ae',
+                                                       'fcc7c6935434dc1b2e03598bec6fb721997b23cd4c39b6776fa1dfc2afa46423'],
+                                                      '7f52b1d056bf13f16791c4d5d41e8ca4ba4a9715a77176403c1dff97e95d0026'),
+ 'src/engine/error_detectors/artifact_freshness.py': (['3a58f8ac3220ea8d64247cf17a756d2658c7815cd3d57744303f80bc40d34dcc'],
+                                                      '365c0fc8c392143a1645fe3c18edaeaa0f72fd238a4757100ed22c65309f75f9'),
+ 'src/engine/monitoring/policy_generation_code_handoff.py': (['b65c616d024460c825d73472311ddf995282069cd58dfdec9241447d4285d841'],
+                                                             '4db24d4d542b8cc6142c1b85e0839bfce6a7116aaae5f49e2b0d90e4174e3d62'),
+ 'src/engine/monitoring/submission_bottleneck_monitor.py': (['00e5a75bdbf7fa812145212820094baa7e04638d5a9c18d4e8011b3b7165abae',
+                                                             '0cacfa688b336befe533f2010b3bfaea40d5d2fe778e4ca48d7347071114527e',
+                                                             '6e1588b8e5709563f15cdea0705babe7357fed62a27061365ec5ac2425fc2085',
+                                                             '808deb51627b4ed17561f168ad2cad808f0181aaac7a754377493912e71d9e57',
+                                                             '9c51124b5c07b8ae9039e2e70d1f36da0e3b542136dd24d2ff66ccab642b4ccb',
+                                                             'a5a8b7be30b63d0e7990a5761a60a6e0225a563272b15a24c8ccf9fc013f21d8'],
+                                                            'f8d68d78e8423db51d4a2f8786c786ea1a53def58f43cb3019d6d79a58dc5902'),
+ 'src/engine/scalping/mechanistic_entry_runtime_policy.py': (['215ac04e8c50c5d18777617b262c7a73b77c2d4d134c26c6f4c88a31dc162867'],
+                                                             '2b8653cc8f30209992c2ac34690846e3d5d7607114b95560aafbf1445d509c08')}.items():
+    REVIEWED_PREPARATION_HISTORY.setdefault(_relative, set()).update(
+        (_origin, _origins[1]) for _origin in _origins[0])
+
+
 def reviewed_preparation_pair(relative, old, current):
     return (REVIEWED_PREPARATION_SOURCES.get(relative) == (old, current)
             or (old, current) in REVIEWED_PREPARATION_HISTORY.get(relative, ()))

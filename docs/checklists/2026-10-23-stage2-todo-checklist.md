@@ -50,6 +50,7 @@
   - 금지: bootstrap 생성·선택을 실제 PID 소비, 자연 행동 또는 비용 후 EV 개선으로 보고하지 않는다.
 
 - [ ] `[DirectFamilySourceRepairEntryCancelWait] entry_cancel_wait 직접 family 원천·경제성 계약 수리` (`Due: 2026-10-23`, `Slot: POSTCLOSE`, `TimeWindow: 16:30~21:40`, `Track: RuntimeStability`)
+  - 11:25 새 경고: source21 요약 plain→gzip 교체(11:07) 뒤 source22 inline census가 사라진 물리 경로를 읽어 실패했다. 원 보고서5f3ee2d9…·원 projection은 보존하고 기존 strict JSONL owner로 bounded 논리 SHA/bytes/행 수·CRC·alias 일치와 세대 CAS를 검증한다. 원2FAIL 재현→관련651PASS, 같은 운영보고서 native 소비 incumbent_carry/findings[]·summary/tower/checklist verified. 정책·보고서 재생성0, 통합배포/PID 소비는 별도 기록한다.
   - Source: [runtime_approval_summary_2026-10-22.json](/home/ubuntu/KORStockScan/data/report/runtime_approval_summary/runtime_approval_summary_2026-10-22.json)
   - 증거: runtime_summary_sha256=`32b66ef4c7ce208ee504fc1d4f5b00ddf0c06b260491a107c962bb9047fd2d79`, source_artifact=`/home/ubuntu/KORStockScan/data/report/entry_cancel_wait_tuning/entry_cancel_wait_tuning_2026-10-22.json`.
   - 상태: family=`entry_cancel_wait`, task_role=`producer_contract_repair`, comparison_status=`source_gap`, resolution_mode=`producer_repair`, prospective_resolution_mode=`-`, first_blocker=`historical_submission_or_source_unreconciled`.
@@ -209,6 +210,7 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
 ## 장중 제출 원천·종료 수리 인계
 
 - [ ] `[MainEntrySourceTerminalRepair1022] 사전 계좌자료 생산과 제출 종료 사유 전달 수리·실제 소비 확인` (`Due: 2026-10-23`, `Slot: INTRADAY`, `TimeWindow: 08:00~20:00`, `Track: RuntimeStability`)
+  - 최종 통합: observer187209a2e·P5 e9d30fa98·b67c4e090/선행33f15를 통합하고, 독립 native/P5 inventory를 완전한 exact successor로 결속한다. 기존926/2b7 원 코드·증거와 정책/수동 제외/guard는 보존한다. 원인·수정·실제 배포/PID 결과는 같은 검토에서 별도 확인한다.
   - P5 포인터 수리: 정지 전 exact candidate P5 path/SHA·날짜·실행root/commit·원selector·PASS를 고정하고 발행 직전 재검증, 상속된 이전P5 필드를 교체한다. 원 publisher의 실패 회귀를 재현하고 변조/다른세대/선택변경 차단과 기존 execute·stopped recovery·lock/CAS 계약을 검증한다. selected prepared P5는 별도 유지하며 수동 운영selector 수정0. [동일 검토](../audits/postclose-root-cause-recovery-review-2026-10-19.md#candidate-p5-pointer-binding-repair-2026-10-23).
   - observer reader 통합: 동일 reader8정의를 monitoring.observer_artifact_io의4함수로 통합하고 두 owner가 직접 호출한다. 옛 reader 재수출/forwarder0, 기존크기·압축·publication lock·PID/boot 계약 유지. 영향1816회귀/compile/위치/diff PASS; 별도P5 결속 수리와 통합 배포·실제PID 소비는 후속 검증한다. [동일 검토](../audits/postclose-root-cause-recovery-review-2026-10-19.md#observer-artifact-reader-consolidation-2026-10-23).
   - 10/23: 선택본9a8e59bfc 기반 격리 후보에서 BUY/보유 시장·세션 공통 owner 이관과 정상 route 차단 완료 영수증의 관측 누락을 수리한다. 원011070·289220 평가2건/진단3개의 ID·원문 hash·비가역 결손과 현재 수집을 분리하며 원 실패는 보존한다. [이번 검토](../audits/postclose-root-cause-recovery-review-2026-10-19.md#sentinel-scope-consolidation-and-exact-historical-diagnostics-2026-10-23).
