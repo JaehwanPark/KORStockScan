@@ -1,10 +1,10 @@
 import statistics
-import math
 import time
 from datetime import datetime, timedelta, time as dt_time
 
 from src.utils.constants import TRADING_RULES
 from src.utils import kiwoom_utils
+from src.utils.numeric import safe_float as _safe_float
 from src.engine.scalping.position_sizing_allocator import (
     FORMULA_VERSION as SCALPING_SIZING_FORMULA_VERSION,
     ScalpingSizingContext,
@@ -83,28 +83,6 @@ def _base_result():
         "qty": 0,
         "price": 0,
     }
-
-
-def _safe_float(value, default=0.0):
-    try:
-        if value is None:
-            return default
-        if isinstance(value, str) and value.strip().lower() in {
-            "",
-            "nan",
-            "nat",
-            "none",
-            "inf",
-            "+inf",
-            "-inf",
-        }:
-            return default
-        numeric = float(value)
-        if not math.isfinite(numeric):
-            return default
-        return numeric
-    except Exception:
-        return default
 
 
 def _safe_int(value, default=0):

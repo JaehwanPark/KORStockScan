@@ -48,6 +48,7 @@ from sqlalchemy import text
 
 # 💡 Level 1 & 2 공통 모듈 (경로 및 패키지 구조에 맞게 통일)
 from src.utils import kiwoom_utils
+from src.utils.numeric import safe_float as _safe_float
 from src.utils.logger import log_error, log_info
 from src.utils.constants import DATA_DIR, RESTART_FLAG_PATH, TRADING_RULES
 from src.utils.pipeline_event_logger import emit_pipeline_event
@@ -1786,28 +1787,6 @@ def _safe_int(value, default=0):
         if not math.isfinite(numeric):
             return default
         return int(numeric)
-    except Exception:
-        return default
-
-
-def _safe_float(value, default=0.0):
-    try:
-        if value is None:
-            return default
-        if isinstance(value, str) and value.strip().lower() in {
-            "",
-            "nan",
-            "nat",
-            "none",
-            "inf",
-            "+inf",
-            "-inf",
-        }:
-            return default
-        numeric = float(value)
-        if not math.isfinite(numeric):
-            return default
-        return numeric
     except Exception:
         return default
 

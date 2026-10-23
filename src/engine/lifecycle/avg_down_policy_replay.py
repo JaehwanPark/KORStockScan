@@ -54,6 +54,7 @@ IMPLEMENTATION_PATHS = (
     "src/engine/scalping/main_stop_policy.py",
     "src/engine/scalping/position_peak_ledger.py",
     "src/engine/lifecycle/policy_snapshot_reference.py",
+    "src/utils/numeric.py",
 )
 _KST = timezone(timedelta(hours=9))
 
