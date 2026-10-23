@@ -152,6 +152,8 @@ CRON_JOB_REGISTRY: list[dict[str, Any]] = [
     {
         "id": "panic_sell_defense",
         "log": "logs/run_panic_sell_defense_cron.log",
+        "owner_terminal_recovery": True,
+        "owner_log_labels": ("panic_sell_defense", "panic sell defense"),
         "window_start": (9, 5),
         "window_end": (15, 30),
         "mode": "recurring",

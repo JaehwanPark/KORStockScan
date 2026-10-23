@@ -32,7 +32,8 @@ def test_finalization_detector_window_precedes_preopen_scanner():
 ])
 @pytest.mark.parametrize('job_id,label', [
     ('buy_funnel_sentinel', 'buy_funnel_sentinel'), ('buy_funnel_sentinel', 'buy funnel sentinel'),
-    ('holding_exit_sentinel', 'holding_exit_sentinel'), ('holding_exit_sentinel', 'holding exit sentinel')])
+    ('holding_exit_sentinel', 'holding_exit_sentinel'), ('holding_exit_sentinel', 'holding exit sentinel'),
+    ('panic_sell_defense', 'panic_sell_defense'), ('panic_sell_defense', 'panic sell defense')])
 def test_recurring_sentinel_recovers_only_after_latest_real_owner_done(monkeypatch, tmp_path, markers, expected, job_id, label):
     import src.engine.error_detectors.cron_completion as cc
     job = next(dict(job) for job in CRON_JOB_REGISTRY if job['id'] == job_id)
@@ -48,7 +49,9 @@ def test_recurring_sentinel_recovers_only_after_latest_real_owner_done(monkeypat
     monkeypatch.setattr(cc, '_kst_time_tuple', lambda: (10, 30))
     monkeypatch.setattr(cc, 'is_krx_trading_day', lambda day: True)
     monkeypatch.setattr(cc, 'CRON_JOB_REGISTRY', [job])
-    marker = 'BUY_FUNNEL_SENTINEL_INTRADAY' if job_id == 'buy_funnel_sentinel' else 'HOLDING_EXIT_SENTINEL_PREMARKET'
+    marker = {'buy_funnel_sentinel': 'BUY_FUNNEL_SENTINEL_INTRADAY',
+              'holding_exit_sentinel': 'HOLDING_EXIT_SENTINEL_PREMARKET',
+              'panic_sell_defense': 'PANIC_SELL_DEFENSE_INTRADAY'}[job_id]
     monkeypatch.setattr(cc, 'load_installed_crontab', lambda: '*/5 9-15 * * 1-5 # '+marker)
     result = CronCompletionDetector(dry_run=True).check()
     assert result.details[job_id+'_status'] == expected

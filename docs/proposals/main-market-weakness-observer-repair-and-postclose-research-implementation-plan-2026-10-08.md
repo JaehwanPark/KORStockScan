@@ -308,3 +308,7 @@ root 관리자가 ubuntu 예약을 설치할 때 연구 디렉터리와 설정�
 10/13 결과 점검에서 실제 야간 일별·누적 생성과 optional 예약 소비를 확인했다. 점검 누적 10/7·10/8·10/12의 16,722개 기록은 전부 상장시장 미연결 UNKNOWN, 자연 trace 1,534개는 exact label 미연결 U, 조정 후보는 0개다. 종목 마스터와 자연 trace의 gzip-only 원천 누락, native 판정 본문의 기존 payload 연결 부족을 새 결함으로 확인했다. 날짜별 global hash로 인한 비교 cohort 단절 가능성과 기계 후보 미지원도 종료 범위를 구체화해야 한다. 과거 구현/배포 검증을 취소하거나 원천 부재를 no-edge로 바꾸지 않는다.
 
 후속 순서와 직접 consumer·압축/연결/누적/후보 회귀·자원·설치 code rebind·자연 수용은 [10/13 결함보완계획](main-market-weakness-postclose-source-binding-and-candidate-repair-plan-2026-10-13.md)의 WR0–WR5를 따른다. 현재 실행 인계는 10/13 checklist의 **동일** `MainMarketWeaknessPostcloseObservation1008`이며 §12–§14는 날짜별 역사다. 이번 후속 요청은 계획 수립이고 수리 코드·재생성·배포·예약 변경·Telegram 전송은 실행하지 않는다.
+
+### 2026-10-23 market-scope and cron recovery contract
+
+Independent market triggers may cover both listing markets even when the separate weighted panic trigger is false. The existing observer producer labels two affected markets BROAD_WEAKNESS and one SINGLE_MARKET_WEAKNESS; raw thresholds, affected scope, hysteresis, freshness and observe-only authority remain unchanged. The strict consumer continues rejecting mismatched scope and missing/stale sources. The recurring panic cron reader accepts only its latest genuine owner DONE as recovery, preserving earlier errors and treating a later START/FAIL separately. See [cause, regression and retained-source revalidation](../audits/main-market-weakness-source-completeness-and-status-review-2026-10-16.md#2026-10-23-two-market-observer-and-retained-source-revalidation).
