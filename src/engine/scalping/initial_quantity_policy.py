@@ -879,7 +879,56 @@ def _fresh_observed_price(fields: dict[str, Any]) -> tuple[float | None, str]:
 
 def join_post_fill_paths(trades, **kwargs):
     from src.engine.scalping.initial_quantity_source_cache import join
-    return join(trades, **kwargs)
+    paths = join(trades, **kwargs)
+    _join_native_research_buy_fills(trades, paths, kwargs.get('data_dir', DATA_DIR))
+    return paths
+
+
+def _join_native_research_buy_fills(trades, paths, data_dir):
+    """Bind recovered cost executions to their original sizing/order path.
+
+    Raw pipeline caches remain unchanged. Existing partial/conflicting fills
+    are never replaced, and an observed registry clock proves no exchange venue.
+    """
+    from src.engine.lifecycle import broker_cost_allocation as allocation
+    from src.engine.lifecycle import main_stop_research_cost as native
+    from src.engine.lifecycle.research_input_budget import Claim
+    from src.engine.sniper_trade_review_report import _quantity_registry_index
+    pending = [trade for trade in trades if trade.get('quantity_research_cost')
+               and trade['trade_id'] in paths and not paths[trade['trade_id']].get('fills')
+               and not paths[trade['trade_id']].get('source_gap')]
+    if not pending:
+        return
+    root = Path(data_dir)
+    registry_path = root/'runtime/order_owner_registry.jsonl'
+    with Claim(registry_path.stat().st_size * 12 if registry_path.exists() else 0):
+        registry, generation, _ = native._registry(root)
+        index = _quantity_registry_index(registry)
+        for trade in pending:
+            path = paths[trade['trade_id']]
+            try:
+                recovered = allocation.native_research_buy_fills(root, dict(
+                    id=trade['record_id'], code=trade['stock_code'],
+                    buy_time=trade['entry_at_fact_buy_time'], buy_qty=trade['buy_qty'],
+                    buy_price=trade['buy_price']), registry, generation, index)
+                if recovered is None:
+                    continue
+                legs, _, proof = recovered
+                cost = trade['quantity_research_cost']
+                if (cost['buy_fill_identity'] != allocation.fill_identity(legs)
+                        or sum(leg['qty'] for leg in legs) != trade['buy_qty']):
+                    raise ValueError('quantity_native_buy_cost_identity_mismatch')
+                fills = [dict(at=_timestamp(leg['at']), emitted_at=_timestamp(leg['at']),
+                    price=leg['price'], qty=leg['qty'], order_no=leg['order_no'],
+                    execution_no=leg['execution_no'], route=leg['route'], venue='UNKNOWN',
+                    actual_execution_venue_verified=False, broker_actual_execution_venue='UNKNOWN',
+                    clock_precision_sec=0, clock_source=proof['clock_source']) for leg in legs]
+                path['fills'].extend(fills)
+                path['native_buy_fill_source'] = proof
+            except (ValueError, TypeError, KeyError, OSError) as exc:
+                if str(exc).startswith('shared_research_budget_'):
+                    raise
+                path['source_gap'].append('quantity_native_buy_source_invalid')
 
 
 def _quantity_capture_lifecycle_sources(data_dir, day, *, decode=False):
@@ -1929,6 +1978,7 @@ def build_initial_quantity_replay(as_of: str, *, data_dir: Path = DATA_DIR,
                                      source_receipts=source_receipts,
                                      price_horizon_seconds=horizon)
     if path_cache is not None:
+        _join_native_research_buy_fills(eligible_trades, paths, data_dir)
         path_cache.update({"census": census, "paths": paths,
                            "pipeline_source_receipts": source_receipts,
                            "date_scan_seconds": date_scan_seconds,
@@ -2015,6 +2065,8 @@ def build_initial_quantity_replay(as_of: str, *, data_dir: Path = DATA_DIR,
                      "entry_fill_venue_assignment_authority": first_fill.get("venue_assignment_authority") if first_fill else None,
                      "entry_fill_clock_source": (first_fill.get("clock_source")
                                                  if first_fill else None),
+                     **({'native_buy_fill_source': path['native_buy_fill_source']}
+                        if path.get('native_buy_fill_source') else {}),
                      "applied_policy_status": parent.get("applied_policy_status"),
                      "applied_policy_file_sha256": parent.get("applied_policy_file_sha256"),
                      "applied_policy_runtime_pid": parent.get("applied_policy_runtime_pid"),

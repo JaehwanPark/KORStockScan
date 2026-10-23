@@ -2775,3 +2775,61 @@ def test_large_quantity_fill_projection_preserves_native_and_operator_market_axe
     assert axes['actual_execution_venue']==('KRX' if venue=='UNKNOWN' else venue)
     assert axes['actual_execution_venue_verified'] is (venue!='UNKNOWN')
     assert projected['broker_actual_execution_venue']==venue
+
+
+@pytest.mark.parametrize('fault', [None, 'cost_identity', 'missing_receipt', 'receipt_qty',
+    'existing_fill', 'source_gap', 'wrong_order', 'wrong_attempt', 'wrong_plan', 'missing_registry', 'during_restore'])
+def test_native_buy_quantity_path_binds_original_policy_without_inventing_venue(tmp_path, monkeypatch, fault):
+    from src.engine.ai import holding_exit_vote as vote
+    from src.engine.lifecycle import broker_cost_allocation as allocation
+    from src.tests.test_broker_cost_allocation import position, source, DAY
+    from src.tests.test_main_stop_research_cost import registry
+    item = position(1)
+    registry(tmp_path, [item])
+    stock = dict(id=1, code='005930', buy_time=DAY+'T10:00:00', buy_qty=2, buy_price=10000,
+        entry_filled_qty=2, _entry_receipt_filled_by_order_no={'11':2},
+        _entry_receipt_executions_by_order_no={'11':{'101':dict(cumulative_qty=2,
+            cumulative_exec_amount=20000, order_qty=2, remaining_qty=0,
+            unit_exec_qty=2, unit_exec_price=10000)}},
+        _add_receipt_filled_by_order_no={}, _add_receipt_executions_by_order_no={})
+    vote.persist_buy_fill_receipt(stock,tmp_path)
+    cost=allocation.build_research_cost_allocations({DAY:source(tmp_path)},[item])['1']
+    trade=dict(trade_id='fact:1',record_id='1',stock_code='005930',buy_qty=2,buy_price=10000,
+        entry_at_fact_buy_time=DAY+'T10:00:00+09:00', quantity_research_cost=cost,
+        profit_rate=cost['allocated_profit_rate'],realized_net_pnl_krw=cost['allocated_net_pnl_krw'])
+    at=policy._timestamp(DAY+'T09:59:59+09:00')
+    path=dict(fills=[],source_gap=[],decisions=[dict(at=at,stage='entry_execution_sizing_plan',fields=dict(
+        entry_submit_attempt_id='attempt',entry_execution_sizing_plan_sha256='plan',
+        position_sizing_policy_status='initial_policy_v2_loaded',position_sizing_policy_sha256='a'*64,
+        initial_quantity_runtime_pid='123'))],order_sent=[dict(at=at,order_no='11',attempt_id='attempt',plan_sha='plan')])
+    receipt=tmp_path/'runtime/holding_buy_fill_receipts/1.json'
+    if fault=='during_restore':
+        restore=vote.restore_buy_fill_receipt
+        def changed(*args):
+            result=restore(*args)
+            receipt.write_bytes(receipt.read_bytes()+b' ')
+            return result
+        monkeypatch.setattr(vote,'restore_buy_fill_receipt',changed)
+    if fault=='cost_identity': cost['buy_fill_identity']='f'*64
+    elif fault=='missing_receipt': receipt.unlink()
+    elif fault=='receipt_qty':
+        changed=json.loads(receipt.read_bytes());changed['buy_qty']=3;receipt.write_text(json.dumps(changed))
+    elif fault=='existing_fill': path['fills']=[{'original_partial':True}]
+    elif fault=='source_gap': path['source_gap']=['original_guard_failure']
+    elif fault=='wrong_order': path['order_sent'][0]['order_no']='12'
+    elif fault=='wrong_attempt': path['order_sent'][0]['attempt_id']='foreign'
+    elif fault=='wrong_plan': path['order_sent'][0]['plan_sha']='foreign'
+    elif fault=='missing_registry': (tmp_path/'runtime/order_owner_registry.jsonl').unlink()
+    policy._join_native_research_buy_fills([trade],{'fact:1':path},tmp_path)
+    if fault=='existing_fill':
+        assert path['fills']==[{'original_partial':True}]
+    elif fault in {'cost_identity','missing_receipt','receipt_qty','source_gap','missing_registry','during_restore'}:
+        assert path['fills']==[]
+    else:
+        assert len(path['fills'])==1
+        assert path['fills'][0]['venue']=='UNKNOWN'
+        assert path['fills'][0]['actual_execution_venue_verified'] is False
+        assert path['native_buy_fill_source']['fill_event_hashes']
+        parent=policy._paired_candidate(trade,path,'parent')
+        assert parent['applied_policy_file_sha256']==('a'*64 if fault is None else None)
+        assert parent['applied_policy_runtime_pid']==('123' if fault is None else None)

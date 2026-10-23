@@ -450,10 +450,6 @@ def _native_missing_buy_position(root, trade, position, registry, generation, re
     This is a research projection of existing executions, not a reconstructed
     HOLDING event. Partial or conflicting pipeline executions stay excluded.
     """
-    from . import main_stop_research_cost as native
-    from src.engine.ai import holding_exit_vote as vote
-    from src.engine.scalping.main_stop_quantity_source import _fill_facts
-    from src.engine.sniper_trade_review_report import _quantity_registry_fill_custody
     missing = {'source_gap_buy_fill_missing', 'source_gap_negative_position_balance',
                'source_gap_position_quantity_not_conserved'}
     reasons = set(position['execution_source_quality_reasons'])
@@ -461,12 +457,29 @@ def _native_missing_buy_position(root, trade, position, registry, generation, re
             or reasons - missing - {'source_gap_sell_leg_configured_cost'}
             or not position['terminal_observed'] or position['status'] != 'COMPLETED'):
         return position, None
-    record = _record(position['record_id'])
+    recovered = native_research_buy_fills(root, trade, registry, generation, registry_index)
+    if recovered is None:
+        return position, None
+    legs, custody, proof = recovered
+    if sum(number(leg['qty']) for leg in position['sell_legs']) != number(trade['buy_qty']):
+        return position, None
+    return {**position, 'buy_legs':legs, 'custody_rows':custody,
+            'execution_source_quality_reasons':sorted(reasons-missing)}, proof
+
+
+def native_research_buy_fills(root, trade, registry, generation, registry_index):
+    """Read exact accepted BUY identities for cost and quantity research only."""
+    from . import main_stop_research_cost as native
+    from src.engine.ai import holding_exit_vote as vote
+    from src.engine.scalping.main_stop_quantity_source import _fill_facts
+    from src.engine.sniper_trade_review_report import _quantity_registry_fill_custody
+    record = _record(trade['id'])
     path = root/'runtime/holding_buy_fill_receipts'/(record+'.json')
     if not path.exists():
-        return position, None
+        return None
     from .research_input_budget import Claim
     with Claim(path.stat().st_size * 12):
+        before = native.byte_generation(path)
         receipt = native._read(path, vote._BUY_FILL_RECEIPT_MAX_BYTES)
         stock = dict(id=int(record), code=trade['code'], buy_time=receipt.get('buy_time'),
                      buy_qty=trade['buy_qty'], buy_price=trade['buy_price'])
@@ -476,7 +489,7 @@ def _native_missing_buy_position(root, trade, position, registry, generation, re
                 or vote.restore_buy_fill_receipt(stock, root) != 'restored'
                 or stock.get('_add_receipt_filled_by_order_no')
                 or stock.get('_add_receipt_executions_by_order_no')):
-            return position, None
+            return None
         facts, identity = _fill_facts(stock)
         legs, hashes = [], []
         owners, _ = registry_index
@@ -486,7 +499,7 @@ def _native_missing_buy_position(root, trade, position, registry, generation, re
             matches = [event for event in fills if event.get('broker_order_no') == leg['order_no']
                        and event.get('execution_no') == leg['execution_no']]
             if len(matches) != 1:
-                return position, None
+                return None
             event = matches[0]
             signature = stock['_entry_receipt_executions_by_order_no'][leg['order_no']][leg['execution_no']]
             # A single complete execution per order supplies an exact price.
@@ -498,23 +511,23 @@ def _native_missing_buy_position(root, trade, position, registry, generation, re
                     or event.get('filled_qty') != leg['qty']
                     or event.get('fill_amount') != leg['qty'] * signature.get('unit_exec_price', 0)
                     or at.date().isoformat() != event.get('order_date')):
-                return position, None
+                return None
             legs.append(dict(at=at.isoformat(), order_no=leg['order_no'], execution_no=leg['execution_no'],
                 qty=leg['qty'], price=signature['unit_exec_price'], route=event.get('route')))
             hashes.append(event['event_hash'])
-        if (not legs or min(_clock(leg['at']) for leg in legs) != _clock(stock['buy_time'])
-                or sum(number(leg['qty']) for leg in position['sell_legs']) != number(trade['buy_qty'])):
-            return position, None
+        if not legs or min(_clock(leg['at']) for leg in legs) != _clock(stock['buy_time']):
+            return None
         custody = _quantity_registry_fill_custody(trade, {'buy_fill_legs':legs}, registry,
             generation, registry_index=registry_index)
         # The shared custody owner validates exact account/owner/route and the
         # complete registry fill census, including conflicting foreign claims.
         custody_account(record, legs, custody)
-        proof = dict(receipt=native.byte_generation(path), buy_fill_identity=identity,
+        if native.byte_generation(path) != before:
+            raise ValueError('research_native_buy_receipt_changed')
+        proof = dict(receipt=before, buy_fill_identity=identity,
             registry_sha256=generation['sha256'], fill_event_hashes=sorted(hashes),
             clock_source='native_registry_fill_observed_at_kst')
-        return {**position, 'buy_legs':legs, 'custody_rows':custody,
-                'execution_source_quality_reasons':sorted(reasons-missing)}, proof
+        return legs, custody, proof
 
 
 def _refresh_native_research_costs(root, completion_date, *, completion_source, input_paths, input_signature):

@@ -4968,12 +4968,15 @@ REVIEWED_PRE_SUBMIT_DEPENDENCY_VARIANTS = {
 }
 
 # Exact native BUY cost consumer; preserve the already consumed observer profile.
-REVIEWED_NATIVE_BUY_COST_HASHES = {'src/engine/infrastructure/startup_validation_code_context.py': 'b77bac6a666240d01470ac06a561badcc3de5915321a857b37dd72c85ab0e072',
- 'src/engine/lifecycle/broker_cost_allocation.py': '7d2954281bc187ba3778ce3587631a6980929536856a73111cbf78ac8f8fdfea',
+REVIEWED_NATIVE_BUY_COST_HASHES = {'src/engine/infrastructure/startup_validation_code_context.py': '6b53262ccf8282c3becbf5f109921c17a695f99c8fbdc81cde3a40bb48012222',
+ 'src/engine/kiwoom_websocket.py': 'ddc6bab2dfd4adb2d253a420e66eac6bd33c1877b18070023f75c489f9c40730',
+ 'src/engine/lifecycle/broker_cost_allocation.py': '021f0a60d6569d0fe02dd619333b7af2f8bcfa0858601b30d93f2847be1c11c9',
  'src/engine/monitoring/policy_generation_code_handoff.py': 'b9bb89e9ea3c3835e2cb45dc7687b91e38156d208adf1dfc7554869038e50a0e',
  'src/engine/scalping/initial_quantity_monitor_projection.py': '87f78306653fc9f51d890a3531752301589782639b1832ad38a24f7c29c4215d',
+ 'src/engine/scalping/initial_quantity_policy.py': '0dc2ed9f75960006ec08e4f5eb7606dc1ee5b501ebcaf3507e0af6f8c8d12dca',
  'src/engine/sniper_state_handlers.py': '6a8c1ad86951d2720a91175cda4565d6202e9ff63b0b220b6613166760c84f66',
  'src/scanners/scalping_scanner.py': 'e3b93e6526caab14d4870bc2550c7efdbb841d86b65abc9cd1f36b8d7c21f90c',
+ 'src/scanners/zero_base_discovery_runtime.py': 'b27a13a0e24a3b07b3161defb97271a73bcc4d214ce2ff419d10d09bc46ce606',
  'src/utils/pipeline_event_logger.py': '67fa82fe4f022123a529f13efa14a0b13a20ef1975210c45b2a5deae3b675b3d'}
 REVIEWED_NATIVE_BUY_COST_PROFILE = {**REVIEWED_PRE_SUBMIT_ENTRY_COST_HASHES, **REVIEWED_NATIVE_BUY_COST_HASHES}
 REVIEWED_NATIVE_BUY_COST_VARIANTS = {
@@ -4984,11 +4987,14 @@ REVIEWED_NATIVE_BUY_COST_VARIANTS = {
     } for key, value in REVIEWED_PRE_SUBMIT_DEPENDENCY_VARIANTS.items()
 }
 REVIEWED_NATIVE_BUY_ORIGINAL_HASHES = {'src/engine/infrastructure/startup_validation_code_context.py': 'ee715b40b27ddd814128f7c49945d2dfbba08e65cf6c7c23c4a8cbd73594b171',
+ 'src/engine/kiwoom_websocket.py': 'ef70d8fc0fd74416fc1e7a9c27dca68663a1f057b7e2b14041b255a66a9af377',
  'src/engine/lifecycle/broker_cost_allocation.py': '404a1fb1f49683eba1e0443b74758cda11fd8b62452e49f229808b7e5769afae',
  'src/engine/monitoring/policy_generation_code_handoff.py': '4db24d4d542b8cc6142c1b85e0839bfce6a7116aaae5f49e2b0d90e4174e3d62',
  'src/engine/scalping/initial_quantity_monitor_projection.py': 'c0ac0738df35657d770b4c7a1a7c0490a0ab4bc8756aa1c19215ad2661dead8b',
+ 'src/engine/scalping/initial_quantity_policy.py': 'f8e29defaefb8128834b22e19404c75037686d5e107961f3f173996895eebbdd',
  'src/engine/sniper_state_handlers.py': 'b3b2965f65f33e5e5bf52fd960757d6bdbe6b5a63e6844bd95f5dc1d5353ea1d',
  'src/scanners/scalping_scanner.py': 'ea6188939ecc11462923d4746d27d38042aadd06f4dcd02d14cea7b2e5f8123b',
+ 'src/scanners/zero_base_discovery_runtime.py': 'dc058e9520482506a7659ae9cbefe1e7ce2a3ac0f2dde0b8b053742aec0535f4',
  'src/utils/pipeline_event_logger.py': '2e1c150e1b7d21adcb6fa586a15c1e018cdf2e6a2aab13daa067f414d9b4e6d3'}
 REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
     name: REVIEWED_ENTRY_COST_PAIRS.get(name, ()) + tuple((origin, current) for origin in

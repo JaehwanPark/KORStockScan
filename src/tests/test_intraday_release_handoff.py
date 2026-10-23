@@ -2455,7 +2455,8 @@ def test_observer_io_handoff_retains_consumed_index_generation(tmp_path,family,f
     'src/engine/infrastructure/startup_validation_code_context.py',
     'src/engine/monitoring/policy_generation_code_handoff.py',
     'src/engine/sniper_state_handlers.py','src/scanners/scalping_scanner.py',
-    'src/utils/pipeline_event_logger.py'])
+    'src/utils/pipeline_event_logger.py','src/engine/scalping/initial_quantity_policy.py',
+    'src/engine/kiwoom_websocket.py','src/scanners/zero_base_discovery_runtime.py'])
 def test_native_buy_cost_handoff_keeps_exact_reviewed_generation(tmp_path,family,fault,dependency):
     test_entry_cost_handoff_keeps_exact_complete_generation(
         tmp_path,family,fault,'current',dependency=dependency)

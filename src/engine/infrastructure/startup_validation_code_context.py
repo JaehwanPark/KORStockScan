@@ -343,6 +343,23 @@ REVIEWED_PREPARATION_HISTORY.setdefault('src/scanners/scalping_scanner.py', set(
 REVIEWED_PREPARATION_HISTORY.setdefault('src/utils/pipeline_event_logger.py', set()).update({('2e1c150e1b7d21adcb6fa586a15c1e018cdf2e6a2aab13daa067f414d9b4e6d3',
   '67fa82fe4f022123a529f13efa14a0b13a20ef1975210c45b2a5deae3b675b3d')})
 
+
+# Reviewed native BUY policy lineage and exact probe collector outcomes.
+REVIEWED_PREPARATION_HISTORY.setdefault('src/engine/lifecycle/broker_cost_allocation.py', set()).update({('404a1fb1f49683eba1e0443b74758cda11fd8b62452e49f229808b7e5769afae',
+  '021f0a60d6569d0fe02dd619333b7af2f8bcfa0858601b30d93f2847be1c11c9'),
+ ('7d2954281bc187ba3778ce3587631a6980929536856a73111cbf78ac8f8fdfea',
+  '021f0a60d6569d0fe02dd619333b7af2f8bcfa0858601b30d93f2847be1c11c9'),
+ ('e392d3e79ad63fe1502a7921aca590ce93c3134d9d3e4d488d42775dd20cf349',
+  '021f0a60d6569d0fe02dd619333b7af2f8bcfa0858601b30d93f2847be1c11c9')})
+REVIEWED_PREPARATION_HISTORY.setdefault('src/engine/scalping/initial_quantity_policy.py', set()).update({('f8e29defaefb8128834b22e19404c75037686d5e107961f3f173996895eebbdd',
+  '0dc2ed9f75960006ec08e4f5eb7606dc1ee5b501ebcaf3507e0af6f8c8d12dca')})
+REVIEWED_PREPARATION_HISTORY.setdefault('src/engine/kiwoom_websocket.py', set()).update({('215a0e3d6388df5938a4d70e8e5afad689fa8087280a3a53b81619a2295e35e3',
+  'ddc6bab2dfd4adb2d253a420e66eac6bd33c1877b18070023f75c489f9c40730'),
+ ('ef70d8fc0fd74416fc1e7a9c27dca68663a1f057b7e2b14041b255a66a9af377',
+  'ddc6bab2dfd4adb2d253a420e66eac6bd33c1877b18070023f75c489f9c40730')})
+REVIEWED_PREPARATION_HISTORY.setdefault('src/scanners/zero_base_discovery_runtime.py', set()).update({('dc058e9520482506a7659ae9cbefe1e7ce2a3ac0f2dde0b8b053742aec0535f4',
+  'b27a13a0e24a3b07b3161defb97271a73bcc4d214ce2ff419d10d09bc46ce606')})
+
 def reviewed_preparation_pair(relative, old, current):
     return (REVIEWED_PREPARATION_SOURCES.get(relative) == (old, current)
             or (old, current) in REVIEWED_PREPARATION_HISTORY.get(relative, ()))
