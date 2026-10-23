@@ -290,7 +290,7 @@ def _identity(pid):
 
 
 def closed_consumption_observation(day=None, *, now=None):
-    """Authenticate an already consumed, normally closed Main for readers only.
+    """Authenticate prior policy consumption after normal or interrupted process exit.
 
     The native market terminal, postclose stop and EOD completion are separate
     evidence. This never verifies a new PID, launches Main or activates policy.
@@ -300,10 +300,9 @@ def closed_consumption_observation(day=None, *, now=None):
     from src.engine.error_detectors.process_health import _is_expected_thread_terminal
     current = (now or datetime.now(KST)).astimezone(KST)
     data = DATA_DIR.resolve()
-    paths = [data/'runtime/runtime_release_selection.json', data.parent/'tmp/error_detector_heartbeat.json',
-             data.parent/'tmp/postclose_bot_isolation.json']
+    paths = [data/'runtime/runtime_release_selection.json', data.parent/'tmp/error_detector_heartbeat.json']
     records = [router._startup_receipt(p) for p in paths]
-    selected, heartbeat, isolation = [record[0] for record in records]
+    selected, heartbeat = [record[0] for record in records]
     receipt = selected.get('actual_pid_receipt') or {}
     recorded = datetime.fromisoformat(str(receipt.get('recorded_at_kst') or ''))
     day = day or recorded.astimezone(KST).date().isoformat()
@@ -334,9 +333,52 @@ def closed_consumption_observation(day=None, *, now=None):
     if not _postclose_main_absent():
         raise ValueError('intraday_closed_consumption_process_inventory_unknown')
     beat = datetime.fromisoformat(str((heartbeat.get('main_loop') or {}).get('last_beat') or ''))
-    stopped = datetime.fromisoformat(str(isolation.get('started_at') or ''))
     terminal = (heartbeat.get('threads') or {}).get('sniper_engine') or {}
     circuit = heartbeat.get('ai_circuit') or {}
+    if terminal.get('alive') is True:
+        # Abrupt exit is never a normal market terminal or source admission.
+        # Authenticate only the already consumed policy generation. The ordered
+        # owner independently preserves the unfinished collector before launch.
+        collector_path = data/'runtime/scalp_micro_reversion_forward_collector/latest.json'
+        collector, collector_raw = router._startup_receipt(collector_path)
+        snapshot = collector.get('collector_snapshot') or {}
+        observed = datetime.fromisoformat(str(collector.get('generated_at') or ''))
+        terminal_at = datetime.fromisoformat(str(terminal.get('last_beat') or ''))
+        manifest = _read(bootstrap.manifest_path(day))
+        checked = _verify_handoff(day, commit, now=current, historical_observer=True)
+        if (day != current.date().isoformat() or beat.tzinfo is None or observed.tzinfo is None
+                or terminal_at.tzinfo is None or not recorded <= beat <= terminal_at <= current
+                or not recorded <= observed <= current
+                or (heartbeat.get('main_loop') or {}).get('pid') != identity['pid']
+                or circuit.get('pid') != identity['pid'] or circuit.get('process_start_ticks') != identity['start_ticks']
+                or collector.get('schema') != 'scalp_micro_reversion_canary_monitor_v1'
+                or snapshot.get('process_pid') != identity['pid']
+                or snapshot.get('process_start_ticks') != identity['start_ticks']
+                or snapshot.get('source_contract') != 'main_market_source_v1'
+                or snapshot.get('collector_lifecycle') != 'running'
+                or type(snapshot.get('sequence_epoch')) is not int or snapshot['sequence_epoch'] <= 0
+                or consumed.get('manifest_sha256') != manifest.get('manifest_sha256')
+                or checked['status'] != 'pass'):
+            raise ValueError('intraday_interrupted_consumption_unproven')
+        paths.append(collector_path); records.append((collector, collector_raw))
+        if (any(router._startup_receipt(p)[1] != record[1] for p, record in zip(paths, records))
+                or router._startup_receipt(consumed_path)[1] != consumed_raw or not _postclose_main_absent()):
+            raise ValueError('intraday_interrupted_consumption_generation_changed')
+        sources = {str(p): hashlib.sha256(record[1]).hexdigest() for p, record in zip(paths, records)}
+        sources.update({str(consumed_path): hashlib.sha256(consumed_raw).hexdigest(),
+                        str(handoff_path): _sha(handoff_path), str(bootstrap.manifest_path(day)): _sha(bootstrap.manifest_path(day)),
+                        **checked.get('handoff', {}).get('frozen_files', {})})
+        return dict(schema='intraday_closed_consumption_observation_v1', target_date=day, release_commit=commit,
+            basis='interrupted_consumed_process', pid_identity=identity, terminal_verified=False,
+            collector_epoch=snapshot['sequence_epoch'], collector_path=str(collector_path),
+            collector_sha256=hashlib.sha256(collector_raw).hexdigest(), source_admission='unverified_interrupted_epoch',
+            selection_sha256=hashlib.sha256(records[0][1]).hexdigest(),
+            consumed_sha256=hashlib.sha256(consumed_raw).hexdigest(), source_hashes=sources,
+            runtime_effect=False, current_observation_verified=False, new_pid_consumption_claimed=False)
+    isolation_path = data.parent/'tmp/postclose_bot_isolation.json'
+    isolation, isolation_raw = router._startup_receipt(isolation_path)
+    paths.append(isolation_path); records.append((isolation, isolation_raw))
+    stopped = datetime.fromisoformat(str(isolation.get('started_at') or ''))
     if (isolation.get('schema_version') != 1 or isolation.get('active') is not True
             or isolation.get('target_date') != day or isolation.get('session') != 'bot'
             or isolation.get('action') not in {'stop', 'restart'}
@@ -5174,6 +5216,49 @@ REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
     for name, current in REVIEWED_AUXILIARY_CAPABILITY_HASHES.items()}}
 
 
+# Exact numeric/replay successor; the source-flush integration; consumed auxiliary/REST/holding profiles stay intact.
+REVIEWED_NUMERIC_REPLAY_HASHES = {'src/engine/ai_engine_openai.py': '278da9793f4415c1609f17532e68a82cb4a6e6c6d7a70f0bc4975354f3f2a4a2',
+ 'src/engine/automation/ordered_intraday_deploy.py': 'd14017560b8664ea2b1fe39a6c146840807c875178764e014683da4713e8bc9b',
+ 'src/engine/infrastructure/startup_validation_code_context.py': 'a68ba8201e58f3096aa98c2bf5e2b8bc68d0592c79136cd641f1164c8a958915',
+ 'src/engine/kiwoom_sniper_v2.py': '51b75d2cd21cc8a66c9fc5bcda6119c102d0f2256b6f569ea5e05194e15f1ce4',
+ 'src/engine/lifecycle/avg_down_policy_replay.py': '7e11c813a94653b142f2682946b78a9bda3fd700c9300f4112e7209771787096',
+ 'src/engine/log_archive_service.py': '1a3f94cc9e50ab7768cd7b7fb2953a3c0787a15f5b99e7a9f40231a41f8b81f2',
+ 'src/engine/monitoring/runtime_performance.py': 'a0223bb985173ed7029ff26cabf1db76d45db690fff22bbf0cf336640a1a4ada',
+ 'src/engine/scalping/entry_candle_context.py': '1acd9a0b1c5fee0cb25835b6a249381e766aff3d54a0481e257466327c1d6f5f',
+ 'src/engine/scalping/mechanistic_entry_runtime_policy.py': '439eff9acb93d3ecd5513d137ee03bdb9c33fd9fde60dcdbb7638058f2dc9951',
+ 'src/engine/scalping/micro_reversion/path_journal.py': '91308bcba1d7162cdedcd47918b50400bc5a8e1f8afee66aa50b8f975b5672d1',
+ 'src/engine/scalping/reversal_evaluation_context.py': 'fe093211bb7677bc6568e31dbc1d8c425ef15482163eacd24844d041856868c2',
+ 'src/engine/sniper_scale_in.py': '4a60e43a414c26b2e4f8d809b45bb339c2d8c04c16ca229fa8c334868c29a506',
+ 'src/engine/sniper_state_handlers.py': 'ea59d6365ae1707af457535650937c49977997d9bc516bb8cc141f07da6eea86',
+ 'src/utils/numeric.py': '2da99f1423eefd7ac55e0c30c8d62d4b9f175944b7017aae46bc21ae23e02273'}
+REVIEWED_NUMERIC_REPLAY_PREVIOUS = {'src/engine/ai_engine_openai.py': '9f9a3561db4dd3247ef14a47e3346f41453c98c0bf42b5ef7ff0be4a2a5b5e56',
+ 'src/engine/automation/ordered_intraday_deploy.py': '7f52b1d056bf13f16791c4d5d41e8ca4ba4a9715a77176403c1dff97e95d0026',
+ 'src/engine/infrastructure/startup_validation_code_context.py': '8ef7d406ba2b9af7504321f14114e4eea6a31c963d56048a26745f2a62cfd0de',
+ 'src/engine/kiwoom_sniper_v2.py': 'bbbe478a566caa33fe2fcf8889d3e9c05dd15409e10f70eb97caaef76595e365',
+ 'src/engine/lifecycle/avg_down_policy_replay.py': '26ec5374924617f9beef1bda42a7b2433c583abbae73407da360e4d866ed35cd',
+ 'src/engine/log_archive_service.py': '18e912bb93cf937548077466fc4fd510c13fff73823e2b1c2510a19481e980af',
+ 'src/engine/monitoring/runtime_performance.py': 'ad937198678bef9cc5ef62e6aa41d9b980a0427d456608a94a1317b4fcd3cb39',
+ 'src/engine/scalping/entry_candle_context.py': '754f9ddcdead55df23259ba21cef5f324023831bf1eaa06e44b5275efa0c48b1',
+ 'src/engine/scalping/mechanistic_entry_runtime_policy.py': '2b8653cc8f30209992c2ac34690846e3d5d7607114b95560aafbf1445d509c08',
+ 'src/engine/scalping/micro_reversion/path_journal.py': '5d8e09413c104fc7392bca32c0804ee4d0142a61ecfb2674cf207089dc943dd6',
+ 'src/engine/scalping/reversal_evaluation_context.py': '7a20e1c32f0a4b54ebb25ae8970939184cbe9cef2e590adf68fb2791561e2458',
+ 'src/engine/sniper_scale_in.py': '11d6a2313c16d28e257cb0fc0cd4e2a44b7e6c2d29eb8c692509735bfdb08be3',
+ 'src/engine/sniper_state_handlers.py': '0fe0c01839a6186b0ef45aa8112075d13220ebc64f299656164aa007a84b1541'}
+REVIEWED_NUMERIC_REPLAY_PROFILE = {**REVIEWED_AUXILIARY_CAPABILITY_PROFILE, **REVIEWED_NUMERIC_REPLAY_HASHES}
+REVIEWED_NUMERIC_REPLAY_VARIANTS = {
+    (key[0], REVIEWED_NUMERIC_REPLAY_HASHES.get(key[0], key[1])): {
+        **value, 'dependencies': {**value['dependencies'], **REVIEWED_NUMERIC_REPLAY_HASHES},
+        'contract_extensions': {origin: {name: REVIEWED_NUMERIC_REPLAY_HASHES.get(os.path.normpath(name), sha)
+            for name, sha in paths.items()} for origin, paths in value['contract_extensions'].items()},
+    } for key, value in REVIEWED_AUXILIARY_CAPABILITY_VARIANTS.items()
+}
+REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
+    name: REVIEWED_ENTRY_COST_PAIRS.get(name, ()) + tuple((origin, current) for origin in
+        {REVIEWED_NUMERIC_REPLAY_PREVIOUS[name]} |
+        {old for pair in REVIEWED_ENTRY_COST_PAIRS.get(name, ()) for old in pair})
+    for name, current in REVIEWED_NUMERIC_REPLAY_HASHES.items() if name in REVIEWED_NUMERIC_REPLAY_PREVIOUS}}
+
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -5363,7 +5448,12 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     auxiliary_capability = any((root / name).is_file()
         and hashlib.sha256(candidate_bytes(name)).hexdigest() == sha
         for name, sha in REVIEWED_AUXILIARY_CAPABILITY_HASHES.items())
-    prepared_hashes = (REVIEWED_AUXILIARY_CAPABILITY_PROFILE if auxiliary_capability else
+    numeric_replay = (root / 'src/utils/numeric.py').exists() or any(
+        (root / name).is_file() and hashlib.sha256(candidate_bytes(name)).hexdigest() == sha
+        for name, sha in REVIEWED_NUMERIC_REPLAY_HASHES.items()
+        if name != 'src/engine/infrastructure/startup_validation_code_context.py')
+    prepared_hashes = (REVIEWED_NUMERIC_REPLAY_PROFILE if numeric_replay else
+        REVIEWED_AUXILIARY_CAPABILITY_PROFILE if auxiliary_capability else
         REVIEWED_MACHINE_REST_HISTORY_PROFILE if machine_rest_history else
         REVIEWED_HOLDING_STREAM_PROFILE if holding_stream else
         REVIEWED_NATIVE_BUY_COST_PROFILE if native_buy_cost else
@@ -5373,7 +5463,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         REVIEWED_ENTRY_COST_HASHES if sentinel_scope_present else
         REVIEWED_PRE_FINALIZATION_HASHES if consumed_finalization else
         REVIEWED_NATIVE_PREOPEN_HASHES if native_preopen else REVIEWED_ENTRY_COST_PRE_SENTINEL_SCOPE_HASHES)
-    prepared_variants = (REVIEWED_AUXILIARY_CAPABILITY_VARIANTS if auxiliary_capability else
+    prepared_variants = (REVIEWED_NUMERIC_REPLAY_VARIANTS if numeric_replay else
+        REVIEWED_AUXILIARY_CAPABILITY_VARIANTS if auxiliary_capability else
         REVIEWED_MACHINE_REST_HISTORY_VARIANTS if machine_rest_history else
         REVIEWED_HOLDING_STREAM_VARIANTS if holding_stream else
         REVIEWED_NATIVE_BUY_COST_VARIANTS if native_buy_cost else

@@ -1949,7 +1949,8 @@ def test_closed_observer_handoff_requires_exact_reader_and_source_epoch(tmp_path
 
 @pytest.mark.parametrize('fault', [None, 'midnight', 'pid_present', 'inventory_unknown', 'receipt_pid', 'receipt_start',
     'heartbeat_pid', 'heartbeat_start', 'terminal', 'unresolved', 'isolation', 'stop_clock', 'eod', 'eod_date',
-    'eod_rows', 'manifest', 'handoff', 'changed_heartbeat'])
+    'eod_rows', 'manifest', 'handoff', 'changed_heartbeat', 'interrupted',
+    'interrupted_actor', 'interrupted_epoch', 'interrupted_clock', 'interrupted_manifest', 'interrupted_changed'])
 def test_closed_consumption_requires_native_terminal_stop_eod_and_frozen_consumption(tmp_path, monkeypatch, fault):
     from src.engine.error_detectors import artifact_freshness as freshness
     from src.engine.infrastructure import runtime_release_router as router
@@ -1980,6 +1981,16 @@ def test_closed_consumption_requires_native_terminal_stop_eod_and_frozen_consump
         reason='threshold_cycle_postclose_resource_isolation',started_at=DAY+'T20:57:32+09:00')
     eod=dict(target_date=DAY,status='completed_with_warnings',finished_at=DAY+'T20:57:09',
         db_state=dict(latest_quote_date=DAY,rows_on_latest_date=2621))
+    if fault.startswith('interrupted') if fault else False:
+        terminal['alive'] = True
+        heartbeat['main_loop']['last_beat'] = DAY+'T20:00:00+09:00'
+        snapshot=dict(process_pid=3,process_start_ticks='42',source_contract='main_market_source_v1',
+            collector_lifecycle='running',sequence_epoch=123)
+        if fault=='interrupted_actor':snapshot['process_pid']=4
+        if fault=='interrupted_epoch':snapshot['sequence_epoch']=False
+        collector=dict(schema='scalp_micro_reversion_canary_monitor_v1',generated_at=DAY+'T20:00:00+09:00',collector_snapshot=snapshot)
+        if fault=='interrupted_clock':collector['generated_at']=DAY+'T20:00:00'
+        _json(data/'runtime/scalp_micro_reversion_forward_collector/latest.json',collector)
     if fault=='receipt_pid': receipt['pid']=4
     elif fault=='receipt_start': receipt['start_ticks']='43'
     elif fault=='heartbeat_pid': heartbeat['main_loop']['pid']=4
@@ -1996,8 +2007,8 @@ def test_closed_consumption_requires_native_terminal_stop_eod_and_frozen_consump
     _json(tmp_path/'tmp/error_detector_heartbeat.json',heartbeat)
     _json(tmp_path/'tmp/postclose_bot_isolation.json',isolation)
     _json(data/'runtime/update_kospi_status'/f'update_kospi_{DAY}.json',eod)
-    _json(handoff.bootstrap.manifest_path(DAY),dict(manifest_sha256='wrong' if fault=='manifest' else 'original'))
-    if fault=='changed_heartbeat':
+    _json(handoff.bootstrap.manifest_path(DAY),dict(manifest_sha256='wrong' if fault in ('manifest','interrupted_manifest') else 'original'))
+    if fault in ('changed_heartbeat','interrupted_changed'):
         original=router._startup_receipt;calls=0
         def changed(path):
             nonlocal calls
@@ -2007,10 +2018,13 @@ def test_closed_consumption_requires_native_terminal_stop_eod_and_frozen_consump
             return original(path)
         monkeypatch.setattr(router,'_startup_receipt',changed)
     now=NOW.replace(hour=22)+(timedelta(days=1) if fault=='midnight' else timedelta())
-    if fault not in (None,'midnight'):
+    if fault not in (None,'midnight','interrupted'):
         with pytest.raises((ValueError,OSError)): handoff.closed_consumption_observation(now=now)
         return
     proof=handoff.closed_consumption_observation(now=now)
+    if fault=='interrupted':
+        assert proof['terminal_verified'] is False and proof['source_admission']=='unverified_interrupted_epoch'
+        assert proof['basis']=='interrupted_consumed_process' and proof['collector_epoch']==123
     assert proof['pid_identity']==identity and proof['target_date']==DAY
     assert proof['runtime_effect'] is proof['current_observation_verified'] is proof['new_pid_consumption_claimed'] is False
 
@@ -2231,7 +2245,8 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(tmp_path,family,faul
     root=tmp_path/'candidate';root.mkdir()
     subprocess.run(['git','clone','-q','--shared','--no-checkout',str(canonical),str(root)],check=True)
     subprocess.run(['git','-C',str(root),'checkout','-q','75e0fbbf7'],check=True)
-    hashes=({'current':handoff.REVIEWED_AUXILIARY_CAPABILITY_PROFILE,
+    hashes=({'current':handoff.REVIEWED_NUMERIC_REPLAY_PROFILE,
+        'consumed_auxiliary_capability':handoff.REVIEWED_AUXILIARY_CAPABILITY_PROFILE,
         'consumed_rest_history':handoff.REVIEWED_MACHINE_REST_HISTORY_PROFILE,
         'consumed_holding_stream':handoff.REVIEWED_HOLDING_STREAM_PROFILE,
         'consumed_policy_custody':handoff.REVIEWED_NATIVE_BUY_COST_PROFILE,
@@ -2258,7 +2273,7 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(tmp_path,family,faul
     for name in hashes:
         content=((canonical/name).read_bytes() if generation=='current' else
             subprocess.check_output(['git','-C',str(canonical),'show',
-                {'consumed_rest_history':'97a72d632','consumed_holding_stream':'6d8891ac3','consumed_policy_custody':'9e820cbf8','prepared_pre_submit':'b2dbb0862','consumed_observer_io':'a2ca8e7d8','consumed_index_sentinel':'926ebca82','consumed_sentinel':'2b7ca0380','consumed_native_preopen':'9a8e59bfc','consumed_pre_finalization':'91e5d2702','consumed_pre_startup':'90bf2d11f','consumed_pre_shutdown':'70fc572f8',
+                {'consumed_auxiliary_capability':'428f7ece3','consumed_rest_history':'97a72d632','consumed_holding_stream':'6d8891ac3','consumed_policy_custody':'9e820cbf8','prepared_pre_submit':'b2dbb0862','consumed_observer_io':'a2ca8e7d8','consumed_index_sentinel':'926ebca82','consumed_sentinel':'2b7ca0380','consumed_native_preopen':'9a8e59bfc','consumed_pre_finalization':'91e5d2702','consumed_pre_startup':'90bf2d11f','consumed_pre_shutdown':'70fc572f8',
                  'consumed_pre_native_label':'b1519a2d4','consumed_pre_coordination':'3dd9f1bf5','consumed_pre_prepared_validation':'bf330ae92','consumed_pre_prepared_repair':'81f43b8ba','consumed_pre_main_preparation':'8644e15fc','consumed_pre_prepared_start':'3b951f1f1','consumed_pre_first_turn':'e9ee2c8ea','consumed_pre_expiry_health':'9476e9ecd','consumed_pre_signed_surge':'bf26ddf0e','consumed_pre_preassessment':'fc51a179b','consumed_pre_prestart':'64ec63a87','consumed_pre_prepared_owner':'d346aa3af'}[generation]+':'+name]))
         (root/name).write_bytes(content)
     name='src/engine/automation/intraday_release_handoff.py'
@@ -2499,7 +2514,7 @@ def test_holding_stream_preserves_actually_consumed_policy_custody(tmp_path,fami
 
 
 @pytest.mark.parametrize('family', ['pre_submit_delay','main_stop','holding_vote'])
-@pytest.mark.parametrize('generation', ['current','consumed_holding_stream','consumed_rest_history'])
+@pytest.mark.parametrize('generation', ['current','consumed_holding_stream','consumed_rest_history','consumed_auxiliary_capability'])
 def test_rest_history_handoff_preserves_policy_and_consumed_parent(tmp_path,family,generation):
     test_entry_cost_handoff_keeps_exact_complete_generation(tmp_path,family,None,generation)
 
@@ -2515,3 +2530,17 @@ def test_rest_history_handoff_rejects_incomplete_sources(tmp_path,dependency,fau
 @pytest.mark.parametrize('fault', [None,'missing','dirty','committed_change','parent_mix'])
 def test_auxiliary_capability_handoff_keeps_whole_reviewed_group(tmp_path,family,dependency,fault):
     test_entry_cost_handoff_keeps_exact_complete_generation(tmp_path,family,fault,'current',dependency)
+
+
+@pytest.mark.parametrize('family', ['pre_submit_delay', 'main_stop', 'holding_vote'])
+@pytest.mark.parametrize('fault', [None, 'missing', 'dirty', 'committed_change'])
+@pytest.mark.parametrize('dependency', sorted(handoff.REVIEWED_NUMERIC_REPLAY_HASHES))
+def test_numeric_replay_handoff_requires_complete_reviewed_group(tmp_path, family, fault, dependency):
+    test_entry_cost_handoff_keeps_exact_complete_generation(tmp_path, family, fault, 'current', dependency)
+
+
+@pytest.mark.parametrize('family', ['pre_submit_delay', 'main_stop', 'holding_vote'])
+@pytest.mark.parametrize('fault', [None, 'successor_mix', 'committed_change'])
+def test_numeric_replay_preserves_consumed_holding_stream(tmp_path, family, fault):
+    test_entry_cost_handoff_keeps_exact_complete_generation(tmp_path, family, fault,
+        'consumed_holding_stream', 'src/engine/sniper_state_handlers.py')

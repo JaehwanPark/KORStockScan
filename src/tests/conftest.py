@@ -96,12 +96,6 @@ def pytest_configure(config):
     # never production logs, including late background-worker completion.
     logger.LOGS_DIR = root / "logs"
     logger.LEGACY_LOGS_DIR = root / "legacy_logs"
-    # This owner creates its default directories at import, before fixtures.
-    # Keep that import under the same scratch boundary; never weaken the guard.
-    from src.utils import constants
-    with pytest.MonkeyPatch.context() as patch:
-        patch.setattr(constants, "DATA_DIR", root / "data")
-        import src.engine.log_archive_service  # noqa: F401
 
 
 @pytest.fixture(autouse=True)

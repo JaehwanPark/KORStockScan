@@ -23,11 +23,6 @@ LOG_ARCHIVE_DIR = DATA_DIR / "log_archive"
 MONITOR_SNAPSHOT_DIR = DATA_DIR / "report" / "monitor_snapshots"
 MONITOR_SNAPSHOT_MANIFEST_DIR = MONITOR_SNAPSHOT_DIR / "manifests"
 
-LOG_ARCHIVE_DIR.mkdir(parents=True, exist_ok=True)
-MONITOR_SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
-MONITOR_SNAPSHOT_MANIFEST_DIR.mkdir(parents=True, exist_ok=True)
-
-
 def _env_float(name: str, default: float = 0.0) -> float:
     raw_value = str(os.getenv(name, "")).strip()
     if not raw_value:

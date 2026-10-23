@@ -528,6 +528,17 @@ def pin_collector_shutdown(workspace, identity):
     snapshot = payload.get('collector_snapshot') or {}
     if snapshot.get('collector_lifecycle') == 'closed':
         return _pin_closed_collector(Path(workspace), identity, path, payload, raw)
+    if not Path('/proc', str(identity['pid'])).exists():
+        proof = H.closed_consumption_observation()
+        if (proof.get('basis') != 'interrupted_consumed_process' or proof.get('pid_identity') != identity
+                or proof.get('collector_path') != str(path) or proof.get('collector_sha256') != _digest(raw)
+                or _main_pids() or not _session_absent()):
+            raise ValueError('deployment_interrupted_collector_unproven')
+        return dict(path=str(path), sha256=_digest(raw), pid=identity['pid'], start_ticks=identity['start_ticks'],
+            sequence_epoch=proof['collector_epoch'], basis='interrupted_consumed_process',
+            source_admission='unverified_interrupted_epoch', terminal_verified=False,
+            original_collector_receipt=payload, historical_consumption=proof)
+
     if (snapshot.get('process_pid') != identity['pid']
             or snapshot.get('process_start_ticks') != identity['start_ticks']
             or snapshot.get('collector_lifecycle') != 'running'
@@ -636,6 +647,14 @@ def verify_collector_shutdown(pin):
     path = Path(pin['path'])
     payload, raw = R._startup_receipt(path)
     snapshot = payload.get('collector_snapshot') or {}
+    if pin.get('basis') == 'interrupted_consumed_process':
+        if (_digest(raw) != pin['sha256'] or payload != pin['original_collector_receipt']
+                or H.closed_consumption_observation() != pin['historical_consumption']
+                or _main_pids() or not _session_absent()):
+            raise ValueError('deployment_interrupted_collector_changed')
+        return dict(status='preserved_unverified', pid=pin['pid'], start_ticks=pin['start_ticks'],
+            sequence_epochs=[pin['sequence_epoch']], receipts=[], terminal_verified=False,
+            source_admission='unverified_interrupted_epoch')
     epochs = snapshot.get('reconciled_sequence_epochs') or []
     if (not isinstance(epochs, list) or not epochs
             or any(type(epoch) is not int or epoch <= 0 for epoch in epochs)):
@@ -801,6 +820,17 @@ class Deployment:
             policy_effect='unchanged', original_selection_sha256=_digest(self.before))
         self.state['candidate_p5'] = self.candidate_p5
         _atomic(self.directory / 'selection-before.json', self.before)
+        if self.collector_shutdown_pin.get('basis') == 'interrupted_consumed_process':
+            raw = Path(self.collector_shutdown_pin['path']).read_bytes()
+            if _digest(raw) != self.collector_shutdown_pin['sha256']:
+                raise ValueError('deployment_interrupted_collector_changed')
+            _atomic(self.directory/'interrupted-collector-original.json', raw)
+            heartbeat = self.workspace/'tmp/error_detector_heartbeat.json'
+            heartbeat_raw = heartbeat.read_bytes()
+            if _digest(heartbeat_raw) != self.closed_predecessor['closed_observation']['source_hashes'][str(heartbeat)]:
+                raise ValueError('deployment_interrupted_heartbeat_changed')
+            _atomic(self.directory/'interrupted-heartbeat-original.json', heartbeat_raw)
+            self.state['interrupted_collector'] = self.collector_shutdown_pin
         self.checkpoint('preflight')
         try:
             if self.closed_predecessor:
@@ -1059,7 +1089,9 @@ class Deployment:
                     or _main_pids() or not _session_absent() or self.flag.exists()):
                 raise ValueError('deployment_closed_predecessor_changed')
             self.checkpoint('drained', drained_at=datetime.now(H.KST).isoformat(),
-                drain_basis='native_postclose_stopped_consumption_verified',
+                drain_basis=('interrupted_consumed_process_preserved'
+                    if self.closed_predecessor['closed_observation'].get('basis') == 'interrupted_consumed_process'
+                    else 'native_postclose_stopped_consumption_verified'),
                 collector_shutdown=verify_collector_shutdown(self.collector_shutdown_pin))
             return
         if H._identity(self.identity['pid']) != self.identity:

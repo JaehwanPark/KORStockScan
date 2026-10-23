@@ -1849,3 +1849,31 @@ def test_verified_observer_canary_close_is_not_a_market_close_requirement(tmp_pa
             with pytest.raises(ValueError):D.verify_collector_shutdown(pin)
     assert not (tmp_path/'restart.flag').exists()
     assert not (tmp_path/'data/runtime/operator_startup_hold.json').exists()
+
+
+@pytest.mark.parametrize('fault',[None,'actor','hash','main','supervisor','changed'])
+def test_interrupted_collector_preserves_original_and_never_claims_terminal(tmp_path,monkeypatch,fault):
+    identity=dict(pid=2147483601,start_ticks='42',cwd=str(tmp_path/'release/src'))
+    path=tmp_path/'data/runtime/scalp_micro_reversion_forward_collector/latest.json'
+    path.parent.mkdir(parents=True)
+    payload=dict(collector_snapshot=dict(collector_lifecycle='running',sequence_epoch=123))
+    path.write_bytes(D._json_bytes(payload))
+    proof=dict(basis='interrupted_consumed_process',pid_identity=identity,collector_path=str(path),
+        collector_sha256=D._digest(path.read_bytes()),collector_epoch=123)
+    if fault=='actor':proof['pid_identity']={**identity,'pid':2}
+    if fault=='hash':proof['collector_sha256']='0'*64
+    monkeypatch.setattr(D.H,'closed_consumption_observation',lambda:proof)
+    monkeypatch.setattr(D,'_main_pids',lambda:[3] if fault=='main' else [])
+    monkeypatch.setattr(D,'_session_absent',lambda:fault!='supervisor')
+    if fault in ('actor','hash','main','supervisor'):
+        with pytest.raises(ValueError):D.pin_collector_shutdown(tmp_path,identity)
+        return
+    pin=D.pin_collector_shutdown(tmp_path,identity)
+    assert pin['original_collector_receipt']==payload and pin['terminal_verified'] is False
+    if fault=='changed':
+        path.write_text('{}')
+        with pytest.raises(ValueError):D.verify_collector_shutdown(pin)
+    else:
+        checked=D.verify_collector_shutdown(pin)
+        assert checked['status']=='preserved_unverified' and checked['receipts']==[]
+        assert checked['terminal_verified'] is False

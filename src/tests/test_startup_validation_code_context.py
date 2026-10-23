@@ -1428,3 +1428,17 @@ def test_main_preparation_reviews_auxiliary_capability_successor(damage):
     if damage=='unreviewed':new='0'*64
     elif damage=='wrong_origin':old='0'*64
     assert C.reviewed_preparation_pair(relative,old,new) is (damage is None)
+
+
+@pytest.mark.parametrize('relative', [
+    'src/engine/kiwoom_sniper_v2.py', 'src/engine/sniper_state_handlers.py',
+    'src/engine/sniper_scale_in.py', 'src/engine/lifecycle/avg_down_policy_replay.py',
+    'src/engine/log_archive_service.py'])
+@pytest.mark.parametrize('damage', [None, 'unreviewed', 'wrong_origin'])
+def test_main_preparation_independently_reviews_numeric_replay(relative, damage):
+    old = hashlib.sha256(subprocess.check_output(
+        ['git', '-C', str(ROOT), 'show', '6d8891ac3:' + relative])).hexdigest()
+    new = hashlib.sha256((ROOT / relative).read_bytes()).hexdigest()
+    if damage == 'unreviewed': new = '0' * 64
+    elif damage == 'wrong_origin': old = '0' * 64
+    assert C.reviewed_preparation_pair(relative, old, new) is (damage is None)

@@ -52,6 +52,7 @@ from src.engine.lifecycle.avg_down_replay import (
     policy_fingerprint as avg_down_policy_fingerprint,
 )
 from src.utils import kiwoom_utils
+from src.utils.numeric import safe_float as _safe_float
 from src.utils.constants import DATA_DIR
 from src.utils.jsonl_io import existing_or_gzip_path
 from src.utils.logger import log_error, log_info
@@ -2771,28 +2772,6 @@ def _attach_scalp_sim_bucket_identity(
         set_fields["lifecycle_bucket_match_reason"] = "parent_catalog_missing"
     _mutate_stock_state(stock, set_fields=set_fields)
     return _scalp_sim_bucket_policy_fields(stock)
-
-
-def _safe_float(value, default=0.0):
-    try:
-        if value is None:
-            return default
-        if isinstance(value, str) and value.strip().lower() in {
-            "",
-            "nan",
-            "nat",
-            "none",
-            "inf",
-            "+inf",
-            "-inf",
-        }:
-            return default
-        numeric = float(value)
-        if not math.isfinite(numeric):
-            return default
-        return numeric
-    except Exception:
-        return default
 
 
 def _runtime_action_now_ts(runtime: dict | None = None) -> float:

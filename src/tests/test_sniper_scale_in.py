@@ -8806,6 +8806,7 @@ def test_describe_buy_order_resolution_reports_nxt_market_remap():
         "effective_dmst_stex_tp": "NXT",
         "broker_route": "NXT",
         "broker_route_resolution": "explicit_request",
+        "broker_route_override": None,
         "order_type_remapped": True,
         "order_type_remap_reason": "nxt_market_to_best_limit",
     }

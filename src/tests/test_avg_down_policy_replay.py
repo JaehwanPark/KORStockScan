@@ -60,6 +60,14 @@ def policy_fixture():
     }
     observation["initial_policy_state"] = capture.holding_state(runtime, stock)
     snapshot = capture.policy_snapshot(runtime, epoch)
+    # The isolated worker imports its own default paths. Carry this fixture's
+    # recorded bytes/absence into that namespace; never read production files.
+    from pathlib import Path
+    from src.utils.constants import DATA_DIR
+    for name, row in list(snapshot["files"].items()):
+        if Path(name).is_relative_to(DATA_DIR):
+            worker_path = policy.REPO / 'data' / Path(name).relative_to(DATA_DIR)
+            snapshot["files"][str(worker_path)] = deepcopy(row)
     for name in snapshot["files"]:
         if ("manual_control_excluded_codes" in name or "symbol_owner_policy_" in name
                 or "order_owner_registry" in name):
@@ -320,34 +328,38 @@ def test_existing_report_runs_policy_adapter_but_never_grants_order_authority():
     )
 
 
-def test_worker_effect_guard_blocks_database_network_and_file_writes(tmp_path):
+@pytest.mark.parametrize("importing", [True, False])
+def test_worker_effect_guard_blocks_database_network_and_file_writes(tmp_path, importing):
     import subprocess
     import sys
 
     script = """
-import socket, sqlite3, sys
+import os, socket, sqlite3, sys
 from src.engine.lifecycle.avg_down_policy_replay import _install_effect_guard, ReplayInputGap
 phase = _install_effect_guard()
-phase['importing'] = False
+phase['importing'] = sys.argv[2] == 'True'
+expected = OSError if phase['importing'] else ReplayInputGap
 checks = [lambda: open(sys.argv[1], 'w'), lambda: sqlite3.connect(sys.argv[1]),
-          lambda: socket.socket().connect(('127.0.0.1', 9))]
+          lambda: socket.socket().connect(('127.0.0.1', 9)), lambda: os.mkdir(sys.argv[1])]
 for check in checks:
     try:
         check()
-    except ReplayInputGap:
+    except expected as exc:
+        prefix = 'offline_import_side_effect_forbidden:' if phase['importing'] else 'offline_side_effect_forbidden:'
+        assert str(exc).startswith(prefix), str(exc)
         continue
     raise SystemExit('unblocked effect')
-print('three_effects_blocked')
+print('four_effects_blocked')
 """
     target = tmp_path / "must-not-exist"
     result = subprocess.run(
-        [sys.executable, "-B", "-c", script, str(target)],
+        [sys.executable, "-B", "-c", script, str(target), str(importing)],
         capture_output=True,
         text=True,
         timeout=10,
     )
     assert result.returncode == 0, result.stderr
-    assert "three_effects_blocked" in result.stdout
+    assert "four_effects_blocked" in result.stdout
     assert not target.exists()
 
 
