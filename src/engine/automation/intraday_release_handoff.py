@@ -4787,16 +4787,18 @@ REVIEWED_NATIVE_PREOPEN_VARIANTS = {
 # Review: postclose-root-cause-recovery-review-2026-10-19.md,2026-10-23.
 REVIEWED_ENTRY_COST_PRE_SENTINEL_SCOPE_HASHES = REVIEWED_ENTRY_COST_HASHES
 REVIEWED_ENTRY_COST_PRE_SENTINEL_SCOPE_VARIANTS = REVIEWED_ENTRY_COST_DEPENDENCY_VARIANTS
-REVIEWED_SENTINEL_SCOPE_HASHES = {'src/engine/automation/main_trailing_source_assembler.py': 'b951b49987a039de6b9746f40ae9f3190facb4c42dd28265a1585d02c52ef413',
+REVIEWED_SENTINEL_SCOPE_HASHES = {'src/engine/automation/main_market_weakness_research.py': 'ad97af89ce2480978e7c5286b05af8d9cb30dd81fad8d62152f7258eb646912b',
+ 'src/engine/automation/main_trailing_source_assembler.py': 'b951b49987a039de6b9746f40ae9f3190facb4c42dd28265a1585d02c52ef413',
  'src/engine/automation/main_trailing_source_reuse.py': 'bdbfff175232f9595b5180bd64b1f288f659e8964d4f7306311d7c45f3c940ba',
  'src/engine/buy_funnel_sentinel.py': '40b489fff0e1b82edbf36b734424ca7826dbc2c4c8a3b27ee9069c9381e7df2a',
  'src/engine/holding_exit_sentinel.py': '7ae845b51d16bf425337e4758d1f83047f1f4e1c3479d39875523f0e2748012a',
- 'src/engine/infrastructure/startup_validation_code_context.py': 'e5286745b38ef116eecd26830a98bb1679d93662b1a8758ff626f92a03ec42a6',
+ 'src/engine/infrastructure/startup_validation_code_context.py': '016b4d59e80fbd6d2bb9dda13bdeb8e6abacae5decfec27240c8bf704648e612',
  'src/engine/kiwoom_sniper_v2.py': '02ecf7b4a55042fbcd2a7b4f59bf8602bed6020730f0a8bb326b41d5d6418866',
  'src/engine/kiwoom_websocket.py': 'ef70d8fc0fd74416fc1e7a9c27dca68663a1f057b7e2b14041b255a66a9af377',
  'src/engine/monitoring/sentinel_event_scope.py': '5a06206336713a85bbf28e479ae39482cd77549ee9296b9a92b90ef7f61aa559',
  'src/engine/monitoring/sentinel_summary_contract.py': '182f6372e025989b47825e6b9a54b6450e837dd6be772740298d567a965015eb',
  'src/engine/monitoring/submission_bottleneck_monitor.py': 'a5a8b7be30b63d0e7990a5761a60a6e0225a563272b15a24c8ccf9fc013f21d8',
+ 'src/engine/scalping/market_weakness_research.py': 'a98076e2d27f17fc50b25335d9b79b4019d828c4d4b8ade2aa985911af1d5677',
  'src/engine/scalping/pre_submit_delay_observation.py': '225bf41983835e7ab53febd50d0cb42d13ce5b296322887a519a53e24281e8ff',
  'src/engine/sniper_state_handlers.py': 'b3b2965f65f33e5e5bf52fd960757d6bdbe6b5a63e6844bd95f5dc1d5353ea1d'}
 REVIEWED_ENTRY_COST_HASHES = {**REVIEWED_ENTRY_COST_HASHES, **REVIEWED_SENTINEL_SCOPE_HASHES}
@@ -4833,6 +4835,13 @@ REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
  'src/engine/automation/main_trailing_source_reuse.py': ['4c38cd9add7e87e7a50529f1a0ad379dde4b786fb8405bf02ee1c7e117a280ec',
                                                          '88faf62cd0e01d4b32f5f36ca96b37fdf3a4bd2432e0adcab8ca1c9d8cfd8ac5',
                                                          'acf252905da4704ff54a3adffdd74ecf7c6b9ab056b52b6719fab8be91866b97']}.items()}}
+REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
+    name: REVIEWED_ENTRY_COST_PAIRS.get(name, ()) + tuple((old, REVIEWED_SENTINEL_SCOPE_HASHES[name])
+        for old in before) for name, before in {'src/engine/automation/main_market_weakness_research.py': ['375f13bd830a42de09cb9fae28879ab69459f76013e47dd4365207d28d976309',
+                                                            '9e704cce559ff4d7cc714feece733ca64380b440a7c3490a219170412656bce8',
+                                                            'c7fc0eacb9ec937d28c507a4b7586d1d71425a3719a08c1d8ada65e0404071f9',
+                                                            'e78122825224eee72bb3301fd2df7c22230645c5b88103fd32009a186316909b'],
+ 'src/engine/scalping/market_weakness_research.py': ['8e124bee20aadb75fc399b752973434f9ccd0df7c1de675ca5b70af2aa8ab59c']}.items()}}
 REVIEWED_ENTRY_COST_DEPENDENCY_VARIANTS = {
     (key[0], REVIEWED_SENTINEL_SCOPE_HASHES.get(key[0], key[1])): {
         **value, 'dependencies': {**value['dependencies'], **REVIEWED_SENTINEL_SCOPE_HASHES},

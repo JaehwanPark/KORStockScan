@@ -198,6 +198,18 @@ REVIEWED_PREPARATION_HISTORY.setdefault('src/engine/automation/main_trailing_sou
  ('d76ee7b7c79ea1d420f4432f9026690b3155f7e815f0dbf1fec66016b51d8e26',
   'b951b49987a039de6b9746f40ae9f3190facb4c42dd28265a1585d02c52ef413')})
 
+# Exact historical weakness native-source repair; original policy/custody stay unchanged.
+REVIEWED_PREPARATION_HISTORY.setdefault('src/engine/automation/main_market_weakness_research.py', set()).update({('375f13bd830a42de09cb9fae28879ab69459f76013e47dd4365207d28d976309',
+  'ad97af89ce2480978e7c5286b05af8d9cb30dd81fad8d62152f7258eb646912b'),
+ ('9e704cce559ff4d7cc714feece733ca64380b440a7c3490a219170412656bce8',
+  'ad97af89ce2480978e7c5286b05af8d9cb30dd81fad8d62152f7258eb646912b'),
+ ('c7fc0eacb9ec937d28c507a4b7586d1d71425a3719a08c1d8ada65e0404071f9',
+  'ad97af89ce2480978e7c5286b05af8d9cb30dd81fad8d62152f7258eb646912b'),
+ ('e78122825224eee72bb3301fd2df7c22230645c5b88103fd32009a186316909b',
+  'ad97af89ce2480978e7c5286b05af8d9cb30dd81fad8d62152f7258eb646912b')})
+REVIEWED_PREPARATION_HISTORY.setdefault('src/engine/scalping/market_weakness_research.py', set()).update({('8e124bee20aadb75fc399b752973434f9ccd0df7c1de675ca5b70af2aa8ab59c',
+  'a98076e2d27f17fc50b25335d9b79b4019d828c4d4b8ade2aa985911af1d5677')})
+
 def reviewed_preparation_pair(relative, old, current):
     return (REVIEWED_PREPARATION_SOURCES.get(relative) == (old, current)
             or (old, current) in REVIEWED_PREPARATION_HISTORY.get(relative, ()))
