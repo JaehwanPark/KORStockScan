@@ -1478,6 +1478,13 @@ def test_performance_tuning_html_renders_new_sections(monkeypatch):
     """HTML /performance-tuning 페이지에 Flow Bottleneck Lane 및 관찰축 커버리지 섹션 렌더링 검증."""
     import src.web.app as web_app
 
+    # This rendering test consumes saved reports; background dispatch has its
+    # own route tests and must not write outside this test's private fixtures.
+    monkeypatch.setattr(
+        web_app, "_load_or_build_post_sell_feedback_report",
+        lambda **_kwargs: {"status": "no_data", "items": [], "summary": {}},
+    )
+
     monkeypatch.setattr(
         web_app,
         "_load_saved_performance_tuning_snapshot",

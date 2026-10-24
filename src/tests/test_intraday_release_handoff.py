@@ -1829,8 +1829,18 @@ def test_source_reader_handoff_preserves_issued_policy_and_exact_dependencies(tm
     }
     inventory = inventories[family]
     root = tmp_path/'candidate'
-    subprocess.run(['git','clone','--shared','--no-checkout','-q',str(canonical),str(root)],check=True)
+    subprocess.run(['git','clone','--shared','--no-checkout','--single-branch','--no-tags','-q',str(canonical),str(root)],check=True)
     names = {os.path.normpath(name) for name in inventory.values()}
+    # Historical releases contain the profile selectors as well as policy
+    # inputs. Preserve their original bytes: a sparse fixture cannot choose
+    # between later profiles that share an unchanged dependency trigger.
+    for table_name, variants in vars(handoff).items():
+        if (table_name.startswith('REVIEWED_') and table_name.endswith('_VARIANTS')
+                and isinstance(variants, dict)):
+            for variant in variants.values():
+                if isinstance(variant, dict):
+                    names.update(variant[key] for key in ('selector_path', 'additional_selector_path')
+                                 if key in variant)
     for variant in handoff.REVIEWED_BROKER_CUSTODY_DEPENDENCY_VARIANTS.values():
         names.update(variant['dependencies'])
     names.update(handoff.REVIEWED_SOURCE_READER_HASHES)

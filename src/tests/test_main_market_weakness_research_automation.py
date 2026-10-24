@@ -14,6 +14,13 @@ from src.engine.scalping import market_weakness_research as R
 from src.tests.test_main_market_weakness_research import DAY, observation, row, trace
 
 
+@pytest.fixture
+def bounded_supervisor_memory(monkeypatch):
+    # Model the standalone supervisor, not the cumulative RSS of pytest.
+    # Tests of the parent/child limit inject their own over-budget readings.
+    monkeypatch.setattr(A, "supervisor_rss", lambda: 0)
+
+
 def setup_sources(tmp_path, monkeypatch):
     data = tmp_path / "data"
     data.mkdir()
@@ -399,7 +406,7 @@ def test_worker_cli_cannot_bypass_supervisor(tmp_path, capsys):
     assert "supervisor_reservation_required" in capsys.readouterr().out
 
 
-def test_supervisor_terminates_group_on_wall_or_memory():
+def test_supervisor_terminates_group_on_wall_or_memory(monkeypatch, bounded_supervisor_memory):
     result = A.supervise(
         [sys.executable, "-c", "import time;time.sleep(30)"],
         seconds=0.05,
@@ -414,6 +421,14 @@ def test_supervisor_terminates_group_on_wall_or_memory():
         rss=lambda _: 10**9,
     )
     assert result["reason"] == "worker_process_group_memory_limit"
+    assert result["exit_code"] != 0
+    monkeypatch.setattr(A, "supervisor_rss", lambda: A.MEMORY_BYTES + 1)
+    result = A.supervise(
+        [sys.executable, "-c", "import time;time.sleep(30)"],
+        seconds=1, gate=lambda: True, rss=lambda _: 0,
+    )
+    assert result["reason"] == "worker_process_group_memory_limit"
+    assert result["exit_code"] != 0
 
 
 def test_heavy_owner_probe_matches_tokens_not_unrelated_command_text(tmp_path):
@@ -458,7 +473,7 @@ def test_earlier_preparation_removes_late_cron_slots(tmp_path):
 
 @pytest.mark.parametrize("requested", [None, DAY, "2026-10-09", "2026-09-20"])
 def test_night_reservations_survive_failures_and_do_not_reset_at_midnight(
-    tmp_path, monkeypatch, requested
+    tmp_path, monkeypatch, requested, bounded_supervisor_memory
 ):
     class Clock(datetime):
         current = datetime.fromisoformat("2026-10-08T23:40:00+09:00")
@@ -512,7 +527,7 @@ def test_night_reservations_survive_failures_and_do_not_reset_at_midnight(
     assert state["reserved_seconds"] == 540
 
 
-def test_deferred_worker_exit_zero_is_not_completed(tmp_path, monkeypatch):
+def test_deferred_worker_exit_zero_is_not_completed(tmp_path, monkeypatch, bounded_supervisor_memory):
     class Clock(datetime):
         @classmethod
         def now(cls, tz=None):
@@ -618,7 +633,7 @@ def test_source_selection_limits_defer_without_starting_child(
 
 
 def test_empty_source_selection_publishes_own_summary_without_child(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, bounded_supervisor_memory
 ):
     monkeypatch.setattr(
         A,
@@ -677,7 +692,7 @@ def test_candidate_manifest_does_not_freeze_empty_first_day_forever(
     assert not (A.namespace(data) / "fixed_candidates.json").exists()
 
 
-def test_supervisor_reaps_spawned_descendant_even_if_leader_exits(tmp_path):
+def test_supervisor_reaps_spawned_descendant_even_if_leader_exits(tmp_path, bounded_supervisor_memory):
     marker = tmp_path / "descendant.pid"
     code = 'import subprocess,sys; p=subprocess.Popen([sys.executable,"-c","import time;time.sleep(30)"]);open(sys.argv[1],"w").write(str(p.pid))'
     result = A.supervise(

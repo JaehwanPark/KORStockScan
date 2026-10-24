@@ -174,7 +174,7 @@ def test_healthy_native_rows_survive_one_bad_row_and_reach_prepared_lookup(tmp_p
     assert prepared.lookup(target_date='2026-10-12',market='REGULAR',kind='ALL',parents=('a'*64,proof['identity_sha256']))['delay_sec']==30
 
 
-def test_identity_tracks_meaning_and_compose_main_observer_preserve_original_request(tmp_path):
+def test_identity_tracks_meaning_and_compose_main_observer_preserve_original_request(tmp_path, monkeypatch):
     from src.tests.test_continuous_reversal import family_reports,rows,K
     from src.tests.test_mechanistic_entry_runtime_policy import initial
     from src.engine.scalping import continuous_reversal_policy as compose
@@ -201,6 +201,13 @@ def test_identity_tracks_meaning_and_compose_main_observer_preserve_original_req
     assert result['entry_ai_effective_assessment']['effective_verdict']=='PASS'
     provenance=_machine_primary_entry_provenance_fields(result)
     assert provenance['entry_auxiliary_policy_identity']==one
+    # Model a fresh observer process independently from prior shutdown tests.
+    from collections import Counter, OrderedDict
+    for name, value in {
+        '_CLOSING': False, '_CLOSED_AT': None, '_ACTIVE': {}, '_HEAPS': {},
+        '_EXPIRIES': [], '_RECENT': OrderedDict(), '_COUNTERS': Counter(), '_SINK': None,
+    }.items():
+        monkeypatch.setattr(observer, name, value)
     records=[];observer.configure_sink(lambda *args,**kwargs:records.append((args[-1],kwargs['fields'])) or {'status':'queued'})
     observer._ACTIVE.clear();observer._HEAPS.clear();observer._RECENT.clear()
     from src.engine.scalping.scanner_async_eval import _immutable_mapping

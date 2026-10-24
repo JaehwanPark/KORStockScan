@@ -1205,4 +1205,6 @@ def test_session_defaults_are_private_before_writer_imports():
     assert constants.CONFIG_PATH.parent == constants.DATA_DIR
     assert constants.DEV_PATH.parent == constants.DATA_DIR
     assert log_archive_service.LOG_ARCHIVE_DIR.is_relative_to(constants.DATA_DIR)
-    assert log_archive_service.LOG_ARCHIVE_DIR.is_dir()
+    # Read-only imports do not create output directories. Both writers must
+    # still resolve to the session-private data root before their first write.
+    assert log_archive_service.MONITOR_SNAPSHOT_DIR.is_relative_to(constants.DATA_DIR)

@@ -1304,6 +1304,8 @@ def test_final_freeze_waits_for_native_publication_with_original_budget(pending_
     perf = clock[0]+.2; budget = EntryDeadline(epoch, perf)
     sleeps, refreshes, reads = [], [], []
     from src.trading.market import shared_ws_snapshot as shared
+    from src.engine.scalping import entry_candle_context as candle
+    native_sleep = engine.time.sleep
     native_read = shared.read_shared_completed_bars
     def read(*args, **kwargs):
         reads.append(True)
@@ -1329,7 +1331,11 @@ def test_final_freeze_waits_for_native_publication_with_original_budget(pending_
                     frame['shared_transport_producer']['completed_bar_integrity']['observer_epoch'] = 8
                     shared.SNAPSHOT_PATH.write_text(json.dumps(frame))
                 path.write_text(json.dumps(value))
-    monkeypatch.setattr(engine.time, 'sleep', sleep)
+    # Other tests can leave bounded background workers alive. Their sleeps
+    # must not publish this fixture's bars or advance its original deadline.
+    monkeypatch.setattr(candle, 'time', SimpleNamespace(sleep=sleep,
+        time=lambda: engine.time.time(), perf_counter=lambda: engine.time.perf_counter()))
+    assert engine.time.sleep is native_sleep
     if mode == 'clock_rollback':
         wall = engine.time.time
         monkeypatch.setattr(engine.time, 'time', lambda: wall()-(10 if sleeps else 0))

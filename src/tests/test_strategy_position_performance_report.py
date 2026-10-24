@@ -1195,7 +1195,7 @@ def archive_identity(path):
 
 def _write_legacy_status(day, value):
     proof=value['_native_source_proof']; census=value['meta']['completed_census_manifest']
-    return report_mod._write_status(day, dict(status='succeeded',
+    return report_mod._write_status(day, dict(status='succeeded', consumer_ready=True,
         completed_census_run_ids=[census['run_id']], completed_census_projection_sha256=[census['projection_sha256']],
         actual_cost_source_generation=proof['actual_cost_source_generation'], completion_snapshot_source=proof))
 
@@ -1593,10 +1593,20 @@ def test_legacy_raw_original_verifies_native_manifest_and_prior_day_completion_w
     monkeypatch.setattr(report_mod,'load_monitor_snapshot',lambda *a,**k:pytest.fail('original JSON decoded'))
     assert report_mod._saved_fact_generation_issue(day) is None
     assert quantity._quantity_fact_generation_issue(day) is None
-    # The completion belongs to entry28, outside the initial quantity window.
+    # Authenticate the observed completion before excluding its entry28.
+    # Source provenance is retained; it cannot create an eligible entry fact.
+    validated = []
+    def validate_day(source_day):
+        validated.append(source_day)
+        return quantity._quantity_fact_generation_issue(source_day)
     overlay = completion_overlay([], as_of=day,data_dir=tmp_path,entry_on_or_after=day,
-        entry_generations={},validate_day=lambda _:pytest.fail('legacy source promoted to overlay'))
-    assert list(overlay) == [] and overlay.completion_generations == {}
+        entry_generations={},validate_day=validate_day)
+    assert validated == [day]
+    assert list(overlay) == [] and set(overlay.completion_generations) == {day}
+    summary = overlay.completion_overlay_summary
+    assert summary['native_terminal_record_count'] == 1
+    assert summary['applicable_terminal_record_count'] == summary['overlaid_completed_count'] == 0
+    assert summary['excluded_native_terminal_observation_counts'] == {'outside_actual_entry_window': 1}
     assert not path.with_suffix('.completed_projection.json').exists()
     assert not path.with_suffix('.fact_projection.json').exists()
     assert {p:(archive_identity(p),hashlib.sha256(p.read_bytes()).hexdigest()) for p in sources} == before

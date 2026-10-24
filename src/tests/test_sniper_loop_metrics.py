@@ -394,10 +394,11 @@ def test_run_sniper_loop_calls_ensure_state_handler_deps():
     from src.engine.kiwoom_sniper_v2 import _run_sniper_iterations
 
     function = ast.parse(inspect.getsource(_run_sniper_iterations)).body[0]
-    loop = next(node for node in ast.walk(function)
-                if isinstance(node, ast.While)
-                and isinstance(node.test, ast.Constant)
-                and node.test.value is True)
+    # The native outer loop honors shutdown; a nested retry may still use
+    # while True and must not be mistaken for the Main iteration boundary.
+    loops = [node for node in function.body if isinstance(node, ast.While)]
+    assert len(loops) == 1
+    loop = loops[0]
     assert any(
         isinstance(node, ast.Expr)
         and isinstance(node.value, ast.Call)
