@@ -5596,11 +5596,18 @@ def _build_workorders(
 
 def _lookup_native_inputs(target_date, current_events=None):
     """Read bounded canonical report sections, never historical giant states."""
+    from src.engine.automation.source_quality_clean_baseline import policy_refresh_start_date
     native = {}
     migration = None
-    lower = (date.fromisoformat(target_date) - timedelta(days=89)).isoformat()
+    lower = max(policy_refresh_start_date(target_date),
+                (date.fromisoformat(target_date) - timedelta(days=89)).isoformat())
     for path in sorted(REPORT_DIR.glob(f"{REPORT_TYPE}_*.json")):
         day = path.stem.removeprefix(f"{REPORT_TYPE}_")
+        try:
+            if date.fromisoformat(day).isoformat() != day:
+                continue
+        except ValueError:
+            continue
         if not lower <= day <= target_date or path.stat().st_size > 64 * 1024 * 1024:
             continue
         section = _read_json(path).get("scanner_unique_funnel", {}).get("economic_cohorts", {}).get("lookup_attention_selection", {})

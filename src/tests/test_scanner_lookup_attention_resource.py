@@ -533,6 +533,54 @@ def integrated_fixture(monkeypatch):
     return tuning
 
 
+@pytest.mark.parametrize("report_day", ["2026-09-28", "2026-10-01"])
+def test_refresh_rejects_old_learning_and_migration_without_fabricating_ev(monkeypatch, tmp_path, report_day):
+    import json
+    integrated_fixture(monkeypatch)
+    monkeypatch.setattr(policy, "SOURCE_REPORT_DIR", tmp_path)
+    prior = {"contract_version": resource.INTEGRATED_CONTRACT,
+             "target_date": report_day, "evaluation_phase": "postclose_final",
+             "independent_holdout": {"learning_cutoff": "2026-09-28",
+                 "learning_rows": [{"observation_date": "2026-09-28"}],
+                 "learning_outcomes": [{"rec_date": "2026-09-28"}]}}
+    prior["artifact_sha256"] = resource.canonical_sha256(prior)
+    (tmp_path / f"intraday_ws_freshness_monitor_{report_day}.json").write_text(json.dumps({
+        "scanner_unique_funnel": {"economic_cohorts": {"lookup_attention_selection": prior}}}))
+    assert resource.previous_learning_section(date(2026, 10, 23)) is None
+    seen = []
+    original = resource.selection_policy_status
+    def evaluate(*args, **kwargs):
+        seen.append(args[5])
+        return original(*args, **kwargs)
+    monkeypatch.setattr(resource, "selection_policy_status", evaluate)
+    result = resource.integrated_selection_evaluation(date(2026, 10, 23), {}, predecessor=prior,
+        migration={"resource_pair_rows": ready_resource_rows()})
+    assert not (seen[0] or {}).get("independent_holdout", {}).get("learning_cutoff")
+    assert result["primary_economics"]["paired_delta_ev_pct"] is None
+    assert result["status"] != "live_auto_apply_ready"
+
+
+@pytest.mark.parametrize("old_field", [None, "learning_rows", "learning_outcomes", "learning_inputs"])
+def test_previous_learning_checks_source_dates_inside_newer_report(monkeypatch, tmp_path, old_field):
+    import json
+    monkeypatch.setattr(policy, "SOURCE_REPORT_DIR", tmp_path)
+    proof = {"learning_cutoff": "2026-10-01",
+             "learning_rows": [{"observation_date": "2026-09-29"}],
+             "learning_outcomes": [{"rec_date": "2026-09-29"}],
+             "learning_inputs": [{"row": {"source_date": "2026-09-29"}}]}
+    if old_field:
+        row = proof[old_field][0]
+        if old_field == "learning_inputs": row = row["row"]
+        row[next(iter(row))] = "2026-09-28"
+    section = {"contract_version": resource.INTEGRATED_CONTRACT,
+               "evaluation_phase": "postclose_final", "independent_holdout": proof}
+    section["artifact_sha256"] = resource.canonical_sha256(section)
+    (tmp_path / "intraday_ws_freshness_monitor_2026-10-01.json").write_text(json.dumps({
+        "scanner_unique_funnel": {"economic_cohorts": {"lookup_attention_selection": section}}}))
+    result = resource.previous_learning_section(date(2026, 10, 23))
+    assert result == (None if old_field else section)
+
+
 def test_native_capture_decoder_preserves_full_partial_and_conflicting_mirrors(monkeypatch):
     from src.tests.test_scanner_lookup_attention_tuning import _observation_event, _receipt_event
     tuning = integrated_fixture(monkeypatch)
@@ -777,6 +825,9 @@ def test_no_effect_skips_execution_and_missing_changed_arm_stays_null():
 
 def test_ready_native_proof_publication_source_date_preopen_and_scanner_bonus(monkeypatch,tmp_path):
     import json
+    # Archived promotion fixture predates the configured forward refresh.
+    from src.engine.automation import source_quality_clean_baseline as baseline
+    monkeypatch.setattr(baseline, "_load_policy_file", lambda: {"policy_refresh_start_date": "2026-09-30"})
     class FrozenDatetime(datetime):
         @classmethod
         def now(cls, tz=None):
@@ -988,6 +1039,12 @@ def test_native_source_gap_remains_visible_in_summary_and_late_capture(monkeypat
     assert projection['source_section_sha256']==section['artifact_sha256']
     assert projection['allowed_runtime_apply'] is False
     monkeypatch.setattr(summary,'DATA_DIR',tmp_path)
+    monkeypatch.setattr(summary,'REPORT_DIR',tmp_path/'report/runtime_approval_summary')
+    original_write=summary._atomic_write
+    def isolated_write(path, content):
+        assert path.resolve().is_relative_to(tmp_path.resolve())
+        original_write(path, content)
+    monkeypatch.setattr(summary,'_atomic_write',isolated_write)
     monkeypatch.setattr(summary,'_owner_requirements',lambda _:({},{}))
     path=summary._paths('2026-10-12')['ws_freshness'];path.parent.mkdir(parents=True)
     import json

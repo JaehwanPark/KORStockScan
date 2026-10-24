@@ -19,6 +19,7 @@ import tempfile
 from typing import Any, Iterable
 from zoneinfo import ZoneInfo
 
+from src.engine.automation.source_quality_clean_baseline import policy_refresh_start_date
 from src.engine.scalping.scanner_lookup_attention_policy import (
     ACTIVATION_MODE,
     LEGACY_ACTIVATION_MODE,
@@ -418,7 +419,8 @@ def _conversion_markers_after_attach(markers, observed_at):
 def collect_lineage(target: date, *, events_by_date=None) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Collect exact lookup observations and full-fill receipt classifications."""
 
-    start = max(ROLLOUT_DATE, target - timedelta(days=ROLLING_CALENDAR_DAYS - 1))
+    start = max(ROLLOUT_DATE, date.fromisoformat(policy_refresh_start_date(target.isoformat())),
+                target - timedelta(days=ROLLING_CALENDAR_DAYS - 1))
     observations: dict[tuple[int, str, str], dict[str, Any]] = {}
     conflicted_observation_keys: set[tuple[int, str, str]] = set()
     fill_receipts: defaultdict[tuple[int, str, str], list[dict[str, Any]]] = (
@@ -1655,7 +1657,7 @@ def _resource_window_start(target: date) -> date:
     while dates < 20:
         start -= timedelta(days=1)
         dates += int(is_krx_trading_day(start))
-    return max(ROLLOUT_DATE, start)
+    return max(ROLLOUT_DATE, date.fromisoformat(policy_refresh_start_date(target.isoformat())), start)
 
 
 def _book_passes(book: dict[str, Any]) -> tuple[bool, list[str]]:

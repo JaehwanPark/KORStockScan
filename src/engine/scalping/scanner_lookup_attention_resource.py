@@ -11,6 +11,7 @@ from datetime import date, datetime
 import math
 from zoneinfo import ZoneInfo
 
+from src.engine.automation.source_quality_clean_baseline import policy_refresh_start_date
 from src.engine.scalping.scanner_lookup_attention_policy import (
     MIN_SCORE,
     RESOURCE_PAIR_CONTRACT_VERSION,
@@ -1058,19 +1059,40 @@ def learning_generation(proof):
         "learning_book_sha256", "learning_outcomes", "candidate_formula")})
 
 
+def _learning_in_refresh_window(section, target):
+    """Do not carry a frozen candidate trained before the forward boundary."""
+    proof = (section or {}).get("independent_holdout") or {}
+    lower, upper = policy_refresh_start_date(target.isoformat()), target.isoformat()
+    try:
+        days = [proof["learning_cutoff"]]
+        days += [row["observation_date"] for row in proof.get("learning_rows", [])]
+        days += [row["rec_date"] for row in proof.get("learning_outcomes", [])]
+        days += [value["row"]["source_date"] for value in proof.get("learning_inputs", [])]
+        return all(lower <= date.fromisoformat(day).isoformat() <= upper for day in days)
+    except (KeyError, TypeError, ValueError):
+        return False
+
+
 def previous_learning_section(target):
     """Carry an existing frozen candidate across dates, without replaying raw."""
     import json
     from src.engine.scalping.scanner_lookup_attention_policy import SOURCE_REPORT_DIR
+    lower = policy_refresh_start_date(target.isoformat())
     for path in sorted(SOURCE_REPORT_DIR.glob("intraday_ws_freshness_monitor_*.json"), reverse=True):
         day = path.stem.removeprefix("intraday_ws_freshness_monitor_")
-        if day >= target.isoformat() or path.stat().st_size > 64 * 1024 * 1024:
+        try:
+            if date.fromisoformat(day).isoformat() != day:
+                continue
+        except ValueError:
+            continue
+        if not lower <= day < target.isoformat() or path.stat().st_size > 64 * 1024 * 1024:
             continue
         try:
             section = json.loads(path.read_text())["scanner_unique_funnel"]["economic_cohorts"]["lookup_attention_selection"]
             if (section.get("contract_version") == INTEGRATED_CONTRACT
                     and section.get("evaluation_phase") == "postclose_final"
                     and (section.get("independent_holdout") or {}).get("learning_cutoff")
+                    and _learning_in_refresh_window(section, target)
                     and section.get("artifact_sha256") == canonical_sha256({k:v for k,v in section.items() if k != "artifact_sha256"})):
                 return section
         except (OSError, KeyError, TypeError, ValueError):
@@ -1116,8 +1138,8 @@ def integrated_selection_evaluation(target, events_by_date, *, predecessor=None,
     if predecessor and predecessor.get("artifact_sha256") != canonical_sha256({k:v for k,v in predecessor.items() if k != "artifact_sha256"}):
         predecessor = None
     learning_predecessor = predecessor
-    if not ((predecessor or {}).get("independent_holdout") or {}).get("learning_cutoff"):
-        learning_predecessor = previous_learning_section(target) or predecessor
+    if not _learning_in_refresh_window(predecessor, target):
+        learning_predecessor = previous_learning_section(target)
     # Post-apply PnL is restricted to exact immutable receipt hashes; completed
     # high/low cohorts without selection-version evidence remain observational.
     prior_policy, applied_outcomes, applied_receipts = post_apply_inputs(target, outcomes)

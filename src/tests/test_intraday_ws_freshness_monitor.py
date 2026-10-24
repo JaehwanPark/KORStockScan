@@ -5,6 +5,24 @@ from types import SimpleNamespace
 from src.engine.monitoring import intraday_ws_freshness_monitor as mod
 
 
+def test_lookup_native_inputs_honors_forward_refresh_before_read(monkeypatch, tmp_path):
+    monkeypatch.setattr(mod, "REPORT_DIR", tmp_path)
+    for day in ("2026-09-28", "2026-09-29", "2026-10-23", "2026-10-24", "2026-09-29-old"):
+        (tmp_path / f"{mod.REPORT_TYPE}_{day}.json").write_text("{}")
+    opened = []
+    def read(path):
+        opened.append(path.stem.removeprefix(f"{mod.REPORT_TYPE}_"))
+        return {"scanner_unique_funnel": {"economic_cohorts": {
+            "lookup_attention_selection": {"native_events": []}}}}
+    monkeypatch.setattr(mod, "_read_json", read)
+    native, _ = mod._lookup_native_inputs("2026-10-23", [{"current": True}])
+    assert opened == ["2026-09-29", "2026-10-23"]
+    assert native["2026-10-23"] == [{"current": True}]
+    opened.clear()
+    mod._lookup_native_inputs("2026-09-28", None)
+    assert opened == ["2026-09-28"]
+
+
 def _event(stage, fields, *, code="000001", emitted_at="2026-07-13T09:10:00+09:00"):
     return {
         "pipeline": "ENTRY_PIPELINE",

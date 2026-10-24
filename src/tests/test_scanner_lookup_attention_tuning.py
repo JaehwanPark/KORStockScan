@@ -9,6 +9,19 @@ from src.engine.scalping import scanner_lookup_attention_policy as policy
 from src.tests.test_scanner_lookup_attention_resource import ready_resource_rows
 
 
+def test_lineage_refresh_excludes_old_and_future_preserves_missing_receipts():
+    events = {day: [_observation_event(day=date.fromisoformat(day))]
+              for day in ("2026-09-28", "2026-09-29", "2026-10-24")}
+    rows, lineage = tuning.collect_lineage(date(2026, 10, 23), events_by_date=events)
+    assert lineage["window_start"] == "2026-09-29"
+    assert [row["observation_date"] for row in rows] == ["2026-09-29"]
+    assert lineage["fill_receipt_missing_count"] == 1
+    assert tuning._resource_window_start(date(2026, 10, 23)) == date(2026, 9, 29)
+    historical, lineage = tuning.collect_lineage(date(2026, 9, 28), events_by_date=events)
+    assert [row["observation_date"] for row in historical] == ["2026-09-28"]
+    assert lineage["window_start"] == "2026-09-02"
+
+
 def _outcome(day: date, *, candidate: bool, index: int) -> dict:
     return {
         "rec_date": day.isoformat(),
