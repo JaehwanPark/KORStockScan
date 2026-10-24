@@ -1,5 +1,19 @@
 import sys
 import types
+import json
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def isolated_telegram_config(tmp_path, monkeypatch):
+    from src.utils import constants
+
+    path = tmp_path / "config.json"
+    path.write_text(
+        json.dumps({"TELEGRAM_TOKEN": "0:offline", "ADMIN_ID": "offline-admin"})
+    )
+    monkeypatch.setattr(constants, "CONFIG_PATH", path)
+    monkeypatch.setattr(constants, "DEV_PATH", path)
 
 
 def test_actual_telegram_sender_uses_plain_thread_sessions_and_existing_retries(
