@@ -141,8 +141,43 @@ def pytest_configure(config):
     logger.LEGACY_LOGS_DIR = root / "legacy_logs"
 
 
+def _release_test_index_state(tmp_path):
+    """Release native handles and path-keyed state before pytest reuses temp names."""
+    store = sys.modules.get("src.engine.automation.main_trailing_source_store")
+    if store is None:
+        return
+    with store._WRITER_LOCK:
+        for key, (connection, lock) in list(store._WRITERS.items()):
+            if not Path(key[1]).is_relative_to(tmp_path):
+                continue
+            with lock:
+                del store._WRITERS[key]
+                connection.close()
+    with store._MAINTENANCE_LOCK:
+        request = store._MAINTENANCE_REQUEST
+        if request is not None and Path(request[0]).is_relative_to(tmp_path):
+            store._MAINTENANCE_REQUEST = None
+        for cache in (
+            store._MAINTENANCE,
+            store._CHECKPOINTS,
+            store._MAINTENANCE_STATUS,
+            store._VOTE_BACKFILL,
+            store._REPORTED_FAILURES,
+        ):
+            for key in list(cache):
+                path = key[0] if isinstance(key, tuple) else key
+                if Path(path).is_relative_to(tmp_path):
+                    del cache[key]
+    with store._PENDING_LOCK:
+        for path in list(store._PENDING_APPENDS):
+            if Path(path).is_relative_to(tmp_path):
+                rows = store._PENDING_APPENDS.pop(path)
+                store._PENDING_BYTES -= sum(len(row[2]) for row in rows)
+
+
 @pytest.fixture(autouse=True)
 def isolate_module_logs(tmp_path, monkeypatch):
+    _release_test_index_state(tmp_path)
     from src.engine.ai.hot_path_ai_symbol_budget import (
         DEFAULT_HOT_PATH_AI_SYMBOL_BUDGET,
     )
@@ -247,6 +282,7 @@ def isolate_module_logs(tmp_path, monkeypatch):
     DEFAULT_HOT_PATH_AI_SYMBOL_BUDGET.reset()
     sniper_state_handlers.datetime = _REAL_DATETIME
     sniper_state_handlers.TRADING_RULES = DEFAULT_TRADING_RULES
+    _release_test_index_state(tmp_path)
     assert _custody_snapshot() == production_custody_snapshot
     for active_logger in tuple(logger._MODULE_LOGGERS.values()):
         for handler in list(active_logger.handlers):

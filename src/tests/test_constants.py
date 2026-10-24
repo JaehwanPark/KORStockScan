@@ -8,9 +8,18 @@ import src.utils.constants as constants
 
 
 @pytest.fixture(autouse=True)
-def reload_constants_module():
+def restore_reloaded_modules():
+    # Reload exercises real environment parsing, but must not replace the
+    # session sandbox paths or leak new rule classes into later test modules.
+    from src.engine import sniper_time
+
+    snapshots = [(module, vars(module).copy()) for module in (constants, sniper_time)]
     yield
-    importlib.reload(constants)
+    for module, state in snapshots:
+        namespace = vars(module)
+        for name in namespace.keys() - state.keys():
+            del namespace[name]
+        namespace.update(state)
 
 
 def test_kt00001_orderable_amount_floor_default_and_rollback_env(monkeypatch):
