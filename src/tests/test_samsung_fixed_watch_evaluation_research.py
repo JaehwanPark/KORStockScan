@@ -287,14 +287,48 @@ def test_source_bad_row_is_identified_without_excluding_good_population():
     assert [r["trace"] for r in result] == ["bad", "malformed"]
 
 
+def historical_evidence_root():
+    """Resolve retained input custody independently of the test checkout."""
+    configured = os.environ.get("KORSTOCKSCAN_TEST_HISTORICAL_ROOT")
+    if configured:
+        root = Path(configured).resolve()
+    else:
+        checkout = Path(__file__).resolve().parents[2]
+        common = subprocess.check_output(
+            ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
+            cwd=checkout,
+            text=True,
+            timeout=10,
+        ).strip()
+        root = Path(common).resolve().parent
+    if not root.is_dir():
+        raise ValueError("historical_evidence_root_unavailable")
+    return root
+
+
+@pytest.mark.parametrize("available", [True, False])
+def test_explicit_historical_custody_never_falls_back_to_another_root(
+    tmp_path, monkeypatch, available
+):
+    root = tmp_path if available else tmp_path / "missing"
+    monkeypatch.setenv("KORSTOCKSCAN_TEST_HISTORICAL_ROOT", str(root))
+    if available:
+        assert historical_evidence_root() == root
+    else:
+        with pytest.raises(ValueError, match="historical_evidence_root_unavailable"):
+            historical_evidence_root()
+
+
 def actual_widget():
-    root = Path(__file__).resolve().parents[2]
+    root = historical_evidence_root()
     source = (
         root
         / "data/report/widget_signal_auto_trade_events/widget_signal_auto_trade_events_20261002.jsonl"
     )
     if not source.exists():
-        pytest.skip("sealed local evidence unavailable")
+        pytest.fail(
+            "sealed historical evidence unavailable; prepare the retained fixture inputs"
+        )
     owners = F.R.read(
         root / "tmp/samsung-opportunity-contract-20261004/accepted-cold/result.json"
     )["owner_inventory"]["rows"]
@@ -316,7 +350,7 @@ def test_actual_widget_receipt_is_not_same_main_event_and_cost_is_not_settlement
 
 def test_actual_premarket_main_rechecks_have_canonical_endpoint_comparison():
     events, owners, rows = actual_widget()
-    root = Path(__file__).resolve().parents[2]
+    root = historical_evidence_root()
     widget = F.widget_receipt(events, owners, rows)
     out = F.premarket_owner_bridge(root, widget, {})
     first, second = out["rows"]
@@ -476,13 +510,15 @@ def historical_source_snapshot(path, expected_sha256):
 
 def historical_intake_fixture(tmp_path):
     """Exercise raw intake on existing bytes, never label it a new holdout."""
-    root = Path(__file__).resolve().parents[2]
+    root = historical_evidence_root()
     original = (
         root
         / "tmp/samsung-continuous-recovery-research-20261003/source-02/projection.json"
     )
     if not original.exists():
-        pytest.skip("sealed local evidence unavailable")
+        pytest.fail(
+            "sealed historical evidence unavailable; prepare the retained fixture inputs"
+        )
     projection = F.R.read(original)
     projection["main"] = [r for r in projection["main"] if r["day"] == "2026-10-02"]
     projection.pop("content_sha256")
