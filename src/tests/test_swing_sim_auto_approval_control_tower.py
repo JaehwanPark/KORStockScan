@@ -101,7 +101,6 @@ def test_control_tower_merges_swing_ldm_and_bottom_rebound_sources() -> None:
         "bottom_rebound_policy_auto_loop",
         "swing_lifecycle_bucket_discovery",
         "swing_runtime_approval",
-        "swing_strategy_discovery_ev",
     ]
     assert approval["final_user_approval_boundary"] == "full_live_only"
     assert approval["runtime_effect"] is False
@@ -212,7 +211,6 @@ def test_control_tower_blocks_runtime_pre_final_when_tier2_missing() -> None:
     assert approval["approved_source_ids"] == [
         "bottom_rebound_policy_auto_loop",
         "swing_lifecycle_bucket_discovery",
-        "swing_strategy_discovery_ev",
     ]
     assert "swing_runtime_approval" not in approval["approved_source_ids"]
     assert not [

@@ -1440,7 +1440,10 @@ def test_swing_same_symbol_loss_guard_blocks_dry_run_before_latency_submit(monke
         "budget_pass",
         "swing_same_symbol_loss_reentry_blocked",
         "swing_reentry_counterfactual_after_loss",
+        "entry_submit_attempt_finished",
     ]
+    assert logs[-1][1]["submit_call_broker_accepted"] is False
+    assert logs[-1][1]["runtime_effect"] is False
     blocked = logs[1][1]
     counterfactual = logs[2][1]
     assert blocked["actual_order_submitted"] is False
@@ -1513,7 +1516,10 @@ def test_swing_same_symbol_loss_zero_qty_counterfactual_does_not_conflict_curr_p
         "blocked_zero_qty",
         "swing_probe_discarded",
         "swing_reentry_counterfactual_after_loss",
+        "entry_submit_attempt_finished",
     ]
+    assert logs[-1][1]["submit_call_broker_accepted"] is False
+    assert logs[-1][1]["runtime_effect"] is False
     counterfactual = logs[2][1]
     assert counterfactual["curr_price"] == 10_000
     assert "event_field_conflict_keys" not in counterfactual
