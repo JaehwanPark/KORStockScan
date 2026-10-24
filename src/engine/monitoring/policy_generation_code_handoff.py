@@ -857,6 +857,35 @@ REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS["holding_vote"] += (
 )
 
 
+# Reviewed 10/23 source and calculation repairs: capability alone never
+# authenticates old calculation results. Native sources and fresh fixtures
+# remain mandatory; affected producers are regenerated before final closure.
+REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS["entry_cancel_wait"] += (
+    (
+        "5fa218b7b916b6b2a98a7a395573dac80ff96d2345edae3b64f9f99e3574125d",
+        "d51f14088df87ad258d719b2a4668814b6ceababd1369f8259bd188eab3b7d3f",
+    ),
+)
+REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS["rising_missed"] += (
+    (
+        "d48f497b194c96ca5776bacf2910a08de4c0c3a6a323c5cde1d8a30c171c15e4",
+        "fd0fe0fdc9e75ac854dca2ef5ebc1a2633409af9c10e1b4be12072588814d32d",
+    ),
+)
+REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS["holding_vote"] += (
+    (
+        "7ea8d358191c970b16384b182f2feaa66c4486f1082f4c36cb54616df4485a81",
+        "6f8601e48045a18659778b7ba2a942de3dde2657f96e4c3cbc9ac474ad05461a",
+    ),
+)
+REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS["auxiliary"] += (
+    (
+        "8f7446efe983c1ad88ba90c3ca72114fe9e90d045356e8c7d74acd0d4ceb62fd",
+        "545cdb221837794354c9031d6e7b69ef7e80c381999db833e54f0a2eadb2fa6a",
+    ),
+)
+
+
 def current_fixture_observation(observed, data):
     family = observed.get("family")
     pair = REVIEWED_SUCCESSORS.get(family)

@@ -1641,7 +1641,17 @@ def test_second_code_handoff_preserves_selector_provenance_without_freezing_tran
     ],
 )
 def test_postclose_midnight_handoff_requires_stopped_exact_native_ancestry(
-    tmp_path, monkeypatch, damage, legacy_damage=False, completed=False
+    tmp_path,
+    monkeypatch,
+    damage,
+    legacy_damage=False,
+    completed=False,
+    observation_day="2026-10-24",
+    source_day="2026-10-23",
+    next_day="2026-10-26",
+    selected_day=None,
+    retained_workflow=False,
+    parent_source=None,
 ):
     import json
     from pathlib import Path
@@ -1655,8 +1665,8 @@ def test_postclose_midnight_handoff_requires_stopped_exact_native_ancestry(
     data = tmp_path / "data"
     origin = tmp_path / "origin"
     origin.mkdir()
-    day = datetime.now(P.KST).date().isoformat()
-    source = (datetime.fromisoformat(day).date() - timedelta(days=1)).isoformat()
+    day = observation_day
+    source = source_day
     selection = data / "runtime/runtime_release_selection.json"
     selection.parent.mkdir(parents=True)
     selected = dict(
@@ -1666,8 +1676,10 @@ def test_postclose_midnight_handoff_requires_stopped_exact_native_ancestry(
         approved_by="user",
         approval_scope="after_postclose_deploy_for_next_regular_start",
         actual_pid_consumed=False,
-        next_operating_date=day,
+        next_operating_date=next_day,
     )
+    if selected_day:
+        selected["selected_at_kst"] = selected_day + "T00:21:20+09:00"
     if damage == "consumed":
         selected["actual_pid_consumed"] = True
     if damage == "source_selection":
@@ -1777,8 +1789,9 @@ def test_postclose_midnight_handoff_requires_stopped_exact_native_ancestry(
     if completed:
         from src.engine.automation import postclose_done_controller as controller
 
-        script = origin / "deploy/run_threshold_cycle_postclose.sh"
-        script.parent.mkdir()
+        workflow_root = tmp_path / "workflow" if retained_workflow else origin
+        script = workflow_root / "deploy/run_threshold_cycle_postclose.sh"
+        script.parent.mkdir(parents=True)
         script.write_text("reviewed workflow")
         body = json.loads(status.read_bytes())
         body.update(
@@ -1787,7 +1800,7 @@ def test_postclose_midnight_handoff_requires_stopped_exact_native_ancestry(
             code_commit="b" * 40,
             reason="verified_main_completed",
             workflow_source=dict(
-                root=str(origin),
+                root=str(workflow_root),
                 commit="a" * 40,
                 script=str(script),
                 sha256=P.file_hash(script),
@@ -1836,23 +1849,42 @@ def test_postclose_midnight_handoff_requires_stopped_exact_native_ancestry(
             )
 
         monkeypatch.setattr(H.subprocess, "check_output", verify_origin)
+        if retained_workflow:
+            from src.engine.infrastructure import runtime_release_router as router
+
+            def verify_workflow(workspace, selection):
+                assert workspace == tmp_path
+                assert selection["release_root"] == str(workflow_root)
+                assert selection["git_commit"] == "a" * 40
+                return workflow_root, "a" * 40
+
+            monkeypatch.setattr(router, "validate_release", verify_workflow)
     if damage == "restart":
         (tmp_path / "restart.flag").touch()
     if damage == "hold":
         (data / "runtime/operator_startup_hold.json").write_text("{}")
     monkeypatch.setattr(D, "_main_pids", lambda: [42] if damage == "main_live" else [])
     monkeypatch.setattr(D, "_session_absent", lambda: damage != "session_live")
-    monkeypatch.setattr(
-        H,
-        "_validated_origin_receipt",
-        lambda *a: (
-            None
-            if damage == "ancestry"
-            else dict(
-                bundle_sha256="bundle", source_hashes={str(data / "old.json"): "0" * 64}
-            )
-        ),
-    )
+    ancestry_days = []
+
+    def ancestry(*args):
+        ancestry_days.append(args[1])
+        if damage == "ancestry" or (selected_day and args[1] == source):
+            return None
+        result = dict(
+            bundle_sha256="bundle", source_hashes={str(data / "old.json"): "0" * 64}
+        )
+        if retained_workflow and damage != "workflow_ancestry":
+            result["source_hashes"][str(script)] = P.file_hash(script)
+        return result
+
+    monkeypatch.setattr(H, "_validated_origin_receipt", ancestry)
+    if selected_day:
+        predecessor = H.path(data, selected_day, "a" * 40, "bundle")
+        predecessor.parent.mkdir(parents=True)
+        predecessor.write_text(
+            json.dumps(dict(postclose_source_date=parent_source or source))
+        )
     original = D._owned_metadata
     reads = []
 
@@ -1885,6 +1917,7 @@ def test_postclose_midnight_handoff_requires_stopped_exact_native_ancestry(
         assert not H.path(data, day, "c" * 40, "bundle").exists()
         return
     proof = H._postclose_origin_receipt(*args)
+    assert ancestry_days == ([source, selected_day] if selected_day else [source])
     frozen = H.path(data, day, "c" * 40, "bundle").with_suffix("") / "postclose_origin"
     assert (frozen / eod.name).read_bytes() == before[0] and (
         frozen / status.name
@@ -1894,8 +1927,7 @@ def test_postclose_midnight_handoff_requires_stopped_exact_native_ancestry(
         and str(status) not in proof["source_hashes"]
     )
     assert (
-        proof["verification_basis"]
-        == "verified_previous_day_postclose_native_code_ancestry"
+        proof["verification_basis"] == "verified_closed_postclose_native_code_ancestry"
     )
     assert all(
         P.file_hash(name) == sha
@@ -1903,6 +1935,86 @@ def test_postclose_midnight_handoff_requires_stopped_exact_native_ancestry(
         if name != str(data / "old.json")
     )
     assert eod.read_bytes() == before[0] and status.read_bytes() == before[1]
+
+
+@pytest.mark.parametrize("day", ["2026-10-24", "2026-10-25", "2026-10-26"])
+def test_closed_postclose_handoff_spans_weekend_without_changing_source(
+    tmp_path, monkeypatch, day
+):
+    test_postclose_midnight_handoff_requires_stopped_exact_native_ancestry(
+        tmp_path, monkeypatch, None, observation_day=day, completed=True
+    )
+
+
+def test_closed_postclose_handoff_uses_exact_selected_issue_day(tmp_path, monkeypatch):
+    test_postclose_midnight_handoff_requires_stopped_exact_native_ancestry(
+        tmp_path,
+        monkeypatch,
+        None,
+        observation_day="2026-10-25",
+        selected_day="2026-10-24",
+        completed=True,
+        retained_workflow=True,
+    )
+
+
+def test_closed_postclose_handoff_rejects_unbound_old_workflow(tmp_path, monkeypatch):
+    test_postclose_midnight_handoff_requires_stopped_exact_native_ancestry(
+        tmp_path,
+        monkeypatch,
+        "workflow_ancestry",
+        observation_day="2026-10-25",
+        selected_day="2026-10-24",
+        completed=True,
+        retained_workflow=True,
+    )
+
+
+@pytest.mark.parametrize(
+    "selected_day,parent_source",
+    [
+        ("2026-10-26", None),
+        ("2026-10-23", None),
+        ("2026-10-24", "2026-10-22"),
+    ],
+)
+def test_closed_postclose_handoff_rejects_foreign_selection_ancestry(
+    tmp_path, monkeypatch, selected_day, parent_source
+):
+    with pytest.raises(ValueError, match="active_policy_postclose_"):
+        test_postclose_midnight_handoff_requires_stopped_exact_native_ancestry(
+            tmp_path,
+            monkeypatch,
+            None,
+            observation_day="2026-10-25",
+            selected_day=selected_day,
+            completed=True,
+            parent_source=parent_source,
+        )
+
+
+@pytest.mark.parametrize(
+    "source,day,target",
+    [
+        ("2026-10-23", "2026-10-27", "2026-10-26"),
+        ("2026-10-23", "2026-10-25", "2026-10-27"),
+        ("2026-10-24", "2026-10-25", "2026-10-26"),
+        ("2026-10-23", "2026-10-23", "2026-10-26"),
+    ],
+)
+def test_closed_postclose_handoff_rejects_wrong_calendar_window(
+    tmp_path, monkeypatch, source, day, target
+):
+    with pytest.raises(ValueError, match="active_policy_postclose_"):
+        test_postclose_midnight_handoff_requires_stopped_exact_native_ancestry(
+            tmp_path,
+            monkeypatch,
+            None,
+            observation_day=day,
+            source_day=source,
+            next_day=target,
+            completed=True,
+        )
 
 
 @pytest.mark.parametrize(

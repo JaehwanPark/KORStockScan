@@ -10118,6 +10118,79 @@ REVIEWED_ENTRY_COST_PAIRS = {
 }
 
 
+# Complete reviewed postclose source-repair successor, including weekend custody.
+# Historical generations remain exact; partial/mixed successors are rejected.
+REVIEWED_POSTCLOSE_SOURCE_PREVIOUS = {
+    "src/engine/automation/entry_cancel_wait_tuning.py": "49c1f36ca4082714705e0e558fa6a931cba7f394fb7f1dca83090884db86dfb4",
+    "src/engine/kiwoom_websocket.py": "ddc6bab2dfd4adb2d253a420e66eac6bd33c1877b18070023f75c489f9c40730",
+    "src/engine/monitoring/rising_missed_intraday_feedback.py": "902ec3543434043e3ee0808bdd724c119a370c43747939ed935af0df4bdb0799",
+    "src/engine/observation_source_quality_audit.py": "dd307c98964273da61188a6832fab3de0b402c5cdd97bf69f063721b096c4ed6",
+    "src/engine/scalping/ai_action_outcome_calibration.py": "a300563f9c78eb6365a24eb1c2afa67872aaf2fc287ac7d4c8aad69907bb5aed",
+    "src/engine/scalping/compact_auxiliary_paired_replay.py": "792619031c87b993dd32fcff8b9821fbfbc464641ff1ea246c6871db97e26d67",
+    "src/engine/scalping/micro_reversion/canary_monitor.py": "1a767cc4e34ac8add1ec4318e305317f6faa35c469951dd422b45ec814258891",
+    "src/engine/scalping/micro_reversion/contracts.py": "ef867b3cfd8c447dd63985af31102dba35b162fd80eeac601b66bc2b7e99d96a",
+    "src/engine/scalping/micro_reversion/forward_collector.py": "975d0b0061398a488244c80e869336a4aaac14e37d653b57c8115b83382e465e",
+    "src/engine/scalping/reversal_auxiliary_tuning.py": "0e8f31ed349a6ef17f5f588f8b4bf4180b2f819ab85077a1d51641662611a40a",
+    "src/engine/scalping/reversal_cumulative_postclose.py": "990d9dd982e2fe6976fe070588e39e6a2aa46830344e3ea449ce77c93c4b68fc",
+    "src/engine/sniper_post_sell_feedback.py": "fae77491c422f776a48a99da5d855b76e934bdd244055e4cdc44372c8016b41b",
+    "src/engine/sniper_state_handlers.py": "b620eff5df4d7d71fc9a8cace747a260b0aad5b1be358e5ef32e2b1deab591f9",
+    "src/engine/scalping/reversal_code_handoff.py": "de1ac1086dcaac8d0d5737cc5b0d49374342e19ecd69d698aa43cb2133e3a124",
+    "src/engine/monitoring/policy_generation_code_handoff.py": "056582f3a61d683220910a86107018d5fea3467f5181a7a837498cf94df6d4c2",
+    "src/engine/infrastructure/startup_validation_code_context.py": "5890164cb152c1f408347ea5703b699b5c8ec8cdf225819314c52bbc76776681",
+}
+REVIEWED_POSTCLOSE_SOURCE_HASHES = {
+    "src/engine/automation/entry_cancel_wait_tuning.py": "860304462737c66646146b84f04c5b930664d144442d12ef223e23f7d0b943fe",
+    "src/engine/kiwoom_websocket.py": "cc5af2d47bcb6d18a64917fcf286e7cad909be5c056e49afedcc9827ea80e637",
+    "src/engine/monitoring/rising_missed_intraday_feedback.py": "6c0665007b1274780f6f13e2b5921368b09ca455b4318107704957767f506942",
+    "src/engine/observation_source_quality_audit.py": "9004c2adbcf818b956c9ab9f6194c2583ae254ae80f46c0d49a3b09caa32e073",
+    "src/engine/scalping/ai_action_outcome_calibration.py": "c570880da2ac0a96fdab41a07aea9ddc8bdf9740d9ba542d364e8b5a4e469486",
+    "src/engine/scalping/compact_auxiliary_paired_replay.py": "b9095cf665e68a16817839f1e77df79334a3aa385095703ba616ad69d8106cff",
+    "src/engine/scalping/micro_reversion/canary_monitor.py": "ccf52d1c9dfb17af4d43eca012fdceed9bfdfab4e7989e21f765711449c63223",
+    "src/engine/scalping/micro_reversion/contracts.py": "670fb3aafc56d9d93057be31bb867d6cc1d50ce01f6c656f00049ebe76020d32",
+    "src/engine/scalping/micro_reversion/forward_collector.py": "0922b5db75dc895532ec63f185f2527d09d2e13c788a4b27f84c5369573504fe",
+    "src/engine/scalping/reversal_auxiliary_tuning.py": "252aeca80423c1f9881ef6a26dc8baa1c18dad18be8c446cbc7c990b5e3f058a",
+    "src/engine/scalping/reversal_cumulative_postclose.py": "f24f1cd9dba38de51a7e3193b506cb8b0e02a8b53fbc94348bf432140782e1f9",
+    "src/engine/sniper_post_sell_feedback.py": "7f1b662ce5b135f8d0d1ca14a3b4d584c8b9823360b79bc1864ce5e0dbbf38af",
+    "src/engine/sniper_state_handlers.py": "f10df239b1d974d817eed5eb7f99be8f744070643ae3e32f98930434662be95d",
+    "src/engine/scalping/reversal_code_handoff.py": "a54226c0232b8a12f049940bc810d5fd6161b9fc7b9154ce66063de3f55b34ec",
+    "src/engine/monitoring/policy_generation_code_handoff.py": "b188d34dea921cf21f602ce83ef7d6c8af0527b8e874b208e92394f2d904759d",
+    "src/engine/infrastructure/startup_validation_code_context.py": "13d85428ca0657171a7e01e9d5ada28e0ef1bd42db630d851072748963fc1ca5",
+}
+REVIEWED_POSTCLOSE_SOURCE_PROFILE = {
+    **REVIEWED_CLOSED_SCANNER_PROFILE,
+    **REVIEWED_POSTCLOSE_SOURCE_HASHES,
+}
+REVIEWED_POSTCLOSE_SOURCE_VARIANTS = {
+    (key[0], REVIEWED_POSTCLOSE_SOURCE_HASHES.get(key[0], key[1])): {
+        **value,
+        "selector_path": "src/engine/scalping/reversal_code_handoff.py",
+        "selector_sha256": REVIEWED_POSTCLOSE_SOURCE_HASHES[
+            "src/engine/scalping/reversal_code_handoff.py"
+        ],
+        "dependencies": {**value["dependencies"], **REVIEWED_POSTCLOSE_SOURCE_HASHES},
+        "contract_extensions": {
+            origin: {
+                name: REVIEWED_POSTCLOSE_SOURCE_HASHES.get(os.path.normpath(name), sha)
+                for name, sha in paths.items()
+            }
+            for origin, paths in value["contract_extensions"].items()
+        },
+    }
+    for key, value in REVIEWED_CLOSED_SCANNER_VARIANTS.items()
+}
+REVIEWED_ENTRY_COST_PAIRS = {
+    **REVIEWED_ENTRY_COST_PAIRS,
+    **{
+        name: REVIEWED_ENTRY_COST_PAIRS.get(name, ())
+        + tuple(
+            (origin, current)
+            for origin in {REVIEWED_POSTCLOSE_SOURCE_PREVIOUS[name]}
+            | {old for pair in REVIEWED_ENTRY_COST_PAIRS.get(name, ()) for old in pair}
+        )
+        for name, current in REVIEWED_POSTCLOSE_SOURCE_HASHES.items()
+    },
+}
+
 # Exact source-only formatting succession. The review manifest preserves the
 # committed predecessor and deterministic formatter output; it never rewrites
 # a policy contract or grants runtime authority. The verifier itself remains
@@ -10688,6 +10761,15 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
             )
         )
     )
+    successor_name = "src/engine/scalping/reversal_code_handoff.py"
+    successor = candidate_bytes(successor_name, optional=True)
+    if (
+        successor is not None
+        and hashlib.sha256(successor).hexdigest()
+        == REVIEWED_POSTCLOSE_SOURCE_HASHES[successor_name]
+    ):
+        prepared_hashes = REVIEWED_POSTCLOSE_SOURCE_PROFILE
+        prepared_variants = REVIEWED_POSTCLOSE_SOURCE_VARIANTS
     entry_cost_hashes = (
         prepared_hashes
         if prepared_owner_present

@@ -5198,7 +5198,7 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(
     )
     subprocess.run(["git", "-C", str(root), "checkout", "-q", "75e0fbbf7"], check=True)
     hashes = {
-        "current": handoff.REVIEWED_CLOSED_SCANNER_PROFILE,
+        "current": handoff.REVIEWED_POSTCLOSE_SOURCE_PROFILE,
         "consumed_closed_scanner": handoff.REVIEWED_CLOSED_SCANNER_PREVIOUS_PROFILE,
         "consumed_scanner_preflight": handoff.REVIEWED_SCANNER_PREFLIGHT_PROFILE,
         "consumed_listing_source": handoff.REVIEWED_AFTERMARKET_LISTING_PROFILE,
@@ -5860,6 +5860,18 @@ def test_closed_scanner_handoff_rejects_unknown_or_mixed_sources(
 ):
     test_entry_cost_handoff_keeps_exact_complete_generation(
         tmp_path, family, fault, "current", dependency
+    )
+
+
+@pytest.mark.parametrize("dependency", sorted(handoff.REVIEWED_POSTCLOSE_SOURCE_HASHES))
+@pytest.mark.parametrize(
+    "fault", ["missing", "dirty", "committed_change", "parent_mix"]
+)
+def test_postclose_source_handoff_rejects_partial_successor(
+    tmp_path, dependency, fault
+):
+    test_entry_cost_handoff_keeps_exact_complete_generation(
+        tmp_path, "pre_submit_delay", fault, "current", dependency
     )
 
 

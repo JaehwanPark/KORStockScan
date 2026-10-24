@@ -1894,6 +1894,134 @@ REVIEWED_PREPARATION_HISTORY["src/engine/scalping/reversal_code_handoff.py"].upd
 )
 
 
+# Reviewed source repairs through 58efa8cb9 and closed-weekend custody repair.
+# Exact historical origins only; no transitive or arbitrary code acceptance.
+REVIEWED_PREPARATION_HISTORY.setdefault(
+    "src/engine/automation/entry_cancel_wait_tuning.py", set()
+).update(
+    {
+        (old, "860304462737c66646146b84f04c5b930664d144442d12ef223e23f7d0b943fe")
+        for old in (
+            "49c1f36ca4082714705e0e558fa6a931cba7f394fb7f1dca83090884db86dfb4",
+            "bdfaaeaac7768f703d181314be45afaf2ecfc983001a6364a60a41ae54882c4e",
+            "d557fef76bf6c35ff583c5c52fa23bd3c19039efe14fc48f81db90036edb61aa",
+        )
+    }
+)
+REVIEWED_PREPARATION_HISTORY.setdefault("src/engine/kiwoom_websocket.py", set()).update(
+    {
+        (old, "cc5af2d47bcb6d18a64917fcf286e7cad909be5c056e49afedcc9827ea80e637")
+        for old in (
+            "215a0e3d6388df5938a4d70e8e5afad689fa8087280a3a53b81619a2295e35e3",
+            "5b22cec0dfd6871ccfc26d15b308845ec24f792556b87399d1561d770aa3a4e5",
+            "ddc6bab2dfd4adb2d253a420e66eac6bd33c1877b18070023f75c489f9c40730",
+            "ef70d8fc0fd74416fc1e7a9c27dca68663a1f057b7e2b14041b255a66a9af377",
+        )
+    }
+)
+REVIEWED_PREPARATION_HISTORY.setdefault(
+    "src/engine/scalping/ai_action_outcome_calibration.py", set()
+).update(
+    {
+        (old, "c570880da2ac0a96fdab41a07aea9ddc8bdf9740d9ba542d364e8b5a4e469486")
+        for old in (
+            "25ea9329d8473808b1b1d3fc09b256a329f1887f3bb50675dd11de625dc4f192",
+            "a300563f9c78eb6365a24eb1c2afa67872aaf2fc287ac7d4c8aad69907bb5aed",
+        )
+    }
+)
+REVIEWED_PREPARATION_HISTORY.setdefault(
+    "src/engine/scalping/reversal_auxiliary_tuning.py", set()
+).update(
+    {
+        (old, "252aeca80423c1f9881ef6a26dc8baa1c18dad18be8c446cbc7c990b5e3f058a")
+        for old in (
+            "0e8f31ed349a6ef17f5f588f8b4bf4180b2f819ab85077a1d51641662611a40a",
+            "a8ac3de954b2d6e89e3a46bb49501edc0d35df47621900a1d22b6d8492672412",
+            "fe5d737f446e95028a6d5135cfa0f7c76f7047ea108aa89c737d7e5283f64e34",
+        )
+    }
+)
+REVIEWED_PREPARATION_HISTORY.setdefault(
+    "src/engine/scalping/reversal_cumulative_postclose.py", set()
+).update(
+    {
+        (old, "f24f1cd9dba38de51a7e3193b506cb8b0e02a8b53fbc94348bf432140782e1f9")
+        for old in (
+            "048afe98a0e4dd7a6d1c487b52c3f5e9e45030533abc84bb7d38480e1cc0b84c",
+            "6adcd6526ca315d53e60d4817cda3cfec1b8ed8db30d624a1c212d6005dbba87",
+            "708ee7428c494f67a7407e5093771f8ddf45ba67227073bea05ff5d87a172493",
+            "990d9dd982e2fe6976fe070588e39e6a2aa46830344e3ea449ce77c93c4b68fc",
+        )
+    }
+)
+REVIEWED_PREPARATION_HISTORY.setdefault(
+    "src/engine/sniper_state_handlers.py", set()
+).update(
+    {
+        (old, "f10df239b1d974d817eed5eb7f99be8f744070643ae3e32f98930434662be95d")
+        for old in (
+            "0fe0c01839a6186b0ef45aa8112075d13220ebc64f299656164aa007a84b1541",
+            "2e69e440301dbc3bf4ec7020abc29b4a37b0dfd5dd624480378c7eab491c45d9",
+            "56a0613b596418c0ade581aabedef12d38371ff7d4d2af9fffea2cc00665dd20",
+            "6a8c1ad86951d2720a91175cda4565d6202e9ff63b0b220b6613166760c84f66",
+            "73a3790ee1a36435f84e3eaaaa5cc73c6e58e810d4043d9d8b1e4bd2e5aa6fbd",
+            "8a0c18d2c097b063a8349907f39e6057d43b7ad9ef173e5f6c4e1be48f8b21f9",
+            "b3b2965f65f33e5e5bf52fd960757d6bdbe6b5a63e6844bd95f5dc1d5353ea1d",
+            "b620eff5df4d7d71fc9a8cace747a260b0aad5b1be358e5ef32e2b1deab591f9",
+            "bc0e823b2f358509d07dd39bc0051a5e0a3f823c687d1a0580b279242ed66e54",
+            "bd2c589431b0f507b2bbbba31cfc700a22dcab07b914313dc101add2cc9c9686",
+            "e25983d9d6175fb628cc3d483ae8f522a4f336f8ce31f107d6a3cf757bd52847",
+            "ea59d6365ae1707af457535650937c49977997d9bc516bb8cc141f07da6eea86",
+            "eaca4d2d23d2764c42e3f7cc2f73d04db0b29bb8115cabac4f10cf48e89d57aa",
+            "edfd4af04194182dff2a3ced3952dbfc5dc989d85906409c0172fabadb381419",
+        )
+    }
+)
+REVIEWED_PREPARATION_HISTORY.setdefault(
+    "src/engine/scalping/reversal_code_handoff.py", set()
+).update(
+    {
+        (old, "a54226c0232b8a12f049940bc810d5fd6161b9fc7b9154ce66063de3f55b34ec")
+        for old in (
+            "16776a22b99bff4054ba99914cd8f7c96e87f6ca9fb1ac041e6a8191723b929d",
+            "54b9c0efc38700a0cb8722694cdf84b9df8aa478a28f529b2b618f5532559b5a",
+            "65fb740d0ddc41cfb8b5c7e0319ed442287cc0c14fd62ef1514c8378a820948c",
+            "6c5b8f3013e055ef54774c1e89be66fda93988aa5792e775bb82bac86636cbf0",
+            "852d31cba14cfcb68cfb73603de07b30643969c5e476ddca6dde1f2d3a6fc589",
+            "8681d10376f4228bbe5b9d1d012d3510e8abd89470036077c3c0bc69fad63471",
+            "ab61f882f4c8bbaddc0576a5765f4f102e38fd824b44a25341ffc78d647741b5",
+            "b77b63fa5afe9b3dff59266cecce73f92880b5256b12c32343a70aeddba63aa9",
+            "c5c6edd558c15bd1067e018d2fa84e4670cd213183baa376cf223e1376ba0238",
+            "de1ac1086dcaac8d0d5737cc5b0d49374342e19ecd69d698aa43cb2133e3a124",
+        )
+    }
+)
+REVIEWED_PREPARATION_HISTORY.setdefault(
+    "src/engine/monitoring/policy_generation_code_handoff.py", set()
+).update(
+    {
+        (old, "b188d34dea921cf21f602ce83ef7d6c8af0527b8e874b208e92394f2d904759d")
+        for old in (
+            "056582f3a61d683220910a86107018d5fea3467f5181a7a837498cf94df6d4c2",
+            "1a572a81032cd49121e24e2e4925d91d922d9697a65c65db0f473873b656c5cc",
+            "1dff8c3fcc6dba15fdc720a36c5070a81805d5124433140b8158f3f50c62b98e",
+            "41ebbc34a2fd015a0cd76ae525c1e6e859edbaa6dc4e4e88e4cc76a44a7a9bef",
+            "4db24d4d542b8cc6142c1b85e0839bfce6a7116aaae5f49e2b0d90e4174e3d62",
+            "58f427eee221104aef727ec4dcadb4ad5ec8021c262b6e3c104941ed851fcf6e",
+            "62872a82eda5eae04541329a65dc062b4f99150360dfb24b7eeb8888214f0c25",
+            "858f6f949015f1c27d0185a0183df7a331f7fda971830408a5cdf53d16b39b5a",
+            "af16ae40eed72ce51960ce6141f3b800e476007f3026cfd2dcd7455226b32fdc",
+            "b14d8aaf06d7414bcbe6bdb87ddfc685f2c3765db15f8a5f50d93f3e5eeaf444",
+            "b65c616d024460c825d73472311ddf995282069cd58dfdec9241447d4285d841",
+            "b9bb89e9ea3c3835e2cb45dc7687b91e38156d208adf1dfc7554869038e50a0e",
+            "ceb7e9d6031da3e0f77fd0285897e760bec25b3c26f82f85e7b272537e4cbfee",
+            "e9b1ef85c2cae6c3bec70a6697a36d767584abee1c6fe621530865ef5146a9eb",
+        )
+    }
+)
+
+
 def reviewed_preparation_pair(relative, old, current):
     # An already reviewed physical pair keeps its original authority; a
     # formatting projection must not replace either endpoint before this check.

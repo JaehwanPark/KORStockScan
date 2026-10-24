@@ -652,3 +652,17 @@ A reviewed successor retains an earlier operator source only when that source's
 reviewed successor exactly matches the pinned predecessor. The complete current
 dependency generation remains mandatory; an isolated matching file cannot
 authenticate a mixed profile.
+
+Stopped postclose code custody follows the native KRX source-to-next-trading-day
+interval across weekends and holidays. The source must be a trading date and
+the selected next operating date must equal its native next trading date.
+Retain the stopped-process, restart/hold, full terminal and unchanged active
+parent checks. A previously selected cold successor resolves only its exact
+offset-bearing selection-day receipt, with the original postclose source date;
+it never searches for a convenient historical proof. A retained earlier
+workflow must be clean and already hash-bound by that parent's native closure,
+and the selected predecessor still performs whole-controller verification.
+The reviewed source-repair profile binds the complete producer dependencies
+and independent preparation pairs; current fixtures attest code capability,
+not the correctness of superseded calculation results. Rebuild affected
+producers before summary/strict/controller/finalization/preparation closure.

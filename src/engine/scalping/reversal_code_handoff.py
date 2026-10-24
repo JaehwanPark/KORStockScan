@@ -8,7 +8,7 @@ from __future__ import annotations
 import json
 import subprocess
 import os
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 from src.engine.scalping import continuous_reversal_postclose as P
 
@@ -351,18 +351,23 @@ def _postclose_origin_receipt(
     pointer_sha,
     release_commit,
 ):
-    """Bridge one midnight using exact stopped postclose/native ancestry.
+    """Bridge the closed trading interval using exact stopped native ancestry.
 
     This is code-only custody for the unchanged active parent. It neither
     requires nor fabricates the downstream next-session policy/PREOPEN.
     """
     from src.engine.automation import ordered_intraday_deploy as D
+    from src.utils.market_day import is_krx_trading_day, next_krx_trading_date
 
     root = Path(data_root).resolve()
     workspace = root.parent
+    source_day = datetime.fromisoformat(source_date).date()
+    observed_day = datetime.fromisoformat(day).date()
     if (
-        source_date
-        != (datetime.fromisoformat(day).date() - timedelta(days=1)).isoformat()
+        source_day.isoformat() != source_date
+        or observed_day.isoformat() != day
+        or not is_krx_trading_day(source_day)
+        or source_day >= observed_day
     ):
         raise ValueError("active_policy_postclose_source_date_invalid")
     selected, selected_raw, _ = D._owned_metadata(
@@ -483,9 +488,39 @@ def _postclose_origin_receipt(
         or scope != "after_postclose_deploy_for_next_regular_start"
         or selected.get("actual_pid_consumed") is not False
         or next_day != canonical
+        or next_day != next_krx_trading_date(source_day).isoformat()
         or next_day < day
     ):
         raise ValueError("active_policy_postclose_stopped_origin_invalid")
+    checked = _validated_origin_receipt(
+        root, source_date, origin_root, origin_commit, bundle_sha, pointer_sha
+    )
+    if checked is None:
+        # A previously selected cold successor issued its own receipt on the
+        # selection day, not the historical source day. Resolve that one exact
+        # native receipt; never scan for a later/older usable policy proof.
+        try:
+            selected_at = datetime.fromisoformat(selected["selected_at_kst"])
+            if selected_at.tzinfo is None:
+                raise ValueError("offset_missing")
+            selected_day = selected_at.astimezone(P.KST).date().isoformat()
+            if not source_date < selected_day <= day or selected_day > next_day:
+                raise ValueError("outside_closed_interval")
+        except (KeyError, TypeError, ValueError):
+            raise ValueError(
+                "active_policy_postclose_selection_clock_invalid"
+            ) from None
+        original = path(root, selected_day, origin_commit, bundle_sha)
+        original_body, original_raw, original_identity = D._owned_metadata(original)
+        if original_body.get("postclose_source_date") != source_date:
+            raise ValueError("active_policy_postclose_ancestry_source_invalid")
+        checked = _validated_origin_receipt(
+            root, selected_day, origin_root, origin_commit, bundle_sha, pointer_sha
+        )
+        if D._owned_metadata(original)[1:] != (original_raw, original_identity):
+            raise ValueError("active_policy_postclose_origin_changed")
+    if checked is None:
+        raise ValueError("active_policy_postclose_native_ancestry_missing")
     paths = [
         root
         / "runtime/update_kospi_status"
@@ -525,7 +560,8 @@ def _postclose_origin_receipt(
         # Authenticate its existing workflow and whole-chain owner; never turn
         # a stored success string into a new completion or PID observation.
         workflow = failed.get("workflow_source") or {}
-        script = origin_root / "deploy/run_threshold_cycle_postclose.sh"
+        workflow_root = Path(workflow.get("root", ""))
+        script = workflow_root / "deploy/run_threshold_cycle_postclose.sh"
         report_path = (
             root
             / "report/postclose_done_controller"
@@ -533,12 +569,34 @@ def _postclose_origin_receipt(
         )
         if (
             failed.get("reason") != "verified_main_completed"
-            or workflow.get("root") != str(origin_root)
-            or workflow.get("commit") != origin_commit
+            or not workflow_root.is_absolute()
+            or workflow_root.resolve() != workflow_root
             or workflow.get("script") != str(script)
             or workflow.get("sha256") != P.file_hash(script)
         ):
             raise ValueError("active_policy_postclose_workflow_evidence_invalid")
+        if workflow_root == origin_root:
+            if workflow.get("commit") != origin_commit:
+                raise ValueError("active_policy_postclose_workflow_evidence_invalid")
+        else:
+            # The calculation can predate a code-only cold selection. Its
+            # immutable workflow must already belong to the verified parent's
+            # native closure; neither a path nor today's Git alone proves it.
+            from src.engine.infrastructure.runtime_release_router import (
+                validate_release,
+            )
+
+            if checked["source_hashes"].get(str(script)) != workflow["sha256"]:
+                raise ValueError("active_policy_postclose_workflow_ancestry_missing")
+            validate_release(
+                workspace,
+                dict(
+                    schema="runtime_release_selection_v1",
+                    workspace=str(workspace),
+                    release_root=str(workflow_root),
+                    git_commit=workflow.get("commit"),
+                ),
+            )
         report, report_raw, report_identity = D._owned_metadata(report_path)
         # The selected predecessor owns this terminal. Running its verification
         # in candidate code would demand the successor receipt being issued.
@@ -580,11 +638,6 @@ with postclose_session(Path(sys.argv[1]),sys.argv[2]):
             terminal_refs[str(name)] = P.file_hash(name)
     else:
         raise ValueError("active_policy_postclose_terminal_evidence_invalid")
-    checked = _validated_origin_receipt(
-        root, source_date, origin_root, origin_commit, bundle_sha, pointer_sha
-    )
-    if checked is None:
-        raise ValueError("active_policy_postclose_native_ancestry_missing")
     # Mutable observed aliases must not invalidate the issued code handoff when
     # the repaired postclose producer naturally publishes its next attempt.
     frozen = (
@@ -615,9 +668,7 @@ with postclose_session(Path(sys.argv[1]),sys.argv[2]):
     ):
         raise ValueError("active_policy_postclose_origin_changed")
     checked["source_hashes"].update(refs | transition_refs | terminal_refs)
-    checked["verification_basis"] = (
-        "verified_previous_day_postclose_native_code_ancestry"
-    )
+    checked["verification_basis"] = "verified_closed_postclose_native_code_ancestry"
     return checked
 
 

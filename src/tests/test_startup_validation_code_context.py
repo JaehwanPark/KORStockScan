@@ -2466,7 +2466,9 @@ def test_main_preparation_uses_reviewed_stopped_origin_code(name):
         C._pairs({name: old}, {name: new})
     review = json.loads((ROOT / H._FORMATTING_REVIEW_PATH).read_text())
     predecessor = review["sources"][name]["before_sha256"]
-    assert review["sources"][name]["after_sha256"] == current
+    if review["sources"][name]["after_sha256"] != current:
+        assert H.REVIEWED_POSTCLOSE_SOURCE_HASHES[name] == current
+        C._pairs({name: review["sources"][name]["after_sha256"]}, {name: current})
     origins = {old for old, new in pairs if new in {predecessor, current}}
     origins.add(predecessor)
     assert origins

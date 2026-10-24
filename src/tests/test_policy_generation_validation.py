@@ -1220,10 +1220,10 @@ def test_latest_capability_pair_is_current_and_keeps_original_source(family):
     assert (
         old
         == {
-            "rising_missed": "b1fb8b69fb938893d36c8b16192bbd0cd5e414f169b8304374d781cc54248ab5",
-            "holding_vote": "b37bdd2ec37e69e281fad273e3b9d07dab8aaf559c5a7841b9d4473141beb9ee",
-            "entry_cancel_wait": "60620f4b8fbe73f3c0506eed8f49c27c031d74a643b68667ca7421c6512d6f57",
-            "auxiliary": "507700d07f88f668f1b467678615656db7af893e0c3e6dbf8148d5c918ed9120",
+            "rising_missed": "d48f497b194c96ca5776bacf2910a08de4c0c3a6a323c5cde1d8a30c171c15e4",
+            "holding_vote": "7ea8d358191c970b16384b182f2feaa66c4486f1082f4c36cb54616df4485a81",
+            "entry_cancel_wait": "5fa218b7b916b6b2a98a7a395573dac80ff96d2345edae3b64f9f99e3574125d",
+            "auxiliary": "8f7446efe983c1ad88ba90c3ca72114fe9e90d045356e8c7d74acd0d4ceb62fd",
         }[family]
     )
 
@@ -1457,13 +1457,18 @@ def test_shared_numeric_owner_invalidates_capability_generation(
         ),
     ],
 )
-def test_krx_listing_capability_binds_native_source_and_actual_current_bytes(
-    family, origin
-):
+def test_krx_listing_capability_preserves_its_exact_formatted_successor(family, origin):
     from src.engine.monitoring import policy_generation_code_handoff as handoff
 
     pairs = handoff.REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS[family]
-    assert (origin, generation.code_generation(family)) in pairs
+    formatted = {
+        "rising_missed": "e3107fd43332462fb9dfcbd023fbb761857ed7de5aef81387f403f7c3b712302",
+        "holding_vote": "d20ee98c614b51edd0c763369429c48c0c49e95deaee849faa43b45e3144e893",
+    }[family]
+    assert (origin, formatted) in pairs
+    # Current code needs its own reviewed original; historical succession is
+    # never transitively extended because today's implementation changed.
+    assert (origin, generation.code_generation(family)) not in pairs
     assert len({pair[1] for pair in pairs if pair[0] == origin}) > 1
 
 
