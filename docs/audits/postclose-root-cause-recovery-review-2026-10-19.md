@@ -3156,3 +3156,26 @@ CI의 Black 형식 검사는 기능 회귀와 별개다. 보존한 main 원본 �
 **원본과 운영 계약.** 원본 2,749개 파일을 [SHA 명세](../../tmp/full-suite-repair-20261024/original-source-manifest.json)와 [무결성 검증](../../tmp/full-suite-repair-20261024/original-archive-verification.json)에 따라 보존했다. 역사 입력은 [복원 근거](../../tmp/full-suite-repair-20261024/historical-restoration.json)·[10개 manifest 원 bytes 복원](../../tmp/full-suite-repair-20261024/historical-manifest-byte-recovery.json)·[원본 149개 보존 대사](../../tmp/full-suite-repair-20261024/historical-original-preservation.json)를 연결한다. 압축 전 manifest는 기존 sealed SHA에 일치하는 원 bytes만 인정했고, 운영 원본을 편집하거나 seal을 재발급하지 않았다. [작업 전](../../tmp/full-suite-repair-20261024/startup-before.json)과 [작업 후](../../tmp/full-suite-repair-20261024/startup-after.json)의 native 준비 판독 결과가 동일하며, [최종 보존 대사](../../tmp/full-suite-repair-20261024/preservation-final.json)는 선택본 source 1,313개·selector·준비 binding·strict 체크리스트 보존과 Main 정지를 확인한다.
 
 **게시와 남은 경계.** [작업별 커밋](../../tmp/full-suite-repair-20261024/clean-commits.json)·[변경량](../../tmp/full-suite-repair-20261024/source-growth-reviewed.json)·[원격 게시 영수증](../../tmp/full-suite-repair-20261024/publication-receipt.json)에 exact commit을 기록한다. 테스트 변경은 +556/-522, 순증 34줄이며 운영 source·새 runtime module/entrypoint·이동은 0이다. 역사 복원과 격리 fixture 보강이 순증 이유이고, 오래된 실행 기대와 중복 검사는 제거했다. 현재 source 수리에 deferred removal은 없다. 다음 실제 Main PID 소비와 수동 보정 없는 장후 완주는 기존 10/26 owner의 자연 검증 항목으로 남으며, 이 작업의 회귀·준비 증거로 닫지 않는다. 추가 배포·재기동은 이번 범위에 포함되지 않는다.
+
+### 2026-10-24 — SKIP 25건의 소비자 대사와 오프라인 검증 통합
+
+**결정과 범위.** 기준 main `de397e13c1481f077e9b8ed2e49b5220eea84c62`에서 앞선 전체 테스트의 SKIP 25건을 각각 검토했다. 퇴역 18건은 현재 계약과 반대되는 활성화 기대이므로 제거하고, 실 API 7건의 기계적 검증은 현재 소비자의 기존 오프라인 회귀에 통합했다. 테스트 목적을 옮긴 것이며 실 API 성공이나 모델 판단 품질을 PASS로 바꾼 것이 아니다. 운영 source·account/auth/request/parser·provider 정책·릴리스 선택·재기동은 변경하지 않았다. 10/24 체크리스트 부재를 이전 날짜로 대체하지 않았고 기존 10/26 strict 원본·기동 준비·OPEN owner를 보존했다.
+
+**퇴역 18건.** 모두 `test_scalp_live_simulator.py`의 ADM/LDM catalog handoff·active seed·hypothesis 동작을 다시 활성화하는 기대였다. native `current_report_view`의 퇴역 artifact 제거, constants/startup의 OFF 처리, `_is_scalp_live_simulator_enabled=False`, 신규/복원 target 금지를 확인했다. 삭제한 함수별 ID·원래 줄·대체 회귀는 [18건 이관 명세](../../tmp/skipped-tests-review-20261024/removed-retired-cases.json)에 있다. `test_adm_ldm_retirement.py`와 실제 native gate를 복원하는 `test_retired_runtime_does_not_arm_or_restore_simulator`가 계속 검증한다. 보존할 과거 receipt/settlement·실주문 분리·hard safety 테스트와 함수는 [잔존 AST 대사](../../tmp/skipped-tests-review-20261024/retained-ast-parity.json)에서 정확히 동일함을 확인했다.
+
+**실 API 7건의 대체 범위.** [소비자·테스트 ID별 리뷰](../../tmp/skipped-tests-review-20261024/review-and-replacement.json)는 다음 대체와 한계를 구분한다.
+
+| 이전 점검 | 현재 오프라인 소비자/검증 | 실 호출 없이 확인할 수 없는 범위 |
+| --- | --- | --- |
+| deposit 1건 | native `get_deposit`의 요청·응답·floor·오류/timeout·cache 회귀 | 현재 계좌 잔고·인증·서비스 가용성 |
+| inventory 1건 | native `get_my_inventory`의 실제 `qry_tp=2` 요청, KRX/NXT 응답 병합·중복·0수량·HTTP/잘못된 행 차단 | 서버의 다른 query 조합, 실제 잔고·체결 거래소 |
+| 모델 비교 1건 | 요청별 모델 역할 격리·reasoning 설정·응답 provenance 회귀 | 실제 모델 우열·현재 가용성·응답시간 |
+| 과거 손실/진입 사례 2건 | current optimizer/consumer의 source-only·정확한 세대/원천 binding·stale/ambiguous 거부 | 당시 사례에 대한 실 모델 판단·경제 효과 |
+| blind replay 1건 | current entry/holding payload의 outcome/이전 모델 출력 배제, research 개발/평가 집합 격리 | 실 모델 예측 정확도·미래 순이익 |
+| holding schema 1건 | 실제 `analyze_target`→`holding_exit_v1`에 격리 WS 응답을 넣은 정상 roundtrip, 기존 timeout/request-ID 충돌 회귀 | 실제 WS 연결·provider 응답·Main PID 소비 |
+
+계좌 2개 파일은 오류를 출력하고 삼키는 standalone probe였고, native account consumer를 충분히 검증하지 않았다. 모델 5건은 과거 고정 모델/점수 재분류, 7월 손실·퇴역 matrix/sim artifact에 종속됐다. 이 세 test module의 현재 import·dynamic dispatch·cron/workflow/CLI 소비자는 없고 pytest만 수집했다. 필요 기능을 기존 `test_kiwoom_orders.py`·`test_ai_engine_openai_transport.py` 및 현재 research/optimizer/consumer 회귀로 통합한 뒤 파일을 제거했다. 두 계좌 probe만 사용하던 전역 `token` SKIP fixture도 제거했다. 남은 `token` 인자는 자체 parameter/helper임을 대사했다. 5/19 체크리스트와 9/15 제거 계획의 옛 command는 원래 날짜의 기록으로 보존하며, 9/29 이후 퇴역 계약을 대체하지 않는다.
+
+**리뷰·검증·원본.** 구현→리뷰→보완→재리뷰를 수행했다. 신규 offline WS fixture가 native 결과의 `ws_used`를 빠뜨린 첫 실패를 보존하고, 실제 결과 dataclass에 맞춰 보완했다. 관련 회귀 **1,009 PASS·0 FAIL·0 SKIP**이며 각 ID의 setup/call/teardown과 JUnit·수집 목록이 일치한다. 원문/JUnit/단계 이벤트와 최종 결과는 [최종 검증 명세](../../tmp/skipped-tests-review-20261024/final-validation.json), [원 실행 결과](../../tmp/skipped-tests-review-20261024/final-regression.txt)에 연결한다. Black·compile·`git diff --check`·문서 link/owner·print-only backlog 검사를 포함한다. 전체 suite는 이 후속 작업에서 재실행하지 않았다. 전체 수집 [ID 대사](../../tmp/skipped-tests-review-20261024/collection-delta.json)는 33,297→33,274건, 정확히 기존 25건 제거와 정상 경로 회귀 2건 추가 외 변화가 없음을 확인한다. 새 SKIP이나 제외 규칙을 추가하지 않았다.
+
+삭제 전 원본과 계약은 [원본 SHA 명세](../../tmp/skipped-tests-review-20261024/original-manifest.json) 및 같은 디렉터리의 `original-source.tar`, Git 기준 commit에 보존했다. 앞선 실패/건너뜀 결과는 수정하지 않았다. [운영 계약 보존 대사](../../tmp/skipped-tests-review-20261024/preservation-final.json)는 선택본 source·selector·native 준비·strict checklist가 그대로임을 확인한다. [작업별 커밋/변경량](../../tmp/skipped-tests-review-20261024/clean-commits.json)과 [원격 게시 영수증](../../tmp/skipped-tests-review-20261024/publication-receipt.json)을 따로 기록한다. 테스트 변경은 +282/-3,042줄(순감 2,760줄), 문서 +23줄이며 운영 source·새 module·entrypoint·이동은 0이다. 기존 소비자 테스트를 재사용하고 퇴역 기대와 중복 probe를 제거해 감소했다. 삭제는 퇴역 활성화 기대·중복 probe·사용하지 않는 fixture에 한정하고, 현재 reader/transport·guard는 retained다. 이 범위의 미결 코드 수정/삭제는 없으며 실제 API 가용성·모델 성능과 다음 Main 기동의 자연 검증을 이 회귀로 종결하지 않는다.
