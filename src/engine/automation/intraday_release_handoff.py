@@ -10532,6 +10532,48 @@ REVIEWED_ENTRY_COST_PAIRS = {
     },
 }
 
+# Separate actual bootstrap producer from selected runtime in a reviewed workflow.
+REVIEWED_PRODUCER_IDENTITY_HASHES = {
+    "src/engine/automation/runtime_policy_bootstrap.py": "8df8fa94ae94370b483ab816d3c35a51464f15f193458429f252379d536f01e4",
+    "src/engine/infrastructure/startup_validation_code_context.py": "15dc6609382751359651f7d744fa616207cf024abe45a5ae4c1fe167134c8b42",
+}
+REVIEWED_PRODUCER_IDENTITY_PROFILE = {
+    **REVIEWED_STOPPED_POSTCLOSE_PROFILE,
+    **REVIEWED_PRODUCER_IDENTITY_HASHES,
+}
+REVIEWED_PRODUCER_IDENTITY_VARIANTS = {
+    (key[0], REVIEWED_PRODUCER_IDENTITY_HASHES.get(key[0], key[1])): {
+        **value,
+        "selector_path": "src/engine/automation/runtime_policy_bootstrap.py",
+        "selector_sha256": REVIEWED_PRODUCER_IDENTITY_HASHES[
+            "src/engine/automation/runtime_policy_bootstrap.py"
+        ],
+        "dependencies": {**value["dependencies"], **REVIEWED_PRODUCER_IDENTITY_HASHES},
+        "contract_extensions": {
+            origin: {
+                name: REVIEWED_PRODUCER_IDENTITY_HASHES.get(os.path.normpath(name), sha)
+                for name, sha in paths.items()
+            }
+            for origin, paths in value["contract_extensions"].items()
+        },
+    }
+    for key, value in REVIEWED_STOPPED_POSTCLOSE_VARIANTS.items()
+}
+REVIEWED_ENTRY_COST_PAIRS = {
+    **REVIEWED_ENTRY_COST_PAIRS,
+    **{
+        name: REVIEWED_ENTRY_COST_PAIRS.get(name, ())
+        + tuple(
+            (origin, current)
+            for origin in {
+                old for pair in REVIEWED_ENTRY_COST_PAIRS.get(name, ()) for old in pair
+            }
+            | {REVIEWED_STOPPED_POSTCLOSE_HASHES[name]}
+        )
+        for name, current in REVIEWED_PRODUCER_IDENTITY_HASHES.items()
+    },
+}
+
 # Exact source-only formatting succession. The review manifest preserves the
 # committed predecessor and deterministic formatter output; it never rewrites
 # a policy contract or grants runtime authority. The verifier itself remains
@@ -11129,6 +11171,15 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     ):
         prepared_hashes = REVIEWED_STOPPED_POSTCLOSE_PROFILE
         prepared_variants = REVIEWED_STOPPED_POSTCLOSE_VARIANTS
+    producer_name = "src/engine/automation/runtime_policy_bootstrap.py"
+    producer_successor = candidate_bytes(producer_name, optional=True)
+    if (
+        producer_successor is not None
+        and hashlib.sha256(producer_successor).hexdigest()
+        == REVIEWED_PRODUCER_IDENTITY_HASHES[producer_name]
+    ):
+        prepared_hashes = REVIEWED_PRODUCER_IDENTITY_PROFILE
+        prepared_variants = REVIEWED_PRODUCER_IDENTITY_VARIANTS
     entry_cost_hashes = (
         prepared_hashes
         if prepared_owner_present

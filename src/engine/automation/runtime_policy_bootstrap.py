@@ -1338,7 +1338,7 @@ def _operator_overrides(
     return values, receipts
 
 
-def _git_sha() -> str:
+def _selected_release_sha() -> str:
     from src.engine.automation import intraday_release_handoff as H
 
     review = H._PREDECESSOR_REVIEW.get()
@@ -1355,6 +1355,10 @@ def _git_sha() -> str:
         ):
             raise ValueError("bootstrap_postclose_workflow_changed")
         return commit
+    return _git_sha()
+
+
+def _git_sha() -> str:
     try:
         return subprocess.run(
             ["git", "rev-parse", "HEAD"],
@@ -1825,7 +1829,7 @@ def build_manifest(
         "target_date": target_date,
         "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
         "producer_code_sha": _git_sha(),
-        "selected_release_sha": _git_sha(),
+        "selected_release_sha": _selected_release_sha(),
         "source_incumbent": _file_receipt(incumbent_path),
         "source_incumbent_verification_basis": incumbent_verification_basis,
         "source_incumbent_target_date": incumbent.get("target_date"),

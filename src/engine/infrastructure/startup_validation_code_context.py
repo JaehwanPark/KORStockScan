@@ -2185,6 +2185,20 @@ REVIEWED_PREPARATION_HISTORY.setdefault(
     }
 )
 
+# Reviewed bootstrap producer identity.
+REVIEWED_PREPARATION_HISTORY.setdefault(
+    "src/engine/automation/runtime_policy_bootstrap.py", set()
+).update(
+    {
+        (old, "8df8fa94ae94370b483ab816d3c35a51464f15f193458429f252379d536f01e4")
+        for old in (
+            "1d353dac40e7bbace49e6860dffe50965244ac35defb37468970419a76a156e0",
+            "c7fc85190018ece3a859ba5d569596285a3bb1b21c40a79ab166ee0b2d22f433",
+            "f852c630ead01b4895eaac2d66b3717907f4a1a99657bb327331ee2b3f2fd883",
+        )
+    }
+)
+
 
 def reviewed_preparation_pair(relative, old, current):
     # An already reviewed physical pair keeps its original authority; a

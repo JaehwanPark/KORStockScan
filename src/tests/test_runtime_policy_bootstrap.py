@@ -34,12 +34,16 @@ def test_bootstrap_workflow_keeps_selected_runtime_commit(monkeypatch, tmp_path,
     token = H._PREDECESSOR_REVIEW.set(review)
     try:
         if valid:
-            assert bootstrap._git_sha() == "a" * 40
+            actual = bootstrap.subprocess.run(
+                ["git", "rev-parse", "HEAD"], check=True, capture_output=True, text=True
+            ).stdout.strip()
+            assert bootstrap._git_sha() == actual
+            assert bootstrap._selected_release_sha() == "a" * 40
         else:
             with pytest.raises(
                 ValueError, match="bootstrap_postclose_workflow_changed"
             ):
-                bootstrap._git_sha()
+                bootstrap._selected_release_sha()
         assert seen[0][:2] == (selected, "a" * 40)
     finally:
         H._PREDECESSOR_REVIEW.reset(token)
@@ -503,8 +507,12 @@ def test_bootstrap_rejects_report_only_receipt(monkeypatch, tmp_path):
         },
     )
 
+    monkeypatch.setattr(bootstrap, "_git_sha", lambda: "b" * 40)
+    monkeypatch.setattr(bootstrap, "_selected_release_sha", lambda: "a" * 40)
     manifest = bootstrap.build_manifest("2026-09-19", receipt_paths=[receipt])
 
+    assert manifest["producer_code_sha"] == "b" * 40
+    assert manifest["selected_release_sha"] == "a" * 40
     assert manifest["direct_family_receipts"] == []
     assert manifest["direct_family_receipts_rejected"][0]["family"] == (
         "machine_microstructure"
