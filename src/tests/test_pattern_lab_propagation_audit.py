@@ -1,7 +1,6 @@
 import json
 from pathlib import Path
 
-from src.engine import build_code_improvement_workorder as workorder_mod
 from src.engine import pattern_lab_currentness_audit as currentness_mod
 from src.engine import pattern_lab_propagation_audit as mod
 from src.engine import runtime_approval_summary as runtime_mod
@@ -15,7 +14,6 @@ def _write_json(path: Path, payload: dict) -> None:
 
 def _patch_dirs(tmp_path: Path, monkeypatch):
     report_dir = tmp_path / "data" / "report"
-    docs_dir = tmp_path / "docs" / "code-improvement-workorders"
     monkeypatch.setattr(mod, "PROJECT_ROOT", tmp_path)
     monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
     monkeypatch.setattr(currentness_mod, "REPORT_DIR", report_dir)
@@ -24,12 +22,7 @@ def _patch_dirs(tmp_path: Path, monkeypatch):
         "SWING_PATTERN_LAB_AUTOMATION_DIR",
         report_dir / "swing_pattern_lab_automation",
     )
-    monkeypatch.setattr(
-        workorder_mod,
-        "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR",
-        report_dir / "code_improvement_workorder",
-    )
-    monkeypatch.setattr(workorder_mod, "CODE_IMPROVEMENT_WORKORDER_DIR", docs_dir)
+    monkeypatch.setattr(runtime_mod, "DATA_DIR", tmp_path / "data")
     monkeypatch.setattr(
         runtime_mod, "REPORT_DIR", report_dir / "runtime_approval_summary"
     )

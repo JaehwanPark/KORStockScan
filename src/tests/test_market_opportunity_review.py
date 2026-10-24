@@ -435,22 +435,33 @@ def test_full_workorder_builder_consumes_only_bound_census_diagnostics(
     source_dir.mkdir()
     source_path = source_dir / "market_opportunity_census_2026-09-08.json"
     source_path.write_text(json.dumps(source), encoding="utf-8")
-    monkeypatch.setattr(workorder, "MARKET_OPPORTUNITY_CENSUS_DIR", source_dir)
-    monkeypatch.setattr(
-        workorder, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", tmp_path / "report"
-    )
-    monkeypatch.setattr(workorder, "CODE_IMPROVEMENT_WORKORDER_DIR", tmp_path / "docs")
+    # The publisher stays retired; exact diagnostics remain readable for audit.
     report = workorder.build_code_improvement_workorder("2026-09-08", max_orders=10)
+    assert report["status"] == "retired"
+    assert report["runtime_effect"] is False
+    assert not report.get("orders")
+    before = source_path.read_bytes()
+    loaded = workorder._load_market_census_source(
+        source_path, isolated_source_mode=False
+    )
     items = [
-        o
-        for o in report["orders"]
-        if o.get("source_report_type") == "market_opportunity_census"
+        workorder._serialize_classified_order(
+            workorder._classify_order(
+                order,
+                finding_by_order_id={},
+                finding_by_title_slug={},
+                auto_family_order_ids=set(),
+                closed_instrumentation_order_families={},
+            )
+        )
+        for order in workorder._market_census_followup_orders(loaded, "2026-09-08")
     ]
+    assert source_path.read_bytes() == before
+    assert not (tmp_path / "report").exists()
     assert len(items) == 1
     assert items[0]["decision"] == "defer_evidence"
     assert items[0]["allowed_runtime_apply"] is False
     assert items[0]["source_artifact_sha256"] == source["artifact_sha256"]
-    assert report["source"]["market_opportunity_census"]
     assert (
         items[0]["recommendation_id"]
         == source["diagnostic_followups"][0]["recommendation_id"]
