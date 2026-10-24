@@ -114,67 +114,38 @@ def test_v2_append_invalidates_previous_audited_generation(tmp_path, monkeypatch
     assert "generation_changed" in result["blocked_reason"]
 
 
-def test_final_verifier_consumes_same_exact_artifact_validation(tmp_path, monkeypatch):
-    from src.engine import verify_threshold_cycle_postclose_chain as verifier
-
+def test_cumulative_source_consumer_requires_exact_audited_generation(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(mod, "REPORT_DIR", tmp_path)
     raw = tmp_path / "pipeline.jsonl"
     raw.write_text("")
     monkeypatch.setattr(producer, "_pipeline_events_path", lambda d: raw)
-    path = tmp_path / "audit.json"
-    path.write_text(
-        json.dumps(producer.build_observation_source_quality_audit("2026-09-08"))
+    path = _write_preflight(
+        tmp_path,
+        "2026-09-08",
+        producer.build_observation_source_quality_audit("2026-09-08"),
     )
-    before = verifier.load_source_quality_preflight("2026-09-08", artifact_path=path)
+    assert mod.filter_source_dates_by_preflight(["2026-09-08"]) == (["2026-09-08"], [])
     raw.write_text('{"event_type":"new"}\n')
-    after = verifier.load_source_quality_preflight("2026-09-08", artifact_path=path)
-    for preflight, expected in ((before, True), (after, False)):
-        result = verifier._source_quality_hard_block_status(
-            preflight,
-            ev_report={},
-            runtime_summary={},
-            ldm_report={},
-            bridge_report={},
-            workorder={},
+    allowed, excluded = mod.filter_source_dates_by_preflight(["2026-09-08"])
+    assert allowed == []
+    assert len(excluded) == 1
+    assert excluded[0]["source_date"] == "2026-09-08"
+    assert "source_generation_changed" in excluded[0]["blocked_reason"]
+    # A bare optimistic status cannot stand in for the native audited source.
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": "observation_source_quality_audit_v2",
+                "status": "pass",
+                "summary": {"tuning_input_allowed": True},
+            }
         )
-        assert result["tuning_input_allowed"] is expected
-    assert after["validation_errors"] == [
-        "source_quality_preflight_source_generation_changed"
-    ]
-    # Exercise the production builder, including its target-specific path routing.
-    monkeypatch.setattr(verifier, "PROJECT_ROOT", tmp_path)
-    monkeypatch.setattr(verifier, "REPORT_DIR", tmp_path / "reports")
-    monkeypatch.setattr(verifier, "LOG_PATH", tmp_path / "missing.log")
-    monkeypatch.setattr(verifier, "_next_krx_trading_day", lambda d: "2026-09-09")
-    monkeypatch.setattr(verifier, "_postclose_not_yet_due", lambda d: False)
-    calls = []
-
-    def checked_load(day, *, artifact_path, require_final=False):
-        calls.append((day, artifact_path))
-        return after
-
-    monkeypatch.setattr(verifier, "load_source_quality_preflight", checked_load)
-    report = verifier.build_threshold_cycle_postclose_verification("2026-09-08")
-    assert calls == [
-        (
-            "2026-09-08",
-            tmp_path
-            / "reports/observation_source_quality_audit/observation_source_quality_audit_2026-09-08.json",
-        )
-    ]
-    assert report["status"] == "fail"
-    raw_status = verifier._source_quality_hard_block_status(
-        {
-            "schema_version": "observation_source_quality_audit_v2",
-            "status": "pass",
-            "summary": {"tuning_input_allowed": True},
-        },
-        ev_report={},
-        runtime_summary={},
-        ldm_report={},
-        bridge_report={},
-        workorder={},
     )
-    assert raw_status["tuning_input_allowed"] is False
+    allowed, excluded = mod.filter_source_dates_by_preflight(["2026-09-08"])
+    assert allowed == []
+    assert len(excluded) == 1
 
 
 def test_verified_archiver_receipt_avoids_decompressing_raw_per_consumer(
@@ -183,7 +154,8 @@ def test_verified_archiver_receipt_avoids_decompressing_raw_per_consumer(
     from src.engine import compress_db_backfilled_files as archive
 
     monkeypatch.setattr(mod, "REPORT_DIR", tmp_path)
-    raw = tmp_path / "pipeline_events_2026-09-08.jsonl"
+    raw = tmp_path / "pipeline_events" / "pipeline_events_2026-09-08.jsonl"
+    raw.parent.mkdir()
     raw.write_text('{"event_type":"other"}\n')
     monkeypatch.setattr(producer, "_pipeline_events_path", lambda d: raw)
     _write_preflight(
