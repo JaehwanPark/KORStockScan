@@ -1578,8 +1578,9 @@ def test_parent_native_delegation_binds_authenticated_scope(scope, fault):
 
 
 @pytest.mark.parametrize("changed", [False, True])
+@pytest.mark.parametrize("kind", ["preparation", "postclose"])
 def test_stopped_preparation_native_reader_binds_original_analysis_only_proof(
-    native_preparation_cli, monkeypatch, changed
+    native_preparation_cli, monkeypatch, changed, kind
 ):
     from contextlib import contextmanager
     from src.engine.automation import intraday_release_handoff as H
@@ -1601,7 +1602,14 @@ def test_stopped_preparation_native_reader_binds_original_analysis_only_proof(
         lambda *a: dict(
             release_root=str(selected),
             actual_pid_consumed=False,
-            deployment_transition="original failed attempt",
+            **(
+                dict(deployment_transition="original failed attempt")
+                if kind == "preparation"
+                else dict(
+                    main_start_authorized=False,
+                    approval_scope="after_postclose_deploy_for_next_regular_start",
+                )
+            ),
         ),
     )
     monkeypatch.setattr(
@@ -1614,17 +1622,19 @@ def test_stopped_preparation_native_reader_binds_original_analysis_only_proof(
     def review(day):
         yield proof
 
-    monkeypatch.setattr(H, "stopped_preparation_review", review)
+    monkeypatch.setattr(H, "stopped_" + kind + "_review", review)
     native_proof = dict(proof, actual_pid_consumed=True) if changed else proof
     (code / "src/engine/automation/intraday_release_handoff.py").write_text(
-        "from contextlib import contextmanager\n@contextmanager\ndef stopped_preparation_review(day):\n"
+        "from contextlib import contextmanager\n@contextmanager\ndef stopped_"
+        + kind
+        + "_review(day):\n"
         f"    assert day=={DAY!r}\n    yield {native_proof!r}\n"
     )
     if changed:
-        with pytest.raises(ValueError, match="stopped_preparation_proof_changed"):
+        with pytest.raises(ValueError, match="stopped_" + kind + "_proof_changed"):
             validation._native_preparation_check(selected, DAY, "2026-10-16")
     else:
         result = validation._native_preparation_check(selected, DAY, "2026-10-16")
-        assert result["stopped_preparation_observation"] == proof
+        assert result["stopped_" + kind + "_observation"] == proof
         assert result["actual_pid_consumed"] is False
         assert result["native_process_lifecycle"]["child_terminated"] is True

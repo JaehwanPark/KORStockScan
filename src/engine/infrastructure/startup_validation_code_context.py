@@ -2103,6 +2103,88 @@ REVIEWED_PREPARATION_HISTORY.setdefault(
     }
 )
 
+# Reviewed stopped postclose workflow readers after native cold selection.
+REVIEWED_PREPARATION_HISTORY.setdefault(
+    "src/engine/scalping/continuous_reversal_policy.py", set()
+).update(
+    {
+        (old, "7ec28cd206daf422f275f440b4f98b37ee9878eed3de0c098f908d1813fcb744")
+        for old in (
+            "2c83f7afad5355cda14ef76eb82793ffb1cb982d4e158d260aa71d3c4f1c6cbd",
+            "7ec28cd206daf422f275f440b4f98b37ee9878eed3de0c098f908d1813fcb744",
+            "82788b5b7832ee26641b80d646269b9568245fea4e480ec79fbaf4400da3238b",
+        )
+    }
+)
+REVIEWED_PREPARATION_HISTORY.setdefault(
+    "src/engine/automation/main_startup_validation.py", set()
+).update(
+    {
+        (old, "e35cfba631fa0409b87cbe35c87ea2a55464a4479ff1c975156a033e363fa604")
+        for old in (
+            "14209ae80827e4583c236ff8a3426d9a173ec290015046fdc076bb5d18214fd7",
+            "b6bd145a6b7b1508a81667d35932dc802b3f1c4123df75ddf991738daea34d54",
+            "e71cc4965ab6749c2579a3fe3e864624502fe98269d07c1e362618691fa7ab64",
+            "fcf33f73c9b4831339c3215732c5364c9cd11f30147273c30c172fa3f611fd0c",
+        )
+    }
+)
+REVIEWED_PREPARATION_HISTORY.setdefault(
+    "src/engine/automation/next_preopen_readiness.py", set()
+).update(
+    {
+        (old, "a391fd0e9c500cb7ca222f9e6bfd2984a3891b242033f9f9edc99095246b1eff")
+        for old in (
+            "2e34f2a99ec94609674d7cf267763d651e5b3d4d3e030b8267dd282f325d5c69",
+            "ea29654d0456212dc462275e1474b84f023a3784991e4cff9aabc1da1583b6dd",
+        )
+    }
+)
+REVIEWED_PREPARATION_HISTORY.setdefault(
+    "src/engine/automation/runtime_policy_bootstrap.py", set()
+).update(
+    {
+        (old, "1d353dac40e7bbace49e6860dffe50965244ac35defb37468970419a76a156e0")
+        for old in (
+            "c7fc85190018ece3a859ba5d569596285a3bb1b21c40a79ab166ee0b2d22f433",
+            "f852c630ead01b4895eaac2d66b3717907f4a1a99657bb327331ee2b3f2fd883",
+        )
+    }
+)
+REVIEWED_PREPARATION_HISTORY.setdefault(
+    "src/engine/scalping/reversal_auxiliary_tuning.py", set()
+).update(
+    {
+        (old, "265a06e3b26c59f616e2819a58dbd27935a4190a7eeea95aaaba6e3e2b1c7992")
+        for old in (
+            "0e8f31ed349a6ef17f5f588f8b4bf4180b2f819ab85077a1d51641662611a40a",
+            "252aeca80423c1f9881ef6a26dc8baa1c18dad18be8c446cbc7c990b5e3f058a",
+            "a8ac3de954b2d6e89e3a46bb49501edc0d35df47621900a1d22b6d8492672412",
+            "fe5d737f446e95028a6d5135cfa0f7c76f7047ea108aa89c737d7e5283f64e34",
+        )
+    }
+)
+REVIEWED_PREPARATION_HISTORY.setdefault(
+    "src/engine/scalping/reversal_code_handoff.py", set()
+).update(
+    {
+        (old, "b1fdf211b0318caaddeda2ccfdb63710c839c61edb89030633143bdf730396b7")
+        for old in (
+            "16776a22b99bff4054ba99914cd8f7c96e87f6ca9fb1ac041e6a8191723b929d",
+            "54b9c0efc38700a0cb8722694cdf84b9df8aa478a28f529b2b618f5532559b5a",
+            "65fb740d0ddc41cfb8b5c7e0319ed442287cc0c14fd62ef1514c8378a820948c",
+            "6c5b8f3013e055ef54774c1e89be66fda93988aa5792e775bb82bac86636cbf0",
+            "852d31cba14cfcb68cfb73603de07b30643969c5e476ddca6dde1f2d3a6fc589",
+            "8681d10376f4228bbe5b9d1d012d3510e8abd89470036077c3c0bc69fad63471",
+            "a54226c0232b8a12f049940bc810d5fd6161b9fc7b9154ce66063de3f55b34ec",
+            "ab61f882f4c8bbaddc0576a5765f4f102e38fd824b44a25341ffc78d647741b5",
+            "b77b63fa5afe9b3dff59266cecce73f92880b5256b12c32343a70aeddba63aa9",
+            "c5c6edd558c15bd1067e018d2fa84e4670cd213183baa376cf223e1376ba0238",
+            "de1ac1086dcaac8d0d5737cc5b0d49374342e19ecd69d698aa43cb2133e3a124",
+        )
+    }
+)
+
 
 def reviewed_preparation_pair(relative, old, current):
     # An already reviewed physical pair keeps its original authority; a

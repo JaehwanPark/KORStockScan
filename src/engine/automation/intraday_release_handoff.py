@@ -664,8 +664,18 @@ def predecessor_review_matches(review, day, root, commit, code_root):
         or review.get("code_root") != code_root
     ):
         return False
-    observation = review.get("prepared_observation")
+    observation = review.get("prepared_observation") or review.get(
+        "postclose_observation"
+    )
     if observation is not None:
+        if review.get("postclose_observation") is not None:
+            from src.engine.scalping import mechanistic_entry_runtime_policy as N
+
+            matches = lambda path, sha: N.source_receipt_matches(
+                dict(path=path, sha256=sha), data_root=DATA_DIR.resolve()
+            )
+        else:
+            matches = lambda path, sha: _sha(path) == sha
         return (
             observation.get("target_date") == day
             and observation.get("release_commit") == commit
@@ -679,7 +689,7 @@ def predecessor_review_matches(review, day, root, commit, code_root):
             )
             and bool(observation.get("source_hashes"))
             and all(
-                _sha(path) == sha for path, sha in observation["source_hashes"].items()
+                matches(path, sha) for path, sha in observation["source_hashes"].items()
             )
         )
     identity = review.get("identity") or {}
@@ -688,6 +698,184 @@ def predecessor_review_matches(review, day, root, commit, code_root):
     if review.get("closed_observation"):
         return closed_consumption_observation(day) == review["closed_observation"]
     return _identity(identity["pid"]) == identity
+
+
+@contextmanager
+def stopped_postclose_review(target_date):
+    """A clean workflow revalidates a native cold selection, without a PID.
+
+    Both selected and successor active-parent receipts must already validate.
+    This scope permits the repaired reader only; it does not substitute the
+    preceding P5 for a fresh candidate P5 or close current postclose sources.
+    """
+    from src.engine.automation import ordered_intraday_deploy as D
+    from src.engine.automation.next_preopen_readiness import target_after_postclose
+    from src.engine.infrastructure import runtime_release_router as R
+    from src.engine.infrastructure import research_release_transition as T
+    from src.engine.scalping import reversal_code_handoff as A
+    from src.engine.scalping import mechanistic_entry_runtime_policy as N
+
+    data = DATA_DIR.resolve()
+    workspace = data.parent
+    candidate = Path(__file__).resolve().parents[3]
+    selector = data / "runtime/runtime_release_selection.json"
+    selection, selected_raw, _ = D._owned_metadata(selector)
+    root, commit = R.selected_release(workspace)
+    candidate_commit = R.git(candidate, "rev-parse", "HEAD")
+    R.validate_release(
+        workspace,
+        dict(
+            schema="runtime_release_selection_v1",
+            workspace=str(workspace),
+            release_root=str(candidate),
+            git_commit=candidate_commit,
+        ),
+    )
+    day = datetime.now(KST).date().isoformat()
+    source = selection.get("source_date")
+    if (
+        root == candidate
+        or selection.get("approved_by") != "user"
+        or selection.get("approval_scope")
+        != "after_postclose_deploy_for_next_regular_start"
+        or selection.get("actual_pid_consumed") is not False
+        or selection.get("main_start_authorized") is not False
+        or selection.get("actual_pid_receipt")
+        or selection.get("deployment_transition")
+        or selection.get("next_operating_date") != target_date
+        or not isinstance(source, str)
+        or not source <= day <= target_date
+        or target_after_postclose(source) != target_date
+    ):
+        raise ValueError("postclose_review_cold_selection_required")
+    protected = (
+        data / "runtime/operator_startup_hold.json",
+        workspace / "restart.flag",
+    )
+
+    def stopped():
+        if (
+            D._main_pids()
+            or not D._session_absent()
+            or any(p.exists() or p.is_symlink() for p in protected)
+            or selector.read_bytes() != selected_raw
+            or R.selected_release(workspace) != (root, commit)
+            or datetime.now(KST).date().isoformat() != day
+        ):
+            raise ValueError("postclose_review_stopped_generation_changed")
+
+    stopped()
+    backup = Path(selection.get("previous_selection_backup", ""))
+    directory = backup.parent
+    if (
+        not backup.is_absolute()
+        or directory.parent != data / "runtime/research_release_transition"
+        or directory.resolve() != directory
+        or backup.is_symlink()
+    ):
+        raise ValueError("postclose_review_transition_path_invalid")
+    transition_path = directory / "transition.json"
+    transition, transition_raw = (
+        T._record(transition_path),
+        D._owned_metadata(transition_path)[1],
+    )
+    entries = transition.get("entries") or []
+    if (
+        transition.get("state") != "verified"
+        or transition.get("transition_id") != directory.name
+        or len(entries) != 1
+        or transition.get("written") != [str(selector)]
+    ):
+        raise ValueError("postclose_review_verified_transition_required")
+    entry = entries[0]
+    prior, prior_raw, _ = D._owned_metadata(backup)
+    after = directory / str(entry.get("after_snapshot", ""))
+    if (
+        entry.get("path") != str(selector)
+        or entry.get("before_snapshot") != backup.name
+        or entry.get("before_sha256") != T.sha(prior_raw)
+        or T.sha(prior_raw) != selection.get("predecessor_selection_sha256")
+        or entry.get("after_sha256") != T.sha(selected_raw)
+        or set(
+            entry.get("accepted_sha256")
+            or [entry.get("before_sha256"), entry.get("after_sha256")]
+        )
+        != {T.sha(prior_raw), T.sha(selected_raw)}
+        or after.parent != directory
+        or after.name != "after-" + T.sha(selected_raw) + ".bytes"
+        or D._owned_metadata(after)[1] != selected_raw
+        or transition_path.read_bytes() != transition_raw
+        or prior.get("git_commit") != selection.get("previous_git_commit")
+        or prior.get("release_root") != selection.get("previous_release_root")
+    ):
+        raise ValueError("postclose_review_transition_binding_invalid")
+    R.validate_release(workspace, prior)
+    p5_path = Path(selection.get("candidate_p5_path", ""))
+    D.verify_candidate_p5(
+        workspace,
+        target_date,
+        root,
+        commit,
+        p5_path,
+        selection.get("candidate_p5_sha256"),
+        prior,
+    )
+    pointer = N.root(data) / "current.json"
+    ptr, pointer_raw, _ = D._owned_metadata(pointer)
+    if ptr.get("effective_date") != source:
+        raise ValueError("postclose_review_active_source_changed")
+    sources = {
+        str(p): _sha(p)
+        for p in (selector, backup, after, transition_path, p5_path, pointer)
+    }
+    for code_root, code_commit in ((root, commit), (candidate, candidate_commit)):
+        proof = A._validated_origin_receipt(
+            data, day, code_root, code_commit, ptr["bundle_sha256"], T.sha(pointer_raw)
+        )
+        if proof is None:
+            raise ValueError("postclose_review_active_parent_receipt_missing")
+        for name, sha in proof["source_hashes"].items():
+            if name in sources and sources[name] != sha:
+                raise ValueError("postclose_review_source_conflict")
+            sources[name] = sha
+    successor = N._read(A.path(data, day, candidate_commit, ptr["bundle_sha256"]))
+    if (
+        successor.get("origin_root") != str(root)
+        or successor.get("origin_commit") != commit
+        or successor.get("origin_selection_sha256") != T.sha(selected_raw)
+        or successor.get("code_hashes") != A.code_hashes()
+        or successor.get("actual_pid_consumed") is not False
+    ):
+        raise ValueError("postclose_review_successor_parent_unbound")
+    proof = dict(
+        target_date=day,
+        prepared_target_date=target_date,
+        source_date=source,
+        release_commit=commit,
+        source_hashes=sources,
+        runtime_effect=False,
+        actual_pid_consumed=False,
+        allowed_runtime_apply=False,
+    )
+    review = dict(
+        day=day,
+        root=root,
+        commit=commit,
+        code_root=candidate,
+        code_commit=candidate_commit,
+        postclose_observation=proof,
+    )
+    token = _PREDECESSOR_REVIEW.set(review)
+    try:
+        stopped()
+        if not predecessor_review_matches(review, day, root, commit, candidate):
+            raise ValueError("postclose_review_source_changed")
+        yield proof
+        stopped()
+        if not predecessor_review_matches(review, day, root, commit, candidate):
+            raise ValueError("postclose_review_source_changed")
+    finally:
+        _PREDECESSOR_REVIEW.reset(token)
 
 
 @contextmanager
@@ -10246,6 +10434,104 @@ REVIEWED_ENTRY_COST_PAIRS = {
     },
 }
 
+# Reviewed source/publication and stopped cold preparation workflow. Original
+# profiles remain available; all current dependencies are exact Git bytes.
+REVIEWED_STOPPED_POSTCLOSE_PREVIOUS = {
+    "src/engine/scalping/continuous_reversal_policy.py": "82788b5b7832ee26641b80d646269b9568245fea4e480ec79fbaf4400da3238b",
+    "src/engine/automation/main_startup_validation.py": "14209ae80827e4583c236ff8a3426d9a173ec290015046fdc076bb5d18214fd7",
+    "src/engine/automation/next_preopen_readiness.py": "ea29654d0456212dc462275e1474b84f023a3784991e4cff9aabc1da1583b6dd",
+    "src/engine/automation/runtime_policy_bootstrap.py": "f852c630ead01b4895eaac2d66b3717907f4a1a99657bb327331ee2b3f2fd883",
+    "src/engine/scalping/reversal_auxiliary_tuning.py": "252aeca80423c1f9881ef6a26dc8baa1c18dad18be8c446cbc7c990b5e3f058a",
+    "src/engine/scalping/reversal_code_handoff.py": "a54226c0232b8a12f049940bc810d5fd6161b9fc7b9154ce66063de3f55b34ec",
+    "src/engine/infrastructure/startup_validation_code_context.py": "a54c23586d077630db8bdbe7b012719bbae411dfdf5f33ebae7bfa559a76f3bc",
+}
+REVIEWED_STOPPED_POSTCLOSE_HASHES = {
+    "src/engine/scalping/continuous_reversal_policy.py": "7ec28cd206daf422f275f440b4f98b37ee9878eed3de0c098f908d1813fcb744",
+    "src/engine/automation/main_startup_validation.py": "e35cfba631fa0409b87cbe35c87ea2a55464a4479ff1c975156a033e363fa604",
+    "src/engine/automation/next_preopen_readiness.py": "a391fd0e9c500cb7ca222f9e6bfd2984a3891b242033f9f9edc99095246b1eff",
+    "src/engine/automation/runtime_policy_bootstrap.py": "1d353dac40e7bbace49e6860dffe50965244ac35defb37468970419a76a156e0",
+    "src/engine/scalping/reversal_auxiliary_tuning.py": "265a06e3b26c59f616e2819a58dbd27935a4190a7eeea95aaaba6e3e2b1c7992",
+    "src/engine/scalping/reversal_code_handoff.py": "b1fdf211b0318caaddeda2ccfdb63710c839c61edb89030633143bdf730396b7",
+    "src/engine/infrastructure/startup_validation_code_context.py": "17e301896dcb28e112dee5497559ab33d9ac39c7a02c00f6851b507908fec8e8",
+}
+REVIEWED_STOPPED_POSTCLOSE_ORIGINS = {
+    "src/engine/scalping/continuous_reversal_policy.py": (
+        "2c83f7afad5355cda14ef76eb82793ffb1cb982d4e158d260aa71d3c4f1c6cbd",
+        "7ec28cd206daf422f275f440b4f98b37ee9878eed3de0c098f908d1813fcb744",
+        "82788b5b7832ee26641b80d646269b9568245fea4e480ec79fbaf4400da3238b",
+    ),
+    "src/engine/automation/main_startup_validation.py": (
+        "14209ae80827e4583c236ff8a3426d9a173ec290015046fdc076bb5d18214fd7",
+        "b6bd145a6b7b1508a81667d35932dc802b3f1c4123df75ddf991738daea34d54",
+        "e71cc4965ab6749c2579a3fe3e864624502fe98269d07c1e362618691fa7ab64",
+        "fcf33f73c9b4831339c3215732c5364c9cd11f30147273c30c172fa3f611fd0c",
+    ),
+    "src/engine/automation/next_preopen_readiness.py": (
+        "2e34f2a99ec94609674d7cf267763d651e5b3d4d3e030b8267dd282f325d5c69",
+        "ea29654d0456212dc462275e1474b84f023a3784991e4cff9aabc1da1583b6dd",
+    ),
+    "src/engine/automation/runtime_policy_bootstrap.py": (
+        "c7fc85190018ece3a859ba5d569596285a3bb1b21c40a79ab166ee0b2d22f433",
+        "f852c630ead01b4895eaac2d66b3717907f4a1a99657bb327331ee2b3f2fd883",
+    ),
+    "src/engine/scalping/reversal_auxiliary_tuning.py": (
+        "0e8f31ed349a6ef17f5f588f8b4bf4180b2f819ab85077a1d51641662611a40a",
+        "252aeca80423c1f9881ef6a26dc8baa1c18dad18be8c446cbc7c990b5e3f058a",
+        "a8ac3de954b2d6e89e3a46bb49501edc0d35df47621900a1d22b6d8492672412",
+        "fe5d737f446e95028a6d5135cfa0f7c76f7047ea108aa89c737d7e5283f64e34",
+    ),
+    "src/engine/scalping/reversal_code_handoff.py": (
+        "16776a22b99bff4054ba99914cd8f7c96e87f6ca9fb1ac041e6a8191723b929d",
+        "54b9c0efc38700a0cb8722694cdf84b9df8aa478a28f529b2b618f5532559b5a",
+        "65fb740d0ddc41cfb8b5c7e0319ed442287cc0c14fd62ef1514c8378a820948c",
+        "6c5b8f3013e055ef54774c1e89be66fda93988aa5792e775bb82bac86636cbf0",
+        "852d31cba14cfcb68cfb73603de07b30643969c5e476ddca6dde1f2d3a6fc589",
+        "8681d10376f4228bbe5b9d1d012d3510e8abd89470036077c3c0bc69fad63471",
+        "a54226c0232b8a12f049940bc810d5fd6161b9fc7b9154ce66063de3f55b34ec",
+        "ab61f882f4c8bbaddc0576a5765f4f102e38fd824b44a25341ffc78d647741b5",
+        "b77b63fa5afe9b3dff59266cecce73f92880b5256b12c32343a70aeddba63aa9",
+        "c5c6edd558c15bd1067e018d2fa84e4670cd213183baa376cf223e1376ba0238",
+        "de1ac1086dcaac8d0d5737cc5b0d49374342e19ecd69d698aa43cb2133e3a124",
+    ),
+    "src/engine/infrastructure/startup_validation_code_context.py": (
+        "a54c23586d077630db8bdbe7b012719bbae411dfdf5f33ebae7bfa559a76f3bc",
+    ),
+}
+REVIEWED_STOPPED_POSTCLOSE_PROFILE = {
+    **REVIEWED_AUXILIARY_FORMAT_PROFILE,
+    **REVIEWED_STOPPED_POSTCLOSE_HASHES,
+}
+REVIEWED_STOPPED_POSTCLOSE_VARIANTS = {
+    (key[0], REVIEWED_STOPPED_POSTCLOSE_HASHES.get(key[0], key[1])): {
+        **value,
+        "selector_path": "src/engine/automation/main_startup_validation.py",
+        "selector_sha256": REVIEWED_STOPPED_POSTCLOSE_HASHES[
+            "src/engine/automation/main_startup_validation.py"
+        ],
+        "dependencies": {**value["dependencies"], **REVIEWED_STOPPED_POSTCLOSE_HASHES},
+        "contract_extensions": {
+            origin: {
+                name: REVIEWED_STOPPED_POSTCLOSE_HASHES.get(os.path.normpath(name), sha)
+                for name, sha in paths.items()
+            }
+            for origin, paths in value["contract_extensions"].items()
+        },
+    }
+    for key, value in REVIEWED_AUXILIARY_FORMAT_VARIANTS.items()
+}
+REVIEWED_ENTRY_COST_PAIRS = {
+    **REVIEWED_ENTRY_COST_PAIRS,
+    **{
+        name: REVIEWED_ENTRY_COST_PAIRS.get(name, ())
+        + tuple(
+            (origin, current)
+            for origin in set(REVIEWED_STOPPED_POSTCLOSE_ORIGINS[name])
+            | {old for pair in REVIEWED_ENTRY_COST_PAIRS.get(name, ()) for old in pair}
+        )
+        for name, current in REVIEWED_STOPPED_POSTCLOSE_HASHES.items()
+    },
+}
+
 # Exact source-only formatting succession. The review manifest preserves the
 # committed predecessor and deterministic formatter output; it never rewrites
 # a policy contract or grants runtime authority. The verifier itself remains
@@ -10834,6 +11120,15 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     ):
         prepared_hashes = REVIEWED_AUXILIARY_FORMAT_PROFILE
         prepared_variants = REVIEWED_AUXILIARY_FORMAT_VARIANTS
+    cold_name = "src/engine/automation/main_startup_validation.py"
+    cold_successor = candidate_bytes(cold_name, optional=True)
+    if (
+        cold_successor is not None
+        and hashlib.sha256(cold_successor).hexdigest()
+        == REVIEWED_STOPPED_POSTCLOSE_HASHES[cold_name]
+    ):
+        prepared_hashes = REVIEWED_STOPPED_POSTCLOSE_PROFILE
+        prepared_variants = REVIEWED_STOPPED_POSTCLOSE_VARIANTS
     entry_cost_hashes = (
         prepared_hashes
         if prepared_owner_present

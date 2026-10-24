@@ -16,6 +16,35 @@ def _write(path: Path, payload: dict):
     path.write_text(json.dumps(payload), encoding="utf-8")
 
 
+@pytest.mark.parametrize("valid", [True, False])
+def test_bootstrap_workflow_keeps_selected_runtime_commit(monkeypatch, tmp_path, valid):
+    from src.engine.automation import intraday_release_handoff as H
+    from src.engine.infrastructure import runtime_release_router as R
+
+    selected = tmp_path / "selected"
+    review = dict(postclose_observation={"source_date": "2026-10-23"}, commit="a" * 40)
+    monkeypatch.setattr(R, "selected_release", lambda w: (selected, "a" * 40))
+    seen = []
+
+    def checked(value, day, root, commit, code):
+        seen.append((root, commit, code))
+        return value is review and valid
+
+    monkeypatch.setattr(H, "predecessor_review_matches", checked)
+    token = H._PREDECESSOR_REVIEW.set(review)
+    try:
+        if valid:
+            assert bootstrap._git_sha() == "a" * 40
+        else:
+            with pytest.raises(
+                ValueError, match="bootstrap_postclose_workflow_changed"
+            ):
+                bootstrap._git_sha()
+        assert seen[0][:2] == (selected, "a" * 40)
+    finally:
+        H._PREDECESSOR_REVIEW.reset(token)
+
+
 def test_write_dispatch_publishes_future_transition_after_verify(monkeypatch):
     calls = []
     monkeypatch.setattr(

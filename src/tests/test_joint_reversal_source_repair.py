@@ -1199,7 +1199,7 @@ def test_registration_exact_delta_native_publisher_and_dated_handoff(
     "predecessor_review,damage",
     [
         (review, damage)
-        for review in (False, True, "closed", "prepared")
+        for review in (False, True, "closed", "prepared", "cold")
         for damage in (
             None,
             "code",
@@ -1292,7 +1292,19 @@ def test_active_code_handoff_is_exact_and_never_reselects_policy(
         old_commit = "a" * 40
         selector.write_text(
             __import__("json").dumps(
-                dict(git_commit=old_commit, release_root=str(selected))
+                dict(
+                    git_commit=old_commit,
+                    release_root=str(selected),
+                    **(
+                        dict(
+                            main_start_authorized=False,
+                            approval_scope="after_postclose_deploy_for_next_regular_start",
+                            next_operating_date="2026-10-26",
+                        )
+                        if predecessor_review == "cold"
+                        else {}
+                    ),
+                )
             )
         )
         identity = dict(pid=123, start_ticks="456", cwd=str(selected / "src"))
@@ -1338,7 +1350,7 @@ def test_active_code_handoff_is_exact_and_never_reselects_policy(
                     AssertionError("closed origin is not live")
                 ),
             )
-        if predecessor_review == "prepared":
+        if predecessor_review in {"prepared", "cold"}:
             IH._PREDECESSOR_REVIEW.get()["identity"] = dict(
                 identity, cwd=str(tmp_path / "previously-consumed/src")
             )
@@ -1350,7 +1362,15 @@ def test_active_code_handoff_is_exact_and_never_reselects_policy(
                 allowed_runtime_apply=False,
                 source_hashes={str(old): P.file_hash(old)},
             )
-            IH._PREDECESSOR_REVIEW.get()["prepared_observation"] = observation
+            IH._PREDECESSOR_REVIEW.get()[
+                (
+                    "postclose_observation"
+                    if predecessor_review == "cold"
+                    else "prepared_observation"
+                )
+            ] = observation
+            if predecessor_review == "cold":
+                monkeypatch.setattr(IH, "DATA_DIR", data)
             monkeypatch.setattr(
                 IH,
                 "_identity",
@@ -1393,6 +1413,20 @@ def test_active_code_handoff_is_exact_and_never_reselects_policy(
 
         stack = contextlib.ExitStack()
         stack.callback(IH._PREDECESSOR_REVIEW.reset, context)
+        if predecessor_review == "cold":
+            cold_review = IH._PREDECESSOR_REVIEW.get()
+            IH._PREDECESSOR_REVIEW.set(None)
+
+            @contextlib.contextmanager
+            def native_cold_review(target):
+                assert target == "2026-10-26"
+                token = IH._PREDECESSOR_REVIEW.set(cold_review)
+                try:
+                    yield cold_review["postclose_observation"]
+                finally:
+                    IH._PREDECESSOR_REVIEW.reset(token)
+
+            monkeypatch.setattr(IH, "stopped_postclose_review", native_cold_review)
         receipt = P.seal(
             dict(
                 receipt,

@@ -600,8 +600,21 @@ def _selected_release(
     path = DATA_DIR / "runtime" / "runtime_release_selection.json"
     selection = _read(path)
     release, commit = selected_release(DATA_DIR.parent)
+    cwd_valid = release == Path.cwd().resolve()
+    if require_selected_cwd and not cwd_valid:
+        from src.engine.automation import intraday_release_handoff as H
+
+        code_root = Path(__file__).resolve().parents[3]
+        review = H._PREDECESSOR_REVIEW.get()
+        cwd_valid = (
+            code_root == Path.cwd().resolve()
+            and H.predecessor_review_matches(
+                review, datetime.now(KST).date().isoformat(), release, commit, code_root
+            )
+            and bool(review.get("postclose_observation"))
+        )
     if selection.get("git_commit") != commit or (
-        require_selected_cwd and release != Path.cwd().resolve()
+        require_selected_cwd and not cwd_valid
     ):
         raise ValueError("selected_release_identity_mismatch")
     return selection, path, commit
@@ -683,7 +696,69 @@ def _generation_dir(
     )
 
 
+def _verification_workflow(source_date, target_date, selected_root, commit):
+    code_root = Path(__file__).resolve().parents[3]
+    if code_root == selected_root:
+        return None
+    from src.engine.automation import intraday_release_handoff as H
+
+    review = H._PREDECESSOR_REVIEW.get()
+    day = datetime.now(KST).date().isoformat()
+    if (
+        not H.predecessor_review_matches(review, day, selected_root, commit, code_root)
+        or (review.get("postclose_observation") or {}).get("prepared_target_date")
+        != target_date
+        or review["postclose_observation"]["source_date"] != source_date
+    ):
+        raise ValueError("prepared_workflow_custody_missing")
+    return dict(
+        code_root=str(code_root),
+        code_commit=review["code_commit"],
+        native_cold_review_sha256=hashlib.sha256(
+            json.dumps(
+                review["postclose_observation"], sort_keys=True, separators=(",", ":")
+            ).encode()
+        ).hexdigest(),
+        actual_pid_consumed=False,
+        runtime_effect=False,
+    )
+
+
 def prepare(
+    source_date: str,
+    *,
+    target_date: str | None = None,
+    now: datetime | None = None,
+    recover_failed_preopen: bool = False,
+) -> dict[str, Any]:
+    selected_root, _ = selected_release(DATA_DIR.parent)
+    selection, _, _ = _selected_release(require_selected_cwd=False)
+    if (
+        Path(__file__).resolve().parents[3] != selected_root
+        and selection.get("main_start_authorized") is False
+        and selection.get("approval_scope")
+        == "after_postclose_deploy_for_next_regular_start"
+    ):
+        from src.engine.automation import intraday_release_handoff as H
+
+        with H.stopped_postclose_review(
+            target_date or target_after_postclose(source_date)
+        ):
+            return _prepare(
+                source_date,
+                target_date=target_date,
+                now=now,
+                recover_failed_preopen=recover_failed_preopen,
+            )
+    return _prepare(
+        source_date,
+        target_date=target_date,
+        now=now,
+        recover_failed_preopen=recover_failed_preopen,
+    )
+
+
+def _prepare(
     source_date: str,
     *,
     target_date: str | None = None,
@@ -703,6 +778,8 @@ def prepare(
     if target_date != expected:
         raise ValueError("preopen_target_not_next_operating_day")
     _, selection_path, commit = _selected_release()
+    selected_root, _ = selected_release(DATA_DIR.parent)
+    workflow = _verification_workflow(source_date, target_date, selected_root, commit)
     activation_candidate = _activation_candidate_receipt(target_date, commit)
     auxiliary_reader = verify_auxiliary_reader(
         target_date, data_root=DATA_DIR, preparation=True
@@ -748,6 +825,8 @@ def prepare(
         "activation_candidate": activation_candidate,
         "auxiliary_reader_readiness": auxiliary_reader,
     }
+    if workflow is not None:
+        receipt["verification_workflow"] = workflow
     receipt_file = output_dir / "readiness.json"
     if auxiliary_reader is not None:
         verify_bound_sources(auxiliary_reader)
@@ -806,6 +885,25 @@ def verify_prepared(
         release_changed = receipt["selected_release_commit"] != commit or receipt[
             "selection_sha256"
         ] != _sha(selection_path)
+        if not release_changed and receipt.get("verification_workflow") is not None:
+            from src.engine.automation import intraday_release_handoff as H
+
+            selected_root, _ = selected_release(DATA_DIR.parent)
+            if (
+                Path(__file__).resolve().parents[3] != selected_root
+                and H._PREDECESSOR_REVIEW.get() is None
+            ):
+                with H.stopped_postclose_review(target_date):
+                    return verify_prepared(
+                        target_date,
+                        require_today=require_today,
+                        now=now,
+                        generation_only=generation_only,
+                    )
+            if receipt["verification_workflow"] != _verification_workflow(
+                receipt["source_date"], target_date, selected_root, commit
+            ):
+                raise ValueError("prepared_verification_workflow_changed")
         expected_source = receipt
         snapshot = None
         if release_changed:

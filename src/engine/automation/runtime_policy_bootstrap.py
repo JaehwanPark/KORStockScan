@@ -1339,6 +1339,22 @@ def _operator_overrides(
 
 
 def _git_sha() -> str:
+    from src.engine.automation import intraday_release_handoff as H
+
+    review = H._PREDECESSOR_REVIEW.get()
+    if review and review.get("postclose_observation"):
+        from src.engine.infrastructure.runtime_release_router import selected_release
+
+        root, commit = selected_release(DATA_DIR.resolve().parent)
+        if not H.predecessor_review_matches(
+            review,
+            datetime.now(H.KST).date().isoformat(),
+            root,
+            commit,
+            Path(__file__).resolve().parents[3],
+        ):
+            raise ValueError("bootstrap_postclose_workflow_changed")
+        return commit
     try:
         return subprocess.run(
             ["git", "rev-parse", "HEAD"],

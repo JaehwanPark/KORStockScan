@@ -226,6 +226,7 @@ def _native_preparation_check(
         raise ValueError("startup_native_preparation_run_id_invalid")
     execution_root, closed, native_pid = selected_root, False, None
     stopped_preparation = None
+    postclose_review = None
     if ROOT != selected_root:
         from src.engine.automation import intraday_release_handoff as H
 
@@ -266,7 +267,17 @@ def _native_preparation_check(
                 with H.stopped_preparation_review(target_date) as proof:
                     stopped_preparation = proof
                 execution_root = ROOT
-        if not closed and stopped_preparation is None:
+            elif (
+                selected.get("release_root") == str(selected_root)
+                and selected.get("actual_pid_consumed") is False
+                and selected.get("main_start_authorized") is False
+                and selected.get("approval_scope")
+                == "after_postclose_deploy_for_next_regular_start"
+            ):
+                with H.stopped_postclose_review(target_date) as proof:
+                    postclose_review = proof
+                execution_root = ROOT
+        if not closed and stopped_preparation is None and postclose_review is None:
             try:
                 selection = H._read(
                     H.DATA_DIR / "runtime/runtime_release_selection.json"
@@ -294,6 +305,7 @@ run_id=sys.argv.pop(1)
 mode=sys.argv.pop(1)
 closed=mode=='1'
 stopped_preparation=mode=='prepared'
+postclose_review=mode=='postclose'
 native_pid=int(mode.split(':',1)[1]) if mode.startswith('native:') else None
 capture=run_id!='0'
 from src.engine.infrastructure.validation_digest_session import postclose_session
@@ -502,12 +514,17 @@ try:
                 from src.engine.automation.intraday_release_handoff import predecessor_review
             if stopped_preparation:
                 from src.engine.automation.intraday_release_handoff import stopped_preparation_review
+            if postclose_review:
+                from src.engine.automation.intraday_release_handoff import stopped_postclose_review
             scope = (closed_predecessor_review(sys.argv[-1]) if closed else
                 predecessor_review(sys.argv[-1],pid=native_pid) if native_pid is not None else
-                stopped_preparation_review(sys.argv[-1]) if stopped_preparation else nullcontext())
+                stopped_preparation_review(sys.argv[-1]) if stopped_preparation else
+                stopped_postclose_review(sys.argv[-1]) if postclose_review else nullcontext())
             with scope as custody:
                 if stopped_preparation:
                     print('P5_NATIVE_STOPPED_PREPARATION='+json.dumps(custody,sort_keys=True),file=sys.stderr)
+                if postclose_review:
+                    print('P5_NATIVE_STOPPED_POSTCLOSE='+json.dumps(custody,sort_keys=True),file=sys.stderr)
                 runpy.run_module('src.engine.automation.next_preopen_readiness',run_name='__main__')
         finally:
             if capture:
@@ -533,7 +550,11 @@ finally:
         (
             "native:" + str(native_pid)
             if native_pid is not None
-            else "prepared" if stopped_preparation is not None else str(int(closed))
+            else (
+                "prepared"
+                if stopped_preparation is not None
+                else "postclose" if postclose_review is not None else str(int(closed))
+            )
         ),
         "--verify",
         "--target-date",
@@ -686,19 +707,24 @@ finally:
         ):
             fail("startup_native_machine_closure_invalid")
         value = {**value, "native_machine_closure": closure}
-    if stopped_preparation is not None:
+    for observed, prefix, name in (
+        (stopped_preparation, "P5_NATIVE_STOPPED_PREPARATION=", "stopped_preparation"),
+        (postclose_review, "P5_NATIVE_STOPPED_POSTCLOSE=", "stopped_postclose"),
+    ):
+        if observed is None:
+            continue
         rows = [
-            line.removeprefix("P5_NATIVE_STOPPED_PREPARATION=")
+            line.removeprefix(prefix)
             for line in result.stderr.splitlines()
-            if line.startswith("P5_NATIVE_STOPPED_PREPARATION=")
+            if line.startswith(prefix)
         ]
         if (
             len(rows) != 1
             or len(rows[0].encode()) > MAX_JSON
-            or json.loads(rows[0]) != stopped_preparation
+            or json.loads(rows[0]) != observed
         ):
-            fail("startup_stopped_preparation_proof_changed")
-        value = {**value, "stopped_preparation_observation": stopped_preparation}
+            fail("startup_" + name + "_proof_changed")
+        value = {**value, name + "_observation": observed}
     return {
         **value,
         "verification_code_root": str(execution_root),

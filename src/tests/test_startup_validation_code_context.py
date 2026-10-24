@@ -2460,6 +2460,9 @@ assert_no_forbidden_attempts()
         "src/engine/scalping/reversal_auxiliary_production_input.py",
         "src/engine/scalping/reversal_auxiliary_registry.py",
         "src/engine/scalping/reversal_auxiliary_wire.py",
+        "src/engine/scalping/continuous_reversal_policy.py",
+        "src/engine/automation/main_startup_validation.py",
+        "src/engine/automation/next_preopen_readiness.py",
     ],
 )
 def test_main_preparation_uses_reviewed_stopped_origin_code(name):
@@ -2472,7 +2475,7 @@ def test_main_preparation_uses_reviewed_stopped_origin_code(name):
     review = json.loads((ROOT / H._FORMATTING_REVIEW_PATH).read_text())
     predecessor = review["sources"][name]["before_sha256"]
     if review["sources"][name]["after_sha256"] != current:
-        assert H.REVIEWED_AUXILIARY_FORMAT_PROFILE[name] == current
+        assert H.REVIEWED_STOPPED_POSTCLOSE_PROFILE[name] == current
         C._pairs({name: review["sources"][name]["after_sha256"]}, {name: current})
     origins = {old for old, new in pairs if new in {predecessor, current}}
     origins.add(predecessor)

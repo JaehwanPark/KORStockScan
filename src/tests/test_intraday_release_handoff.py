@@ -17,6 +17,190 @@ NATIVE_SELECTION = handoff._selection
 
 
 @pytest.mark.parametrize(
+    "fault",
+    [
+        None,
+        "main",
+        "supervisor",
+        "hold",
+        "restart",
+        "consumed",
+        "start_authority",
+        "target",
+        "transition",
+        "p5",
+        "parent_missing",
+        "successor_origin",
+        "selector_during",
+        "source_during",
+        "midnight_during",
+    ],
+)
+def test_stopped_postclose_review_requires_native_cold_custody(
+    tmp_path, monkeypatch, fault
+):
+    from src.engine.automation import ordered_intraday_deploy as D
+    from src.engine.infrastructure import runtime_release_router as R
+    from src.engine.infrastructure import research_release_transition as T
+    from src.engine.scalping import reversal_code_handoff as A
+    from src.engine.scalping import mechanistic_entry_runtime_policy as N
+
+    workspace = tmp_path / "workspace"
+    data = workspace / "data"
+    root, candidate, prior_root = (
+        tmp_path / name for name in ("selected", "candidate", "prior")
+    )
+    for path in (root, candidate, prior_root):
+        path.mkdir()
+    clock = [datetime(2026, 10, 25, 7, tzinfo=ZoneInfo("Asia/Seoul"))]
+
+    class Clock:
+        @staticmethod
+        def now(tz):
+            return clock[0]
+
+    monkeypatch.setattr(handoff, "datetime", Clock)
+    monkeypatch.setattr(readiness, "datetime", Clock)
+    monkeypatch.setattr(handoff, "DATA_DIR", data)
+    monkeypatch.setattr(
+        handoff,
+        "__file__",
+        str(candidate / "src/engine/automation/intraday_release_handoff.py"),
+    )
+    monkeypatch.setattr(R, "selected_release", lambda w: (root, OLD))
+    monkeypatch.setattr(R, "git", lambda *a: NEW)
+    monkeypatch.setattr(
+        R, "validate_release", lambda w, r: (Path(r["release_root"]), r["git_commit"])
+    )
+    monkeypatch.setattr(D, "_main_pids", lambda: [10] if fault == "main" else [])
+    monkeypatch.setattr(D, "_session_absent", lambda: fault != "supervisor")
+    selector = data / "runtime/runtime_release_selection.json"
+
+    def write(path, value):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(value))
+
+    prior = dict(release_root=str(prior_root), git_commit="c" * 40)
+    write(selector, prior)
+    prior_raw = selector.read_bytes()
+    transition = T.Transition(workspace, "cold-test")
+    p5_path = (
+        data / "report/main_startup_validation/2026-10-26" / ("d" * 32) / "final.json"
+    )
+    write(
+        p5_path,
+        dict(
+            schema="main_policy_load_exit_validation_v1",
+            run_id="d" * 32,
+            status="failed" if fault == "p5" else "passed",
+            findings=[],
+            target_date="2026-10-26",
+            execution_release_root=str(root),
+            execution_release_commit=OLD,
+            selected_release_root=str(prior_root),
+            selected_release_commit="c" * 40,
+            child_exit_code=0,
+            failure_phase=None,
+            child_terminated=True,
+            load_check_passed=True,
+            protected_sources_unchanged=True,
+            runtime_effect=False,
+            actual_pid_consumed=False,
+            allowed_runtime_apply=False,
+        ),
+    )
+    selection = dict(
+        release_root=str(root),
+        git_commit=OLD,
+        approved_by="user",
+        approval_scope="after_postclose_deploy_for_next_regular_start",
+        actual_pid_consumed=fault == "consumed",
+        main_start_authorized=fault == "start_authority",
+        source_date="2026-10-23",
+        next_operating_date="2026-10-26",
+        previous_selection_backup=str(
+            transition.directory / ("before-" + T.sha(prior_raw) + ".bytes")
+        ),
+        predecessor_selection_sha256=T.sha(prior_raw),
+        previous_git_commit="c" * 40,
+        previous_release_root=str(prior_root),
+        candidate_p5_path=str(p5_path),
+        candidate_p5_sha256=handoff._sha(p5_path),
+    )
+    raw = json.dumps(selection).encode()
+    with transition.owner():
+        transition.add(selector, raw)
+        transition.execute(
+            [lambda: transition.write(selector, raw)], verify=lambda: None
+        )
+    pointer = N.root(data) / "current.json"
+    write(pointer, dict(effective_date="2026-10-23", bundle_sha256="e" * 64))
+    if fault in {"hold", "restart"}:
+        p = (
+            data / "runtime/operator_startup_hold.json"
+            if fault == "hold"
+            else workspace / "restart.flag"
+        )
+        p.touch()
+    if fault == "transition":
+        transition.path.write_bytes(transition.path.read_bytes() + b"broken")
+    source = data / "frozen-parent.json"
+    write(source, {"native": "source"})
+    sources = {str(source): handoff._sha(source)}
+    monkeypatch.setattr(
+        A,
+        "_validated_origin_receipt",
+        lambda data, day, code_root, *a: (
+            None
+            if fault == "parent_missing" and code_root == candidate
+            else dict(source_hashes=sources)
+        ),
+    )
+    codes = {str(candidate / "code.py"): "f" * 64}
+    monkeypatch.setattr(A, "code_hashes", lambda: codes)
+    successor = A.path(data, "2026-10-25", NEW, "e" * 64)
+    write(
+        successor,
+        dict(
+            origin_root="wrong" if fault == "successor_origin" else str(root),
+            origin_commit=OLD,
+            origin_selection_sha256=T.sha(raw),
+            code_hashes=codes,
+            actual_pid_consumed=False,
+        ),
+    )
+    target = "2026-10-27" if fault == "target" else "2026-10-26"
+
+    def run():
+        with handoff.stopped_postclose_review(target) as proof:
+            assert proof["source_date"] == "2026-10-23"
+            assert proof["target_date"] == "2026-10-25"
+            assert proof["prepared_target_date"] == "2026-10-26"
+            assert proof["actual_pid_consumed"] is False
+            review = handoff._PREDECESSOR_REVIEW.get()
+            assert handoff.predecessor_review_matches(
+                review, "2026-10-25", root, OLD, candidate
+            )
+            assert not handoff.predecessor_review_matches(
+                review, "2026-10-26", root, OLD, candidate
+            )
+            if fault == "selector_during":
+                selector.write_text("{}")
+            elif fault == "source_during":
+                source.write_text("{}")
+            elif fault == "midnight_during":
+                clock[0] += timedelta(days=1)
+
+    if fault:
+        with pytest.raises((ValueError, json.JSONDecodeError)):
+            run()
+    else:
+        run()
+        assert selector.read_bytes() == raw
+    assert handoff._PREDECESSOR_REVIEW.get() is None
+
+
+@pytest.mark.parametrize(
     "name",
     [
         "src/engine/kiwoom_sniper_v2.py",
@@ -5198,7 +5382,8 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(
     )
     subprocess.run(["git", "-C", str(root), "checkout", "-q", "75e0fbbf7"], check=True)
     hashes = {
-        "current": handoff.REVIEWED_AUXILIARY_FORMAT_PROFILE,
+        "current": handoff.REVIEWED_STOPPED_POSTCLOSE_PROFILE,
+        "consumed_auxiliary_format": handoff.REVIEWED_AUXILIARY_FORMAT_PROFILE,
         "consumed_postclose_source": handoff.REVIEWED_POSTCLOSE_SOURCE_PROFILE,
         "consumed_closed_scanner": handoff.REVIEWED_CLOSED_SCANNER_PREVIOUS_PROFILE,
         "consumed_scanner_preflight": handoff.REVIEWED_SCANNER_PREFLIGHT_PROFILE,
@@ -5240,6 +5425,7 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(
                     str(canonical),
                     "show",
                     {
+                        "consumed_auxiliary_format": "c0346b611",
                         "consumed_postclose_source": "06dbfe661",
                         "consumed_closed_scanner": "2edf3263e",
                         "consumed_scanner_preflight": "6e970e41f",
@@ -5978,6 +6164,28 @@ def test_formatting_original_digest_is_verified_before_comparison(monkeypatch):
 def test_auxiliary_format_handoff_rejects_partial_successor(
     tmp_path, dependency, fault
 ):
+    test_entry_cost_handoff_keeps_exact_complete_generation(
+        tmp_path, "pre_submit_delay", fault, "current", dependency
+    )
+
+
+@pytest.mark.parametrize("family", ["pre_submit_delay", "main_stop", "holding_vote"])
+@pytest.mark.parametrize("generation", ["current", "consumed_auxiliary_format"])
+def test_cold_postclose_reader_preserves_original_complete_profile(
+    tmp_path, family, generation
+):
+    test_entry_cost_handoff_keeps_exact_complete_generation(
+        tmp_path, family, None, generation
+    )
+
+
+@pytest.mark.parametrize(
+    "dependency", sorted(handoff.REVIEWED_STOPPED_POSTCLOSE_HASHES)
+)
+@pytest.mark.parametrize(
+    "fault", ["missing", "dirty", "committed_change", "parent_mix"]
+)
+def test_cold_postclose_reader_rejects_partial_successor(tmp_path, dependency, fault):
     test_entry_cost_handoff_keeps_exact_complete_generation(
         tmp_path, "pre_submit_delay", fault, "current", dependency
     )

@@ -397,6 +397,53 @@ def test_next_session_carries_effective_registered_prompt(setup, monkeypatch):
     V.validate_sources(next_bundle, root)
 
 
+@pytest.mark.parametrize("admitted", [True, False])
+def test_source_workflow_publication_keeps_selected_runtime_binding(
+    setup, monkeypatch, admitted
+):
+    from contextlib import contextmanager
+    from src.engine.automation import intraday_release_handoff as H
+    from src.engine.infrastructure import runtime_release_router as router
+
+    root, b, machine, _, _ = setup
+    T.prepare(root, "2026-10-07", machine, b)
+    selector = root / "runtime/runtime_release_selection.json"
+    P.write(selector, {"git_commit": "c" * 40})
+    monkeypatch.setattr(
+        router, "selected_release", lambda w: (root / "selected", "c" * 40)
+    )
+    active = []
+
+    @contextmanager
+    def scope(target):
+        assert target == "2026-10-08"
+        if not admitted:
+            raise ValueError("native_cold_custody_invalid")
+        active.append(True)
+        try:
+            yield {"actual_pid_consumed": False}
+        finally:
+            active.pop()
+
+    monkeypatch.setattr(H, "stopped_postclose_review", scope)
+    staged = []
+
+    def stage(*args, **kwargs):
+        assert active
+        staged.append(kwargs["release_commit"])
+        return dict(bundle_sha256="d" * 64, target_date="2026-10-08")
+
+    monkeypatch.setattr(V, "stage", stage)
+    if admitted:
+        T.auxiliary_report(root, "2026-10-07", "2026-10-07", b)
+        assert staged == ["c" * 40]
+    else:
+        with pytest.raises(ValueError, match="native_cold_custody_invalid"):
+            T.auxiliary_report(root, "2026-10-07", "2026-10-07", b)
+        assert staged == []
+    assert active == []
+
+
 def test_publish_requires_improvement_parent_and_preserves_initial_list(
     setup, monkeypatch
 ):

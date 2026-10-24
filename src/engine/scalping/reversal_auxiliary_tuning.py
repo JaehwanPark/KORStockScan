@@ -1347,15 +1347,28 @@ def auxiliary_report(data_root, day, publication, parent, *, publish_policy=True
             commit = subprocess.check_output(
                 ["git", "rev-parse", "HEAD"], text=True
             ).strip()
-            bundle = V.stage(
-                data_root,
-                day,
-                publication,
-                issued,
-                auxiliary,
-                target_date=N.next_target(publication),
-                release_commit=commit,
-            )
+            from contextlib import nullcontext
+            from src.engine.infrastructure import runtime_release_router as router
+            from src.engine.automation import intraday_release_handoff as handoff
+
+            scope, selected_commit = nullcontext(), commit
+            selector = Path(data_root) / "runtime/runtime_release_selection.json"
+            if selector.exists() or selector.is_symlink():
+                selected_root, selected_commit = router.selected_release(
+                    Path(data_root).resolve().parent
+                )
+                if selected_root != Path(__file__).resolve().parents[3]:
+                    scope = handoff.stopped_postclose_review(N.next_target(publication))
+            with scope as review:
+                bundle = V.stage(
+                    data_root,
+                    day,
+                    publication,
+                    issued,
+                    auxiliary,
+                    target_date=N.next_target(publication),
+                    release_commit=selected_commit if review is not None else commit,
+                )
             P.write(
                 Path(data_root)
                 / "report/ai_entry_setup_paired_replay_batch"

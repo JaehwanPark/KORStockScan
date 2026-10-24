@@ -109,6 +109,16 @@ def validate(bundle, data_root, *, original_error):
         from src.engine.automation import intraday_release_handoff as handoff
 
         review = handoff._PREDECESSOR_REVIEW.get()
+        if (
+            review is None
+            and selection.get("main_start_authorized") is False
+            and selection.get("approval_scope")
+            == "after_postclose_deploy_for_next_regular_start"
+        ):
+            # Source-only recovery of an unconsumed cold release authenticates
+            # both native parent receipts before using a repaired reader.
+            with handoff.stopped_postclose_review(selection["next_operating_date"]):
+                return validate(bundle, data_root, original_error=original_error)
         if not handoff.predecessor_review_matches(
             review, day, root, commit, Path(__file__).resolve().parents[3]
         ):

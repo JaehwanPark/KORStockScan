@@ -12,6 +12,72 @@ KST = ZoneInfo("Asia/Seoul")
 
 
 @pytest.mark.parametrize(
+    "fault", [None, "scope", "source", "target", "code_root", "bytes"]
+)
+def test_prepared_workflow_binds_exact_native_cold_review(tmp_path, monkeypatch, fault):
+    from src.engine.automation import intraday_release_handoff as H
+
+    selected, code = (
+        tmp_path / "selected",
+        Path(readiness.__file__).resolve().parents[3],
+    )
+    data = tmp_path / "data"
+    data.mkdir()
+    source = data / "frozen.json"
+    source.write_text("{}")
+    monkeypatch.setattr(H, "DATA_DIR", data)
+    day = datetime.now(KST).date().isoformat()
+    observation = dict(
+        target_date=day,
+        prepared_target_date="2026-10-26",
+        source_date="2026-10-23",
+        release_commit="a" * 40,
+        source_hashes={str(source): readiness._sha(source)},
+        actual_pid_consumed=False,
+        allowed_runtime_apply=False,
+        runtime_effect=False,
+    )
+    review = dict(
+        day=day,
+        root=selected,
+        commit="a" * 40,
+        code_root=code,
+        code_commit="b" * 40,
+        postclose_observation=observation,
+    )
+    if fault == "scope":
+        review = None
+    elif fault == "source":
+        observation["source_date"] = "2026-10-22"
+    elif fault == "target":
+        observation["prepared_target_date"] = "2026-10-27"
+    elif fault == "code_root":
+        review["code_root"] = selected
+    elif fault == "bytes":
+        source.write_text('{"changed":true}')
+    token = H._PREDECESSOR_REVIEW.set(review)
+    try:
+        if fault:
+            with pytest.raises(ValueError, match="prepared_workflow_custody_missing"):
+                readiness._verification_workflow(
+                    "2026-10-23", "2026-10-26", selected, "a" * 40
+                )
+        else:
+            proof = readiness._verification_workflow(
+                "2026-10-23", "2026-10-26", selected, "a" * 40
+            )
+            assert proof["code_root"] == str(code) and proof["code_commit"] == "b" * 40
+            assert proof["actual_pid_consumed"] is proof["runtime_effect"] is False
+            assert len(proof["native_cold_review_sha256"]) == 64
+        assert (
+            readiness._verification_workflow("2026-10-23", "2026-10-26", code, "b" * 40)
+            is None
+        )
+    finally:
+        H._PREDECESSOR_REVIEW.reset(token)
+
+
+@pytest.mark.parametrize(
     "damage", [None, "running", "activated", "env", "main", "lock", "expired"]
 )
 def test_failed_preopen_recovery_requires_unactivated_terminal_failure_and_exclusive_lease(
@@ -152,6 +218,85 @@ def test_finalization_recovery_never_prepares_another_session(
 def _json(path: Path, payload: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+
+
+@pytest.mark.parametrize("fault", [None, "custody", "workflow"])
+def test_workflow_monitor_repeats_custody_and_full_current_chain(
+    tmp_path, monkeypatch, fault
+):
+    from contextlib import contextmanager
+    from src.engine.automation import intraday_release_handoff as H
+
+    target, source, commit = "2026-10-26", "2026-10-23", "a" * 40
+    selected = tmp_path / "selected"
+    selection = tmp_path / "selection.json"
+    _json(selection, {"git_commit": commit})
+    prepared = tmp_path / "prepared"
+    workflow = dict(code_root="reviewed-workflow", code_commit="b" * 40)
+    receipt_path = prepared / target / "generation/readiness.json"
+    _json(
+        receipt_path,
+        dict(
+            schema="next_preopen_readiness_v1",
+            status="prepared_verified",
+            target_date=target,
+            source_date=source,
+            actual_pid_consumed=False,
+            runtime_effect=False,
+            selected_release_commit=commit,
+            selection_sha256=readiness._sha(selection),
+            verification_workflow=workflow,
+        ),
+    )
+    _json(
+        prepared / target / "latest.json",
+        dict(
+            target_date=target,
+            receipt_path=str(receipt_path),
+            receipt_sha256=readiness._sha(receipt_path),
+        ),
+    )
+    monkeypatch.setattr(readiness, "PREPARED_DIR", prepared)
+    monkeypatch.setattr(readiness, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(
+        readiness, "_selected_release", lambda **k: ({}, selection, commit)
+    )
+    monkeypatch.setattr(readiness, "selected_release", lambda w: (selected, commit))
+    visits = []
+
+    @contextmanager
+    def scope(day):
+        visits.append("custody")
+        assert day == target
+        if fault == "custody":
+            raise ValueError("native_cold_custody_missing")
+        token = H._PREDECESSOR_REVIEW.set({"fixture": "authenticated"})
+        try:
+            yield
+        finally:
+            H._PREDECESSOR_REVIEW.reset(token)
+
+    monkeypatch.setattr(H, "stopped_postclose_review", scope)
+
+    def checked_workflow(*args):
+        assert H._PREDECESSOR_REVIEW.get() is not None
+        return {} if fault == "workflow" else workflow
+
+    monkeypatch.setattr(readiness, "_verification_workflow", checked_workflow)
+
+    def full_source(*args, **kwargs):
+        assert H._PREDECESSOR_REVIEW.get() is not None
+        assert kwargs == {}
+        visits.append("full_current_chain")
+        raise ValueError("postclose_controller_not_closed:fixture")
+
+    monkeypatch.setattr(readiness, "_source_receipts", full_source)
+    result = readiness.verify_prepared(target)
+    assert result["status"] == "fail"
+    assert visits == (
+        ["custody", "full_current_chain"] if fault is None else ["custody"]
+    )
+    assert H._PREDECESSOR_REVIEW.get() is None
 
 
 @pytest.mark.parametrize(
@@ -361,6 +506,11 @@ def test_prepare_isolated_then_detects_source_and_release_drift(monkeypatch, tmp
     selection = tmp_path / "selection.json"
     _json(selection, {"git_commit": "a" * 40})
     selected = ["a" * 40]
+    monkeypatch.setattr(
+        readiness,
+        "selected_release",
+        lambda workspace: (Path(readiness.__file__).resolve().parents[3], selected[0]),
+    )
     monkeypatch.setattr(
         readiness, "_selected_release", lambda **kwargs: ({}, selection, selected[0])
     )
