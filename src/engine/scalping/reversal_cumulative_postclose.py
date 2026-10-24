@@ -207,7 +207,10 @@ def build(data_root, day, publication, parent, *, source=None, publish_outputs=T
                 counts = Counter()
                 coverage = Counter()
                 for symbol, source_rows in iter_normalized_symbols(path):
-                    item = symbol + ("_NX" if route == "NXT" else "_AL")
+                    # Storage route is the normalized source item's route,
+                    # not the policy cohort or an inferred execution venue.
+                    # KRX's unsuffixed items must not be discarded as SOR.
+                    item = symbol + {"KRX": "", "NXT": "_NX", "SOR": "_AL"}[route]
                     rows = [r[:] for r in source_rows]
                     for r in rows:
                         if r[9] != item:

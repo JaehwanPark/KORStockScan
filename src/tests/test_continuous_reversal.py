@@ -825,10 +825,16 @@ def test_native_next_day_population_and_previous_regular_inheritance(tmp_path):
 
 
 def test_new_turn_after_block_wakes_machine_and_preserves_transport_backoff(
+    tmp_path,
     monkeypatch,
 ):
     from src.engine import sniper_state_handlers as H
     from src.engine.scalping import mechanistic_entry_runtime_policy as N
+    from src.utils import constants
+
+    # The native evaluation reader pins an existing input root even when the
+    # policy payload is mocked. Do not depend on another test creating it.
+    monkeypatch.setattr(constants, "DATA_DIR", tmp_path)
 
     state = K.ReversalState()
     for row in rows([100, 99, 100]):

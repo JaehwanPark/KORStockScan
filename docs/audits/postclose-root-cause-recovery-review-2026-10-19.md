@@ -3306,3 +3306,37 @@ CI의 Black 형식 검사는 기능 회귀와 별개다. 보존한 main 원본 �
 **대체·제거와 변경량.** cohort→route 추정과 native 증거를 무시하던 양수 BBO 판독은 기존 feedback owner 안에서 **consolidated**했다. 무비용 net 목표 표기는 gross 진단으로 **replaced**했다. 기존 historical field-only reader는 과거 보고서/fixture 소비 때문에 명시적으로 **retained**하며 native proof 통과로 표시하지 않는다. 별도 모듈·producer·validator CLI·wrapper·dispatch·registry·스케줄을 추가하지 않았고 삭제 유예는 없다. 비테스트 source·테스트·문서의 증분은 리뷰 명세에 별도 기록한다. 순증은 기존 보고서의 native 증거 판독·연결과 회귀 coverage이며, 거래 실행·정책·수량·안전 임계값은 변경하지 않았다.
 
 **보존과 다음 단계.** [최종 보존 검사](../../tmp/postclose-step-review-20261023/02-rising-missed-feedback/preservation-final.json)는 1단계 원본 11개·재사용 원본 29개·212,188bytes 원문 구간, 운영 artifact 6개·선택본 source 1,313개·PREOPEN binding 6개·strict 원본·Main 정지 상태를 재확인한다. 코드 게시만 [클린 커밋·푸시 영수증](../../tmp/postclose-step-review-20261023/02-rising-missed-feedback/publication-receipt.json)으로 남긴다. 1단계 OPEN과 새 코드의 미배포·자연 수용 미검증 상태를 보존하고 이 2단계 결과를 공유한다. 다음 순서인 `main_machine_policy`의 원천·세대·계산 검증은 아직 시작하지 않았다.
+
+<a id="calculation-stage3-main-machine-policy-2026-10-25"></a>
+
+### 2026-10-25 — 3단계 main_machine_policy의 입력·세대·계산 및 의미 검증
+
+**결정과 범위.** 기준 main `55543b9b1b4b97488453b9761f1a5e3bfaa71b8d`에서 EOD를 제외한 **10/23** `main_machine_policy`를 대사했다. 계산 생산자가 KRX 원천 item을 SOR item으로 잘못 비교해 적격 관측 전체를 버리는 결함을 수정했다. 원 입력과 native 계산을 사용하는 격리 재생으로 진단 집계 3개의 변화를 확인했으며, 등록된 22개 범위의 정책 선택은 그대로다. 이는 코드·계산 검증 완료이며 운영 결과 재생성·정책 소비 완료가 아니다. 검증 중 자정이 지났어도 원천일은 유지했다. 10/24·10/25 체크리스트 부재를 과거/미래 체크리스트로 대체하지 않았고, strict에 바인딩된 10/26 원본을 유지했다.
+
+**원천과 세대 바인딩.** [원본 16개 명세](../../tmp/postclose-step-review-20261023/03-main-machine-policy/original-manifest.json)에 보고서·원천 manifest·완료 영수증·코드·테스트·selector·이전 단계 인계를 보존했다. machine content SHA는 `6989c48ed693fae562f6dc1d32270edccd8c6eb3d1a64e58282b3fb280315db4`, source content SHA는 `5b55f1464c27b2784a82e5ab4036a294daea656155eda943d0a7dcf102a735bd`, parent bundle은 `1d9e5b0924fec60f473bea1b4a8a51ed8bc242f3af533c592e1a04342726e7b6`이다. 현재 원 parent bytes와 별도 사본도 일치한다. 당시 실행본 `submission-lineage-20261023-6e970e41f`의 native reader로 source date 10/23·effective date 10/26·코드/원천/결과/완료 영수증을 검증해 [issues=[]](../../tmp/postclose-step-review-20261023/03-main-machine-policy/historical-binding.json)를 확인했다. 변경된 main 코드로 역사 영수증을 재봉인하지 않았다.
+
+[원천 receipt 962개](../../tmp/postclose-step-review-20261023/03-main-machine-policy/source-hash-check.json), 총 581,639,270bytes는 전부 원 SHA와 일치하고 누락이 없다. 84개 계산 partition의 보존된 point 객체도 native readonly store로 읽어 각각 원 records SHA·건수를 확인했다. 입력 census는 9,552,860행·기존 유효 5,806,105행이며, family refresh 이전 26개 partition은 원 계약대로 제외된다. 이 누적 입력이 모두 10/23 당일 자료라는 뜻은 아니다. 당일 새 partition은 5개이며, KRX는 과거 누적 구간에만 존재한다. 당시 코드와 기준 main의 계산/원천/kernel 3개 모듈은 [전체 AST가 동일](../../tmp/postclose-step-review-20261023/03-main-machine-policy/historical-code-parity.json)했다.
+
+**계산 재현과 최초 위반.** [기존 304,379개 확인 지점 대사](../../tmp/postclose-step-review-20261023/03-main-machine-policy/metric-reconciliation.json)에서 중복 충돌은 0이었다. 고정 후보 27,056개의 승패 집계와 같은 수의 added/removed 효과를 전부 재계산해 원 비교표와 일치했고, 실제 원 parent로 native selection을 실행해 22개 선택·manifest membership을 재현했다. 그 이전 원천→계산 경계에서 `reversal_cumulative_postclose.build`는 NXT 이외 route에 모두 `_AL`을 붙였다. KRX 원천의 정상 item은 접미사가 없는 종목 코드이므로, 모든 KRX 유효 행이 item 불일치로 무효화됐다. 시장 데이터 item이며 실제 주문 경로나 체결 거래소 추정이 아니다.
+
+기존 owner 안에서 KRX/SOR/NXT의 exact item 비교로 고쳤고, 다른 item·부적격 원천 차단은 유지했다. 이 모듈은 기존 policy contract code 목록과 checkpoint fingerprint에 이미 포함돼 있어 코드가 바뀌면 기존 계산 cache를 재사용하지 않는다. 새 fallback·cache namespace·validator·정책 수치를 추가하지 않았다. 격리 source는 원 source generation과 동결된 completed-bar receipts를 명시하고 **영향받은 KRX 12개 partition만** 포함한다. 전체 운영 세대로 발행하거나 뒤늦게 갱신된 봉을 재발견하지 않았다.
+
+| 원 계산의 손실 | 수정 후 격리 계산·직접 선택 소비 |
+| --- | --- |
+| KRX 12개 partition / 281,493행 중 적격 256,183행을 모두 제외 | 적격 256,183행을 복원하고 원천 부적격 25,310행은 계속 제외 |
+| KRX 확인 지점 0 | 2,475개: WIN 523 / FAIL_STOP 35 / FAIL_TIMEOUT 2 / UNRESOLVED 1,915 |
+| 전체 확인 지점 304,379개 | 306,854개, 충돌 0; 기존 다른 route의 해시 검증된 point 재사용 |
+| KRX CURRENT_NATIVE 진단 집계 3개가 빈 값 | 3개 집계·증감 효과 수정; SOR/NXT 집계는 동일 |
+| 등록 범위 22개: 선택 5 / 기존 유지 17 | 22개 모두 선택·membership 동일; KRX는 해당 누적 variant 등록 대상이 아님 |
+
+[KRX native 재생](../../tmp/postclose-step-review-20261023/03-main-machine-policy/krx-replay-summary.json)은 30.34초에 완료됐다. [전체 point 결합 후 27,056개 재계산](../../tmp/postclose-step-review-20261023/03-main-machine-policy/combined-summary.json)과 [변경된 세 집계](../../tmp/postclose-step-review-20261023/03-main-machine-policy/combined-delta.json)를 따로 보존한다. 운영 입력 전체 955만 행의 label을 새 코드로 다시 생산한 것으로 주장하지 않는다. 원 84개 point 세대 검증·전체 후보 집계 재현과, 결함 영향 12개 partition의 실제 재생을 구분한다.
+
+**의미와 남은 결손.** target/stop/cost/horizon은 원 catalog와 kernel의 동일 계약을 사용한다. 비용률이 반영된 가상 목표 선도달 비율이며, 완료 거래·실제 수수료·실현 PnL·cost-adjusted EV 증거는 아니다. UNRESOLVED는 승패/0 수익으로 치환하지 않는다. 필터 특징 UNKNOWN 시 기존 신호를 유지하는 refinement 동작은 원 catalog·runtime 계약과 일치하므로 이번 수리에서 더 엄격한 새 정책으로 바꾸지 않았다. 원 관측 sequence/epoch, 동일 item completed-bar, 부분 봉·양방향 도달 ambiguity 및 결손은 기존 guard와 회귀로 확인했다.
+
+당일 NXT premarket 82,417행·regular 15,114행과 SOR premarket 133행은 원 source quality에서 부적격이다. 원 종료 epoch `1792709745678229761`은 raw reconciliation이 완료됐지만 callback latency canary의 `stop_required`를 갖고 있어 native reader가 `main_raw_epoch_contract_invalid`로 거부한다. [종료 원본·SHA 및 판독](../../tmp/postclose-step-review-20261023/03-main-machine-policy/source-exclusion-evidence.json)을 보존했다. 파일이 존재한다는 이유로 eligibility를 올리거나, stop 판정·원천 수용 계약을 완화하지 않았다. 이 제외와 불완전 label은 KRX 계산 결함과 별개의 역사 원천 한계로 남는다. 특히 KRX 복원분의 UNRESOLVED 1,915개와 기존 전체 UNRESOLVED 116,081개는 합계 117,996개로 그대로 드러낸다.
+
+**리뷰·회귀 및 실패 보존.** 구현→자체 리뷰→보완→재리뷰 후 관련 8개 파일 [280 PASS / 0 FAIL / 0 SKIP](../../tmp/postclose-step-review-20261023/03-main-machine-policy/regression-reviewed.txt)이다. 새 회귀는 native `build`→store→report에서 3개 route의 exact item을 확인하고 다른 item을 거부한다. [원 코드 주입 재현](../../tmp/postclose-step-review-20261023/03-main-machine-policy/original-red.txt)은 KRX 1건 FAIL, SOR/NXT 2건 PASS였다. 기존 source hash·미래 날짜·cache/세대·scope guard도 유지했다. 확대 회귀의 최초 279 PASS / 1 FAIL은 BLOCK 이후 wake 테스트가 loader의 source anchor에 필요한 임시 data root를 만들지 않아 생긴 독립적인 테스트 격리 결함이었다. [진단](../../tmp/postclose-step-review-20261023/03-main-machine-policy/wake-diagnosis.txt)과 [수정 후 단독 PASS](../../tmp/postclose-step-review-20261023/03-main-machine-policy/wake-fixed.txt)를 보존하고, 해당 테스트가 자기 `tmp_path`를 바인딩하도록 수정했다. native reader를 우회하거나 운영 경로를 열지 않았다. 원천 inspector의 초기 scratch 경로 준비 실패도 보존하고 private scratch만 지정했다. Black·compile·`git diff --check` 및 문서 link/owner·print-only backlog 검사를 포함한다.
+
+**대체·제거 및 보존.** 잘못된 두 갈래 item 판독은 기존 함수의 세 route 판독으로 **consolidated**, item 불일치 무효화·부적격 행·날짜·세대 guard는 **retained**다. 기존 테스트의 전역 임시 경로 의존은 테스트 소유 입력 root로 **replaced**했다. 새 모듈/dispatch/CLI/wrapper/스케줄/이동과 삭제 유예는 없다. 비테스트 source +4/-1줄, 테스트 +67/-0줄이며 문서 증분은 [리뷰 명세](../../tmp/postclose-step-review-20261023/03-main-machine-policy/review-validation.json)에 별도 기록한다. 순증은 원천 item 계약 설명과 생산자부터 저장 결과까지의 회귀 coverage다. [최종 보존 검사](../../tmp/postclose-step-review-20261023/03-main-machine-policy/preservation-final.json)는 이전 단계 원본/증거, 선택본 source 1,313개·운영 artifact 6개·PREOPEN binding 6개·strict 원본·Main 정지가 그대로임을 확인한다.
+
+**인계.** [클린 커밋·푸시 영수증](../../tmp/postclose-step-review-20261023/03-main-machine-policy/publication-receipt.json)은 소스 게시만 증명한다. 1단계의 invalid-depth 원문 98건·수신 이전 누적량 차이 1,179·입력 마감 초과 3건의 세부 원인, 2단계의 원천 null·미배포·자연 수용 미결을 보존한다. 본 수정도 운영 배포·재기동·selector 변경·운영 재생성·provider/주문·외부 동기화를 하지 않았다. 향후 통합 시에는 변경된 native code 세대에 맞춰 계산→직접 소비자→준비/terminal을 순서대로 검증해야 하며 과거 PASS를 복사하지 않는다. 다음 직접 소비자 `main_auxiliary_policy`의 계산 검증은 아직 시작하지 않고 이 단계 결과를 먼저 공유한다.

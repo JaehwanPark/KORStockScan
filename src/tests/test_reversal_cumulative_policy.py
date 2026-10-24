@@ -537,6 +537,67 @@ def test_native_postclose_cache_scope_isolation_compact_projection_and_materiali
         )
 
 
+@pytest.mark.parametrize(
+    "route,session,item",
+    [
+        ("KRX", "KRX_REGULAR", "000001"),
+        ("SOR", "SOR_REGULAR", "000001_AL"),
+        ("NXT", "NXT_REGULAR_OVERLAP", "000001_NX"),
+    ],
+)
+def test_cumulative_replay_uses_exact_native_item_for_each_route(
+    tmp_path, monkeypatch, route, session, item
+):
+    import gzip
+    import json
+    from src.engine.ai import offline_comparison_store as S
+    from src.engine.scalping import reversal_cumulative_postclose as CP
+    from src.engine.scalping import continuous_reversal_postclose as P
+
+    parent, _ = postclose_fixture(monkeypatch)
+    valid = rows([3000] * 180 + [2980, 2981, 2982, 2983, 2984, 2985])
+    for row in valid:
+        row[9] = item
+    wrong_item = "000001_AL" if route != "SOR" else "000001"
+    wrong = copy.deepcopy(valid)
+    for row in wrong:
+        row[0] += 1000
+        row[1] += 1
+        row[9] = wrong_item
+    raw = tmp_path / "native.json.gz"
+    raw.write_bytes(
+        gzip.compress(json.dumps(dict(symbols={"000001": valid + wrong})).encode())
+    )
+    rec = dict(
+        day="2026-09-29",
+        venue=route,
+        session=session,
+        path=str(raw),
+        sha256=P.file_hash(raw),
+    )
+    report = CP.build(
+        tmp_path,
+        "2026-10-14",
+        "2026-10-15",
+        parent,
+        source=P.seal(dict(normalized_sources=dict(partitions=[rec]))),
+        publish_outputs=False,
+    )
+    assert report["input_census"]["source_rows"] == len(valid) + len(wrong)
+    assert report["input_census"]["valid_source_rows"] == len(valid)
+    part = report["partitions"][0]
+    assert part["points"] > 0
+    with S.Store(tmp_path, readonly=True) as store:
+        points = store.get(part["records_object"])
+        for point in points:
+            event, _ = store.get(point["snapshot_obj"])
+            assert event["source_item"] == item
+            assert event["venue"] == route
+            assert point["scope"].endswith("|" + route)
+    assert report["runtime_effect"] is False
+    assert report["actual_order_submitted"] is False
+
+
 def test_followup_selection_compares_fixed_originals_with_actual_current():
     from src.engine.scalping import continuous_reversal_postclose as P
 
