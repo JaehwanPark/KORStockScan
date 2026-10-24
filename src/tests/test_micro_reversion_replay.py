@@ -372,38 +372,50 @@ def test_removed_entry_odds_surfaces_and_no_runtime_authority_imports() -> None:
     assert all(not (repository_root / path).exists() for path in removed_paths)
 
     package_root = repository_root / "src/engine/scalping/micro_reversion"
-    source = "\n".join(
-        path.read_text(encoding="utf-8") for path in sorted(package_root.glob("*.py"))
-    ).lower()
-    forbidden_imports = (
-        "import src.trading",
-        "from src.trading",
-        "import src.engine.ai",
-        "from src.engine.ai",
-        "import src.engine.lifecycle",
-        "from src.engine.lifecycle",
-    )
-    # Shared venue constants already used by the source-only contract do not
-    # grant execution authority. Keep every other runtime import prohibited.
     import ast
 
-    contracts = package_root / "contracts.py"
-    tree = ast.parse(contracts.read_text())
-    allowed = [
-        n
-        for n in ast.walk(tree)
-        if isinstance(n, ast.ImportFrom)
-        and n.module == "src.trading.market.session_contract"
-    ]
-    assert len(allowed) == 1
-    assert {n.name for n in allowed[0].names} == {
-        "ACTUAL_EXECUTION_VENUE_UNKNOWN",
-        "MARKET_DATA_ROUTE_KRX_NXT_INTEGRATED",
-        "MARKET_DATA_ROUTE_KRX_ONLY",
-        "MARKET_DATA_ROUTE_NXT_ONLY",
-        "MARKET_DATA_ROUTE_UNKNOWN",
+    # These metadata, retirement-veto and read-only storage helpers are the
+    # existing source-only consumers; no execution/provider import is allowed.
+    allowed = {
+        ("contracts.py", "src.trading.market.session_contract"): {
+            "ACTUAL_EXECUTION_VENUE_UNKNOWN",
+            "MARKET_DATA_ROUTE_KRX_NXT_INTEGRATED",
+            "MARKET_DATA_ROUTE_KRX_ONLY",
+            "MARKET_DATA_ROUTE_NXT_ONLY",
+            "MARKET_DATA_ROUTE_UNKNOWN",
+        },
+        ("path_capture.py", "src.trading.market.session_contract"): {
+            "market_source_session_bucket"
+        },
+        ("forward_collector.py", "src.trading.market.session_contract"): {
+            "market_source_partition_venue",
+            "market_source_session_bucket",
+        },
+        ("collection_targets.py", "src.trading.config.owner_retirement"): {
+            "new_entry_retired"
+        },
+        ("storage_maintenance.py", "src.engine.lifecycle.snapshot_archive"): {
+            "file_identity"
+        },
+        ("economic_reference.py", "src.engine.lifecycle.snapshot_archive"): {"present"},
     }
-    allowed_source = ast.get_source_segment(contracts.read_text(), allowed[0]).lower()
-    assert source.count(allowed_source) == 1
-    source = source.replace(allowed_source, "", 1)
-    assert all(token not in source for token in forbidden_imports)
+    observed = {}
+    forbidden_prefixes = ("src.trading", "src.engine.ai", "src.engine.lifecycle")
+    for path in sorted(package_root.glob("*.py")):
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if isinstance(node, ast.Import):
+                assert not any(
+                    alias.name.startswith(forbidden_prefixes) for alias in node.names
+                ), (path, node.lineno)
+            elif isinstance(node, ast.ImportFrom) and (node.module or "").startswith(
+                forbidden_prefixes
+            ):
+                key = (path.name, node.module)
+                names = {alias.name for alias in node.names}
+                assert key in allowed and names <= allowed[key], (
+                    path,
+                    node.lineno,
+                    names,
+                )
+                observed.setdefault(key, set()).update(names)
+    assert observed == allowed
