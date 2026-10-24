@@ -32,9 +32,6 @@ from src.engine.infrastructure.market_eligibility_source import (
 )
 from src.core.event_bus import EventBus
 
-# 💡 [핵심 교정] 텔레그램 매니저를 초대해야 수신기가 EventBus에 정상 등록됩니다!
-import src.notify.telegram_manager as telegram_manager
-
 # ==========================================
 # 1. 경로 및 로깅 설정
 # ==========================================
@@ -1048,7 +1045,15 @@ def _build_update_kospi_status(
     }
 
 
-if __name__ == "__main__":
+def main():
+    # Register notification receivers only at the executable boundary. Feature
+    # consumers and test collection must not load credentials or start a bot.
+    import src.notify.telegram_manager  # noqa: F401
+
     chain_status = run_update_kospi_chain()
     if chain_status.get("status") == "failed":
         sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

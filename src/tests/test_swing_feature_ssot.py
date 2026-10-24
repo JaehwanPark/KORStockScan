@@ -336,3 +336,49 @@ def test_calculate_all_features_matches_expected_numeric_values():
 
     assert latest["dual_net_buy"] == 1
     assert latest["up_trend_2d"] == 1
+
+
+def test_feature_import_does_not_initialize_notification_runtime(monkeypatch):
+    import builtins
+    import importlib.util
+    from pathlib import Path
+
+    original_import = builtins.__import__
+
+    def without_runtime(name, *args, **kwargs):
+        if name == "src.notify.telegram_manager":
+            pytest.fail("feature import reached notification runtime")
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", without_runtime)
+    spec = importlib.util.spec_from_file_location(
+        "isolated_eod_features", Path(update_kospi.__file__)
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    assert module.calculate_all_features is common_v2.calculate_all_features
+
+
+@pytest.mark.parametrize("status,exit_code", [("completed", None), ("failed", 1)])
+def test_eod_cli_binds_notifier_before_chain_and_preserves_failure(monkeypatch, status, exit_code):
+    import builtins
+
+    calls = []
+    original_import = builtins.__import__
+
+    def bind_runtime(name, *args, **kwargs):
+        if name == "src.notify.telegram_manager":
+            calls.append("notifier")
+            return None
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", bind_runtime)
+    monkeypatch.setattr(update_kospi, "run_update_kospi_chain",
+                        lambda: calls.append("chain") or {"status": status})
+    if exit_code is None:
+        update_kospi.main()
+    else:
+        with pytest.raises(SystemExit) as caught:
+            update_kospi.main()
+        assert caught.value.code == exit_code
+    assert calls == ["notifier", "chain"]

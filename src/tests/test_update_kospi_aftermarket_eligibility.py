@@ -1,27 +1,11 @@
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
 import logging
-import sys
-from types import ModuleType
-from unittest.mock import patch
 import pytest
 
 from src.database.db_manager import DBManager
 from src.database.models import Base
-from src.utils import kiwoom_utils
-import src.model as model_package
-import src.notify as notify_package
-
-# These source/storage tests do not execute feature calculation or messaging.
-# Isolate import-time writers as well as the calls mocked by each fixture.
-_features = ModuleType('src.model.common_v2')
-_features.calculate_all_features = lambda *a, **k: pytest.fail('unexpected feature calculation')
-_telegram = ModuleType('src.notify.telegram_manager')
-with patch.dict(sys.modules, {'src.model.common_v2': _features,
-                             'src.notify.telegram_manager': _telegram}), \
-        patch.object(model_package, 'common_v2', _features, create=True), \
-        patch.object(notify_package, 'telegram_manager', _telegram, create=True):
-    from src.utils import update_kospi
+from src.utils import kiwoom_utils, update_kospi
 
 
 KST = ZoneInfo("Asia/Seoul")
