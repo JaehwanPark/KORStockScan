@@ -64,6 +64,8 @@ def test_reaction_context_reaches_entry_and_canonical_holding_payload(monkeypatc
         "microstructure_reaction_venue": "KRX",
         "future_first_hit": "net_target_first",
         "realized_pnl": 10000,
+        "known_outcome_label": "future_loss",
+        "prior_model_action": "BUY",
     }
     entry = engine._build_entry_screen_hot_payload(
         {"curr": 10000},
@@ -97,6 +99,14 @@ def test_reaction_context_reaches_entry_and_canonical_holding_payload(monkeypatc
         is True
     )
     for payload in (entry, holding):
+        serialized = json.dumps(payload)
+        for withheld in (
+            "future_first_hit",
+            "realized_pnl",
+            "known_outcome_label",
+            "prior_model_action",
+        ):
+            assert withheld not in serialized
         audit = finalize_scalping_feature_delivery_audit_fields(
             build_scalping_feature_audit_fields(packet),
             json.dumps(payload),
@@ -8981,6 +8991,53 @@ def test_openai_compact_auxiliary_invalid_prompt_retry_keeps_compact_contract(
     assert "Historical policy context" not in instructions
     assert "binding PASS/VETO authority" not in instructions
     assert "Domain glossary for interpretation" not in instructions
+
+
+def test_analyze_target_holding_schema_roundtrip_uses_offline_ws_transport(monkeypatch):
+    engine = _build_engine()
+    monkeypatch.setattr(
+        openai_module,
+        "TRADING_RULES",
+        replace(
+            openai_module.TRADING_RULES,
+            OPENAI_TRANSPORT_MODE="responses_ws",
+            OPENAI_RESPONSES_WS_ENABLED=True,
+        ),
+    )
+    captured = []
+
+    def transport(request):
+        captured.append(request)
+        return OpenAITransportResult(
+            payload={"action": "HOLD", "score": 67, "reason": "offline schema fixture"},
+            transport_mode="responses_ws",
+            ws_used=True,
+            roundtrip_ms=1,
+        )
+
+    monkeypatch.setattr(engine, "_call_openai_responses_ws", transport)
+    monkeypatch.setattr(
+        engine,
+        "_call_openai_responses_http",
+        lambda *_: pytest.fail("unexpected HTTP fallback"),
+    )
+    result = engine.analyze_target(
+        "OFFLINE_HOLDING",
+        _sample_ws_data(),
+        _sample_ticks(),
+        _sample_candles(),
+        strategy="SCALPING",
+        prompt_profile="holding",
+        cache_profile="holding",
+    )
+    assert len(captured) == 1
+    assert captured[0].schema_name == "holding_exit_v1"
+    assert captured[0].endpoint_name == "analyze_target"
+    assert result["action_schema"] == "holding_exit_v1"
+    assert result["action_v2"] == "HOLD"
+    assert result["ai_parse_ok"] is True
+    assert result["openai_ws_used"] is True
+    assert result["openai_ws_http_fallback"] is False
 
 
 def test_openai_ws_request_id_mismatch_fails_closed_without_http_fallback(monkeypatch):
