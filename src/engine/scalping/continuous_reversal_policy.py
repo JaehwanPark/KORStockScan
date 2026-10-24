@@ -697,12 +697,15 @@ def direct_handoff(data_root, day, *, effective_date=None, publication_date=None
     """Revalidate producer -> dated loader -> consumer without an EV gate."""
     from src.engine.scalping import mechanistic_entry_runtime_policy as native
 
-    publication = publication_date or day
-    effective = effective_date or native.next_target(publication)
+    effective = effective_date or native.next_target(publication_date or day)
     bundle = native.load(data_root=Path(data_root), target_date=effective)
     if not bundle or not bundle.get("continuous_reversal"):
         raise ValueError("continuous_reversal_dated_policy_missing")
     family = bundle["continuous_reversal"]
+    # Recovery keeps the source day while the native publisher records its
+    # actual later publication. Read that date from the validated dated policy;
+    # an explicit caller binding must still match it exactly.
+    publication = publication_date or family["publication_date"]
     if family["source_date"] != day or family["publication_date"] != publication:
         raise ValueError("continuous_reversal_source_date_mismatch")
     out = directory(data_root, day)
@@ -856,13 +859,20 @@ def scoped_verification(
                 Path(data_root)
                 / "report"
                 / "main_ai_prompt_consumer"
-                / f"main_ai_prompt_consumer_{handoff['publication_date']}.json"
+                / f"main_ai_prompt_consumer_{day}.json"
             )
             consumer = json.loads(path.read_text())
-            if consumer.get("compact_auxiliary") != handoff or consumer.get(
-                "artifact_content_sha256"
-            ) != digest(
-                {k: v for k, v in consumer.items() if k != "artifact_content_sha256"}
+            if (
+                consumer.get("target_date") != day
+                or consumer.get("compact_auxiliary") != handoff
+                or consumer.get("artifact_content_sha256")
+                != digest(
+                    {
+                        k: v
+                        for k, v in consumer.items()
+                        if k != "artifact_content_sha256"
+                    }
+                )
             ):
                 issues.append("continuous_reversal_last_consumer_stale")
     except (ValueError, KeyError, TypeError, OSError) as exc:

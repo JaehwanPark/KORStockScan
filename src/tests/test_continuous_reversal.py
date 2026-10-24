@@ -302,6 +302,73 @@ def test_effective_auxiliary_verdict_preserves_valid_nonpass_without_buy_authori
     assert result["entry_ai_effective_assessment"]["contract_valid"] is (not errors)
 
 
+@pytest.mark.parametrize("publication", ["2026-10-23", "2026-10-24", "2026-10-25"])
+def test_source_day_consumer_accepts_native_weekend_republication(
+    tmp_path, monkeypatch, publication
+):
+    from src.tests.test_mechanistic_entry_runtime_policy import initial
+    from src.engine.scalping import continuous_reversal_policy as policy
+    from src.engine.scalping import main_ai_prompt_consumer as consumer
+
+    day, target = "2026-10-23", "2026-10-26"
+    initial(tmp_path)
+    machine, auxiliary = (
+        P.seal({**report, "source_date": day, "target_date": day})
+        for report in family_reports()
+    )
+    out = P.directory(tmp_path, day)
+    P.write(out / "machine.json", machine)
+    P.write(out / "auxiliary.json", auxiliary)
+    staged = policy.publish(tmp_path, day, publication, machine, auxiliary)
+    monkeypatch.setattr(consumer.quality, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(
+        consumer, "REPORT_DIR", tmp_path / "report/main_ai_prompt_consumer"
+    )
+    report = consumer.build_report(day, write=True)
+    handoff = report["compact_auxiliary"]
+    assert staged["target_date"] == handoff["effective_date"] == target
+    assert handoff["source_date"] == report["target_date"] == day
+    assert handoff["publication_date"] == publication
+    assert handoff["current_pid_consumption_claimed"] is False
+    assert (
+        policy.scoped_verification(tmp_path, day, require_consumer=True)["issues"] == []
+    )
+    assert (
+        policy.direct_handoff(
+            tmp_path, day, publication_date=publication, effective_date=target
+        )
+        == handoff
+    )
+    with pytest.raises(ValueError, match="source_date_mismatch"):
+        policy.direct_handoff(tmp_path, "2026-10-22", effective_date=target)
+    if publication != day:
+        with pytest.raises(ValueError, match="source_date_mismatch"):
+            policy.direct_handoff(tmp_path, day, publication_date=day)
+
+    source_file = consumer.REPORT_DIR / f"main_ai_prompt_consumer_{day}.json"
+    original = source_file.read_bytes()
+    for invalid in (
+        P.seal({**report, "target_date": "2026-10-22"}),
+        {**report, "artifact_content_sha256": "0" * 64},
+        P.seal(
+            {
+                **report,
+                "compact_auxiliary": {**handoff, "publication_date": "2026-10-22"},
+            }
+        ),
+    ):
+        P.write(source_file, invalid)
+        assert policy.scoped_verification(tmp_path, day, require_consumer=True)[
+            "issues"
+        ] == ["continuous_reversal_last_consumer_stale"]
+    source_file.write_bytes(original)
+    source_file.rename(consumer.REPORT_DIR / "main_ai_prompt_consumer_2026-10-27.json")
+    assert (
+        policy.scoped_verification(tmp_path, day, require_consumer=True)["status"]
+        == "fail"
+    )
+
+
 def test_reversal_reports_reach_runtime_summary_and_nextday_projection(
     tmp_path, monkeypatch
 ):
