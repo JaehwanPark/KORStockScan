@@ -1,5 +1,4 @@
 import json
-import os
 from datetime import date, timedelta
 
 import pytest
@@ -17,21 +16,8 @@ from src.engine.swing_strategy_discovery_schema import (
 )
 
 
-def _external_test_db_url() -> str:
-    db_url = os.getenv("KORSTOCKSCAN_TEST_DATABASE_URL", "").strip()
-    if not db_url:
-        pytest.skip(
-            "set KORSTOCKSCAN_TEST_DATABASE_URL to run DB-backed discovery EV tests"
-        )
-    if "test" not in db_url.lower():
-        pytest.skip(
-            "KORSTOCKSCAN_TEST_DATABASE_URL must point to an isolated test database"
-        )
-    return db_url
-
-
-def _setup_test_db():
-    db_url = _external_test_db_url()
+def _setup_test_db(tmp_path):
+    db_url = f"sqlite:///{tmp_path / 'discovery-test.sqlite'}"
     ensure_swing_strategy_discovery_schema(db_url)
     engine = create_engine(db_url)
     with engine.begin() as conn:
@@ -140,8 +126,8 @@ def _seed_labeled_arm(
     )
 
 
-def test_ev_report_aggregates_surviving_arms_and_contract(clean_source_date):
-    db_url, Session = _setup_test_db()
+def test_ev_report_aggregates_surviving_arms_and_contract(tmp_path, clean_source_date):
+    db_url, Session = _setup_test_db(tmp_path)
     with Session.begin() as session:
         for idx, ret in enumerate([1.0, 2.0, 1.5, 0.5, 3.0, -0.2], start=1):
             _seed_labeled_arm(session, idx, ret=ret, source_date=clean_source_date)
@@ -176,8 +162,10 @@ def test_ev_report_aggregates_surviving_arms_and_contract(clean_source_date):
     assert report["source_quality_summary"]["runtime_effect"] is False
 
 
-def test_ev_report_adds_source_only_morning_turbulence_analysis(clean_source_date):
-    db_url, Session = _setup_test_db()
+def test_ev_report_adds_source_only_morning_turbulence_analysis(
+    tmp_path, clean_source_date
+):
+    db_url, Session = _setup_test_db(tmp_path)
     with Session.begin() as session:
         for idx, ret in enumerate([1.0, 0.5, -0.2, 1.2, 0.8], start=1):
             _seed_labeled_arm(
@@ -233,9 +221,10 @@ def test_ev_report_adds_source_only_morning_turbulence_analysis(clean_source_dat
 
 
 def test_ev_report_clean_baseline_filters_pre_baseline_discovery_rows(
+    tmp_path,
     clean_source_date,
 ):
-    db_url, Session = _setup_test_db()
+    db_url, Session = _setup_test_db(tmp_path)
     with Session.begin() as session:
         _seed_labeled_arm(
             session, 1, ret=-10.0, source_date=clean_source_date - timedelta(days=1)

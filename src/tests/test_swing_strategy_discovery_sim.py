@@ -1,8 +1,6 @@
 import json
-import os
 
 import pandas as pd
-import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -17,21 +15,8 @@ from src.engine.swing_strategy_discovery_schema import (
 )
 
 
-def _external_test_db_url() -> str:
-    db_url = os.getenv("KORSTOCKSCAN_TEST_DATABASE_URL", "").strip()
-    if not db_url:
-        pytest.skip(
-            "set KORSTOCKSCAN_TEST_DATABASE_URL to run DB-backed discovery sim tests"
-        )
-    if "test" not in db_url.lower():
-        pytest.skip(
-            "KORSTOCKSCAN_TEST_DATABASE_URL must point to an isolated test database"
-        )
-    return db_url
-
-
-def _setup_test_db():
-    db_url = _external_test_db_url()
+def _setup_test_db(tmp_path):
+    db_url = f"sqlite:///{tmp_path / 'discovery-test.sqlite'}"
     ensure_swing_strategy_discovery_schema(db_url)
     engine = create_engine(db_url)
     with engine.begin() as conn:
@@ -361,7 +346,7 @@ def test_active_bucket_priority_raises_default_cap_without_arm_duplication(
 
 
 def test_schema_report_and_persistence_are_idempotent(tmp_path, monkeypatch):
-    db_url, _engine, Session = _setup_test_db()
+    db_url, _engine, Session = _setup_test_db(tmp_path)
     output_dir = tmp_path / "report"
 
     monkeypatch.setattr(mod, "load_safe_pool_rows", lambda target_date: _source_rows(6))
@@ -696,7 +681,7 @@ def test_discovery_report_normalizes_missing_optional_values_to_strict_json(
 def test_bottom_rebound_source_persists_candidate_and_dedicated_arms(
     tmp_path, monkeypatch
 ):
-    db_url, _engine, Session = _setup_test_db()
+    db_url, _engine, Session = _setup_test_db(tmp_path)
     source_path = tmp_path / "swing_bottom_rebound_candidate_source_2026-05-22.json"
     source_path.write_text(
         json.dumps(
