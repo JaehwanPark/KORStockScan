@@ -30,6 +30,7 @@ from zoneinfo import ZoneInfo
 from src.utils.jsonl_io import existing_or_gzip_path, iter_jsonl
 from src.engine.automation.source_quality_clean_baseline import policy_refresh_start_date
 from src.trading.order.tick_utils import get_tick_size
+from src.trading.market.execution_venue import operational_venue, MARKET_DEFAULT_AUTHORITY
 from src.engine.scalping.entry_setup_evidence import (
     MECHANISTIC_ENTRY_FLOW_OBSERVATION_SCHEMA,
     MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1,
@@ -318,7 +319,8 @@ def _main_mechanistic_input_fingerprint(
     data_root: Path, target_date: str, incumbent_date: str | None = None
 ) -> str:
     """Cheap retry fingerprint; large immutable JSONL inputs are never reread."""
-    from src.engine.scalping.mechanistic_entry_runtime_policy import digest, load_effective
+    from src.engine.scalping.mechanistic_entry_runtime_policy import digest
+    from src.engine.scalping.continuous_reversal_operating_postclose import load_report_parent
 
     def generation(path: Path) -> dict[str, Any]:
         # Compact finalization rewrites its small sealed projection even when
@@ -367,7 +369,7 @@ def _main_mechanistic_input_fingerprint(
     refresh_policy = data_root / "source_quality/clean_baseline_policy.json"
     if refresh_policy.is_file():
         candidates.add(refresh_policy)
-    incumbent = load_effective(data_root=data_root, target_date=incumbent_date or target_date)
+    incumbent = load_report_parent(data_root, incumbent_date or target_date)
     from src.engine.scalping.strategy_owner_replay import entry_operating_model_identity
     code_paths = [
         Path(__file__),
@@ -378,6 +380,7 @@ def _main_mechanistic_input_fingerprint(
         Path(__file__).with_name("compact_auxiliary_paired_replay.py"),
         Path(__file__).with_name("strategy_owner_replay.py"),
         Path(__file__).with_name("entry_split_order_plan.py"),
+        Path(__file__).with_name("continuous_reversal_operating_postclose.py"),
     ]
     body = {
         "contract_version": MAIN_MECHANISTIC_EVALUATION_CONTRACT_VERSION,
@@ -675,8 +678,8 @@ def _candidate_source_contract(
             and _normalized_venue(row.get("market_data_route")) != route
         ):
             exclusions["dual_market_data_route_mismatch"] += 1
-        elif is_dual_aftermarket and _normalized_venue(
-            row.get("actual_execution_venue")
+        elif is_dual_aftermarket and operational_venue(
+            row.get("actual_execution_venue"), observed_at=row.get("decision_ts")
         ) not in {"KRX", "NXT"}:
             exclusions["dual_actual_execution_venue_unknown"] += 1
         elif not row_date:
@@ -705,6 +708,9 @@ def _candidate_source_contract(
         ):
             exclusions["dual_exposure_cost_missing_or_invalid"] += 1
         else:
+            if is_dual_aftermarket and _normalized_venue(row.get("actual_execution_venue")) not in {"KRX", "NXT"}:
+                row = {**row, "operational_execution_venue": "KRX",
+                       "execution_venue_assignment_authority": MARKET_DEFAULT_AUTHORITY}
             comparisons.append(row)
 
     identity = (
@@ -5391,25 +5397,39 @@ def _read_machine_projection(path: Path, *, kernels: dict) -> dict:
     before = actual.stat()
     opener = gzip.open if actual.suffix == '.gz' else open
     try:
-        with opener(actual, 'rt', encoding='utf-8') as handle:
+        with opener(actual, 'rt', encoding='utf-8', newline='') as handle:
             prefix = handle.read(64 * 1024)
             match = re.match(r'\s*\{\s*"contract"\s*:\s*', prefix)
             if match:
                 contract, _ = json.JSONDecoder().raw_decode(prefix[match.end():])
                 if not isinstance(contract, dict) or contract.get('kernels') != kernels:
                     return {}
-        with opener(actual, 'rb') as handle:
-            body = handle.read(MACHINE_PROJECTION_MAX_BYTES + 1)
-            if len(body) > MACHINE_PROJECTION_MAX_BYTES:
-                return {}
-        value = json.loads(body)
-        del body
+        from src.engine.lifecycle.research_json_stream import Reader
+        from src.engine.scalping.postclose_entry_validation import FrozenRows
+        with opener(actual, 'rt', encoding='utf-8', newline='') as handle:
+            reader = Reader(handle, max_bytes=MACHINE_PROJECTION_MAX_BYTES, budgeted=False)
+            value = {}
+            def field(key, source):
+                if key == 'rows':
+                    rows = FrozenRows()
+                    rows.extend(source.array(lambda r: r.value(MACHINE_PROJECTION_MAX_BYTES)))
+                    value[key] = rows
+                else:
+                    value[key] = source.value(MACHINE_PROJECTION_MAX_BYTES)
+                return ()
+            for _ in reader.fields(field, max_fields=None):
+                pass
+            reader.finish()
         after = actual.stat()
         if (before.st_ino, before.st_size, before.st_mtime_ns, before.st_ctime_ns) != (
                 after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns):
             raise ValueError('machine_projection_changed_during_read')
         return value if isinstance(value, dict) and compact.valid(value) else {}
-    except (OSError, EOFError, UnicodeDecodeError, json.JSONDecodeError):
+    except ValueError as exc:
+        if str(exc) == "machine_projection_changed_during_read":
+            raise
+        return {}
+    except (OSError, EOFError):
         return {}
 
 
@@ -10206,9 +10226,9 @@ def build_main_mechanistic_report(
         report_root / PAIRED_SUBDIR,
         target_date=target_date, all_supported_cohorts=True,
     )
-    from src.engine.scalping.mechanistic_entry_runtime_policy import load_effective
+    from src.engine.scalping.continuous_reversal_operating_postclose import load_report_parent
 
-    incumbent = load_effective(data_root=data_root, target_date=incumbent_date or target_date)
+    incumbent = load_report_parent(data_root, incumbent_date or target_date)
     parent = (incumbent or {}).get("machine_policy") or MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1
     # The compact materialization contains only the provider-screened subset.
     # Main-machine tuning also needs BLOCK/RECHECK outcomes, so reuse the
@@ -10368,8 +10388,12 @@ def build_main_mechanistic_report(
         "hierarchical_entry_quality": hierarchical,
         **OFFLINE_CONTRACT,
     }
-    from src.engine.scalping.main_submit_drought_research import refresh_daily_projection
-    report['submission_drought_price_comparison'] = refresh_daily_projection(data_root, target_date, incumbent)
+    # The continuous-reversal family owns its native comparison in the
+    # mandatory main_machine_policy stage. Its captures have no legacy raw
+    # setup recipe; do not feed them to the older KRX recipe comparator.
+    if not (incumbent or {}).get('continuous_reversal'):
+        from src.engine.scalping.main_submit_drought_research import refresh_daily_projection
+        report['submission_drought_price_comparison'] = refresh_daily_projection(data_root, target_date, incumbent)
     return _with_artifact_content_sha256(report)
 
 
@@ -10491,9 +10515,9 @@ def build_report(
         source_contract=mechanistic_source_contract,
     )
     hierarchy_parent = json.loads(json.dumps(MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1))
-    from src.engine.scalping.mechanistic_entry_runtime_policy import load_effective
+    from src.engine.scalping.continuous_reversal_operating_postclose import load_report_parent
 
-    incumbent = load_effective(data_root=data_root, target_date=target_date)
+    incumbent = load_report_parent(data_root, target_date)
     if incumbent is not None:
         hierarchy_parent = json.loads(json.dumps(incumbent["machine_policy"]))
     machine_observations, machine_capture_census = load_machine_observation_rows(

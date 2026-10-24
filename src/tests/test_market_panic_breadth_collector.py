@@ -1,5 +1,6 @@
 from datetime import datetime
 from pathlib import Path
+import json
 
 import pytest
 
@@ -8,6 +9,50 @@ from src.engine.risk.market_weakness_threshold_policy import (
     EffectiveMarketWeaknessThresholds,
     threshold_hash,
 )
+
+
+@pytest.mark.parametrize("source_status,age", [("ok", 0), ("missing", 0), ("ok", 301)])
+def test_two_scoped_weak_markets_without_weighted_panic_reach_observer(
+    tmp_path, source_status, age
+):
+    from datetime import timedelta
+    from src.engine import notify_panic_state_transition as notifier
+
+    # KOSPI is weak by stock breadth; KOSDAQ is weak by index/industries.
+    # Their weighted index does not meet the separate composite panic rule.
+    rows = [
+        dict(code="001", name="KOSPI", change_pct=0.24, source_market="KOSPI",
+             listed_count=940, fall_count=756, rising_count=146),
+        dict(code="101", name="KOSDAQ", change_pct=-1.67, source_market="KOSDAQ",
+             listed_count=1824, fall_count=1267, rising_count=399),
+    ]
+    rows += [dict(code=str(base + i), name="industry", change_pct=-2.5,
+                  source_market=market)
+             for market, base in (("KOSPI", 1), ("KOSDAQ", 101)) for i in (1, 2, 3)]
+    summary = collector.summarize_breadth(rows)
+    assert summary["risk_off_advisory"] is False
+    assert summary["affected_markets"] == ["KOSDAQ", "KOSPI"]
+    report, state = tmp_path / "panic.json", tmp_path / "state.json"
+    for minute in (0, 2):
+        when = datetime.fromisoformat("2026-08-28T10:00:00+09:00") + timedelta(minutes=minute)
+        observation = collector.build_market_weakness_observation(
+            summary, target_date="2026-08-28", as_of=when.isoformat(),
+            source_quality_status=source_status,
+        )
+        assert observation["raw_state"] == ("BROAD_WEAKNESS" if source_status == "ok" else "UNKNOWN")
+        report.write_text(json.dumps(dict(target_date="2026-08-28", as_of=(when + timedelta(seconds=age)).isoformat(),
+                                         market_weakness_observation=observation)))
+        notifier.notify_from_report(report, kind="market_weakness", state_file=state,
+                                    send_enabled=False, now_ts=when.timestamp() + age)
+    saved = json.loads(state.read_text())
+    healthy = source_status == "ok" and age == 0
+    assert saved["market_weakness_observer_health"]["ready"] is healthy
+    if healthy:
+        assert saved["market_weakness"]["active_markets"] == ["KOSDAQ", "KOSPI"]
+        assert saved["market_weakness"]["phase"] == "active"
+        assert saved["market_weakness"]["last_source_gate"]["contract_errors"] == []
+    else:
+        assert saved["market_weakness"]["phase"] != "active"
 
 
 def test_parse_kiwoom_industry_rows_from_nested_response():

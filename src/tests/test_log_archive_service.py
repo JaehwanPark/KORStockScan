@@ -11,6 +11,32 @@ from src.engine import monitor_snapshot_runtime as runtime
 from src.engine.notify_monitor_snapshot_admin import _build_message, _load_json_line
 
 
+def test_import_under_replay_guard_does_not_create_archive_directories(tmp_path):
+    import subprocess
+
+    target = tmp_path / "absent-data"
+    script = """
+from pathlib import Path
+import sys
+from src.utils import constants
+constants.DATA_DIR = Path(sys.argv[1])
+from src.engine.lifecycle.avg_down_policy_replay import _install_effect_guard
+_install_effect_guard()
+from src.engine import log_archive_service as archive
+assert archive.LOG_ARCHIVE_DIR == constants.DATA_DIR / 'log_archive'
+assert archive.load_monitor_snapshot('missing', '2026-10-23') is None
+assert not constants.DATA_DIR.exists()
+print('read_only_import')
+"""
+    result = subprocess.run(
+        [sys.executable, "-B", "-c", script, str(target)],
+        capture_output=True, text=True, timeout=15,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "read_only_import" in result.stdout
+    assert not target.exists()
+
+
 def _postclose_phase_fixture(tmp_path,monkeypatch):
     from src.engine import sniper_trade_review_report as trades
     from src.engine import sniper_post_sell_feedback as post_sell
@@ -400,9 +426,7 @@ if run_snapshot_once "$OUTPUT_FILE"; then exit 0; else exit $?; fi
 
 def test_monitor_snapshot_roundtrip(tmp_path, monkeypatch):
     snapshot_dir = tmp_path / "monitor_snapshots"
-    snapshot_dir.mkdir(parents=True, exist_ok=True)
     manifest_dir = snapshot_dir / "manifests"
-    manifest_dir.mkdir(parents=True, exist_ok=True)
     monkeypatch.setattr(service, "MONITOR_SNAPSHOT_DIR", snapshot_dir)
     monkeypatch.setattr(service, "MONITOR_SNAPSHOT_MANIFEST_DIR", manifest_dir)
 
@@ -414,6 +438,11 @@ def test_monitor_snapshot_roundtrip(tmp_path, monkeypatch):
     assert loaded is not None
     assert loaded == payload
     assert not list(snapshot_dir.glob(".trade_review_2026-04-06.json.*.tmp"))
+    manifest = service.save_monitor_snapshot_manifest(
+        "2026-04-06", profile="full", snapshots={"trade_review": str(path)},
+    )
+    assert manifest.parent == manifest_dir
+    assert json.loads(manifest.read_text())["snapshot_paths"] == {"trade_review": str(path)}
 
 
 @pytest.mark.parametrize('transactional', [False, True])
@@ -437,7 +466,8 @@ def test_snapshot_date_header_survives_sorted_payload_roundtrip(tmp_path, monkey
     assert next(iter(payload)) == 'a_large'
 
 
-def test_postclose_trade_review_completed_projection_is_sealed_and_consumed(tmp_path, monkeypatch):
+@pytest.mark.parametrize("database_only", [False, True])
+def test_postclose_trade_review_completed_projection_is_sealed_and_consumed(tmp_path, monkeypatch, database_only):
     from src.engine import holding_exit_observation_report as holding
     from src.engine.sniper_trade_review_report import completed_census_manifest
 
@@ -457,6 +487,18 @@ def test_postclose_trade_review_completed_projection_is_sealed_and_consumed(tmp_
         "sections": {"completed_trade_projection": [],
                      "open_scalp_position_projection": []},
     }
+    if database_only:
+        witness = "a" * 64
+        payload["meta"]["database_completed_sources"] = [dict(
+            id=49362, status="COMPLETED", sell_time=day + " 09:44:00", source_row_sha256=witness)]
+        payload["sections"]["completed_trade_projection"] = [dict(
+            id=49362, status="COMPLETED", completion_observed_date=day, profit_rate=None,
+            database_completion_source_sha256=witness,
+            completion_source_status="database_completed_native_terminal_unobserved",
+            strict_completion_status="excluded",
+            strict_completion_reasons=["source_gap_native_sell_completed_event_missing"])]
+        payload["metrics"].update(canonical_completed_trades=1,
+            native_sell_completed_trade_count=0, database_only_completed_trade_count=1)
     payload["meta"]["completed_census_manifest"] = completed_census_manifest(payload)
     path = service.save_monitor_snapshot("trade_review", day, payload)
     monkeypatch.setattr(holding, "_monitor_snapshot_path",
@@ -464,10 +506,27 @@ def test_postclose_trade_review_completed_projection_is_sealed_and_consumed(tmp_
     snapshots, sources = holding._load_saved_snapshots("trade_review", [day])
     assert len(snapshots) == 1
     assert snapshots[0]["schema"] == "trade_review_completed_projection_sidecar_v1"
+    collected, gaps = holding._collect_completed_trade_rows(snapshots, data_root=tmp_path)
+    assert len(collected) == int(database_only)
+    assert gaps == ([{"date": day, "reason": "completion_day_terminal_receipt_missing"}]
+                    if database_only else [])
     assert sources == [str(path.with_suffix(".completed_projection.json"))]
     sidecar = path.with_suffix(".completed_projection.json")
+    observed = {p: (p.read_bytes(), p.stat().st_ino, p.stat().st_mtime_ns, p.stat().st_ctime_ns)
+                for p in (path, sidecar)}
+    for mutation in ("ids", "census_missing", "open_missing", "wrong_date"):
+        invalid = json.loads(json.dumps(payload))
+        if mutation == "ids": invalid["meta"]["sell_completed_event_ids"] = [49363]
+        elif mutation == "census_missing": invalid["meta"].pop("completed_census_manifest")
+        elif mutation == "open_missing": invalid["sections"].pop("open_scalp_position_projection")
+        else: invalid["date"] = "2026-10-01"
+        with pytest.raises(ValueError, match="trade_review_(completed_projection_invalid|open_position_projection_missing)"):
+            service.save_monitor_snapshot("trade_review", day, invalid)
+        for source, before in observed.items():
+            assert (source.read_bytes(), source.stat().st_ino,
+                    source.stat().st_mtime_ns, source.stat().st_ctime_ns) == before
     altered = json.loads(sidecar.read_text())
-    altered["metrics"]["canonical_completed_trades"] = 1
+    altered["metrics"]["canonical_completed_trades"] += 1
     sidecar.write_text(json.dumps(altered))
     assert holding._verified_trade_review_projection(path, day) is None
 
@@ -553,7 +612,8 @@ def test_completed_census_seals_actual_saved_profile(tmp_path, monkeypatch):
         "meta": {"sell_completed_event_ids": [],
                  "trailing_event_source_receipts": []},
         "metrics": {"canonical_completed_trades": 0},
-        "sections": {"completed_trade_projection": []},
+        "sections": {"completed_trade_projection": [],
+                     "open_scalp_position_projection": []},
     }
     payload["meta"]["completed_census_manifest"] = completed_census_manifest(payload)
     prior_run = payload["meta"]["completed_census_manifest"]["run_id"]
@@ -854,7 +914,6 @@ def test_completion_artifact_readers_keep_complete_generation_during_partial_wri
 
 def test_archive_and_replay_daily_log_slice(tmp_path, monkeypatch):
     archive_dir = tmp_path / "log_archive"
-    archive_dir.mkdir(parents=True, exist_ok=True)
     monkeypatch.setattr(service, "LOG_ARCHIVE_DIR", archive_dir)
 
     logs_dir = tmp_path / "logs"
@@ -903,15 +962,24 @@ def test_save_monitor_snapshots_for_date_includes_expected_snapshot_sources(
     monkeypatch.setattr(service, "MONITOR_SNAPSHOT_DIR", snapshot_dir)
     monkeypatch.setattr(service, "MONITOR_SNAPSHOT_MANIFEST_DIR", manifest_dir)
 
+    from src.engine.sniper_trade_review_report import (
+        completed_census_manifest, verify_completed_census_manifest,
+    )
+
+    def empty_trade_review(**kwargs):
+        body = {"date": kwargs["target_date"],
+                "meta": {"sell_completed_event_ids": []},
+                "metrics": {"canonical_completed_trades": 0},
+                "sections": {"completed_trade_projection": [],
+                             "open_scalp_position_projection": []}}
+        body["meta"]["completed_census_manifest"] = completed_census_manifest(body)
+        return body
+
     monkeypatch.setitem(
-        sys.modules,
-        "src.engine.sniper_trade_review_report",
-        types.SimpleNamespace(
-            build_trade_review_report=lambda **kwargs: {
-                "date": kwargs["target_date"],
-                "meta": {},
-            }
-        ),
+        sys.modules, "src.engine.sniper_trade_review_report",
+        types.SimpleNamespace(build_trade_review_report=empty_trade_review,
+                              completed_census_manifest=completed_census_manifest,
+                              verify_completed_census_manifest=verify_completed_census_manifest),
     )
     monkeypatch.setitem(
         sys.modules,
@@ -1066,3 +1134,100 @@ def test_cost_only_revision_invalidates_sidecar_and_manifest_without_pipeline_ch
     assert service.verified_postclose_exit_snapshot_manifest(day, data_root=tmp_path) == manifest
     cost_path.write_text('{"revision":2}')
     assert service.verified_postclose_exit_snapshot_manifest(day, data_root=tmp_path) is None
+
+
+@pytest.mark.parametrize('mutation', ['missing', 'changed_current_code', 'changed_recorded_code'])
+def test_prefix_reuse_requires_original_current_producer_generation(tmp_path, monkeypatch, mutation):
+    from src.engine.lifecycle.broker_cost_reconciliation import digest
+    day, _, _, _ = _postclose_phase_fixture(tmp_path, monkeypatch)
+    result = service.save_monitor_snapshots_for_date_with_profile(
+        day, profile='postclose_exit', postclose_phase='completion_prefix')
+    path = Path(result['snapshot_manifest'])
+    assert service.verified_postclose_exit_prefix_manifest(day, data_root=tmp_path) == path
+    before = path.read_bytes()
+    if mutation == 'changed_current_code':
+        code = dict(service._postclose_prefix_producer_code_generation())
+        code['sniper_trade_review_report.py'] = 'f' * 64
+        monkeypatch.setattr(service, '_postclose_prefix_producer_code_generation', lambda: code)
+    else:
+        body = json.loads(before)
+        if mutation == 'missing': body.pop('producer_code_generation')
+        else: body['producer_code_generation']['sniper_trade_review_report.py'] = 'f' * 64
+        body['artifact_sha256'] = digest({k:v for k,v in body.items() if k != 'artifact_sha256'})
+        path.write_text(json.dumps(body))
+    assert service.verified_postclose_exit_prefix_manifest(day, data_root=tmp_path) is None
+    if mutation == 'changed_current_code': assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize('compressed', [False, True])
+def test_snapshot_selected_sections_preserve_recent_rows_without_census(tmp_path, monkeypatch, compressed):
+    import gzip
+    import json
+    from src.engine import log_archive_service as owner
+    monkeypatch.setattr(owner, 'MONITOR_SNAPSHOT_DIR', tmp_path)
+    path = tmp_path / 'trade_review_2026-10-19.json'
+    original = {'sections': {'recent_trades': [{'id': 'a', 'profit_rate': None}], 'completed_trade_projection': [{'id': i} for i in range(3000)]}, 'meta': {'warnings': ['source_gap']}}
+    raw = json.dumps(original).encode()
+    if compressed:
+        path.with_suffix('.json.gz').write_bytes(gzip.compress(raw))
+    else:
+        path.write_bytes(raw)
+    result = owner.load_monitor_snapshot('trade_review', '2026-10-19', section_names=('recent_trades',))
+    assert result == {'sections': {'recent_trades': original['sections']['recent_trades']}, 'meta': original['meta']}
+
+
+def test_log_tail_is_bounded_and_matches_original_lines(tmp_path, monkeypatch):
+    from src.engine.log_archive_service import tail_log_lines
+    path = tmp_path / 'cron.log'
+    raw = ('prefix padding ' * 30000 + '\n' + '\n'.join(f'line {i} 한글' for i in range(6000))).encode()
+    path.write_bytes(raw)
+    assert tail_log_lines(path) == raw.decode().splitlines()[-5000:]
+    monkeypatch.setattr(Path, 'read_text', lambda *a, **k: pytest.fail('whole file read_text'))
+    assert tail_log_lines(path, 2) == ['line 5998 한글', 'line 5999 한글']
+
+
+def test_date_log_filter_keeps_late_rotation_and_archive_fallback(tmp_path, monkeypatch):
+    from src.engine import log_archive_service as owner
+    import gzip
+    monkeypatch.setattr(owner, 'LOG_ARCHIVE_DIR', tmp_path / 'archive')
+    log = tmp_path / 'live.log'
+    log.write_text('[2026-10-18 09:00] OLD\n[2026-10-19 09:00] NEW\n')
+    rotated = tmp_path / 'live.log.1'
+    rotated.write_text('[2026-10-19 08:00] LATE\n')
+    archive = owner.archived_log_path(log, '2026-10-19')
+    archive.parent.mkdir(parents=True)
+    archive.write_bytes(gzip.compress(b'[2026-10-19 07:00] ARCHIVED\n'))
+    assert owner.iter_target_log_lines([log], target_date='2026-10-19') == ['[2026-10-19 09:00] NEW', '[2026-10-19 08:00] LATE']
+    log.unlink();rotated.unlink()
+    assert owner.iter_target_log_lines([log], target_date='2026-10-19') == ['[2026-10-19 07:00] ARCHIVED']
+
+
+def test_date_log_reuse_is_bound_to_generation_and_keeps_late_rows(tmp_path, monkeypatch):
+    from src.engine import log_archive_service as owner
+    from src.engine.infrastructure.validation_digest_session import postclose_session
+    path = tmp_path / 'events.log'
+    path.write_text('[2026-10-18 10:00] OLD\n[2026-10-19 10:00] A\n[2026-10-19 10:01] B\n')
+    import builtins
+    native = builtins.open
+    opened = []
+    def counted(candidate, *args, **kwargs):
+        opened.append(candidate)
+        return native(candidate, *args, **kwargs)
+    monkeypatch.setattr(owner, 'open', counted, raising=False)
+    with postclose_session(tmp_path, '2026-10-19'):
+        assert owner._read_matching_lines(path, target_date='2026-10-19', marker='A') == ['[2026-10-19 10:00] A']
+        assert owner._read_matching_lines(path, target_date='2026-10-19', marker='B') == ['[2026-10-19 10:01] B']
+        assert len(opened) == 1
+        with path.open('a') as handle:handle.write('[2026-10-19 10:02] A late\n')
+        assert len(owner._read_matching_lines(path, target_date='2026-10-19', marker='A')) == 2
+        assert len(opened) == 2
+
+
+def test_dated_log_cache_does_not_retain_large_unselected_population(tmp_path):
+    from src.engine import log_archive_service as owner
+    from src.engine.infrastructure.validation_digest_session import postclose_session
+    path = tmp_path / 'events.log'
+    path.write_text(('[2026-10-19 09:00] OTHER ' + 'x' * 1000 + '\n') * 1100 + '[2026-10-19 09:01] SELECTED\n')
+    with postclose_session(tmp_path, '2026-10-19') as session:
+        assert owner._read_matching_lines(path, target_date='2026-10-19', marker='SELECTED') == ['[2026-10-19 09:01] SELECTED']
+        assert not session.semantic_objects

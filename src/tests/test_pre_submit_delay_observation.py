@@ -6,11 +6,94 @@ from src.engine.scalping import pre_submit_delay_observation as observer
 
 @pytest.fixture(autouse=True)
 def reset():
+    observer._CLOSING = False
+    observer._CLOSED_AT = None
     observer._ACTIVE.clear(); observer._HEAPS.clear(); observer._EXPIRIES.clear(); observer._RECENT.clear()
     observer._COUNTERS.clear(); observer.configure_sink(None)
     yield
     observer._ACTIVE.clear(); observer._HEAPS.clear(); observer._EXPIRIES.clear(); observer._RECENT.clear()
     observer.configure_sink(None)
+    observer._CLOSING = False
+    observer._CLOSED_AT = None
+
+
+def test_shutdown_seals_admission_and_preserves_actual_censor_clock(monkeypatch):
+    emitted = []
+    observer.configure_sink(lambda callback, *args, **kw:
+        emitted.append((args[3], kw)) or {'status': 'queued'})
+    assert observer.register('123456', state('first'))
+    assert observer.register('123456', state('second'))
+    monkeypatch.setattr(observer.time, 'time', lambda: 61.25)
+    assert observer.shutdown() is True
+    assert not observer.register('123456', state('after-shutdown'))
+    assert observer.health()['active'] == 0
+    assert len(emitted) == 2
+    for stage, envelope in emitted:
+        fields = envelope['fields']
+        assert stage == 'pre_submit_delay_intent_terminal'
+        assert envelope['observed_at_epoch'] == fields['terminal_finished_at_epoch'] == 61.25
+        assert fields['observation_only'] is True and fields['broker_order_forbidden'] is True
+        assert fields['actual_order_submitted'] is False
+    assert observer.shutdown() is True
+    assert len(emitted) == 2
+
+
+@pytest.mark.parametrize('failure', ['sampler', 'queue'])
+def test_shutdown_failure_cannot_claim_censor_publication(monkeypatch, failure):
+    emitted = []
+    observer.configure_sink(lambda callback, *a, **kw:
+        emitted.append(kw) or {'status': 'unavailable'})
+    assert observer.register('123456', state('exact'))
+    if failure == 'sampler':
+        monkeypatch.setattr(observer, 'stop_sampler', lambda: False)
+    assert observer.shutdown() is False
+    assert not observer.register('123456', state('late'))
+    if failure == 'sampler':
+        assert emitted == [] and observer.health()['active'] == 1
+    else:
+        assert len(emitted) == 1 and observer.health()['queue_rejected'] == 1
+        assert observer.shutdown() is False
+
+
+def test_shutdown_serializes_commit_and_refuses_sampler_or_sink_reopening(monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    import threading
+    entered, release, closing = threading.Event(), threading.Event(), threading.Event()
+    stages = []
+    def sink(callback, *args, **kwargs):
+        stages.append(args[3])
+        if args[3] == 'pre_submit_delay_committed':
+            entered.set()
+            assert release.wait(2)
+        return {'status': 'queued'}
+    observer.configure_sink(sink)
+    def close():
+        closing.set()
+        return observer.shutdown()
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        registration = executor.submit(observer.register, '123456', state('exact'), commit={'id': 'exact'})
+        assert entered.wait(2)
+        shutdown = executor.submit(close)
+        assert closing.wait(2)
+        release.set()
+        assert registration.result(2) and shutdown.result(2)
+    assert stages == ['pre_submit_delay_committed', 'pre_submit_delay_intent_terminal']
+    assert observer.configure_sink(sink) is False
+    assert observer.configure_sampler(lambda code: {}, lambda *a, **kw: None) is False
+    assert observer.take_due('123456', 1000) == []
+
+
+def test_failed_sampler_retry_retains_first_actual_shutdown_clock(monkeypatch):
+    emitted = []
+    observer.configure_sink(lambda callback, *args, **kw: emitted.append(kw) or {'status': 'queued'})
+    assert observer.register('123456', state('exact'))
+    monkeypatch.setattr(observer.time, 'time', lambda: 61.)
+    monkeypatch.setattr(observer, 'stop_sampler', lambda: False)
+    assert observer.shutdown() is False
+    monkeypatch.setattr(observer.time, 'time', lambda: 200.)
+    monkeypatch.setattr(observer, 'stop_sampler', lambda: True)
+    assert observer.shutdown() is True
+    assert emitted[0]['observed_at_epoch'] == 61.
 
 
 def state(identity, stamp=10):
@@ -39,6 +122,63 @@ def test_silent_symbol_expires_without_tick_or_new_worker():
     assert observer.health()['active'] == 0
     assert observer.health()['expired_without_quote'] == 5
     assert observer.health()['writer_not_prepared'] == 1
+
+
+def test_source_sampler_observes_short_horizons_without_a_main_target_visit(monkeypatch):
+    from src.engine import sniper_state_handlers as handlers
+    clock = [10.]
+    emitted = []
+    monkeypatch.setattr(observer.time, 'time', lambda: clock[0])
+    monkeypatch.setattr(handlers, '_log_pre_submit_delay_event',
+        lambda *a, **kw: emitted.append(kw) or True)
+    depth = dict(item='123456_AL', market_route='KRX_NXT_INTEGRATED',
+        transport_epoch=1, orderbook={'asks':[{'price':100,'volume':10}],
+                                    'bids':[{'price':99,'volume':10}]})
+    def read(code):
+        assert code == '123456'
+        return dict(market_data_transport_epoch=1,
+            realtime_type_snapshots_by_route={'integrated': {'0D':
+                dict(depth, observed_epoch=clock[0]-.01)}})
+    value = state('short')
+    value.update(remaining_sec=[0, 1, 3, 5],
+                 observation_grid_version=observer.OBSERVATION_GRID_VERSION)
+    observer.register('123456', value)
+    for when in (10.02, 11.02, 13.02, 15.02):
+        clock[0] = when
+        assert observer.sample_due(read, handlers.observe_pre_submit_delay_quote) == 1
+    assert [v['target_delay_sec'] for v in emitted] == [0,1,3,5]
+    assert all(v['quote_valid'] for v in emitted)
+    assert observer.health()['active'] == 0
+
+
+def test_sampler_never_backdates_a_slow_or_stale_snapshot(monkeypatch):
+    from src.engine import sniper_state_handlers as handlers
+    clock = [11.]
+    emitted = []
+    monkeypatch.setattr(observer.time, 'time', lambda: clock[0])
+    monkeypatch.setattr(handlers, '_log_pre_submit_delay_event',
+        lambda *a, **kw: emitted.append(kw) or True)
+    value = state('late')
+    value.update(remaining_sec=[1], observation_grid_version=observer.OBSERVATION_GRID_VERSION)
+    observer.register('123456', value)
+    def read(code):
+        clock[0] = 11.8
+        return {}
+    observer.sample_due(read, handlers.observe_pre_submit_delay_quote)
+    assert emitted[0]['quote_valid'] is False
+    assert emitted[0]['quote_source_reason'] == 'horizon_late_or_early'
+    assert emitted[0]['quote_observed_at_epoch'] == 11.8
+
+
+def test_sampling_cannot_escape_before_its_commit_is_admitted(monkeypatch):
+    seen = []
+    def sink(*a, **k):
+        seen.extend(observer.take_due('123456', 10))
+        return {'status':'queued'}
+    observer.configure_sink(sink)
+    assert observer.register('123456', state('exact'), commit={'id':'exact'})
+    assert not seen
+    assert len(observer.take_due('123456', 10)) == 1
 
 
 def test_same_symbol_due_intents_share_exact_depth_without_sharing_identity(monkeypatch):
@@ -380,3 +520,127 @@ def test_submit_terminal_preserves_actual_recheck_and_submit_ids(monkeypatch):
     assert emitted[0]['resolved_machine_attempt_id'] == 'new'
     assert not emitted[0]['actual_order_submitted']
     assert emitted[0]['terminal_reason'] == 'submit_call_returned_false'
+
+
+def test_pending_horizons_retain_source_even_while_sampler_holds_due_state():
+    assert observer.register('053800', state('incident', stamp=10))
+    due = observer.take_due('053800', 40)
+    assert not observer._HEAPS
+    assert observer.should_retain_ws_subscription('053800', now_ts=40)
+    assert not observer.should_retain_ws_subscription('other', now_ts=40)
+    for row in due:
+        row['remaining_sec'].clear()
+        observer.advance('053800', row)
+    assert not observer.should_retain_ws_subscription('053800', now_ts=40)
+
+
+def test_retention_is_per_intent_bounded_and_shutdown_never_waits_for_horizons():
+    assert observer.register('053800', state('first', stamp=10))
+    assert observer.register('053800', state('second', stamp=20))
+    assert observer.should_retain_ws_subscription('053800', now_ts=192.9)
+    observer.discard('053800', 'first', reason='test_censored')
+    assert observer.should_retain_ws_subscription('053800', now_ts=202.9)
+    assert not observer.should_retain_ws_subscription('053800', now_ts=203)
+    assert not observer.should_retain_ws_subscription('053800', now_ts=19)
+    observer.configure_sink(lambda *a, **kw: {'status':'queued'})
+    assert observer.shutdown()
+    assert not observer.should_retain_ws_subscription('053800', now_ts=40)
+
+
+def test_watch_expiry_retains_ws_cache_until_all_follow_up_quotes(monkeypatch):
+    from src.engine import kiwoom_sniper_v2 as main, kiwoom_websocket as ws
+    from src.engine import sniper_state_handlers as handlers
+    import asyncio
+    import json
+    from concurrent.futures import Future
+    packets = []
+    async def send(payload):
+        packets.append(json.loads(payload))
+    def schedule(coroutine, loop):
+        result = Future()
+        result.set_result(asyncio.run(coroutine))
+        return result
+    monkeypatch.setattr(ws.asyncio, 'run_coroutine_threadsafe', schedule)
+    clock = [10.]
+    monkeypatch.setattr(observer.time, 'time', lambda: clock[0])
+    manager = ws.KiwoomWSManager('test-token')
+    manager._market_data_transport_epoch = 7
+    manager.websocket = SimpleNamespace(send=send)
+    manager.loop = SimpleNamespace(is_running=lambda: True)
+    manager._session_ready.set()
+    manager.subscribed_codes = {'053800', '000001'}
+    manager._registered_items_by_code = {'053800': ('053800_NX',), '000001': ('000001_AL',)}
+    manager.realtime_data['000001'] = {}
+    monkeypatch.setattr(main, 'WS_MANAGER', manager)
+    monkeypatch.setattr(main, 'should_retain_ws_subscription', lambda *a, **kw: False)
+    monkeypatch.setattr(main, '_is_scanner_promotion_pending_attach', lambda *a, **kw: False)
+    monkeypatch.setattr(handlers, 'should_retain_rising_missed_nxt_post_block_subscription', lambda *a, **kw: False)
+    commands, quotes = [], []
+    def publish(topic, payload):
+        assert topic == 'COMMAND_WS_UNREG'
+        commands.extend(payload['codes'])
+        manager._handle_unreg_event(payload)
+    monkeypatch.setattr(main, 'event_bus', SimpleNamespace(publish=publish))
+    monkeypatch.setattr(handlers, '_log_pre_submit_delay_event', lambda *a, **kw: quotes.append(kw) or True)
+    value = state('incident')
+    value.update(route='NXT_ONLY', quote_transport_epoch=7, remaining_sec=[30,60,120,180])
+    assert observer.register('053800', value)
+    # A watch/order terminal is independent of the outstanding source lease.
+    for horizon in (30,60,120,180):
+        clock[0] = 10. + horizon + .02
+        manager.realtime_data['053800'] = {'realtime_type_snapshots_by_route': {'nxt': {'0D': {
+            'item':'053800_NX', 'market_route':'NXT_ONLY', 'transport_epoch':7,
+            'observed_epoch':clock[0]-.01, 'orderbook':{
+                'asks':[{'price':91900,'volume':10}], 'bids':[{'price':91800,'volume':10}]}}}}}
+        main._prune_ws_subscriptions_for_inactive_targets([{'code':'053800','status':'EXPIRED'}])
+        # Even an independently generated unregistration command is checked.
+        manager._handle_unreg_event({'codes':['053800']})
+        assert manager.get_pre_submit_delay_depth('053800')['realtime_type_snapshots_by_route']
+        assert observer.sample_due(manager.get_pre_submit_delay_depth, handlers.observe_pre_submit_delay_quote) == 1
+    assert [q['target_delay_sec'] for q in quotes] == [30,60,120,180]
+    assert all(q['quote_valid'] for q in quotes)
+    assert commands == ['000001']
+    assert len(packets) == 1 and packets[0]['trnm'] == 'REMOVE'
+    assert all(row['item'] == ['000001_AL'] for row in packets[0]['data'])
+    main._prune_ws_subscriptions_for_inactive_targets([])
+    assert commands == ['000001', '053800']
+    assert '053800' not in manager.realtime_data
+    assert '053800' not in manager.subscribed_codes
+    assert len(packets) == 2 and packets[1]['trnm'] == 'REMOVE'
+    assert all(row['item'] == ['053800_NX'] for row in packets[1]['data'])
+
+
+def test_budget_expiry_preserves_only_pending_observation_source(monkeypatch):
+    from src.engine import kiwoom_sniper_v2 as main
+    commands = []
+    monkeypatch.setattr(observer.time, 'time', lambda: 40.)
+    monkeypatch.setattr(main, 'should_retain_ws_subscription', lambda *a, **kw: False)
+    monkeypatch.setattr(main.sniper_state_handlers, 'should_retain_rising_missed_nxt_post_block_subscription', lambda *a, **kw: False)
+    monkeypatch.setattr(main, 'emit_pipeline_event', lambda *a, **kw: None)
+    monkeypatch.setattr(main, 'event_bus', SimpleNamespace(publish=lambda topic, payload: commands.extend(payload['codes'])))
+    assert observer.register('053800', state('pending'))
+    targets = [dict(code=code, name=code, strategy='SCALPING', status='WATCHING',
+                    position_tag='SCANNER') for code in ('053800','000001')]
+    main._expire_scalping_watch_budget_targets(targets[:], targets, reason='test_reallocation')
+    assert commands == ['000001']
+    assert targets == []  # The source lease does not keep a trading target alive.
+
+
+@pytest.mark.parametrize('mutation', ['transport', 'stale', 'conflict'])
+def test_retained_subscription_does_not_approve_invalid_quote(monkeypatch, mutation):
+    from src.engine import sniper_state_handlers as handlers
+    quotes = []
+    monkeypatch.setattr(handlers, '_log_pre_submit_delay_event', lambda *a, **kw: quotes.append(kw) or True)
+    value = state('invalid'); value['remaining_sec'] = [30]
+    assert observer.register('053800', value)
+    depth = dict(item='053800_AL', market_route='KRX_NXT_INTEGRATED', transport_epoch=1,
+                 observed_epoch=40.01, orderbook={'asks':[{'price':100,'volume':10}],
+                                               'bids':[{'price':99,'volume':10}]})
+    partitions = {'integrated':{'0D':depth}}
+    if mutation == 'transport': depth['transport_epoch'] = 2
+    elif mutation == 'stale': depth['observed_epoch'] = 30.
+    else: partitions['duplicate'] = {'0D':dict(depth)}
+    assert observer.should_retain_ws_subscription('053800', now_ts=40.02)
+    handlers.observe_pre_submit_delay_quote({}, '053800', dict(market_data_transport_epoch=1,
+        realtime_type_snapshots_by_route=partitions), now_ts=40.02)
+    assert len(quotes) == 1 and quotes[0]['quote_valid'] is False

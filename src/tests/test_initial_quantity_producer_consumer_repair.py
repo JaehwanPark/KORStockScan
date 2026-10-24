@@ -16,6 +16,264 @@ from src.tests.test_initial_quantity_policy import _cap_context, _quality, _fact
 from src.tests.test_initial_quantity_timeout import _research_trade_path
 
 
+@pytest.mark.parametrize('compressed', [False, True])
+def test_quantity_features_hash_physical_source_in_one_read(tmp_path, compressed, monkeypatch):
+    import gzip
+    day='2026-10-08'; _quality(tmp_path,day)
+    path=tmp_path/'pipeline_events'/f'pipeline_events_{day}.jsonl'
+    path.parent.mkdir()
+    raw=(json.dumps(dict(record_id=1,stock_code='005930',stage='other',
+                        emitted_at=day+'T09:30:00+09:00',fields={}))+'\n').encode()
+    if compressed:
+        path=Path(str(path)+'.gz'); path.write_bytes(gzip.compress(raw))
+    else:path.write_bytes(raw)
+    rows,_=policy.completed_trade_fact_census(day,data_dir=tmp_path,
+        fact_rows=[actual_fact()],entry_on_or_after='2026-09-29')
+    monkeypatch.setattr(policy,'_file_sha256',lambda *a: pytest.fail('second full raw hash'))
+    receipts={};proofs={}
+    policy._join_post_fill_paths_uncached(rows,data_dir=tmp_path,source_receipts=receipts,
+                                         source_byte_proofs=proofs)
+    assert receipts[day]['sha256']==hashlib.sha256(path.read_bytes()).hexdigest()
+    assert proofs[day]['generation']['sha256']==receipts[day]['sha256']
+
+
+@pytest.mark.parametrize('damage',[None,'hash','size','physical'])
+def test_full_quantity_generation_accepts_verified_logical_pipeline_archive(tmp_path,monkeypatch,damage):
+    import gzip
+    from src.engine.automation import main_trailing_source_store as S
+    from src.engine.compress_db_backfilled_files import native_raw_archive_receipt
+    monkeypatch.setattr(policy,'DATA_DIR',tmp_path)
+    path=tmp_path/'pipeline_events/pipeline_events_2026-10-08.jsonl';path.parent.mkdir()
+    raw=b'{}\n';path.write_bytes(raw)
+    while not S.build_step(tmp_path,path)['complete']:pass
+    native=S.generation(tmp_path,path);before=path.stat()
+    identity=lambda s:dict(device=s.st_dev,inode=s.st_ino,size=s.st_size,mtime_ns=s.st_mtime_ns,ctime_ns=s.st_ctime_ns)
+    archive=Path(str(path)+'.gz');archive.write_bytes(gzip.compress(raw))
+    receipt=native_raw_archive_receipt(path,logical_sha256=hashlib.sha256(raw).hexdigest(),logical_size=len(raw),source_identity=identity(before),archive_identity=identity(archive.stat()),indexed=native)
+    Path(str(archive)+'.archive_receipt.json').write_text(json.dumps(receipt));path.unlink()
+    gen=dict(path=str(path),sha256=hashlib.sha256(raw).hexdigest(),size_bytes=len(raw),archive_identity_valid=None)
+    if damage=='hash':gen['sha256']='0'*64
+    elif damage=='size':gen['size_bytes']+=1
+    elif damage=='physical':archive.write_bytes(gzip.compress(raw+b'{}\n'))
+    report=dict(census={},pipeline_source_receipts={'2026-10-08':gen})
+    if damage:
+        with pytest.raises((ValueError,S.InputPending)):policy.verify_refresh_source_generations(report)
+    else:policy.verify_refresh_source_generations(report)
+
+
+def test_large_indexed_quantity_fingerprint_never_rehashes_raw(tmp_path, monkeypatch):
+    from src.engine.scalping import initial_quantity_source_cache as C
+    from src.engine.automation import main_trailing_source_store as S
+    day='2026-10-08';_quality(tmp_path,day)
+    path=tmp_path/'pipeline_events'/f'pipeline_events_{day}.jsonl'
+    path.parent.mkdir();line=(json.dumps(dict(record_id=2,fields=dict(padding='x'*1024)))+'\n').encode()
+    path.write_bytes(line*4200)
+    while not S.build_step(tmp_path,path)['complete']:pass
+    rows,_=policy.completed_trade_fact_census(day,data_dir=tmp_path,fact_rows=[actual_fact()],entry_on_or_after='2026-09-29')
+    monkeypatch.setattr(C,'byte_generation',lambda *a:pytest.fail('full raw fingerprint'))
+    before=C.fingerprint(rows,path,600)
+    assert before['source']['schema']==S.SCHEMA+':generation'
+    path.write_bytes(path.read_bytes()+line)
+    with pytest.raises(S.InputPending):C.fingerprint(rows,path,600)
+
+
+@pytest.mark.parametrize('virtual_identity', [False, True])
+def test_indexed_quantity_byte_proof_keeps_warm_cache_key_stable(tmp_path, monkeypatch, virtual_identity):
+    from src.engine.scalping import initial_quantity_source_cache as C
+    from src.engine.automation import main_trailing_source_store as S
+    from src.engine.infrastructure.validation_digest_session import postclose_session
+    from src.engine.lifecycle import research_json_stream as stream
+    day='2026-10-08';_quality(tmp_path,day)
+    path=tmp_path/'pipeline_events'/f'pipeline_events_{day}.jsonl';path.parent.mkdir()
+    line=(json.dumps(dict(record_id=2,fields=dict(padding='x'*1024)))+'\n').encode()
+    path.write_bytes(line*4200)
+    while not S.build_step(tmp_path,path)['complete']:pass
+    if virtual_identity:
+        # Native gzip enrollment may retain the original plain identity in
+        # its logical generation. Digest admission owns current physical bytes.
+        original=S.generation
+        def retained_plain(*args):
+            value=original(*args)
+            return {**value,'source_stat':[1,2,value['size']*2,3,4]}
+        monkeypatch.setattr(S,'generation',retained_plain)
+    rows,_=policy.completed_trade_fact_census(day,data_dir=tmp_path,fact_rows=[actual_fact()],entry_on_or_after='2026-09-29')
+    with postclose_session(tmp_path,day) as session:
+        session.native_read_budget=dict(remaining=0)
+        first=C.join(rows,data_dir=tmp_path)
+        expected=hashlib.sha256(path.read_bytes()).hexdigest()
+        monkeypatch.setattr(stream,'hashed_text_source',lambda *a:pytest.fail('warm raw reread'))
+        assert C.join(rows,data_dir=tmp_path)==first
+        assert session.digest(path)==expected
+
+
+@pytest.mark.parametrize('population', ['source_quality_by_entry_date', 'source_quality_by_exit_date'])
+def test_refresh_refuses_preflight_replaced_by_final_quality(tmp_path, population):
+    source = tmp_path / 'quality.json'
+    source.write_text(json.dumps(dict(status='warning', tuning_input_allowed=True, phase='preflight')))
+    binding = dict(artifact=str(source), sha256=hashlib.sha256(source.read_bytes()).hexdigest())
+    report = dict(census={population: {'2026-10-19': binding}})
+    policy.verify_refresh_source_generations(report)
+    source.write_text(json.dumps(dict(status='warning', tuning_input_allowed=True, phase='final')))
+    with pytest.raises(ValueError, match='quantity_source_quality_generation_changed'):
+        policy.verify_refresh_source_generations(report)
+    binding['sha256'] = hashlib.sha256(source.read_bytes()).hexdigest()
+    policy.verify_refresh_source_generations(report)
+
+
+@pytest.mark.parametrize('late_identity', [False, True])
+@pytest.mark.parametrize('padding', ['x' * 150000, '\uac00' * 30000])
+def test_oversized_unrelated_pipeline_row_preserves_next_record(late_identity, padding):
+    import io
+    fields = {'record_id': None, 'fields': {'payload': padding}}
+    if late_identity:
+        fields = dict(reversed(list(fields.items())))
+    relevant = json.dumps({'record_id': 7, 'fields': {}}) + '\n'
+    source = relevant + json.dumps(fields, ensure_ascii=False) + '\n' + relevant
+    receipt = {}
+    assert list(policy._quantity_pipeline_rows(io.StringIO(source), {'7': []}, receipt)) == [(relevant, None), (relevant, None)]
+    assert receipt == {'oversized_out_of_cohort_records': 1}
+
+
+@pytest.mark.parametrize('identity', ['', '"record_id":null,"record_id":8,'])
+def test_oversized_unidentified_pipeline_row_stays_blocked(identity):
+    import io
+    source = '{' + identity + '"fields":{"payload":"' + 'x' * 150000 + '"}}\n'
+    with pytest.raises(ValueError):
+        list(policy._quantity_pipeline_rows(io.StringIO(source), {'7': []}, {}))
+
+
+def test_oversized_relevant_row_marks_only_identified_trade_unusable(tmp_path):
+    day = '2026-10-08'
+    _quality(tmp_path, day)
+    pipeline = tmp_path/'pipeline_events'; pipeline.mkdir()
+    oversized = json.dumps(dict(record_id=1, fields=dict(payload='x'*150000)))
+    (pipeline/f'pipeline_events_{day}.jsonl').write_text(oversized+'\n{}\n')
+    rows, _ = policy.completed_trade_fact_census(day, data_dir=tmp_path,
+        fact_rows=[actual_fact(1), actual_fact(2)], entry_on_or_after='2026-09-29')
+    receipts = {}
+    paths = policy._join_post_fill_paths_uncached(rows, data_dir=tmp_path, source_receipts=receipts)
+    for row in rows:
+        path = paths[row['trade_id']]
+        assert path['source_gap'] == (['pipeline_record_partition_required'] if row['record_id']=='1' else [])
+        if row['record_id']=='1':
+            assert policy._paired_candidate(row, path, 'two_leg_0_1tick')['status']=='path_source_gap'
+            assert policy._paired_candidate(row, path, 'parent')['status']=='paired'
+    assert receipts[day]['oversized_in_cohort_record_ids']==['1']
+
+
+@pytest.mark.parametrize('late_identity', [False, True])
+@pytest.mark.parametrize('padding', ['x' * 150000, '\uac00' * 50000])
+def test_large_native_quantity_row_preserves_policy_fields(late_identity, padding):
+    import io
+    fields = dict(entry_execution_sizing_valid=True,
+                  entry_submit_attempt_id='attempt', entry_execution_sizing_plan_sha256='a'*64,
+                  position_sizing_policy_status='initial_policy_v2_loaded',
+                  position_sizing_policy_sha256='b'*64, initial_quantity_runtime_pid='123',
+                  initial_quantity_cap_research_context=json.dumps(_cap_context()),
+                  unused_context=padding)
+    fields.update({f'unused_{n}': n for n in range(300)})
+    row = dict(record_id=7, stock_code='005930', stage='entry_execution_sizing_plan',
+               emitted_at='2026-10-16T09:00:00+09:00', fields=fields)
+    if late_identity:
+        row = dict(reversed(list(row.items())))
+    receipt = {}
+    parsed = [json.loads(value) for value, _ in policy._quantity_pipeline_rows(
+        io.StringIO(json.dumps(row, ensure_ascii=False)+'\n'), {'7': []}, receipt)]
+    assert len(parsed)==1 and parsed[0]['record_id']==7
+    assert parsed[0]['fields']=={k:v for k,v in fields.items() if k in policy._QUANTITY_PIPELINE_FIELDS}
+    assert receipt==dict(oversized_projected_rows=1, oversized_projection_contract='quantity_execution_fields_v1')
+
+
+def test_large_quantity_decision_keeps_exact_sent_fill_policy_join(tmp_path):
+    day='2026-10-08'
+    _quality(tmp_path,day)
+    pipeline=tmp_path/'pipeline_events';pipeline.mkdir()
+    path=pipeline/f'pipeline_events_{day}.jsonl'
+    def event(stage, clock, **fields):
+        return dict(record_id=1,stock_code='005930',stage=stage,emitted_at=day+'T'+clock+'+09:00',fields=fields)
+    identity=dict(entry_submit_attempt_id='exact-attempt',entry_execution_sizing_plan_sha256='a'*64)
+    events=[event('entry_execution_sizing_plan','09:29:59',**identity,
+                  entry_execution_sizing_valid=True,position_sizing_policy_status='initial_policy_v2_loaded',
+                  position_sizing_policy_sha256='b'*64,initial_quantity_runtime_pid='123'),
+            event('order_leg_sent','09:29:59.500000',**identity,tag='entry_leg',
+                  actual_order_submitted=True,broker_order_no='11'),
+            event('position_rebased_after_fill','09:30:00',entry_mode='normal',
+                  fill_price=100000,fill_qty=1,order_no='11',execution_no='1',actual_execution_venue='KRX',
+                  broker_execution_observed_at=day+'T09:30:00+09:00')]
+    rows,_=policy.completed_trade_fact_census(day,data_dir=tmp_path,fact_rows=[actual_fact()],entry_on_or_after='2026-09-29')
+    path.write_text(''.join(json.dumps(row)+'\n' for row in events))
+    expected=policy._join_post_fill_paths_uncached(rows,data_dir=tmp_path)
+    events[0]['fields']['unused_large_context']='x'*200000
+    path.write_text(''.join(json.dumps(row)+'\n' for row in events))
+    receipts={}
+    actual=policy._join_post_fill_paths_uncached(rows,data_dir=tmp_path,source_receipts=receipts)
+    assert actual==expected
+    joined=policy._paired_candidate(rows[0],actual['fact:1'],'parent')
+    assert joined['applied_policy_file_sha256']=='b'*64
+    assert joined['applied_policy_runtime_pid']=='123'
+    assert joined['policy_decision_stage']=='entry_execution_sizing_plan'
+    assert not actual['fact:1']['source_gap']
+    assert receipts[day]['oversized_projected_rows']==1
+
+
+def test_large_required_quantity_field_remains_an_identified_gap():
+    import io
+    row=dict(record_id=7,stock_code='005930',stage='entry_execution_sizing_plan',
+             emitted_at='2026-10-16T09:00:00+09:00',
+             fields=dict(initial_quantity_cap_research_context='x'*150000))
+    receipt={}
+    assert list(policy._quantity_pipeline_rows(io.StringIO(json.dumps(row)+'\n'),{'7':[]},receipt))==[]
+    assert receipt['oversized_in_cohort_record_ids']==['7']
+
+
+@pytest.mark.parametrize('damage', [None, 'hash', 'nested', 'duplicate', 'truncated', 'nonfinite'])
+def test_native_large_cancel_wait_context_reaches_quantity_order_clock(tmp_path, damage):
+    from src.engine.scalping.entry_cancel_wait_runtime import submission_fields
+    from src.engine.scalping.strategy_owner_components import digest
+    day='2026-10-08'; _quality(tmp_path, day)
+    directory=tmp_path/'pipeline_events';directory.mkdir()
+    frozen=datetime.fromisoformat(day+'T09:29:59+09:00')
+    stock=dict(code='005930',position_tag='SCALP_BASE',entry_mode='normal')
+    seed=dict(plan_sha256='a'*64,operating_contract={str(i).zfill(4): {'source':'x'*130,'value':i} for i in range(759)},
+        mixed=[None,True,-1,1.5,1e-25,'quote\" slash\\ line\n',chr(0x1f600),'x'*8191])
+    fields=submission_fields(stock,dict(tag='entry_leg'),seed=seed,qty=1,price=100000,
+                             route='KRX',timeout_sec=60,now_ts=frozen.timestamp())
+    fields.update(actual_order_submitted=True,broker_order_no='11')
+    context=json.loads(fields['entry_cancel_wait_submission_context'])
+    if damage=='hash':context['sha256']='0'*64
+    if damage=='nested':context['seed']['operating_contract']['0000']['value']=99
+    if damage=='nonfinite':context['seed']['bad']=float('nan')
+    fields['entry_cancel_wait_submission_context']=json.dumps(context,sort_keys=True,separators=(',',':'))
+    if damage=='duplicate':fields['entry_cancel_wait_submission_context']=fields['entry_cancel_wait_submission_context'].replace('"stock_code":','"stock_code":"009999","stock_code":')
+    if damage=='truncated':fields['entry_cancel_wait_submission_context']=fields['entry_cancel_wait_submission_context'][:-1]
+    event=dict(record_id=1,stock_code='005930',stage='entry_cancel_wait_submission',
+               emitted_at=day+'T09:29:59.500000+09:00',fields=fields)
+    path=directory/f'pipeline_events_{day}.jsonl'
+    path.write_text(json.dumps(event)+'\n')
+    rows,_=policy.completed_trade_fact_census(day,data_dir=tmp_path,fact_rows=[actual_fact()],entry_on_or_after='2026-09-29')
+    receipts={}; result=policy._join_post_fill_paths_uncached(rows,data_dir=tmp_path,source_receipts=receipts)['fact:1']
+    if damage:
+        assert result['source_gap']==['pipeline_record_partition_required']
+        assert result['order_starts']==[]
+    else:
+        assert not result['source_gap']
+        assert result['order_starts']==[dict(at=frozen,order_no='11',
+            source='entry_cancel_wait_submission_context_frozen_at',total_wait_sec=60,
+            frozen_context_valid=True,probe_applied=False,
+            emitted_at=datetime.fromisoformat(event['emitted_at']))]
+        assert context['sha256']==digest({k:v for k,v in context.items() if k!='sha256'})
+        assert len(path.read_bytes())>65536
+
+
+def test_streamed_context_validity_cannot_be_supplied_by_a_raw_event(tmp_path):
+    import io
+    row=dict(record_id=7,stock_code='005930',stage='entry_cancel_wait_submission',
+        emitted_at='2026-10-16T09:00:00+09:00',verified_context={'sha256':'claimed'},
+        fields={'entry_cancel_wait_submission_context':'{}','verified_context':True})
+    raw=json.dumps(row)+'\n'
+    assert list(policy._quantity_pipeline_rows(io.StringIO(raw),{'7':[]},{}))==[(raw,None)]
+
+
 def test_native_fact_sync_preserves_null_real_zero_and_provenance(monkeypatch,tmp_path):
     from src.engine import strategy_position_performance_report as mod
     from src.engine.scalping import scale_in_split_order_plan as scale
@@ -63,6 +321,71 @@ def test_actual_cost_census_accepts_broker_cost_not_configured_rate(tmp_path):
     bad={**fact,'completion_census_run_id':None}
     good,census=policy.completed_trade_fact_census('2026-10-08',data_dir=tmp_path,fact_rows=[fact,{**bad,'recommendation_id':2}],entry_on_or_after='2026-09-29')
     assert len(good)==1 and census['excluded']=={'actual_cost_identity_or_amount_invalid':1}
+
+
+@pytest.mark.parametrize('issued_physical', [False, True])
+@pytest.mark.parametrize('damage', [None, 'seal', 'physical', 'logical', 'ctime', 'authority', 'receipt_symlink', 'issued_sha', 'issued_size', 'issued_path', 'issued_cost'])
+def test_native_pipeline_gzip_preserves_issued_quantity_timeout_generation(tmp_path, monkeypatch, damage, issued_physical):
+    import gzip
+    from src.engine.scalping.initial_quantity_timeout_research import build_timeout_research, timeout_research_valid
+    from src.engine.scalping.micro_reversion.economic_reference import content_sha256
+    day='2026-10-08'; _quality(tmp_path,day)
+    monkeypatch.setattr(policy,'DATA_DIR',tmp_path)
+    pipeline=tmp_path/'pipeline_events'/f'pipeline_events_{day}.jsonl'
+    pipeline.parent.mkdir(); original=b'{}\n'; pipeline.write_bytes(original)
+    fact=actual_fact()
+    before=policy.build_initial_quantity_replay(day,data_dir=tmp_path,fact_rows=[fact],entry_on_or_after='2026-09-29')
+    timeout=build_timeout_research(day,data_dir=tmp_path,fact_rows=before['census']['input_fact_rows'],
+                                   entry_on_or_after='2026-09-29',replay=before)
+    assert timeout_research_valid(timeout,replay=before)
+    archived=Path(str(pipeline)+'.gz'); archived.write_bytes(gzip.compress(original)); pipeline.unlink()
+    info=archived.stat()
+    if issued_physical:
+        # An issued legacy report can bind gzip bytes while its successor
+        # reader binds the native archiver's identical logical input.
+        before['pipeline_source_receipts'][day].update(path=str(archived),size_bytes=info.st_size,
+            sha256=hashlib.sha256(archived.read_bytes()).hexdigest(),archive_identity_valid=True)
+        if damage=='issued_sha':before['pipeline_source_receipts'][day]['sha256']='0'*64
+        if damage=='issued_size':before['pipeline_source_receipts'][day]['size_bytes']+=1
+        if damage=='issued_path':before['pipeline_source_receipts'][day]['path']=str(archived.with_name('other.gz'))
+        if damage=='issued_cost':before['census']['cost_rate']+=0.001
+        before['report_content_sha256']=policy._digest({k:v for k,v in before.items() if k!='report_content_sha256'})
+        timeout['pipeline_source_receipts']=copy.deepcopy(before['pipeline_source_receipts'])
+        timeout['joint_replay_content_sha256']=before['report_content_sha256']
+        timeout['report_content_sha256']=policy._digest({k:v for k,v in timeout.items() if k!='report_content_sha256'})
+    receipt=dict(schema='pipeline_raw_archive_identity_v1',logical_path=str(pipeline),
+        logical_content_sha256=hashlib.sha256(original).hexdigest(),logical_size_bytes=len(original),
+        archive_generation=dict(device=info.st_dev,inode=info.st_ino,size_bytes=info.st_size,
+                                mtime_ns=info.st_mtime_ns,ctime_ns=info.st_ctime_ns),
+        verification_contract='logical_sha256_size_crc_to_eof_v1',runtime_effect=False,allowed_runtime_apply=False)
+    if issued_physical:
+        from src.engine.automation.main_trailing_source_store import migrate_frozen_source
+        receipt['artifact_content_sha256']=content_sha256(receipt)
+        Path(str(archived)+'.archive_receipt.json').write_text(json.dumps(receipt))
+        migrate_frozen_source(tmp_path,pipeline)
+        del receipt['artifact_content_sha256']
+    if damage=='logical':receipt['logical_content_sha256']='0'*64
+    if damage=='ctime':receipt['archive_generation']['ctime_ns']+=1
+    if damage=='authority':receipt['allowed_runtime_apply']=True
+    receipt['artifact_content_sha256']=content_sha256(receipt)
+    if damage=='seal':receipt['artifact_content_sha256']='0'*64
+    receipt_path=Path(str(archived)+'.archive_receipt.json');receipt_path.write_text(json.dumps(receipt))
+    if damage=='physical':archived.write_bytes(gzip.compress(original+b'{}\n'))
+    if damage=='receipt_symlink':
+        saved=receipt_path.with_suffix('.saved');receipt_path.rename(saved);receipt_path.symlink_to(saved)
+    if damage=='receipt_symlink':
+        with pytest.raises(ValueError,match='window_dependency_path_invalid'):
+            policy.build_initial_quantity_replay(day,data_dir=tmp_path,fact_rows=before['census']['input_fact_rows'],entry_on_or_after='2026-09-29')
+        assert not timeout_research_valid(timeout,replay=before)
+        return
+    after=policy.build_initial_quantity_replay(day,data_dir=tmp_path,fact_rows=before['census']['input_fact_rows'],entry_on_or_after='2026-09-29')
+    if damage is None or not issued_physical and damage.startswith('issued_'):
+        if not issued_physical:assert after==before
+        assert timeout_research_valid(timeout,replay=before)
+    else:
+        assert after!=before
+        assert not timeout_research_valid(timeout,replay=before)
+    assert gzip.decompress(archived.read_bytes())==(original+b'{}\n' if damage=='physical' else original)
 
 
 def _allocated_quantity_fact(tmp_path, *, record_id=7):
@@ -580,6 +903,78 @@ def test_v2_same_date_successors_and_consumer_pointer(tmp_path):
     with pytest.raises(ValueError,match='quantity_stage_reference_invalid'):policy.committed_refresh_stage_path(base,day)
 
 
+@pytest.mark.parametrize('change', ['none', 'code', 'parent', 'stage', 'reference'])
+def test_prepared_refresh_handoff_preserves_incumbent_and_binds_reader(tmp_path, monkeypatch, change):
+    from src.engine.scalping import initial_quantity_monitor_projection as projection
+    from src.engine.scalping.initial_quantity_timeout_research import build_timeout_research
+    parent, path = parent_fixture(tmp_path)
+    base, day = tmp_path/'refresh', '2026-10-08'
+    stages = []
+    for index, facts in enumerate(([], [{**actual_fact(), 'status': 'HOLDING'}])):
+        report = policy.build_initial_quantity_replay(day, data_dir=tmp_path, fact_rows=facts,
+            entry_on_or_after=policy.refresh_window(parent))
+        timeout = build_timeout_research(day, data_dir=tmp_path, fact_rows=facts,
+            entry_on_or_after=policy.refresh_window(parent), replay=report)
+        kwargs = {} if index == 0 else {'publish_current': False}
+        stages.append(policy.publish_refresh_quantity_evaluation(report, parent_policy=parent,
+            parent_policy_path=path, output_dir=base, timeout_research=timeout,
+            terminal_receipt=policy._natural_refresh_terminal_receipt(report), **kwargs))
+        if index == 0:
+            incumbent_ref = (base/'committed_stage.json').read_bytes()
+            incumbent = policy.committed_refresh_stage_path(base, day)
+            incumbent_raw = incumbent.read_bytes()
+    prepared = policy.committed_refresh_stage_path(base, day)
+    assert prepared != incumbent and json.loads(prepared.read_bytes()) == stages[1]
+    assert (base/'committed_stage.json').read_bytes() == incumbent_ref
+    assert incumbent.read_bytes() == incumbent_raw
+    reference = next(base.glob('committed_stage.*.json'))
+    if change == 'code':
+        monkeypatch.setattr(projection, '_code', lambda: {'other-reader': '0'*64})
+        assert policy.committed_refresh_stage_path(base, day) == incumbent
+    elif change != 'none':
+        target = {'parent': base/'committed_stage.json', 'stage': prepared, 'reference': reference}[change]
+        target.write_bytes(target.read_bytes() + b' ' if change != 'reference' else b'{}')
+        with pytest.raises(ValueError, match='quantity_stage_reference_invalid'):
+            policy.committed_refresh_stage_path(base, day)
+    else:
+        # Normal publication advances both views only through the producer.
+        report = json.loads(Path(stages[1]['report_path']).read_bytes())
+        timeout = json.loads(Path(stages[1]['timeout_research_path']).read_bytes())
+        policy.publish_refresh_quantity_evaluation(report, parent_policy=parent,
+            parent_policy_path=path, output_dir=base, timeout_research=timeout,
+            terminal_receipt=policy._natural_refresh_terminal_receipt(report))
+        assert policy.committed_refresh_stage_path(base, day) == prepared
+        assert json.loads((base/'committed_stage.json').read_bytes())['stage_path'] == str(prepared)
+
+
+@pytest.mark.parametrize('failure', ['validation', 'concurrent_commit'])
+def test_prepared_refresh_failure_cannot_select_unverified_generation(tmp_path, monkeypatch, failure):
+    from src.engine.scalping import initial_quantity_monitor_projection as projection
+    from src.engine.scalping.initial_quantity_timeout_research import build_timeout_research
+    parent, path = parent_fixture(tmp_path)
+    base, day = tmp_path/'refresh', '2026-10-08'
+    report = policy.build_initial_quantity_replay(day, data_dir=tmp_path, fact_rows=[],
+        entry_on_or_after=policy.refresh_window(parent))
+    timeout = build_timeout_research(day, data_dir=tmp_path, fact_rows=[],
+        entry_on_or_after=policy.refresh_window(parent), replay=report)
+    policy.publish_refresh_quantity_evaluation(report, parent_policy=parent,
+        parent_policy_path=path, output_dir=base, timeout_research=timeout)
+    pointer = base/'committed_stage.json'
+    before = pointer.read_bytes()
+    if failure == 'validation':
+        monkeypatch.setattr(policy, 'refresh_quantity_stage_terminal_valid', lambda _: False)
+    else:
+        def race(*args, **kwargs):
+            pointer.write_bytes(before + b' ')
+        monkeypatch.setattr(projection, 'publish', race)
+    with pytest.raises(ValueError, match='quantity_(generation_validation_failed|stage_cas_conflict)'):
+        policy.publish_refresh_quantity_evaluation(report, parent_policy=parent,
+            parent_policy_path=path, output_dir=base, timeout_research=timeout,
+            publish_current=False)
+    assert pointer.read_bytes() == before + (b' ' if failure == 'concurrent_commit' else b'')
+    assert not list(base.glob('committed_stage.*.json'))
+
+
 def test_public_stage_validator_preserves_v2_and_accepts_v3_selection(tmp_path, monkeypatch):
     from src.engine.scalping.initial_quantity_refresh_evaluation import VERSION, SELECTION_VERSION
     from src.engine.scalping.initial_quantity_timeout_research import build_timeout_research
@@ -787,6 +1182,7 @@ def test_quantity_fact_validator_never_decodes_oversized_legacy_timeline(monkeyp
     from src.engine import log_archive_service as archive
     from src.engine import strategy_position_performance_report as fact
     from src.engine.lifecycle.holding_window_generation import MAX_PROJECTION_BYTES
+    monkeypatch.setattr(policy,'DATA_DIR',tmp_path)
     monkeypatch.setattr(archive,'MONITOR_SNAPSHOT_DIR',tmp_path)
     monkeypatch.setattr(fact,'_saved_fact_generation_issue',lambda *a,**k:pytest.fail('unbounded snapshot decode'))
     path=tmp_path/'trade_review_2026-09-30.json'
@@ -794,6 +1190,47 @@ def test_quantity_fact_validator_never_decodes_oversized_legacy_timeline(monkeyp
     assert policy._quantity_fact_generation_issue('2026-09-30')=='trade_review_snapshot_missing'
     with path.with_suffix('.completed_projection.json').open('wb') as handle:handle.truncate(MAX_PROJECTION_BYTES+1)
     assert policy._quantity_fact_generation_issue('2026-09-30')=='fact_snapshot_requires_bounded_native_projection'
+
+
+def test_quantity_raw_hash_reuses_only_invocation_local_verified_bytes(tmp_path):
+    import os
+    from src.engine.infrastructure import validation_digest_session as digests
+    from src.engine.lifecycle.holding_window_generation import byte_generation
+    path=tmp_path/'pipeline_events/day.jsonl';path.parent.mkdir()
+    path.write_bytes(b'a'*(digests.MIN_BYTES+1))
+    with digests.postclose_session(tmp_path,'2026-10-19') as session:
+        expected=policy._file_sha256(path)
+        assert policy._file_sha256(path)==expected
+        assert byte_generation(path)['sha256']==expected
+        assert session.stats['full_reads']==1 and session.stats['reused_reads']==2
+        before=path.stat();path.write_bytes(b'b'*before.st_size)
+        os.utime(path,ns=(before.st_atime_ns,before.st_mtime_ns))
+        assert policy._file_sha256(path)!=expected
+        assert session.stats['full_reads']==2
+    assert digests.ACTIVE.get() is None
+    assert not (tmp_path/'runtime/validation_digests').exists()
+
+
+def test_quantity_cli_establishes_digest_scope_after_native_admission(tmp_path,monkeypatch):
+    from contextlib import contextmanager
+    from src.engine.infrastructure import validation_digest_session as digests
+    from src.engine.lifecycle import research_admission,research_disk_budget
+    @contextmanager
+    def admitted(*args,**kwargs):
+        assert digests.ACTIVE.get() is None
+        yield
+    @contextmanager
+    def no_output(*args,**kwargs):yield
+    monkeypatch.setattr(research_admission,'direct_job',admitted)
+    monkeypatch.setattr(research_disk_budget,'use',no_output)
+    def run(argv):
+        session=digests.ACTIVE.get()
+        assert session is not None and session.binding['role']=='postclose'
+        assert session.data_root==tmp_path
+        return 0
+    monkeypatch.setattr(policy,'_main_impl',run)
+    assert policy.main(['--as-of','2026-10-19','--data-dir',str(tmp_path)])==0
+    assert digests.ACTIVE.get() is None
 
 
 def _native_quantity_fact_source(tmp_path, monkeypatch, *, large=True):
@@ -1418,6 +1855,302 @@ def _overlay_for_test(tmp_path, rows, *, as_of='2026-10-08', issue=None):
         entry_generations={'2026-10-08':{'issue':issue}}, validate_day=lambda day:None)
 
 
+@pytest.mark.parametrize('fault',[None,'missing_manifest','archive_changed'])
+def test_original_stream_entry_seal_survives_preservation_then_compression(tmp_path,monkeypatch,fault):
+    import os,hashlib
+    from src.engine import strategy_position_performance_report as facts
+    from src.engine import compress_db_backfilled_files as compression
+    from src.engine.lifecycle.holding_window_generation import seal_dependency_receipt
+    day='2026-10-08'
+    _,path=_quantity_completion_overlay_fixture(tmp_path,monkeypatch,day=day)
+    sidecar=path.with_suffix('.completed_projection.json');projection=json.loads(sidecar.read_bytes())
+    # Older native entry batches have an original stream proof and no scalar
+    # projection. Reproduce that native producer/consumer contract unchanged.
+    seal_dependency_receipt(sidecar,projection)
+    path.with_suffix('.fact_projection.json').unlink()
+    source=facts._load_completion_fact_projection(day,path)
+    assert source['_native_source_proof']['source_basis']=='native_original_snapshot_stream'
+    census=projection['meta']['completed_census_manifest']
+    facts._write_status(day,dict(status='valid_empty',consumer_ready=True,
+        completed_census_run_ids=[census['run_id']],
+        completed_census_projection_sha256=[census['projection_sha256']],
+        actual_cost_source_generation=projection['meta']['actual_cost_source_generation'],
+        completion_snapshot_source=source['_native_source_proof']))
+    original_status=facts._status_path(day).read_bytes()
+    sha=hashlib.sha256(path.read_bytes()).hexdigest()
+    manifest=path.parent/'manifests'/f'monitor_snapshot_manifest_{day}_postclose_exit.json'
+    manifest.parent.mkdir(exist_ok=True)
+    manifest.write_text(json.dumps(dict(target_date=day,profile='postclose_exit',
+        snapshot_paths={'trade_review':str(path)},snapshot_sha256={'trade_review':sha})))
+    os.link(path,path.with_suffix('.preserved'))
+    monkeypatch.setattr(compression,'MONITOR_SNAPSHOT_DIR',path.parent)
+    assert compression._gzip_file(path,dry_run=False)[0]
+    if fault=='missing_manifest':manifest.unlink()
+    elif fault=='archive_changed':
+        archived=Path(str(path)+'.gz');archived.write_bytes(archived.read_bytes()+b'x')
+    issue=policy._quantity_original_fact_generation_issue(day)
+    assert (issue is None) is (fault is None)
+    assert facts._status_path(day).read_bytes()==original_status
+
+
+@pytest.mark.parametrize('legacy', [False, True])
+@pytest.mark.parametrize('fill_source', ['indexed', 'historical_window', 'missing', 'conflicting', 'guard',
+    'partial_indexed', 'partial_historical', 'native_receipt', 'native_wrong_clock',
+    'native_wrong_qty', 'native_wrong_execution', 'native_wrong_price', 'native_guard',
+    'native_foreign', 'native_partial'])
+def test_completion_cost_adapter_consumes_original_buy_without_changing_fact_bytes(
+        tmp_path, monkeypatch, legacy, fill_source):
+    from src.engine import sniper_trade_review_report as review
+    from src.engine import strategy_position_performance_report as facts
+    from src.engine.lifecycle import broker_cost_allocation as allocation
+    from src.engine.lifecycle import broker_cost_source as official
+    from src.engine.lifecycle import holding_window_generation as window
+    from src.engine.scalping import initial_quantity_source_cache as cache
+    from src.engine.automation import main_trailing_source_store as indexed
+    from src.tests.test_broker_cost_reconciliation import fixture
+    from src.tests.test_broker_cost_allocation import source, position
+    from src.tests.test_main_stop_research_cost import registry
+    from src.tests.test_main_trailing_source_store import append
+    day = '2026-10-08'
+    entry_day = '2026-10-07' if legacy and fill_source == 'indexed' else day
+    item = position(1)
+    partial=fill_source.startswith('partial_')
+    if partial:
+        item['buy_legs']=[{**item['buy_legs'][0],'qty':1},
+            {**item['buy_legs'][0],'qty':1,'execution_no':'103','at':day+' 10:00:01'}]
+    observed = source(tmp_path)
+    official.atomic(official.source_path(tmp_path, day), observed)
+    registry(tmp_path, [item])
+    if fill_source.startswith('native_'):
+        from src.engine.ai import holding_exit_vote as vote
+        stock = dict(id=1, code='005930', buy_time=day+'T10:00:00', buy_qty=2, buy_price=10000,
+            entry_filled_qty=2, _entry_receipt_filled_by_order_no={'11':2},
+            _entry_receipt_executions_by_order_no={'11':{'101':dict(cumulative_qty=2,
+                cumulative_exec_amount=20000, order_qty=2, remaining_qty=0,
+                unit_exec_qty=2, unit_exec_price=10000)}},
+            _add_receipt_filled_by_order_no={}, _add_receipt_executions_by_order_no={})
+        if fill_source == 'native_wrong_clock': stock['buy_time']=day+'T10:00:00.100000'
+        elif fill_source == 'native_wrong_price': stock['buy_price']=10001
+        elif fill_source == 'native_wrong_qty': stock['buy_qty']=3
+        if fill_source != 'native_wrong_qty': vote.persist_buy_fill_receipt(stock,tmp_path)
+        else:
+            vote.persist_buy_fill_receipt({**stock,'buy_qty':2},tmp_path)
+            path=tmp_path/'runtime/holding_buy_fill_receipts/1.json'
+            changed=json.loads(path.read_bytes());changed['buy_qty']=3;path.write_text(json.dumps(changed))
+        if fill_source in {'native_wrong_execution','native_partial','native_foreign'}:
+            path=tmp_path/'runtime/holding_buy_fill_receipts/1.json'
+            changed=json.loads(path.read_bytes())
+            if fill_source == 'native_wrong_execution': changed['record_id']=2
+            elif fill_source == 'native_foreign': changed['source']='legacy_path_vote_exact_buy_legs'
+            else: changed['receipt_fields']['_entry_receipt_executions_by_order_no']['11']['101'].update(order_qty=3,remaining_qty=1)
+            path.write_text(json.dumps(changed))
+    missing = {**item, 'buy_legs':[], 'execution_source_quality_reasons':['source_gap_buy_fill_missing']}
+    old = allocation.build_research_cost_allocations({day:observed}, [missing])
+    allocation.persist_research_costs(tmp_path, day, old, [day])
+    _, events, _, _, _ = fixture()
+    buy = events[0]
+    buy.fields.update(id='1', order_no='11', execution_no='101')
+    if partial:buy.fields.update(fill_qty=1,order_filled_qty=1,order_remaining_qty=1,fill_quality='PARTIAL_FILL')
+    sell = events[-1]
+    sell.fields.update(id='1', order_no='12', execution_no='102',
+        main_lifecycle_exit_qty=2, cumulative_sell_qty=2)
+    sell = review.HoldingEvent(day+' 10:01:00', '', '005930', sell.stage, sell.fields, '')
+    identity = dict(rec_date=entry_day, buy_time=day+'T10:00:00+09:00', buy_price=10000,
+        buy_qty=2, sell_time=day+'T10:01:00+09:00', sell_price=10100,
+        buy_fill_legs=[], sell_fill_legs=item['sell_legs'], sell_quantity_conserved=False,
+        position_residual_qty=-2, exact_sell_fill_time=item['completed_at'],
+        terminal_decision_authority='broker_sell_fill_observation_only',
+        strict_completion_reasons=['source_gap_buy_fill_missing'], quantity_research_cost=old['1'],
+        timeline=[dict(stage=sell.stage, timestamp=sell.timestamp, fields=sell.fields)])
+    if partial:identity['timeline'].insert(0,dict(stage=buy.stage,timestamp=buy.timestamp,fields=buy.fields))
+    original, path = _quantity_completion_overlay_fixture(tmp_path, monkeypatch, identity=identity)
+    original.update(rec_date=entry_day, buy_time=day+'T10:00:00+09:00', buy_qty=2, buy_price=10000)
+    if legacy:
+        sidecar = path.with_suffix('.completed_projection.json')
+        projection = json.loads(sidecar.read_bytes())
+        window.seal_dependency_receipt(sidecar, projection)
+        path.with_suffix('.fact_projection.json').unlink()
+        native = facts._load_completion_fact_projection(day, path)
+        census = projection['meta']['completed_census_manifest']
+        facts._write_status(day,dict(status='valid_empty',consumer_ready=True,
+            completed_census_run_ids=[census['run_id']], completed_census_projection_sha256=[census['projection_sha256']],
+            actual_cost_source_generation=projection['meta']['actual_cost_source_generation'],
+            completion_snapshot_source=native['_native_source_proof']))
+    log = tmp_path/'pipeline_events'/f'pipeline_events_{day}.jsonl'
+    log.parent.mkdir(); log.touch()
+    monkeypatch.setattr(indexed, 'maintain', lambda *a:None)
+    append(tmp_path, log, dict(record_id=1, stock_code='005930', pipeline='ENTRY_PIPELINE',
+        stage='order_leg_sent', emitted_at=day+'T09:59:59', fields={}))
+    if fill_source != 'missing' and (not fill_source.startswith('native_') or fill_source == 'native_guard'):
+        payload = dict(record_id=1, stock_code='005930', pipeline='HOLDING_PIPELINE',
+            stage=buy.stage, emitted_at=day+'T10:00:00', fields=buy.fields)
+        project = indexed.project
+        if fill_source in {'historical_window','partial_historical'}:
+            monkeypatch.setattr(indexed, 'project', lambda ns,row:None if row.get('stage') == buy.stage else project(ns,row))
+        append(tmp_path, log, payload)
+        if partial:
+            append(tmp_path,log,dict(payload,emitted_at=day+'T10:00:01',fields={**buy.fields,
+                'execution_no':'103','order_filled_qty':2,'order_remaining_qty':0,'fill_quality':'FULL_FILL'}))
+        if fill_source == 'conflicting':
+            append(tmp_path, log, dict(payload,fields={**buy.fields,'fill_price':10001}))
+        elif fill_source in {'guard', 'native_guard'}:
+            # An identical execution ID cannot erase a forbidden broker guard.
+            append(tmp_path, log, dict(payload,fields={**buy.fields,'broker_order_forbidden':True}))
+        monkeypatch.setattr(indexed, 'project', project)
+    immutable = {p:p.read_bytes() for p in cache.completion_source_paths(tmp_path,day) if p.is_file()}
+    if fill_source == 'indexed':
+        raw_open = Path.open
+        def no_raw(self,*args,**kwargs):
+            if self == log: pytest.fail('indexed fill caused a historical raw scan')
+            return raw_open(self,*args,**kwargs)
+        monkeypatch.setattr(Path, 'open', no_raw)
+    from contextlib import nullcontext
+    from src.engine.lifecycle.research_input_budget import Claim
+    # Native registry/census reservations coexist with the bounded migration.
+    # Per-date worst-case reservations used to exhaust the unchanged 64MiB cap.
+    with (Claim(52*1024*1024) if fill_source in {'historical_window','partial_historical'} else nullcontext()):
+        for _ in range(2):
+            cache.prepare_completion_cost_revisions(tmp_path,day,day,validate_day=policy._quantity_original_fact_generation_issue)
+    # The second preparation must reuse native revision, not original windows.
+    monkeypatch.setattr(indexed,'read_order_fill_windows',lambda *a,**kw:pytest.fail('unchanged migration repeated'),raising=False)
+    cache.prepare_completion_cost_revisions(tmp_path,day,day,validate_day=policy._quantity_original_fact_generation_issue)
+    rows = _overlay_for_test(tmp_path,[original])
+    assert rows[0]['completion_source_date'] == day
+    receipt = policy._quantity_research_fact_cost(rows[0])
+    invalid = fill_source in {'missing','conflicting','guard'} or fill_source.startswith('native_') and fill_source != 'native_receipt'
+    assert receipt['status'] == ('research_cost_invalid' if invalid else 'research_cost_allocated')
+    if fill_source == 'native_receipt':
+        index=json.loads((tmp_path/'runtime/initial_quantity_research_costs'/day/'index.json').read_bytes())
+        proof=index['native_revision']['native_buy_recoveries']['1']
+        assert proof['clock_source']=='native_registry_fill_observed_at_kst'
+        assert len(proof['receipt']['sha256'])==64 and len(proof['fill_event_hashes'])==1
+    assert rows[0]['profit_rate'] is None and rows[0]['realized_pnl_krw'] is None
+    cache.verify_completion_overlay_generations(rows.completion_generations,data_dir=tmp_path)
+    cache.verify_completion_census_context(rows,dict(completion_overlay_generations=rows.completion_generations,
+        completion_overlay_summary=rows.completion_overlay_summary,persisted_fact_generations={day:{'issue':None}}),
+        as_of=day,data_dir=tmp_path,entry_on_or_after='2026-09-29')
+    assert {p:p.read_bytes() for p in immutable} == immutable
+    if fill_source == 'native_receipt':
+        # A changed native receipt is a new producer input, not a warm-cache hit.
+        native_path=tmp_path/'runtime/holding_buy_fill_receipts/1.json'
+        changed=json.loads(native_path.read_bytes());changed['buy_qty']=3
+        native_path.write_text(json.dumps(changed))
+        monkeypatch.setattr(indexed,'read_order_fill_windows',lambda *a,**kw:{})
+        cache.prepare_completion_cost_revisions(tmp_path,day,day,validate_day=policy._quantity_original_fact_generation_issue)
+        revised=json.loads((tmp_path/'runtime/initial_quantity_research_costs'/day/'1.json').read_bytes())
+        assert revised['status']=='research_cost_invalid'
+    dependency=Path(str(path.with_suffix('.completed_projection.json'))+'.dependencies.json')
+    dependency.write_bytes(dependency.read_bytes()+b' ')
+    with pytest.raises(ValueError):
+        cache.verify_completion_overlay_generations(rows.completion_generations,data_dir=tmp_path)
+
+
+@pytest.mark.parametrize('missing_source', [False, True])
+def test_late_cost_revision_reallocates_without_resealing_original_facts(tmp_path, monkeypatch, missing_source):
+    from copy import deepcopy
+    from src.engine.lifecycle import broker_cost_allocation as allocation
+    from src.engine.lifecycle import broker_cost_source as official
+    from src.engine.lifecycle import broker_cost_reconciliation as costs
+    from src.engine.lifecycle import main_stop_research_cost as native_cost
+    from src.engine.scalping import initial_quantity_source_cache as cache
+    from src.engine.scalping import initial_quantity_monitor_projection as monitor
+    from src.tests.test_broker_cost_allocation import source, position
+    from src.tests.test_main_stop_research_cost import registry
+    day = '2026-10-08'
+    item = position(1)
+    observed = source(tmp_path)
+    official.atomic(official.source_path(tmp_path, day), observed)
+    registry(tmp_path, [item])
+    receipts = allocation.build_research_cost_allocations({day:observed}, [item])
+    allocation.persist_research_costs(tmp_path, day, receipts, [day])
+    original, path = _quantity_completion_overlay_fixture(tmp_path, monkeypatch, identity=dict(
+        rec_date=day, buy_time=day+'T10:00:00+09:00', sell_time=day+'T10:01:00+09:00',
+        buy_qty=2, buy_price=10000, sell_price=10100, buy_fill_legs=item['buy_legs'],
+        sell_fill_legs=item['sell_legs'], sell_quantity_conserved=True, position_residual_qty=0,
+        exact_sell_fill_time=item['completed_at'],
+        terminal_decision_authority='broker_sell_fill_observation_only',
+        strict_completion_reasons=['source_gap_broker_actual_cost_missing'], quantity_research_cost=receipts['1']))
+    original.update(rec_date=day, buy_time=day+'T10:00:00+09:00', buy_qty=2, buy_price=10000)
+    immutable = [path, path.with_suffix('.completed_projection.json'),
+                 path.with_suffix('.fact_projection.json'),
+                 Path(str(path.with_suffix('.completed_projection.json'))+'.dependencies.json'),
+                 tmp_path/'report/strategy_position_fact_sync'/f'strategy_position_fact_sync_{day}.status.json']
+    before = {p:p.read_bytes() for p in immutable}
+    index_path = tmp_path/'runtime/initial_quantity_research_costs'/day/'index.json'
+    index_before = index_path.read_bytes()
+    revised = deepcopy(observed)
+    revised['observations']['ka10170']['pages'][0]['tdy_trde_diary'][0]['cmsn_alm_tax'] = '41'
+    revised['source_sha256'] = costs.digest({k:v for k,v in revised.items() if k != 'source_sha256'})
+    official.atomic(official.source_path(tmp_path, day), revised)
+    if missing_source:
+        official.source_path(tmp_path, day).unlink()
+    assert policy._quantity_fact_generation_issue(day) == 'fact_snapshot_native_projection_invalid'
+    assert policy._quantity_original_fact_generation_issue(day) is None
+    calls = []
+    full_read = native_cost._native_projection
+    def counted(*args, **kwargs):
+        calls.append(args[1])
+        return full_read(*args, **kwargs)
+    monkeypatch.setattr(native_cost, '_native_projection', counted)
+    for _ in range(2):
+        cache.prepare_completion_cost_revisions(tmp_path, day, day,
+            validate_day=policy._quantity_original_fact_generation_issue)
+    assert calls == [day]
+    assert {p:p.read_bytes() for p in immutable} == before
+    import hashlib
+    assert (index_path.parent/'index_generations'/(hashlib.sha256(index_before).hexdigest()+'.json')).read_bytes() == index_before
+    rows = _overlay_for_test(tmp_path, [original])
+    current = rows[0]
+    assert current['profit_rate'] is None and current['realized_pnl_krw'] is None
+    assert current['economics_source_status'] != 'broker_actual_cost_reconciled'
+    receipt = policy._quantity_research_fact_cost(current)
+    if missing_source:
+        assert receipt['status'] == 'research_cost_invalid'
+        assert receipt.get('allocated_net_pnl_krw') is None
+    else:
+        assert receipt['status'] == 'research_cost_allocated'
+        assert receipt['allocated_fees_taxes_krw'] == 21
+        assert receipt['sources'][0]['source_sha256'] == revised['source_sha256']
+        assert receipt['actual_execution_cost'] is False
+    report = {'census':{'completion_overlay_generations':rows.completion_generations}}
+    assert monitor._costs(report, tmp_path) == [{'source_date':day, 'generation':costs.source_generation(tmp_path,day)}]
+    cache.verify_completion_overlay_generations(rows.completion_generations, data_dir=tmp_path)
+    from src.engine.lifecycle import holding_window_generation as window
+    current_window = window.capture_window(tmp_path, [day], allow_cost_revision=True)
+    dependency = current_window['dependencies'][day]
+    assert dependency['status'] == 'observed'
+    assert dependency['original_cost_generation'] == json.loads(before[immutable[2]])['meta']['actual_cost_source_generation']
+    assert dependency['cost_generation'] == costs.source_generation(tmp_path, day)
+    window.verify_window(tmp_path, current_window)
+    assert window.capture_window(tmp_path, [day])['dependencies'][day]['status'] == 'source_gap'
+    from src.tests.test_main_trailing_source_assembler import fixture as trailing_fixture
+    from src.engine.automation import main_trailing_source_assembler as assembler
+    from src.engine.automation import main_trailing_all_scope_research as research
+    from src.engine.lifecycle import research_storage as storage
+    trailing_fixture(tmp_path)
+    manifest_path = assembler.assemble(tmp_path, tmp_path.parent/(tmp_path.name+'-trailing'),
+        source_date=day, target_date='2026-10-12', start_date=day)
+    manifest = research._sealed(manifest_path)
+    positions = [position for part in storage.iter_tree(manifest_path.parent, manifest['partitions_ref'])
+                 for position in research._sealed(manifest_path.parent/part['path'])['positions']
+                 if position['evidence_kind'] == 'actual_completed']
+    assert [position['position_key'] for position in positions] == ['1']
+    assert manifest['assembly_census']['source_gaps'].get('completed_snapshot_source_gap',0) == 0
+    assert positions[0]['actual_cost_reconciliation'] == {'status':'actual_cost_unallocated', 'reason':'late_cost_revision'}
+    assert positions[0]['current_cost_generation_sha256'] == costs.digest(dependency['cost_generation'])
+    index_after = index_path.read_bytes()
+    # A further source revision invalidates the derivative, never the original
+    # terminal bytes. No observer may silently refresh it while validating.
+    if not missing_source:
+        revised['observations']['ka10170']['pages'][0]['tdy_trde_diary'][0]['cmsn_alm_tax'] = '43'
+        revised['source_sha256'] = costs.digest({k:v for k,v in revised.items() if k != 'source_sha256'})
+        official.atomic(official.source_path(tmp_path,day), revised)
+        with pytest.raises(ValueError, match='quantity_completion_generation_changed'):
+            cache.verify_completion_overlay_generations(rows.completion_generations, data_dir=tmp_path)
+    assert {p:p.read_bytes() for p in immutable} == before
+    assert index_path.read_bytes() == index_after
+
+
 @pytest.mark.parametrize('fractional', [False, True])
 def test_bounded_completion_projection_retains_quantity_receipt_without_global_pnl(monkeypatch, tmp_path, fractional):
     from src.engine import strategy_position_performance_report as native
@@ -1954,3 +2687,149 @@ def test_serialized_completion_context_accepts_compression_without_full_snapshot
     _,rebuilt=policy.completed_trade_fact_census('2026-10-08',data_dir=tmp_path,
         fact_rows=serialized['input_fact_rows'],entry_on_or_after='2026-10-07',source_census=serialized)
     assert rebuilt==serialized
+
+
+@pytest.mark.parametrize('fault',[None,'no_request','duplicate_request','different_plan','different_order',
+    'late_decision','next_second','proxy_clock','exact_clock','quantity_conflict','sent_after_receipt','partial_position'])
+def test_same_broker_second_policy_requires_exact_causal_request_sent_full_fill(fault):
+    from copy import deepcopy
+    from datetime import timedelta
+    from src.engine.scalping.initial_quantity_refresh_evaluation import policy_decision_precedes_fill
+    at=policy._timestamp('2026-10-16T12:31:28+09:00')
+    fields=dict(entry_submit_attempt_id='attempt',entry_execution_sizing_plan_sha256='a'*64,
+        position_sizing_policy_status='initial_policy_v2_loaded',position_sizing_policy_sha256='b'*64,
+        initial_quantity_runtime_pid='123',quantity_type='KRX_THIN_HIGH_TICK',
+        quantity_type_classifier_version=policy.CLASSIFIER_VERSION,reference_time=at.isoformat())
+    decision=dict(at=at+timedelta(milliseconds=100),stage='entry_execution_sizing_plan',fields=fields)
+    request=dict(at=at+timedelta(milliseconds=200),attempt_id='attempt',plan_sha='a'*64,tag='entry_probe')
+    sent={**request,'at':at+timedelta(milliseconds=300),'order_no':'11'}
+    fill=dict(at=at,emitted_at=at+timedelta(seconds=2),clock_precision_sec=1,
+        clock_source='broker_execution_observed_at',qty=1,price=100000,order_no='11',execution_no='1')
+    trade=dict(entry_at_fact_buy_time=at.isoformat(),buy_qty=1,profit_rate=1,realized_net_pnl_krw=1000)
+    path=dict(decisions=[decision],order_requests=[request],order_sent=[sent],fills=[fill])
+    if fault=='no_request':path['order_requests']=[]
+    elif fault=='duplicate_request':path['order_requests'].append(deepcopy(request))
+    elif fault=='different_plan':sent['plan_sha']='c'*64
+    elif fault=='different_order':sent['order_no']='12'
+    elif fault=='late_decision':decision['at']=request['at']+timedelta(milliseconds=1)
+    elif fault=='next_second':decision['at']=at+timedelta(seconds=1)
+    elif fault=='proxy_clock':fill['clock_source']='position_rebased_emitted_at_proxy'
+    elif fault=='exact_clock':fill['clock_precision_sec']=0
+    elif fault=='quantity_conflict':fill['qty']=2
+    elif fault=='partial_position':
+        trade['buy_qty']=2;trade['entry_at_fact_buy_time']=(at+timedelta(seconds=2)).isoformat()
+    elif fault=='sent_after_receipt':sent['at']=fill['emitted_at']+timedelta(milliseconds=1)
+    parent=policy._paired_candidate(trade,path,'parent')
+    if fault and fault!='partial_position':
+        assert parent['applied_policy_file_sha256'] is None
+        assert 'policy_decision_clock_proof' not in parent
+        return
+    assert parent['applied_policy_file_sha256']=='b'*64
+    assert parent['quantity_type']=='KRX_THIN_HIGH_TICK'
+    row={**parent, 'entry_fill_at':at.isoformat(),'entry_fill_clock_source':fill['clock_source'],
+        'entry_fill_clock_precision_sec':1,'entry_fill_order_no':'11','entry_fill_execution_no':'1',
+        'shapes':{'parent':deepcopy(parent)},
+        'cap_source':dict(attempt_id='attempt',plan_sha256='a'*64,
+                         fills=[dict(at=at.isoformat(),qty=1)])}
+    fact=dict(buy_time=trade['entry_at_fact_buy_time'],buy_qty=trade['buy_qty'])
+    assert policy_decision_precedes_fill(row,fact)
+    for field,value in [('proof_sha256','0'*64),('request_at',(at-timedelta(seconds=1)).isoformat()),
+                        ('order_no','wrong'),('fill_qty',3)]:
+        broken=deepcopy(row);broken['policy_decision_clock_proof'][field]=value
+        if field!='proof_sha256':
+            proof=broken['policy_decision_clock_proof'];proof['proof_sha256']=policy._digest({k:v for k,v in proof.items()if k!='proof_sha256'})
+        broken['shapes']['parent']['policy_decision_clock_proof']=deepcopy(broken['policy_decision_clock_proof'])
+        assert not policy_decision_precedes_fill(broken,fact)
+
+
+def test_quantity_execution_cache_binds_shared_market_default_owner(monkeypatch):
+    from pathlib import Path
+    from src.trading.market import execution_venue
+    from src.engine.scalping.initial_quantity_refresh_evaluation import _execution_key
+    before = _execution_key({}, {}, {}, {})
+    owner = Path(execution_venue.__file__).resolve()
+    original = Path.read_bytes
+    monkeypatch.setattr(Path, 'read_bytes', lambda path: original(path) +
+        (b'\n# changed market authority\n' if path.resolve() == owner else b''))
+    assert _execution_key({}, {}, {}, {}) != before
+
+
+@pytest.mark.parametrize('venue', ['KRX','NXT','UNKNOWN'])
+def test_large_quantity_fill_projection_preserves_native_and_operator_market_axes(venue):
+    import io
+    from src.engine.sniper_execution_receipts import _receipt_market_axes
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    fields=dict(actual_execution_venue=venue, broker_actual_execution_venue=venue,
+        broker_actual_execution_venue_source='official_fid_2134_2135' if venue!='UNKNOWN' else 'official_exchange_fields_ambiguous_or_missing',
+        broker_actual_exchange_code='1' if venue=='KRX' else '2' if venue=='NXT' else '0',
+        broker_actual_exchange_name=venue if venue!='UNKNOWN' else 'SOR',
+        broker_sor_flag='N' if venue!='UNKNOWN' else 'Y', broker_route_requested='SOR',
+        unused_context='x'*150000)
+    at=datetime(2026,10,21,10,tzinfo=ZoneInfo('Asia/Seoul'))
+    raw=json.dumps(dict(record_id=7,stock_code='005930',stage='position_rebased_after_fill',
+        emitted_at=at.isoformat(),fields=fields))+'\n'
+    projected=json.loads(next(policy._quantity_pipeline_rows(io.StringIO(raw),{'7':[]},{}))[0])['fields']
+    assert projected=={k:v for k,v in fields.items() if k!='unused_context'}
+    axes=_receipt_market_axes(projected,observed_at=at,requested_route_keys=('broker_route_requested',))
+    assert axes['actual_execution_venue']==('KRX' if venue=='UNKNOWN' else venue)
+    assert axes['actual_execution_venue_verified'] is (venue!='UNKNOWN')
+    assert projected['broker_actual_execution_venue']==venue
+
+
+@pytest.mark.parametrize('fault', [None, 'cost_identity', 'missing_receipt', 'receipt_qty',
+    'existing_fill', 'source_gap', 'wrong_order', 'wrong_attempt', 'wrong_plan', 'missing_registry', 'during_restore'])
+def test_native_buy_quantity_path_binds_original_policy_without_inventing_venue(tmp_path, monkeypatch, fault):
+    from src.engine.ai import holding_exit_vote as vote
+    from src.engine.lifecycle import broker_cost_allocation as allocation
+    from src.tests.test_broker_cost_allocation import position, source, DAY
+    from src.tests.test_main_stop_research_cost import registry
+    item = position(1)
+    registry(tmp_path, [item])
+    stock = dict(id=1, code='005930', buy_time=DAY+'T10:00:00', buy_qty=2, buy_price=10000,
+        entry_filled_qty=2, _entry_receipt_filled_by_order_no={'11':2},
+        _entry_receipt_executions_by_order_no={'11':{'101':dict(cumulative_qty=2,
+            cumulative_exec_amount=20000, order_qty=2, remaining_qty=0,
+            unit_exec_qty=2, unit_exec_price=10000)}},
+        _add_receipt_filled_by_order_no={}, _add_receipt_executions_by_order_no={})
+    vote.persist_buy_fill_receipt(stock,tmp_path)
+    cost=allocation.build_research_cost_allocations({DAY:source(tmp_path)},[item])['1']
+    trade=dict(trade_id='fact:1',record_id='1',stock_code='005930',buy_qty=2,buy_price=10000,
+        entry_at_fact_buy_time=DAY+'T10:00:00+09:00', quantity_research_cost=cost,
+        profit_rate=cost['allocated_profit_rate'],realized_net_pnl_krw=cost['allocated_net_pnl_krw'])
+    at=policy._timestamp(DAY+'T09:59:59+09:00')
+    path=dict(fills=[],source_gap=[],decisions=[dict(at=at,stage='entry_execution_sizing_plan',fields=dict(
+        entry_submit_attempt_id='attempt',entry_execution_sizing_plan_sha256='plan',
+        position_sizing_policy_status='initial_policy_v2_loaded',position_sizing_policy_sha256='a'*64,
+        initial_quantity_runtime_pid='123'))],order_sent=[dict(at=at,order_no='11',attempt_id='attempt',plan_sha='plan')])
+    receipt=tmp_path/'runtime/holding_buy_fill_receipts/1.json'
+    if fault=='during_restore':
+        restore=vote.restore_buy_fill_receipt
+        def changed(*args):
+            result=restore(*args)
+            receipt.write_bytes(receipt.read_bytes()+b' ')
+            return result
+        monkeypatch.setattr(vote,'restore_buy_fill_receipt',changed)
+    if fault=='cost_identity': cost['buy_fill_identity']='f'*64
+    elif fault=='missing_receipt': receipt.unlink()
+    elif fault=='receipt_qty':
+        changed=json.loads(receipt.read_bytes());changed['buy_qty']=3;receipt.write_text(json.dumps(changed))
+    elif fault=='existing_fill': path['fills']=[{'original_partial':True}]
+    elif fault=='source_gap': path['source_gap']=['original_guard_failure']
+    elif fault=='wrong_order': path['order_sent'][0]['order_no']='12'
+    elif fault=='wrong_attempt': path['order_sent'][0]['attempt_id']='foreign'
+    elif fault=='wrong_plan': path['order_sent'][0]['plan_sha']='foreign'
+    elif fault=='missing_registry': (tmp_path/'runtime/order_owner_registry.jsonl').unlink()
+    policy._join_native_research_buy_fills([trade],{'fact:1':path},tmp_path)
+    if fault=='existing_fill':
+        assert path['fills']==[{'original_partial':True}]
+    elif fault in {'cost_identity','missing_receipt','receipt_qty','source_gap','missing_registry','during_restore'}:
+        assert path['fills']==[]
+    else:
+        assert len(path['fills'])==1
+        assert path['fills'][0]['venue']=='UNKNOWN'
+        assert path['fills'][0]['actual_execution_venue_verified'] is False
+        assert path['native_buy_fill_source']['fill_event_hashes']
+        parent=policy._paired_candidate(trade,path,'parent')
+        assert parent['applied_policy_file_sha256']==('a'*64 if fault is None else None)
+        assert parent['applied_policy_runtime_pid']==('123' if fault is None else None)

@@ -36,6 +36,69 @@ class ValidationDeferred(Exception):
     """Resource contention, not a policy/source verdict."""
 
 
+class NativeJSONWriter:
+    """Hash the bytes already being written by the native snapshot producer."""
+    def __init__(self, handle):
+        self.handle=handle;self.sha=hashlib.sha256();self.size=0
+    def write(self,text):
+        raw=text.encode('utf-8')
+        result=self.handle.write(text)
+        self.sha.update(raw);self.size+=len(raw)
+        return result
+    def generation(self,path):
+        return dict(path=Path(path).name,size=self.size,sha256=self.sha.hexdigest())
+
+
+def _native_proof_path(data_root,path):
+    root=Path(data_root).resolve();path=Path(path).resolve()
+    if path.parent!=root/'report/monitor_snapshots' or path.suffix!='.json':
+        raise ValueError('native_byte_proof_source_owner_invalid')
+    key=hashlib.sha256(str(path.relative_to(root)).encode()).hexdigest()
+    return root/'report/main_trailing_source_index/native_bytes'/(key+'.json')
+
+
+def publish_native_bytes(data_root,path,generation):
+    """Native durable writer only; no extra source read, policy or verdict."""
+    from src.engine.scalping.pre_submit_delay_initial_policy import _atomic
+    path=Path(path).resolve();before=identity(path)
+    if (generation.get('path')!=path.name or generation.get('size')!=before[4]
+            or not re.fullmatch('[0-9a-f]{64}',str(generation.get('sha256','')))):
+        raise ValueError('native_byte_proof_writer_generation_invalid')
+    body=dict(schema='native_report_source_byte_proof_v1',producer='native_monitor_snapshot_writer',
+        path=str(path),generation=generation,source_stat=before[2:7],
+        runtime_effect=False,allowed_runtime_apply=False,semantic_verdict=False)
+    body['proof_sha256']=_sha(body)
+    destination=_native_proof_path(data_root,path)
+    if identity(path)!=before:
+        raise ValueError('native_byte_proof_source_changed')
+    _atomic(destination,body)
+    return body
+
+
+def _native_bytes(data_root,path):
+    """A missing proof permits only the caller's existing bounded fallback."""
+    path=Path(path)
+    try:
+        proof_path=_native_proof_path(data_root,path)
+    except ValueError:
+        return None
+    if not proof_path.exists():
+        return None
+    before=identity(proof_path)
+    if (before[4]>4096 or before[8]!=os.getuid() or before[7]&0o077):
+        raise ValidationDeferred('validation_deferred:native_byte_proof_untrusted')
+    value=json.loads(proof_path.read_bytes())
+    if (identity(proof_path)!=before or value.get('schema')!='native_report_source_byte_proof_v1'
+            or value.get('producer')!='native_monitor_snapshot_writer'
+            or value.get('path')!=str(path.resolve())
+            or value.get('proof_sha256')!=_sha({k:v for k,v in value.items() if k!='proof_sha256'})
+            or value.get('semantic_verdict') is not False
+            or value.get('runtime_effect') is not False or value.get('allowed_runtime_apply') is not False
+            or value.get('source_stat')!=identity(path)[2:7]):
+        raise ValidationDeferred('validation_deferred:native_byte_proof_changed')
+    return value
+
+
 def _encode(value):
     return json.dumps(value, sort_keys=True, separators=(',', ':'), allow_nan=False).encode()
 
@@ -126,8 +189,12 @@ class DigestSession:
         self.key = _sha(self.binding)
         self.path = self.directory/(self.key+'.json')
         self.entries = {}
+        self.semantic_objects = {}
+        self.semantic_bytes = 0
+        self.invocation_pid = os.getpid()
+        self.native_read_budget = None
         self._loaded_entries_sha = None
-        self.stats = dict(full_reads=0, full_bytes=0, reused_reads=0, reused_bytes=0,
+        self.stats = dict(semantic_reused_reads=0, full_reads=0, full_bytes=0, reused_reads=0, reused_bytes=0,
                           cache_status='unused', role=role, generation_sha256=self.key,
                           pid=os.getpid(), wall_seconds=0.0, thread_io_delta=None)
 
@@ -171,7 +238,29 @@ class DigestSession:
             return None  # A fork cannot inherit invocation-local digest authority.
         path = Path(path).absolute()
         before = identity(path)
-        if before[4] < MIN_BYTES:
+        entry = self.entries.get(str(path), {})
+        # Expiration ends digest reuse, not the native writer's byte proof.
+        # Reauthenticate that same issuer/identity before a fresh admission;
+        # a changed epoch or an unrenewable proof must still fail closed.
+        created = entry.get('created') if isinstance(entry, dict) else None
+        expired_native = (isinstance(entry, dict) and entry.get('native_generation_proof')
+            and entry.get('identity') == before and isinstance(created, (int, float))
+            and time.time()-created > self.ttl)
+        if self.binding['role']=='postclose' and expired_native:
+            proof = _native_bytes(self.data_root, path)
+            if proof is not None and proof['proof_sha256']==entry['native_generation_proof']:
+                self.admit_native_generation(path, proof['generation'], proof['source_stat'],
+                    proof_sha256=proof['proof_sha256'])
+                entry = self.entries[str(path)]
+        if (self.binding['role']=='postclose' and before[4]>=MIN_BYTES
+                and not (isinstance(entry,dict) and entry.get('native_generation_proof'))):
+            proof=_native_bytes(self.data_root,path)
+            if proof is not None:
+                self.admit_native_generation(path,proof['generation'],proof['source_stat'],
+                    proof_sha256=proof['proof_sha256'])
+                entry=self.entries[str(path)]
+        if (before[4] < MIN_BYTES and self.native_read_budget is None
+                and not (isinstance(entry,dict) and entry.get('native_generation_proof'))):
             return None
         # Only native data dependencies. Code and control-plane small files are
         # read normally; optional file discovery is never memoized.
@@ -190,6 +279,12 @@ class DigestSession:
             self.stats['reused_reads'] += 1
             self.stats['reused_bytes'] += before[4]
             return entry['digest']
+        if isinstance(entry, dict) and entry.get('native_generation_proof'):
+            raise ValidationDeferred('validation_deferred:native_source_proof_epoch_changed')
+        if self.native_read_budget is not None:
+            if before[4] > self.native_read_budget['remaining']:
+                raise ValidationDeferred('validation_deferred:native_source_read_budget_exceeded')
+            self.native_read_budget['remaining'] -= before[4]
         with path.open('rb') as stream:
             observed = hashlib.file_digest(stream, 'sha256').hexdigest()
         if identity(path) != before:
@@ -199,6 +294,34 @@ class DigestSession:
         if len(self.entries) < MAX_ENTRIES or key in self.entries:
             self.entries[key] = dict(identity=before, digest=observed, created=now)
         return observed
+
+    def admit_native_generation(self, path, generation, expected_stat, *, proof_sha256):
+        """Reuse an independently verified native byte/identity attestation.
+
+        The caller must validate the issuer, its seal and source/date contract.
+        This admits a file digest only; every semantic reader still executes.
+        It is distinct from loading an observer/transition verdict or store.
+        """
+        if self.binding['role']!='postclose' or self.binding['pid']!=os.getpid():
+            raise ValueError('native_source_generation_proof_requires_postclose_owner')
+        path=Path(path).absolute()
+        observed=identity(path)
+        actual=[observed[2],observed[3],observed[4],observed[5],observed[6]]
+        if (not _local_filesystem(path)
+                or not Path(observed[1]).is_relative_to(self.data_root.resolve())
+                or observed[8]!=os.getuid() or observed[2]!=self.data_root.stat().st_dev
+                or list(expected_stat)!=actual
+                or generation.get('path')!=path.name or generation.get('size')!=observed[4]
+                or re.fullmatch('[0-9a-f]{64}',str(generation.get('sha256',''))) is None
+                or re.fullmatch('[0-9a-f]{64}',str(proof_sha256)) is None
+                or identity(path)!=observed):
+            raise ValueError('native_source_generation_proof_changed_or_unbound')
+        if len(self.entries)>=MAX_ENTRIES and str(path) not in self.entries:
+            raise ValueError('native_source_generation_proof_budget_exceeded')
+        self.entries[str(path)]=dict(identity=observed,digest=generation['sha256'],
+            created=time.time(),native_generation_proof=proof_sha256)
+        self.stats['admitted_native_proofs']=self.stats.get('admitted_native_proofs',0)+1
+        self.stats['admitted_native_bytes']=self.stats.get('admitted_native_bytes',0)+observed[4]
 
     def _save(self):
         now = time.time()
@@ -291,9 +414,12 @@ class DigestSession:
         token = ACTIVE.set(self)
         started, io_before = time.monotonic(), _thread_io()
         try:
-            yield
+            from src.engine.automation.main_trailing_source_store import read_session
+            with read_session(self.data_root):
+                yield
         finally:
             ACTIVE.reset(token)
+            self.semantic_objects.clear();self.semantic_bytes = 0
             self.stats['wall_seconds'] += time.monotonic()-started
             self.stats['peak_process_rss_kib'] = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
             after = _thread_io()

@@ -44,10 +44,6 @@ def _build_engine():
     engine.consecutive_failures = 0
     engine.max_consecutive_failures = 5
     engine.current_api_key_index = 0
-    engine.model_tier1_fast = "tier1-model"
-    engine.model_tier2_balanced = "tier2-model"
-    engine.model_tier3_deep = "tier3-model"
-    engine.current_model_name = engine.model_tier1_fast
     return engine
 
 
@@ -263,12 +259,6 @@ def test_ai_input_preflight_blocks_provider_calls(monkeypatch):
         {},
         holding_context=holding_context,
     )
-    overnight = engine.evaluate_scalping_overnight_decision(
-        "테스트",
-        "005930",
-        {},
-        holding_context=holding_context,
-    )
 
     assert entry["action"] == "DROP"
     assert entry_price["action"] == "USE_DEFENSIVE"
@@ -276,10 +266,9 @@ def test_ai_input_preflight_blocks_provider_calls(monkeypatch):
     assert score["score"] == 50
     assert score["holding_score_effective_usable"] is False
     assert flow["action"] == "EXIT"
-    assert overnight["action"] == "SELL_TODAY"
     assert all(
         result["ai_result_source"] == "input_preflight_blocked"
-        for result in (entry, entry_price, score, flow, overnight)
+        for result in (entry, entry_price, score, flow)
     )
 
 
@@ -747,19 +736,11 @@ def test_required_preflight_blocks_when_context_is_missing(monkeypatch):
         {},
         holding_context=None,
     )
-    overnight = engine.evaluate_scalping_overnight_decision(
-        "테스트",
-        "005930",
-        {},
-        holding_context=None,
-    )
 
     assert entry["action"] == "DROP"
     assert entry["provider_called"] is False
     assert holding["score"] == 50
     assert holding["provider_called"] is False
-    assert overnight["action"] == "SELL_TODAY"
-    assert overnight["provider_called"] is False
 
 
 def test_ai_input_preflight_does_not_activate_without_master_flag(monkeypatch):
@@ -879,10 +860,6 @@ def _build_provider_engine(engine_cls):
     engine.consecutive_failures = 0
     engine.max_consecutive_failures = 1
     engine.current_api_key_index = 0
-    engine.model_tier1_fast = "tier1-model"
-    engine.model_tier2_balanced = "tier2-model"
-    engine.model_tier3_deep = "tier3-model"
-    engine.current_model_name = engine.model_tier1_fast
     return engine
 
 
@@ -1212,19 +1189,12 @@ def test_holding_context_is_shared_and_blocks_unsupported_continuation(monkeypat
         position,
         holding_context=holding_context,
     )
-    overnight = engine.evaluate_scalping_overnight_decision(
-        "테스트",
-        "005930",
-        {"avg_price": 10000, "curr_price": 10010, "buy_qty": 1},
-        holding_context=holding_context,
-    )
 
     assert (
         json.loads(captured["holding_score"])["holding_decision_context"]["schema"]
         == "holding_decision_context_v1"
     )
     assert "holding_decision_context_v1" in captured["holding_flow"]
-    assert "holding_decision_context_v1" in captured["overnight"]
     assert flow["semantic_validator_version"] == (
         "holding_flow_live_schema_semantic_v1"
     )
@@ -1255,11 +1225,9 @@ def test_holding_context_is_shared_and_blocks_unsupported_continuation(monkeypat
     assert score["holding_context_hold_defer_allowed"] is False
     assert flow["action"] == "HOLD"
     assert flow["holding_context_hold_defer_allowed"] is False
-    assert overnight["action"] == "SELL_TODAY"
-    assert overnight["holding_context_action_clamped"] is True
 
 
-def test_holding_flow_and_overnight_preserve_exact_request_trace_fields(monkeypatch):
+def test_holding_flow_preserves_exact_request_trace_fields(monkeypatch):
     engine = _build_engine()
     captured_traces = []
 
@@ -1357,18 +1325,11 @@ def test_holding_flow_and_overnight_preserve_exact_request_trace_fields(monkeypa
         position,
         holding_context=holding_context,
     )
-    overnight = engine.evaluate_scalping_overnight_decision(
-        "테스트",
-        "005930",
-        {**position, **ws_data},
-        holding_context=holding_context,
-    )
 
     assert [row[0]["ai_decision_trace_id"] for row in captured_traces] == [
         "holding_flow-trace",
-        "overnight-trace",
     ]
-    for result in (flow, overnight):
+    for result in (flow,):
         assert result["ai_prompt_sha256"] == "a" * 64
         assert result["ai_prompt_store_date"] == "2026-07-24"
         assert result["ai_prompt_replay_exact"] is True
@@ -2266,7 +2227,7 @@ def test_scalping_entry_prompts_align_default_runtime_buy_band():
         assert "70-100 BUY" not in prompt
 
 
-def test_tier2_surfaces_do_not_advance_analyze_target_cooldown(monkeypatch):
+def test_price_and_flow_do_not_advance_analyze_target_cooldown(monkeypatch):
     engine = _build_engine()
     engine.last_call_time = 1234.5
 
@@ -2322,17 +2283,12 @@ def test_tier2_surfaces_do_not_advance_analyze_target_cooldown(monkeypatch):
             "current_ai_score": 50,
         },
     )
-    engine.evaluate_scalping_overnight_decision(
-        "테스트",
-        "005930",
-        {"curr_price": 10000, "avg_price": 9900, "pnl_pct": 0.7},
-    )
 
     assert engine.last_call_time == 1234.5
     assert engine.consecutive_failures == 0
 
 
-def test_analyze_target_routes_scalping_and_swing_to_expected_tiers(monkeypatch):
+def test_analyze_target_routes_scalping_and_swing_by_role(monkeypatch):
     engine = _build_engine()
     used_models = []
 
@@ -2363,7 +2319,7 @@ def test_analyze_target_routes_scalping_and_swing_to_expected_tiers(monkeypatch)
         "스윙", ws_data, recent_ticks, recent_candles, strategy="KOSDAQ_ML"
     )
 
-    assert used_models == ["gpt-5.4-nano", "tier2-model"]
+    assert used_models == ["gpt-5.4-nano", "gpt-5.4-mini"]
 
 
 def test_analyze_target_uses_exact_snapshot_stock_code_for_request_provenance(
@@ -2465,8 +2421,8 @@ def test_analyze_target_routes_scalping_prompt_profiles(monkeypatch):
     ]
     assert used_models == [
         "gpt-5.4-nano",
-        "tier1-model",
-        "tier1-model",
+        "gpt-5-nano",
+        "gpt-5-nano",
         "gpt-5.4-nano",
     ]
     assert watching["ai_prompt_type"] == "scalping_entry"
@@ -2474,7 +2430,7 @@ def test_analyze_target_routes_scalping_prompt_profiles(monkeypatch):
     assert exiting["ai_prompt_type"] == "scalping_holding"
     assert shared["ai_prompt_type"] == "scalping_shared"
     assert watching["ai_model"] == "gpt-5.4-nano"
-    assert exiting["ai_model"] == "tier1-model"
+    assert exiting["ai_model"] == "gpt-5-nano"
     assert shared["ai_model"] == "gpt-5.4-nano"
     assert watching["ai_prompt_version"] == "hot_v1"
 
@@ -2879,7 +2835,7 @@ def test_scalping_legacy_text_entry_payload_includes_feature_provenance(monkeypa
     assert "ma5_available: false" in text
 
 
-def test_swing_tier2_analyze_target_input_labels_are_english_ascii():
+def test_swing_analysis_input_labels_are_english_ascii():
     engine = _build_engine()
     candles = [
         {"체결시간": f"10:{idx:02d}:00", "현재가": 10000 + idx, "거래량": 1000 + idx}
@@ -3373,53 +3329,7 @@ def test_provider_holding_matrix_cache_token_separates_cache_variants(monkeypatc
         assert second["cache_hit"] is False
 
 
-def test_provider_overnight_engine_disabled_is_annotated():
-    for engine_cls, _, _ in PROVIDER_ENGINES:
-        engine = _build_provider_engine(engine_cls)
-        engine.ai_disabled = True
-
-        result = engine.evaluate_scalping_overnight_decision(
-            "테스트",
-            "000001",
-            {"position_status": "HOLDING", "curr_price": 10000},
-        )
-
-        assert result["action"] == "SELL_TODAY"
-        assert result["reason"] == "engine_disabled_sell_today_fallback"
-        assert result["risk_note"] == "engine_disabled"
-        assert result["ai_prompt_type"] == "scalping_overnight"
-        assert result["ai_prompt_version"] == "overnight_v1"
-        assert result["ai_result_source"] == "engine_disabled"
-        assert result["ai_parse_fail"] is False
-        assert result["provider_called"] is False
-        assert result["ai_trace_stock_code"] == "000001"
-        assert result["ai_trace_reference_price_type"] == "current_price"
-        assert result["ai_trace_reference_price"] == 10000
-
-
-def test_provider_overnight_failure_disables_engine(monkeypatch):
-    def _raise(*args, **kwargs):
-        raise RuntimeError("provider down")
-
-    for engine_cls, _, call_name in PROVIDER_ENGINES:
-        engine = _build_provider_engine(engine_cls)
-        monkeypatch.setattr(engine, call_name, _raise)
-
-        result = engine.evaluate_scalping_overnight_decision(
-            "테스트",
-            "000001",
-            {"position_status": "HOLDING", "curr_price": 10000},
-        )
-
-        assert engine.ai_disabled is True
-        assert result["action"] == "SELL_TODAY"
-        assert result["reason"] == "ai_failure_sell_today_fallback"
-        assert result["risk_note"] == "ai_response_error_or_insufficient_context"
-        assert result["ai_result_source"] == "exception"
-        assert result["ai_parse_fail"] is True
-
-
-def test_openai_overnight_uses_batch_timeout_profile(monkeypatch):
+def test_openai_active_roles_keep_timeout_profiles(monkeypatch):
     monkeypatch.setattr(
         ai_engine_openai_module,
         "TRADING_RULES",
@@ -3430,22 +3340,10 @@ def test_openai_overnight_uses_batch_timeout_profile(monkeypatch):
             OPENAI_ENTRY_PRICE_TIMEOUT_MS=7000,
             OPENAI_HOLDING_SCORE_TIMEOUT_MS=7000,
             OPENAI_HOLDING_FLOW_TIMEOUT_MS=15000,
-            OPENAI_SCANNER_REPORT_TIMEOUT_MS=15000,
-            OPENAI_OVERNIGHT_TIMEOUT_MS=12000,
         ),
     )
     engine = _build_provider_engine(GPTSniperEngine)
 
-    assert (
-        engine._get_openai_timeout_ms(endpoint_name="overnight", require_json=True)
-        == 12000
-    )
-    assert (
-        engine._get_openai_timeout_ms(
-            endpoint_name="scanner_report", require_json=False
-        )
-        == 15000
-    )
     assert (
         engine._get_openai_timeout_ms(endpoint_name="analyze_target", require_json=True)
         == 3000
@@ -3572,37 +3470,7 @@ def test_analyze_target_pre_provider_timeout_like_error_is_not_transport_timeout
     assert result["openai_local_failure_reason"] == "local feature timeout"
 
 
-def test_openai_sim_observation_overnight_failure_does_not_disable_engine(monkeypatch):
-    engine = _build_provider_engine(GPTSniperEngine)
-
-    def _raise(*args, **kwargs):
-        raise TimeoutError("Request timed out.")
-
-    monkeypatch.setattr(engine, "_call_openai_safe", _raise)
-
-    result = engine.evaluate_scalping_overnight_decision(
-        "SIM",
-        "000001",
-        {
-            "position_status": "SIM_HOLDING",
-            "simulation_book": "scalp_ai_buy_all",
-            "actual_order_submitted": False,
-            "broker_order_forbidden": True,
-            "decision_authority": "sim_observation_only",
-            "curr_price": 10000,
-        },
-    )
-
-    assert engine.ai_disabled is False
-    assert engine.consecutive_failures == 0
-    assert result["action"] == "SELL_TODAY"
-    assert result["reason"] == "ai_failure_sell_today_fallback"
-    assert result["risk_note"] == "ai_response_error_or_insufficient_context"
-    assert result["ai_result_source"] == "exception"
-    assert result["sim_observation_failure_isolated"] is True
-
-
-def test_realtime_report_and_overnight_decision_use_tier2_model(monkeypatch):
+def test_realtime_report_uses_role_model(monkeypatch):
     engine = _build_engine()
     used_models = []
 
@@ -3624,29 +3492,42 @@ def test_realtime_report_and_overnight_decision_use_tier2_model(monkeypatch):
     engine.generate_realtime_report(
         "리포트주", "000001", "legacy packet", analysis_mode="SWING"
     )
-    engine.evaluate_scalping_overnight_decision(
-        "오버나이트주", "000001", {"curr_price": 10000}
-    )
 
-    assert used_models == ["tier2-model", "tier2-model"]
+    assert used_models == ["gpt-5.4-mini"]
 
 
-def test_scanner_briefing_uses_tier3_model(monkeypatch):
+
+
+def test_role_change_invalidates_only_its_analysis_and_gatekeeper_cache(monkeypatch):
     engine = _build_engine()
-    used_models = []
-
-    monkeypatch.setattr(
-        ai_engine_openai_module,
-        "build_scanner_data_input",
-        lambda **kwargs: "scanner-data",
-    )
-
-    def _fake_call(*args, **kwargs):
-        used_models.append(kwargs.get("model_override"))
-        return "브리핑"
-
-    monkeypatch.setattr(engine, "_call_openai_safe", _fake_call)
-
-    engine.analyze_scanner_results(100, 5, "stats", "macro")
-
-    assert used_models == ["tier3-model"]
+    rules = ai_engine_openai_module.TRADING_RULES
+    ws = {"curr": 10000, "fluctuation": 1.0, "orderbook": {"asks": [], "bids": []}}
+    key_args = dict(target_name="TEST", strategy="SCALPING", ws_data=ws,
+                    recent_ticks=[], recent_candles=[], program_net_qty=0, cache_profile="default")
+    # The role-independent input digest remains reusable; the request cache
+    # adds only the selected role model in analyze_target.
+    input_key = engine._build_analysis_cache_key_with_profile(**key_args)
+    gate_args = dict(stock_name="TEST", stock_code="005930", realtime_ctx=ws, analysis_mode="SCALP")
+    report_key = engine._build_gatekeeper_cache_key(**gate_args)
+    monkeypatch.setattr(ai_engine_openai_module, "TRADING_RULES", replace(
+        rules, OPENAI_HOLDING_FLOW_MODEL="changed-flow"))
+    assert engine._build_analysis_cache_key_with_profile(**key_args) == input_key
+    assert engine._build_gatekeeper_cache_key(**gate_args) == report_key
+    monkeypatch.setattr(ai_engine_openai_module, "TRADING_RULES", replace(
+        rules, OPENAI_REALTIME_REPORT_MODEL="changed-report"))
+    assert engine._build_gatekeeper_cache_key(**gate_args) != report_key
+    used = []
+    monkeypatch.setattr(engine, "_call_openai_safe", lambda *a, **kw:
+                        (used.append(kw["model_override"]) or {"action": "WAIT", "score": 70, "reason": "ok"}))
+    monkeypatch.setattr(engine, "_apply_remote_entry_guard", lambda result, **kw: result, raising=False)
+    # A genuine same-input cache hit precedes the role change. The changed
+    # watching role must produce a new request, with no new cadence budget.
+    first = engine.analyze_target("TEST", ws, [], [], strategy="SCALPING", prompt_profile="watching")
+    cached = engine.analyze_target("TEST", ws, [], [], strategy="SCALPING", prompt_profile="watching")
+    monkeypatch.setattr(ai_engine_openai_module, "TRADING_RULES", replace(
+        rules, OPENAI_SCALPING_ENTRY_MODEL="changed-entry"))
+    changed = engine.analyze_target("TEST", ws, [], [], strategy="SCALPING", prompt_profile="watching")
+    assert cached["cache_hit"] is True
+    assert used == [rules.OPENAI_SCALPING_ENTRY_MODEL, "changed-entry"]
+    assert first["ai_model"] == rules.OPENAI_SCALPING_ENTRY_MODEL
+    assert changed["ai_model"] == "changed-entry"

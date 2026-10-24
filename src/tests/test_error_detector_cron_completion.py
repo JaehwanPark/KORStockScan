@@ -32,7 +32,8 @@ def test_finalization_detector_window_precedes_preopen_scanner():
 ])
 @pytest.mark.parametrize('job_id,label', [
     ('buy_funnel_sentinel', 'buy_funnel_sentinel'), ('buy_funnel_sentinel', 'buy funnel sentinel'),
-    ('holding_exit_sentinel', 'holding_exit_sentinel'), ('holding_exit_sentinel', 'holding exit sentinel')])
+    ('holding_exit_sentinel', 'holding_exit_sentinel'), ('holding_exit_sentinel', 'holding exit sentinel'),
+    ('panic_sell_defense', 'panic_sell_defense'), ('panic_sell_defense', 'panic sell defense')])
 def test_recurring_sentinel_recovers_only_after_latest_real_owner_done(monkeypatch, tmp_path, markers, expected, job_id, label):
     import src.engine.error_detectors.cron_completion as cc
     job = next(dict(job) for job in CRON_JOB_REGISTRY if job['id'] == job_id)
@@ -48,7 +49,9 @@ def test_recurring_sentinel_recovers_only_after_latest_real_owner_done(monkeypat
     monkeypatch.setattr(cc, '_kst_time_tuple', lambda: (10, 30))
     monkeypatch.setattr(cc, 'is_krx_trading_day', lambda day: True)
     monkeypatch.setattr(cc, 'CRON_JOB_REGISTRY', [job])
-    marker = 'BUY_FUNNEL_SENTINEL_INTRADAY' if job_id == 'buy_funnel_sentinel' else 'HOLDING_EXIT_SENTINEL_PREMARKET'
+    marker = {'buy_funnel_sentinel': 'BUY_FUNNEL_SENTINEL_INTRADAY',
+              'holding_exit_sentinel': 'HOLDING_EXIT_SENTINEL_PREMARKET',
+              'panic_sell_defense': 'PANIC_SELL_DEFENSE_INTRADAY'}[job_id]
     monkeypatch.setattr(cc, 'load_installed_crontab', lambda: '*/5 9-15 * * 1-5 # '+marker)
     result = CronCompletionDetector(dry_run=True).check()
     assert result.details[job_id+'_status'] == expected
@@ -387,8 +390,9 @@ def test_error_detector_cron_install_preserves_release_routed_finalization(tmp_p
         )
     ],
 )
+@pytest.mark.parametrize('schema_version', [1, 2])
 def test_postclose_completion_shares_exact_bounded_running_gate(
-    monkeypatch, tmp_path, case, expected
+    monkeypatch, tmp_path, case, expected, schema_version
 ):
     import src.engine.error_detectors.cron_completion as cc
     from src.engine.error_detectors.artifact_freshness import ArtifactFreshnessDetector
@@ -405,7 +409,7 @@ def test_postclose_completion_shares_exact_bounded_running_gate(
     if case == "other_owner":
         job["id"] = "other_owner"
     payload = {
-        "schema_version": 1,
+        "schema_version": schema_version,
         "report_type": "threshold_cycle_postclose_status",
         "target_date": "2026-09-10",
         "status": "running",
@@ -414,6 +418,8 @@ def test_postclose_completion_shares_exact_bounded_running_gate(
         "runtime_effect": False,
         "started_at": "2026-09-10T20:10:04+09:00",
     }
+    if schema_version == 2:
+        payload.update(run_id='a'*32, code_commit='b'*40)
     if case == "failed":
         payload.update(status="failed", exit_code=1)
     elif case == "done":
@@ -453,6 +459,9 @@ def test_postclose_completion_shares_exact_bounded_running_gate(
     result = detector.check()
     assert result.details[f"{job['id']}_status"] == expected
     assert result.severity == ("warning" if expected == "in_progress" else expected)
+    if expected == 'in_progress':
+        assert result.details[f"{job['id']}_running_deadline"] == '23:20 source date'
+        assert 'before source-date 23:20' in result.summary
 
 
 @pytest.fixture(autouse=True)

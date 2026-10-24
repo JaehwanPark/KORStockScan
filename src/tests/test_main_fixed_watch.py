@@ -415,3 +415,48 @@ def test_revived_fixed_identity_persists_then_rebinds_venue_without_inheriting_w
     assert restored['effective_venue'] == 'KRX'
     assert before['effective_venue'] == 'NXT'
     assert fixed.revived_watch_identity({}, symbol=symbol, now_epoch=epoch(10)) == {}
+
+
+@pytest.mark.parametrize("damage", [None, "signature", "admission", "generation", "venue", "order", "owner"])
+def test_revived_wait_writer_keeps_new_identity_without_restoring_runtime_source(monkeypatch, tmp_path, damage):
+    from copy import deepcopy
+    from types import SimpleNamespace
+    from src.engine import sniper_execution_receipts as receipts, sniper_state_handlers as handlers
+    from src.engine.monitoring import submission_bottleneck_monitor as monitor
+    from src.utils import pipeline_event_logger as writer
+    from src.tests.test_submission_bottleneck_monitor import _source_gap_files
+    at = epoch(10)
+    fields = fixed.revived_watch_identity(dict(watch_origin=fixed.WATCH_ORIGIN), symbol="005930", now_epoch=at)
+    stock = dict(id=7, code="005930", name="test", strategy="SCALPING", status="HOLDING",
+        source_signature="old-signature", market_data_route="nxt_only", broker_route="NXT", **fields)
+    monkeypatch.setattr(receipts, "POSITION_PEAK_LEDGER", SimpleNamespace(remove_for_stock=lambda _:None))
+    monkeypatch.setattr(receipts, "highest_prices", {})
+    monkeypatch.setattr(receipts, "move_orders_to_terminal", lambda *a, **k:None)
+    receipts._apply_scalp_revive_memory_state(target_stock=stock, code="005930", new_watch_id=8,
+        revived_position_tag="SCALP_BASE", revived_at_ts=at, fixed_watch_fields=fields)
+    assert "source_signature" not in stock and "market_data_route" not in stock
+    assert fixed.observation_ready(stock, {}, now_epoch=at+1) == (False, "fixed_watch_warmup")
+    before = deepcopy(stock)
+    monkeypatch.setattr(writer, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(writer, "log_info", lambda *a:None)
+    monkeypatch.setattr(handlers, "emit_pipeline_event", lambda *a, **k:writer.emit_pipeline_event(
+        *a, **k, observed_at_epoch=at+1))
+    monkeypatch.setattr(handlers, "pipeline_lifecycle_fields_safe", lambda *a, **k:{})
+    monkeypatch.setattr(handlers, "observe_candidate_transition_safe", lambda *a, **k:None)
+    row = handlers._log_entry_pipeline(stock, "005930", "main_fixed_watch_observation_wait",
+        source_quality_reason="fixed_watch_warmup", actual_order_submitted=False, broker_order_forbidden=True)
+    assert row["structured_append_succeeded"] is True
+    assert stock == before
+    assert row["fields"]["source_signature"] == "MAIN_FIXED_WATCH:"+fields["watch_admission_id"]
+    values = row["fields"]
+    if damage == "signature":values["source_signature"] = "old-signature"
+    elif damage == "admission":values["watch_admission_id"] = "foreign"
+    elif damage == "generation":values["watch_generation_id"] = "0"*64
+    elif damage == "venue":values["effective_venue"] = "NXT"
+    elif damage == "order":values["actual_order_submitted"] = "True"
+    elif damage == "owner":values["watch_origin"] = "SCANNER"
+    now = datetime.fromtimestamp(at+2,KST)
+    _source_gap_files(tmp_path,now,probes=[row])
+    census = monitor.source_gap_semantics(tmp_path,now)["fixed_watch_waits"]
+    assert census["known_source_wait_count"] == int(damage is None)
+    assert census["unclassified_or_actionable_wait_count"] == int(damage is not None)

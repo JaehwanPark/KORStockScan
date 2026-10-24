@@ -5247,3 +5247,37 @@ def test_report_uses_captured_missing_source_status(tmp_path, monkeypatch):
     assert result['source_quality']['status'] == 'missing_pipeline_events'
     assert result['source_quality']['pipeline_events_exists'] is False
     assert result['source_snapshot']['row_count'] == 0
+
+
+def test_compressed_replay_skips_unrelated_blocks_without_changing_order(tmp_path, monkeypatch):
+    path = tmp_path / 'events.jsonl'
+    rows = [{'stage': 'unrelated', 'record_id': i} for i in range(1024)] + [{'stage': 'selected', 'record_id': i} for i in range(5)]
+    path.write_text(''.join(json.dumps(row) + '\n' for row in rows))
+    with mod._pipeline_replay(path) as replay:
+        native = mod.pickle.load
+        reads = []
+        def counted(*args, **kwargs):
+            reads.append(1)
+            return native(*args, **kwargs)
+        monkeypatch.setattr(mod.pickle, 'load', counted)
+        assert list(mod._pipeline_rows(replay, stages={'selected'})) == rows[-5:]
+        assert len(reads) == 5
+        assert list(replay) == rows
+
+
+def test_prior_reports_decode_once_and_changed_generation_reloads(tmp_path, monkeypatch):
+    path = tmp_path / 'prior.json'
+    path.write_text('{"nested":{"id":1}}')
+    native = mod.json.load
+    calls = []
+    def counted(*args, **kwargs):
+        calls.append(1)
+        return native(*args, **kwargs)
+    monkeypatch.setattr(mod.json, 'load', counted)
+    cache = {}
+    mod._prior_daily_report(path, cache)['nested']['id'] = 'changed caller'
+    assert mod._prior_daily_report(path, cache) == {'nested': {'id': 1}}
+    assert len(calls) == 1
+    path.write_text('{"nested":{"id":2}}')
+    assert mod._prior_daily_report(path, cache) == {'nested': {'id': 2}}
+    assert len(calls) == 2

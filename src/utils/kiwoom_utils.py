@@ -641,6 +641,9 @@ def _kiwoom_token_file_lock():
 # ==========================================
 # 1. API 설정 및 공통 유틸리티
 # ==========================================
+KIWOOM_BASE_URL_PROVENANCE = {'status':'unobserved'}
+
+
 def get_kiwoom_base_url():
     """
     스마트 URL 스위치 (운영/모의투자 자동 감지)
@@ -648,6 +651,10 @@ def get_kiwoom_base_url():
     자동으로 모의투자 URL 또는 실투자 URL을 세팅합니다.
     """
 
+    global KIWOOM_BASE_URL_PROVENANCE
+    # Clear the previous successful read before resolving a new generation.
+    # This observer never changes the existing URL/fallback or token behavior.
+    KIWOOM_BASE_URL_PROVENANCE = {'status':'unobserved'}
     # GCP에는 dev_path가 있고, AWS에는 없으므로 알아서 분기됩니다!
     target_path = CONFIG_PATH if os.path.exists(CONFIG_PATH) else DEV_PATH
 
@@ -656,11 +663,18 @@ def get_kiwoom_base_url():
             conf = json.load(f)
             # config에 명시된 URL이 있으면 가져오고, 없으면 실투자 URL을 기본값으로 씁니다.
             base_url = conf.get("KIWOOM_BASE_URL", "https://api.kiwoom.com")
+            KIWOOM_BASE_URL_PROVENANCE = dict(status='observed',
+                origin=base_url if isinstance(base_url,str) and base_url in ('https://api.kiwoom.com','https://mockapi.kiwoom.com') else None,
+                explicit_origin=isinstance(conf.get('KIWOOM_BASE_URL'),str)
+                    and bool(conf['KIWOOM_BASE_URL'].strip()),
+                credential_present=isinstance(conf.get('KIWOOM_APPKEY'),str)
+                    and bool(conf['KIWOOM_APPKEY'].strip()))
             # Also called for each market-cache scope, not only at startup.
             # Successful resolution must be silent on both stdout and stderr;
             # keep reading the origin so cache isolation stays unchanged.
             return base_url
     except Exception as e:
+        KIWOOM_BASE_URL_PROVENANCE = {'status':'source_gap'}
         # Startup diagnostics must stay on stderr even if file logging fails.
         print(f"⚠️ 설정 로드 실패. 실투자 기본 URL로 폴백합니다: {e}", file=sys.stderr)
         return "https://api.kiwoom.com"
@@ -2133,8 +2147,9 @@ def get_stock_eligibility_map_ka10099(
     ``ka10017(stk_cnd=10)``.
     """
 
-    source_revision = ("953e5dbff123f437ab4d11a78a95191a685eb51f" if runtime_prepare
-                       else "234560d213acd8871ae344b5481aecd2f30287fa")
+    from src.trading.market.aftermarket_eligibility import official_listing_venue_fields
+
+    source_revision = "953e5dbff123f437ab4d11a78a95191a685eb51f"
     observed_at = observed_at_kst or datetime.now(_KST)
     if isinstance(observed_at, datetime) and observed_at.tzinfo is not None:
         observed_at = observed_at.astimezone(_KST).isoformat(timespec="seconds")
@@ -2251,21 +2266,8 @@ def get_stock_eligibility_map_ka10099(
                 nxt_eligible = (
                     True if nxt_enable == "Y" else False if nxt_enable == "N" else None
                 )
-                blocked_reasons = []
-                if "환기" in audit_info or "관리" in audit_info:
-                    blocked_reasons.append("audit_info_excluded")
-                elif audit_info not in {"", "정상"}:
-                    blocked_reasons.append("audit_info_unknown")
-                if "관리" in stock_state:
-                    blocked_reasons.append("management_state_excluded")
-                if not order_warning:
-                    blocked_reasons.append("order_warning_missing")
-                elif order_warning != "0":
-                    blocked_reasons.append("order_warning_excluded")
-                product_quality_eligible = not blocked_reasons
-                if nxt_eligible is None:
-                    blocked_reasons.append("nxt_enable_unknown")
-                blocked_reasons.append("krx_aftermarket_eligibility_unknown")
+                venue_fields = official_listing_venue_fields(
+                    item, trade_date=source_trade_date, nxt_eligible=nxt_eligible)
                 raw_payload_sha256 = hashlib.sha256(
                     json.dumps(
                         item,
@@ -2278,11 +2280,7 @@ def get_stock_eligibility_map_ka10099(
                 snapshot = {
                     "trade_date": source_trade_date,
                     "stock_code": code,
-                    "eligible": product_quality_eligible,
-                    "krx_regular_eligible": True,
-                    "nxt_eligible": nxt_eligible,
-                    "krx_aftermarket_eligible": None,
-                    "eligible_venues_json": ["NXT"] if nxt_eligible is True else [],
+                    **venue_fields,
                     "audit_info": audit_info,
                     "state": stock_state,
                     "stock_state": stock_state,
@@ -2293,10 +2291,6 @@ def get_stock_eligibility_map_ka10099(
                     "source_revision": source_revision,
                     "observed_at_kst": observed_at,
                     "payload_sha256": raw_payload_sha256,
-                    "quality_state": (
-                        "PARTIAL" if nxt_eligible is not None else "UNKNOWN"
-                    ),
-                    "blocked_reasons": blocked_reasons,
                 }
                 previous = result.get(code)
                 if previous is not None and ((runtime_prepare and previous.get("quality_state") == "CONFLICT") or any(
@@ -4201,7 +4195,7 @@ def get_zero_base_volume_surge_ka10023(
                     **code_fields, "Name": name, "Price": price,
                     "ChangeRate": _scanner_to_signed_float(item.get("flu_rt")),
                     "Volume": _scanner_to_int(item.get("now_trde_qty")),
-                    "SurgeQty": _scanner_to_int(item.get("sdnin_qty")),
+                    "SurgeQty": _scanner_to_signed_int(item.get("sdnin_qty")),
                     "PreSig": item.get("pred_pre_sig"),
                     "SourceRank": source_rank,
                 })
@@ -4261,7 +4255,7 @@ def scan_volume_spike_ka10023(token, mrkt_tp="000", trde_qty_tp=None, pric_tp=No
                     "cur_prc": curr_price,  # 하위 호환성 유지
                     "TradeQty": _scanner_to_int(item.get("now_trde_qty")),
                     "PreviousTradeQty": _scanner_to_int(item.get("prev_trde_qty")),
-                    "SurgeQty": _scanner_to_int(item.get("sdnin_qty")),
+                    "SurgeQty": _scanner_to_signed_int(item.get("sdnin_qty")),
                     "PreSig": item.get("pred_pre_sig", ""),
                     "PreSigDirection": _pred_pre_signal_direction(
                         item.get("pred_pre_sig")
@@ -5888,18 +5882,10 @@ def is_trading_day():
     return True, "정상거래일"
 
 
-def is_valid_stock(code, name, token=None, current_price=0):
-    """
-    [공통 필터] 불순물 종목을 걸러냅니다.
-    스팩(SPAC), ETF(KODEX 포함), ETN, 우선주, 리츠 등을 제외하여 순수 상장 주식만 매매 엔진에 전달합니다.
-    가격/유동성 조건은 scanner priority 또는 submit safety guard에서 별도로 판단합니다.
-    """
-    name_upper = name.upper()
-
-    # ==========================================
-    # 1. 이름 기반 필터링 (KODEX 포함 제외 목록)
-    # ==========================================
-    invalid_keywords = [
+def is_non_equity_product_name(name):
+    """Share product exclusions across intake, restored probes and prefetch."""
+    name_upper = str(name or "").strip().upper()
+    invalid_keywords = (
         "스팩",
         "ETF",
         "ETN",
@@ -5917,24 +5903,33 @@ def is_valid_stock(code, name, token=None, current_price=0):
         "PLUS ",
         "TIMEFOLIO",
         "KIWOOM ",
-    ]
+        "KOACT ",
+        "선물",
+        "레버리지",
+        "블룸버그",
+        "VIX",
+        "인버스",
+    )
+    # TIME is the renamed ETF brand, not a substring exclusion for companies.
+    return name_upper.startswith("TIME ") or any(
+        keyword in name_upper for keyword in invalid_keywords
+    )
 
-    for keyword in invalid_keywords:
-        if keyword in name_upper:
-            return False
 
+def is_valid_stock(code, name, token=None, current_price=0):
+    """
+    [공통 필터] 불순물 종목을 걸러냅니다.
+    스팩(SPAC), ETF(KODEX 포함), ETN, 우선주, 리츠 등을 제외하여 순수 상장 주식만 매매 엔진에 전달합니다.
+    가격/유동성 조건은 scanner priority 또는 submit safety guard에서 별도로 판단합니다.
+    """
+    if is_non_equity_product_name(name):
+        return False
     # 2. 우선주 필터링 (이름 끝자리 및 코드 번호 규칙)
     if name.endswith(("우", "우B", "우C")):
         return False
 
     if len(str(code)) == 6 and str(code)[-1] != "0":
         return False
-
-    # 3. 파생상품 및 기타 예외 처리
-    derivative_keywords = ["선물", "레버리지", "블룸버그", "VIX", "인버스"]
-    for keyword in derivative_keywords:
-        if keyword in name_upper:
-            return False
 
     return True
 

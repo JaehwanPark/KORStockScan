@@ -49,15 +49,52 @@ _MAIN_MARKET_REGIME: dict = {}
 _IMPLEMENTATION: dict | None = None
 _POLICY_CACHE: dict = {}
 _AI_STATE: dict[str, dict] = {}
-AI_STATE_FIELDS = (
-    "ai_disabled",
-    "consecutive_failures",
-    "max_consecutive_failures",
-    "current_model_name",
-    "model_tier1_fast",
-    "model_tier2_balanced",
-    "model_tier3_deep",
-)
+AI_CIRCUIT_FIELDS = ("ai_disabled", "consecutive_failures", "max_consecutive_failures")
+AI_STATE_FIELDS = (*AI_CIRCUIT_FIELDS, "role_models")
+# Historical capture schema only. These names never select live request models.
+_LEGACY_MODEL_FIELDS = ("current_model_name", "model_tier1_fast",
+                        "model_tier2_balanced", "model_tier3_deep")
+
+
+def ai_policy_state(engine):
+    return {**{name: _json_value(getattr(engine, name)) for name in AI_CIRCUIT_FIELDS},
+            "role_models": engine.model_configuration()}
+
+
+def normalize_ai_policy_state(state, rules):
+    """Read original captures without rewriting bytes or reviving tier state."""
+    from src.engine.ai_engine_openai import GPTSniperEngine
+    from src.utils.constants import TradingConfig
+
+    if not isinstance(state, dict):
+        raise ValueError("initial_ai_engine_policy_state_missing")
+    settings = GPTSniperEngine.MODEL_ROLE_SETTINGS
+    if set(state) == set(AI_STATE_FIELDS):
+        models = state["role_models"]
+        if not isinstance(models, dict) or set(models) != {*settings, "compact_auxiliary"}:
+            raise ValueError("recorded_role_model_contract_invalid")
+    elif set(state) == {*AI_CIRCUIT_FIELDS, *_LEGACY_MODEL_FIELDS}:
+        if any(not isinstance(state[key], str) or not state[key].strip()
+               for key in _LEGACY_MODEL_FIELDS):
+            raise ValueError("recorded_legacy_model_contract_invalid")
+        fast, report = state["model_tier1_fast"], state["model_tier2_balanced"]
+        models = {setting: getattr(rules, setting, None) or getattr(TradingConfig, setting)
+                  for setting in settings}
+        for setting in ("OPENAI_SCALPING_SHARED_MODEL", "OPENAI_WATCHING_SHADOW_MODEL",
+                        "OPENAI_GATEKEEPER_SHADOW_MODEL"):
+            models[setting] = fast
+        models["OPENAI_SCALPING_ENTRY_MODEL"] = getattr(rules, "OPENAI_SCALPING_ENTRY_MODEL", None) or fast
+        for setting in ("OPENAI_REALTIME_REPORT_MODEL", "OPENAI_SWING_ANALYSIS_MODEL"):
+            models[setting] = report
+        models["compact_auxiliary"] = GPTSniperEngine._get_compact_auxiliary_model()
+    else:
+        raise ValueError("initial_ai_engine_policy_state_missing")
+    if (any(not isinstance(model, str) or not model.strip() for model in models.values())
+            or models["compact_auxiliary"] != GPTSniperEngine._get_compact_auxiliary_model()):
+        raise ValueError("recorded_role_model_contract_invalid")
+    return {**{name: state[name] for name in AI_CIRCUIT_FIELDS}, "role_models": dict(models)}
+
+
 GLOBALS = (
     "COOLDOWNS",
     "ALERTED_STOCKS",
@@ -98,7 +135,7 @@ def record_ai_state(code, engine) -> None:
     if engine is None:
         return
     try:
-        state = {name: _json_value(getattr(engine, name)) for name in AI_STATE_FIELDS}
+        state = ai_policy_state(engine)
         with _LOCK:
             _AI_STATE[str(code)[:6]] = state
             while len(_AI_STATE) > 64:
@@ -157,6 +194,10 @@ def policy_snapshot(handlers, now_ts: float) -> dict:
         DATA_DIR / "runtime" / "trade_pause_state.json",
         DATA_DIR.parent / "pause.flag",
         registry_path(),
+        # ENTRY replay imports this catalog inside the frozen-file sandbox.
+        # Its source must travel with the policy, never be read from live disk.
+        Path(__file__).with_name("reversal_cumulative_data.json"),
+        Path(__file__).with_name("reversal_price_progress_data.json"),
     }
     for key, value in {**rules, **environment}.items():
         if (

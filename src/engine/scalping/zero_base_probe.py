@@ -1087,6 +1087,11 @@ def run_zero_base_probe(
             )
         try:
             for calculation_index in range(2):
+                if observation_context is not None:
+                    # Retain this caller's issued reference even when native
+                    # invalidation returns before the engine's success projection.
+                    result['native_observation'] = {k: deepcopy(v) for k, v in observation_context.items()
+                                                    if k != 'snapshot'}
                 machine = ai_engine.analyze_target(
                     candidate.get("name") or code, ws_data, ticks, candles,
                     strategy="SCALPING", prompt_profile="watching", machine_only=True,
@@ -1153,9 +1158,21 @@ def run_zero_base_probe(
         # assessment. These fields never admit a candidate or change retries.
         for field in ("evaluation_attempt_id", "native_observation", "machine_evaluation_status",
                       "machine_capture_status", "machine_observation_sha256",
-                      "machine_bundle_sha256"):
+                      "machine_bundle_sha256", "provider_called", "continuous_reversal_rejected_claim_receipt"):
             if machine.get(field) is not None:
                 result[field] = machine[field]
+        # Keep the engine's measured input boundary on rejected assessments too.
+        # Missing timings stay absent; this projection cannot admit or retry.
+        machine_input_trace = {
+            field: deepcopy(machine[field]) for field in (
+                "entry_machine_input_as_of", "entry_machine_input_preparation_ms",
+                "entry_machine_input_preparation_stages_ms",
+                "entry_machine_input_feature_build_ms", "entry_local_stage_timings_ms",
+                "response_ms",
+            ) if machine.get(field) is not None
+        }
+        if machine_input_trace:
+            result["machine_input_trace"] = machine_input_trace
         if machine.get("ai_input_runtime_preflight_artifact_status") is not None:
             result["machine_preflight_artifact_status"] = machine[
                 "ai_input_runtime_preflight_artifact_status"]

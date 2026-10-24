@@ -523,20 +523,36 @@ def verify_prepared(target_date: str, *, require_today: bool = False,
         release_changed = (receipt["selected_release_commit"] != commit
                            or receipt["selection_sha256"] != _sha(selection_path))
         expected_source = receipt
+        snapshot = None
         if release_changed:
-            from src.engine.automation.intraday_release_handoff import verify as verify_intraday
-            handoff = verify_intraday(target_date, commit, now=now)
-            preserved = handoff.get("handoff") or {}
-            if (handoff["status"] != "pass" or preserved.get("prepared_receipt_path") != str(receipt_path)
-                    or preserved.get("prepared_receipt_sha256") != _sha(receipt_path)):
-                raise ValueError("prepared_source_or_release_changed")
-            handoff_basis = "intraday_preserved_preopen_generation"
-            reseal = preserved.get('postclose_source_reseal')
-            if reseal is not None:
-                expected_source = reseal['current_source_receipts']
-                handoff_basis = 'intraday_preserved_preopen_generation_current_postclose_resealed'
-        snapshot = ((preserved.get('postclose_source_reseal') or {}).get('historical_checklist')
-                    if release_changed else None)
+            from src.engine.automation import intraday_release_handoff as H
+            selection = _read(selection_path)
+            native_pid = (selection.get('actual_pid_receipt') or {}).get('pid')
+            native = (receipt['selected_release_commit'] == commit
+                and selection.get('actual_pid_consumed') is True
+                and not H._paths(target_date, commit)[0].exists())
+            if native:
+                checked = H.verify_pid_consumption(target_date, pid=native_pid, now=now)
+                if (checked.get('status') != 'pass' or checked.get('basis') != 'native_preopen'
+                        or checked.get('actual_pid_consumed') is not True
+                        or checked.get('selected_release_commit') != commit):
+                    raise ValueError('prepared_native_consumption_unverified')
+                snapshot = H.preserve_checklist(target_date)
+                if snapshot['source_date'] != receipt['source_date']:
+                    raise ValueError('prepared_native_source_date_changed')
+                handoff_basis = 'native_consumed_preopen_preserved_generation'
+            else:
+                handoff = H.verify(target_date, commit, now=now)
+                preserved = handoff.get('handoff') or {}
+                if (handoff['status'] != 'pass' or preserved.get('prepared_receipt_path') != str(receipt_path)
+                        or preserved.get('prepared_receipt_sha256') != _sha(receipt_path)):
+                    raise ValueError('prepared_source_or_release_changed')
+                handoff_basis = 'intraday_preserved_preopen_generation'
+                reseal = preserved.get('postclose_source_reseal')
+                if reseal is not None:
+                    expected_source = reseal['current_source_receipts']
+                    handoff_basis = 'intraday_preserved_preopen_generation_current_postclose_resealed'
+                snapshot = (preserved.get('postclose_source_reseal') or {}).get('historical_checklist')
         source = _source_receipts(receipt["source_date"], target_date,
             **({"generation_only": True} if generation_only or snapshot else {}),
             **({"checklist_snapshot": Path(snapshot['path'])} if snapshot else {}))
@@ -589,6 +605,10 @@ def verify_prepared(target_date: str, *, require_today: bool = False,
         if (check.get("status") != "pass"
                 or check.get("manifest_sha256") != receipt["manifest_content_sha256"]):
             raise ValueError("prepared_bootstrap_changed:" + ",".join(check.get("findings") or []))
+        if handoff_basis == 'native_consumed_preopen_preserved_generation':
+            if (H.verify_pid_consumption(target_date, pid=native_pid, now=now) != checked
+                    or _read(selection_path) != selection):
+                raise ValueError('prepared_native_consumption_changed')
     except (OSError, ValueError, KeyError, TypeError, subprocess.CalledProcessError) as exc:
         findings.append(str(exc))
         receipt = {}
@@ -601,6 +621,8 @@ def verify_prepared(target_date: str, *, require_today: bool = False,
         "selected_release_commit": commit if handoff_basis and not findings else receipt.get("selected_release_commit"),
         "preserved_preopen_commit": receipt.get("selected_release_commit") if handoff_basis else None,
         "handoff_basis": handoff_basis,
+        "native_predecessor_consumption": (checked if handoff_basis ==
+            'native_consumed_preopen_preserved_generation' and not findings else None),
         "actual_pid_consumed": False,
         "runtime_effect": False,
         "validation_scope": ("intraday_preserved_historical_generation" if handoff_basis and not findings
@@ -653,15 +675,25 @@ def main(argv: list[str] | None = None) -> int:
     if args.verify_completion and not args.selected_release_commit:
         parser.error("--verify-completion requires --selected-release-commit")
     try:
-        if args.prepare:
-            from src.engine.infrastructure.validation_digest_session import postclose_session
-            with postclose_session(DATA_DIR, args.source_date) as session:
-                result = prepare(args.source_date, target_date=args.target_date)
+        if args.prepare or args.verify:
+            from src.engine.infrastructure.validation_digest_session import ACTIVE, postclose_session
+            # The day scopes this invocation, not the semantic source contract.
+            # Full verification still resolves and validates the sealed receipt.
+            day = args.source_date if args.prepare else args.target_date
+            parent = ACTIVE.get()
+            if (parent is not None and parent.binding.get('role') == 'postclose'
+                    and parent.invocation_pid == os.getpid()
+                    and parent.binding.get('lexical_root') == str(DATA_DIR)
+                    and parent.binding.get('resolved_root') == str(DATA_DIR.resolve(strict=True))):
+                # P5 owns the source-day invocation and captures its digest
+                # closure after this CLI returns. Preserve that exact owner.
+                day = parent.binding['day']
+            with postclose_session(DATA_DIR, day) as session:
+                result = (prepare(args.source_date, target_date=args.target_date) if args.prepare
+                          else verify_prepared(args.target_date, require_today=args.require_today))
             result = {**result, 'validation_io': session.stats}
         else:
-            result = (verify_prepared(args.target_date, require_today=args.require_today)
-                      if args.verify else verify_preopen_completion(
-                          args.target_date, args.selected_release_commit))
+            result = verify_preopen_completion(args.target_date, args.selected_release_commit)
     except (OSError, ValueError, KeyError, TypeError, subprocess.CalledProcessError) as exc:
         result = {"status": "fail", "reason": str(exc), "actual_pid_consumed": False}
     print(json.dumps(result, ensure_ascii=False))

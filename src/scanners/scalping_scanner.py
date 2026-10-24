@@ -67,6 +67,7 @@ from src.engine.sniper_time import (
     scalping_session_venue_provenance,
 )
 from src.utils.constants import DATA_DIR, TRADING_RULES
+from src.utils import pipeline_event_logger as pipeline_observation
 from src.utils.pipeline_event_logger import emit_pipeline_event
 from src.scanners.scanner_source_census import (
     observe_cycle,
@@ -133,30 +134,6 @@ PRIMARY_RISING_START_SOURCES = {
     MARKET_GAINER_SOURCE,
 }
 LOW_REBOUND_BASE_SOURCES = {"VOLUME_SURGE_RAW", "VALUE_TOP", "REALTIME_RANK_START"}
-LOW_REBOUND_PREFETCH_EXCLUDED_NAME_KEYWORDS = (
-    "스팩",
-    "ETF",
-    "ETN",
-    "TIGER",
-    "KBSTAR",
-    "KODEX",
-    "KINDEX",
-    "ARIRANG",
-    "KOSEF",
-    "리츠",
-    "HANARO",
-    "SOL ",
-    "ACE ",
-    "RISE ",
-    "PLUS ",
-    "TIMEFOLIO",
-    "KIWOOM ",
-    "선물",
-    "레버리지",
-    "블룸버그",
-    "VIX",
-    "인버스",
-)
 
 
 def _resolve_scan_interval_sec(now_time):
@@ -1338,24 +1315,6 @@ def _lookup_attention_source_age_sec(target, *, now=None):
     return round((observed_at - source_at).total_seconds(), 6)
 
 
-ZERO_CONTEXT_FORBIDDEN_USES = (
-    "threshold_mutation,provider_route_change,order_price_relaxation,"
-    "quantity_or_cap_change,broker_guard_bypass,stale_quote_bypass,"
-    "hard_safety_guard_bypass,real_execution_quality_approval"
-)
-
-
-def _zero_context_value_missing(value) -> bool:
-    if value is None:
-        return True
-    text = str(value).strip().lower()
-    return (
-        text == ""
-        or text in {"-", "none", "null", "nan", "nat", "not_evaluated"}
-        or text.startswith("not_applicable")
-    )
-
-
 def _zero_context_value_state(
     value, *, missing: bool = False, not_applicable: bool = False
 ) -> str:
@@ -1364,37 +1323,9 @@ def _zero_context_value_state(
         return "non_zero"
     if not_applicable:
         return "not_applicable_zero"
-    if missing or _zero_context_value_missing(value):
+    if missing or pipeline_observation.zero_context_value_missing(value):
         return "missing_defaulted_zero"
     return "actual_zero"
-
-
-def _zero_context_observation_fields(
-    *, domain: str, blocker: str, states: dict
-) -> dict:
-    zero_states = {str(key): str(value) for key, value in (states or {}).items()}
-    blocking_states = [
-        value
-        for value in zero_states.values()
-        if value in {"missing_defaulted_zero", "stale_defaulted_zero"}
-    ]
-    return {
-        "zero_context_observed": bool(zero_states),
-        "zero_context_domain": str(domain or "unknown"),
-        "zero_context_blocker": str(blocker or "unknown"),
-        "zero_context_primary_state": (
-            blocking_states[0]
-            if blocking_states
-            else (
-                next(iter(zero_states.values()))
-                if zero_states
-                else "not_applicable_zero"
-            )
-        ),
-        "zero_context_defaulted_zero_field_count": len(blocking_states),
-        "zero_context_forbidden_uses": ZERO_CONTEXT_FORBIDDEN_USES,
-        **{f"zero_context_{key}_state": value for key, value in zero_states.items()},
-    }
 
 
 def _safe_positive_int(value, default=0):
@@ -3650,7 +3581,7 @@ def _scanner_zero_context_fields(
 ):
     cntr_str_available = bool(target.get("CntrStrAvailable", False))
     first_seen_not_applicable = source_guard_context == "first_seen_not_applicable"
-    return _zero_context_observation_fields(
+    return pipeline_observation.zero_context_observation_fields(
         domain="scanner_source_guard",
         blocker=source_guard.get("reason") or "candidate_observed",
         states={
@@ -6172,8 +6103,7 @@ def _merge_low_rebound_universe(universe, targets, source):
 
 
 def _is_low_rebound_prefetch_product_allowed(target):
-    name = str((target or {}).get("Name") or "").upper()
-    if any(keyword in name for keyword in LOW_REBOUND_PREFETCH_EXCLUDED_NAME_KEYWORDS):
+    if kiwoom_utils.is_non_equity_product_name((target or {}).get("Name")):
         return False
     price = _safe_positive_int((target or {}).get("Price"))
     min_price = _safe_positive_int(getattr(TRADING_RULES, "MIN_PRICE", 0))
@@ -6913,6 +6843,9 @@ def run_zero_base_scanner(*, token, event_bus, is_test_mode=False):
                     "zero_base_tick_read_source": result.get("tick_read_source") or "-",
                     "zero_base_tick_read_selection_reason": result.get("tick_read_selection_reason") or "-",
                     "zero_base_machine_contract_error": result.get("machine_contract_error") or "-",
+                    "continuous_reversal_rejected_claim_receipt": result.get("continuous_reversal_rejected_claim_receipt"),
+                    "provider_called": result.get("provider_called"),
+                    "zero_base_machine_input_trace": result.get("machine_input_trace"),
                     "zero_base_machine_source_gap_kind": result.get("machine_source_gap_kind") or "-",
                     "zero_base_machine_evaluation_status": result.get("machine_evaluation_status") or "-",
                     "zero_base_machine_preflight_artifact_status": result.get("machine_preflight_artifact_status") or "-",

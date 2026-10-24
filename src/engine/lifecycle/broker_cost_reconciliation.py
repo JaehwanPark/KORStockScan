@@ -69,7 +69,11 @@ def load_receipt(data_root: Path, completion_date: str, record_id: str) -> dict 
     return value
 
 
-def source_generation(data_root: Path, completion_date: str, *, additional_source_dates=None) -> dict:
+def source_generation(data_root: Path, completion_date: str, *, additional_source_dates=None,
+                      declared_research=None) -> dict:
+    if declared_research is None and additional_source_dates is None:
+        from src.engine.automation.main_trailing_source_reuse import frozen_cost_declaration
+        declared_research = frozen_cost_declaration(data_root, completion_date)
     directory = receipt_path(data_root, completion_date, "1").parent
     if any(parent.is_symlink() for parent in (directory, directory.parent, directory.parent.parent)):
         raise ValueError("cost_source_directory_symlink")
@@ -82,6 +86,10 @@ def source_generation(data_root: Path, completion_date: str, *, additional_sourc
             paths.append(path)
     paths.sort()
     total_bytes = 0
+    def account_read(size):
+        nonlocal total_bytes
+        total_bytes+=size
+        if total_bytes>MAX_GENERATION_BYTES:raise ValueError('research_cost_generation_size_limit')
     for path in paths:
         if not path.stem.isdigit() or path.is_symlink() or path.stat().st_size > MAX_BYTES:
             raise ValueError("cost_source_path_or_size_invalid")
@@ -103,8 +111,14 @@ def source_generation(data_root: Path, completion_date: str, *, additional_sourc
     if official.exists():
         if official.is_symlink() or official.parent.is_symlink() or official.stat().st_size > SOURCE_MAX_BYTES:
             raise ValueError("broker_cost_source_path_or_size_invalid")
-        with official.open("rb") as handle:
-            raw = handle.read(SOURCE_MAX_BYTES + 1)
+        declared_official = next((row for row in declared_research.get('source_dates', [])
+            if isinstance(row,dict) and row.get('source_date') == completion_date),None) if isinstance(declared_research,dict) else None
+        if declared_official is not None:
+            from .broker_cost_source import declared_source_bytes
+            raw = declared_source_bytes(data_root,declared_official,account_read=account_read)
+        else:
+            with official.open("rb") as handle:
+                raw = handle.read(SOURCE_MAX_BYTES + 1)
         if len(raw) > SOURCE_MAX_BYTES:
             raise ValueError("broker_cost_source_size_limit")
         result["official_source_sha256"] = hashlib.sha256(raw).hexdigest()
@@ -113,12 +127,40 @@ def source_generation(data_root: Path, completion_date: str, *, additional_sourc
     # corrections then invalidate only reports that actually depend on them.
     research = Path(data_root) / "runtime/initial_quantity_research_costs" / completion_date
     index_path = research / "index.json"
-    if additional_source_dates is not None or index_path.exists():
+    if declared_research is False:
+        if additional_source_dates is not None:
+            raise ValueError('research_cost_declared_scope_conflict')
+        # The sealed original predates the dedicated research publisher.
+        # Its complete actual/official scope was revalidated above.
+        return result
+    if declared_research is not None and additional_source_dates is not None:
+        raise ValueError('research_cost_declared_scope_conflict')
+    if declared_research is not None or additional_source_dates is not None or index_path.exists():
         if any(p.is_symlink() for p in (research, research.parent, index_path)):
             raise ValueError("research_cost_generation_symlink")
         index = None
         indexed_receipts = []
-        if index_path.exists():
+        if declared_research is not None:
+            # Revalidate references sealed by an existing immutable report.
+            # Current official/actual costs and every original receipt byte
+            # remain mandatory; a newer research allocation is a separate scope.
+            if (not isinstance(declared_research, dict)
+                    or set(declared_research) != {'source_dates', 'receipts'}
+                    or not isinstance(declared_research['receipts'], list)
+                    or not isinstance(declared_research['source_dates'], list)
+                    or len(declared_research['receipts']) > RESEARCH_COST_MAX_RECORDS
+                    or len(declared_research['source_dates']) > RESEARCH_COST_MAX_DATES):
+                raise ValueError('research_cost_declared_generation_invalid')
+            receipt_rows = declared_research['receipts']
+            date_rows = declared_research['source_dates']
+            index = dict(schema=RESEARCH_COST_INDEX_SCHEMA, completion_date=completion_date,
+                receipts={r['record_id']: r['content_sha256'] for r in receipt_rows},
+                source_dates=[r['source_date'] for r in date_rows])
+            if (len(index['receipts']) != len(receipt_rows)
+                    or len(set(index['source_dates'])) != len(date_rows)):
+                raise ValueError('research_cost_declared_generation_duplicate')
+            index['index_sha256'] = digest(index)
+        elif index_path.exists():
             if index_path.stat().st_size > MAX_GENERATION_BYTES:
                 raise ValueError("research_cost_index_size_limit")
             with index_path.open("rb") as handle:
@@ -126,6 +168,7 @@ def source_generation(data_root: Path, completion_date: str, *, additional_sourc
             if len(index_raw) > MAX_GENERATION_BYTES:
                 raise ValueError("research_cost_index_size_limit")
             index = json.loads(index_raw)
+        if index is not None:
             if (index.get("schema") != RESEARCH_COST_INDEX_SCHEMA
                     or index.get("completion_date") != completion_date
                     or index.get("index_sha256") != digest({k: v for k, v in index.items() if k != "index_sha256"})
@@ -152,6 +195,7 @@ def source_generation(data_root: Path, completion_date: str, *, additional_sourc
                                          "receipt_sha256": receipt.get("receipt_sha256")})
         dates = sorted(set(additional_source_dates if additional_source_dates is not None
                            else (index or {}).get("source_dates", [])))
+        declared_sources={row['source_date']:row for row in declared_research['source_dates']} if declared_research is not None else {}
         if len(dates) > RESEARCH_COST_MAX_DATES:
             raise ValueError("research_cost_dependency_date_limit")
         sources = []
@@ -165,11 +209,15 @@ def source_generation(data_root: Path, completion_date: str, *, additional_sourc
             if path.exists():
                 if path.stat().st_size > SOURCE_MAX_BYTES:
                     raise ValueError("research_cost_source_dependency_size_limit")
-                with path.open("rb") as handle:
-                    raw = handle.read(SOURCE_MAX_BYTES + 1)
+                if day in declared_sources:
+                    from .broker_cost_source import declared_source_bytes
+                    raw=declared_source_bytes(data_root,declared_sources[day],account_read=account_read)
+                else:
+                    with path.open("rb") as handle:
+                        raw = handle.read(SOURCE_MAX_BYTES + 1)
                 if len(raw) > SOURCE_MAX_BYTES:
                     raise ValueError("research_cost_source_dependency_size_limit")
-                total_bytes += len(raw)
+                if day not in declared_sources:total_bytes += len(raw)
                 if total_bytes > MAX_GENERATION_BYTES:
                     raise ValueError("research_cost_generation_size_limit")
                 try:

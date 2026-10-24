@@ -13,6 +13,7 @@ observer feature flag is enabled.
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import queue
 import threading
@@ -425,6 +426,9 @@ class ForwardCollectorSnapshot:
     detector_clock_adjustment_max_ms: int
     timestamp_rejection_sample_total: int = 0
     timestamp_rejection_samples: tuple[dict[str, Any], ...] = ()
+    timestamp_rejection_ledger: dict[str, Any] | None = None
+    process_pid: int = 0
+    process_start_ticks: str = ""
     source_contract: str | None = None
     raw_reconciliation_completed: bool | None = None
     raw_reconciliation_error_count: int | None = None
@@ -513,6 +517,16 @@ class ForwardObservationCollector:
         self._depth_source_sequences: dict[tuple[str, str, str], int] = {}
         self._sequence_epoch = time.time_ns()
         self._source_epochs = {self._sequence_epoch}
+        self._process_pid = os.getpid()
+        self._process_start_ticks = Path(f"/proc/{self._process_pid}/stat").read_text().rsplit(")", 1)[1].split()[19]
+        # One epoch-owned journal, written only by the existing collector worker.
+        # The callback queues receipts without encoding or disk I/O.
+        self._rejection_queue = queue.Queue(maxsize=self.config.observation_queue_size)
+        self._rejection_path = self.config.output_root / "timestamp_rejections" / f"{self._sequence_epoch}.jsonl"
+        self._rejection_file = None
+        self._rejection_digest = hashlib.sha256()
+        self._rejection_bytes = self._rejection_persisted = self._rejection_errors = 0
+        self._rejection_sealed = False
         self._completed_bar_transport_epoch = 0
         self._series_epochs: dict[tuple[str, str, str], int] = {}
         self._sequence_losses: dict[tuple[int, str, str, str], dict[int, str]] = {}
@@ -680,11 +694,11 @@ class ForwardObservationCollector:
 
     def close(self, *, timeout_sec: float = 10.0) -> None:
         deadline = time.monotonic() + max(0.01, timeout_sec)
-        self._increment("_close_attempts")
         callback_timeout_error: TimeoutError | None = None
         with self._callback_condition:
             if self._lifecycle is CollectorLifecycle.CLOSED:
                 return
+            self._increment("_close_attempts")
             thread = self._thread
             depth_thread = self._depth_thread
             self._accepting = False
@@ -768,7 +782,7 @@ class ForwardObservationCollector:
                 writer.request_close()
             except Exception as exc:  # collector shutdown must inspect every writer
                 close_errors.append(exc)
-        writer_deadline = time.monotonic() + max(0.01, timeout_sec)
+        writer_deadline = deadline
         for writer in writers:
             try:
                 writer.wait_closed(
@@ -786,6 +800,27 @@ class ForwardObservationCollector:
             close_errors.append(
                 RuntimeError(f"{writer_alive_count} path writer(s) remain alive")
             )
+        try:
+            if self._rejection_file is not None:
+                self._rejection_file.flush()
+                os.fsync(self._rejection_file.fileno())
+                self._rejection_file.close()
+                self._rejection_file = None
+                fd = os.open(self._rejection_path.parent, os.O_RDONLY | os.O_DIRECTORY)
+                try:
+                    os.fsync(fd)
+                finally:
+                    os.close(fd)
+            with self._metrics_lock:
+                self._rejection_sealed = (
+                    self._rejection_errors == 0
+                    and self._rejection_persisted == self._timestamp_rejection_sample_total
+                    and self._rejection_queue.empty()
+                )
+            if not self._rejection_sealed:
+                raise RuntimeError("timestamp_rejection_journal_incomplete")
+        except Exception as exc:
+            close_errors.append(exc)
         try:
             self._reconcile_references_and_paths(shutdown_clean=not close_errors)
         except Exception as exc:
@@ -1196,7 +1231,7 @@ class ForwardObservationCollector:
         packet_snapshot: dict[str, Any] | None = None,
     ) -> None:
         # No I/O or unbounded per-symbol maps on the producer callback. This
-        # tail is diagnostic only; it cannot reconstruct all rejected rows.
+        # tail is diagnostic only; the worker persists the complete queued census.
         checked_at_ms = time.time_ns() // 1_000_000
         received_at_ms = (
             received_at_ms if received_at_ms and received_at_ms > 0 else None
@@ -1221,7 +1256,8 @@ class ForwardObservationCollector:
         with self._state_lock:
             local_observer_epoch = self._sequence_epoch
         sample = {
-            "process_pid": os.getpid(),
+            "process_pid": self._process_pid,
+            "process_start_ticks": self._process_start_ticks,
             "symbol": normalize_symbol(symbol),
             "item": item,
             "venue": venue,
@@ -1277,6 +1313,10 @@ class ForwardObservationCollector:
                     self._completed_bar_unscoped_rejections += 1
             sample["rejection_index"] = self._timestamp_rejection_sample_total
             self._timestamp_rejection_samples.append(sample)
+            try:
+                self._rejection_queue.put_nowait(sample)
+            except queue.Full:
+                self._rejection_errors += 1
 
     def runtime_snapshot(self) -> ForwardCollectorSnapshot:
         adapter = self._adapter.runtime_snapshot()
@@ -1326,6 +1366,17 @@ class ForwardObservationCollector:
                 source_contract="main_market_source_v1" if self._detector is None else None,
                 raw_reconciliation_completed=self._raw_reconciliation_completed if self._detector is None else None,
                 raw_reconciliation_error_count=self._raw_reconciliation_errors if self._detector is None else None,
+                process_pid=self._process_pid,
+                process_start_ticks=self._process_start_ticks,
+                timestamp_rejection_ledger={
+                    "schema": "timestamp_rejection_ledger_v1",
+                    "path": str(self._rejection_path.absolute()),
+                    "sha256": self._rejection_digest.hexdigest(),
+                    "bytes": self._rejection_bytes,
+                    "rows": self._rejection_persisted,
+                    "errors": self._rejection_errors,
+                    "sealed": self._rejection_sealed,
+                },
                 timestamp_rejection_sample_total=self._timestamp_rejection_sample_total,
                 timestamp_rejection_samples=tuple(
                     dict(sample) for sample in self._timestamp_rejection_samples
@@ -1605,10 +1656,37 @@ class ForwardObservationCollector:
             self._depth_source_sequences[series_key] = sequence
             return self._sequence_epoch, sequence
 
-    def _run(self) -> None:
-        while not self._stop_requested.is_set() or self._sink.qsize() > 0:
+    def _persist_timestamp_rejections(self) -> None:
+        # Bounded batches keep valid-row processing responsive to rejection bursts.
+        for _ in range(self.config.path_batch_size):
             try:
-                envelope = self._sink.get(timeout=self.config.worker_poll_interval_sec)
+                sample = self._rejection_queue.get_nowait()
+            except queue.Empty:
+                return
+            try:
+                if self._rejection_file is None:
+                    self._rejection_path.parent.mkdir(parents=True, exist_ok=True)
+                    self._rejection_file = self._rejection_path.open("xb")
+                raw = (json.dumps(sample, ensure_ascii=True, allow_nan=False,
+                                  separators=(",", ":")) + "\n").encode()
+                if self._rejection_file.write(raw) != len(raw):
+                    raise OSError("timestamp_rejection_short_write")
+                with self._metrics_lock:
+                    self._rejection_digest.update(raw)
+                    self._rejection_bytes += len(raw)
+                    self._rejection_persisted += 1
+            except Exception:
+                with self._metrics_lock:
+                    self._rejection_errors += 1
+            finally:
+                self._rejection_queue.task_done()
+
+    def _run(self) -> None:
+        while (not self._stop_requested.is_set() or self._sink.qsize() > 0
+               or not self._rejection_queue.empty()):
+            self._persist_timestamp_rejections()
+            try:
+                envelope = self._sink.get(timeout=0 if not self._rejection_queue.empty() else self.config.worker_poll_interval_sec)
             except queue.Empty:
                 continue
             try:

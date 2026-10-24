@@ -10,6 +10,7 @@ import math
 import os
 import re
 import stat
+import sys
 import threading
 import time
 from itertools import islice
@@ -62,7 +63,7 @@ class BoundedObservationQueue:
 
     def submit(self, callback, *args, **kwargs):
         category = kwargs.pop('observation_category', 'default')
-        if category not in {'default', 'pre_submit_delay', 'initial_quantity', 'main_stop'}:
+        if category not in {'default', 'pre_submit_delay', 'initial_quantity', 'main_stop', 'trailing'}:
             return self._unavailable('observation_category_invalid')
         try:
             # Copy at admission, never retain a live stock or an AI payload.
@@ -87,7 +88,7 @@ class BoundedObservationQueue:
                 or self._category_bytes.get(category, 0) + size > self.max_bytes // 4
             ):
                 return self._unavailable('observation_category_budget_exceeded')
-            if category in {'initial_quantity','main_stop'} and (
+            if category in {'initial_quantity','main_stop','trailing'} and (
                 self._category_items.get(category,0)>=min(128,max(1,self.max_items//8))
                 or self._category_bytes.get(category,0)+size>self.max_bytes//8
             ):
@@ -223,6 +224,36 @@ class BoundedObservationQueue:
             if self._items:
                 self._unavailable('observation_shutdown_drain_timeout')
             return self._items == 0
+
+
+_TRAILING_OBSERVATION_SINK = None
+
+
+def configure_trailing_observation_sink(sink):
+    """Use Main's existing bounded executor and shutdown drain owner."""
+    global _TRAILING_OBSERVATION_SINK
+    _TRAILING_OBSERVATION_SINK = sink
+
+
+def _append_trailing_observation(name, code, record_id, fields):
+    from src.engine.scalping.universal_trailing_replay import encode_quote
+    fields['universal_trailing_quote_source_sha256'] = fields['universal_trailing_quote'].get('source_sha256')
+    fields['universal_trailing_quote'] = json.dumps(
+        encode_quote(fields['universal_trailing_quote']), sort_keys=True, separators=(',', ':'))
+    return emit_pipeline_event('HOLDING_PIPELINE', name, code,
+        'scalp_trailing_input_transition', record_id=record_id, fields=fields,
+        observed_at_epoch=fields['evaluation_at_epoch'])
+
+
+def enqueue_trailing_observation(name, code, record_id, fields):
+    # Admission copies finite JSON; the writer never retains a live position.
+    # No synchronous fallback when the diagnostic queue is full or closed.
+    sink = _TRAILING_OBSERVATION_SINK
+    if sink is None:
+        return dict(status='unavailable', reason='trailing_observation_sink_missing',
+                    structured_append_succeeded=False)
+    return sink(_append_trailing_observation, name, code, record_id, fields,
+                observation_category='trailing')
 
 _TEXT_INFO_STAGE_KEYWORDS = (
     "order_submitted",
@@ -563,8 +594,14 @@ def _flush_producer_summary_at_exit() -> None:
 
 
 def drain_pipeline_event_summary_before_termination() -> None:
-    """Flush now, then synchronously publish any diagnostic rows before SIGTERM."""
+    """Close loaded observation sources, then flush their rows before SIGTERM."""
     global _TERMINATION_DRAIN_ACTIVE
+    engine = sys.modules.get('src.engine.kiwoom_sniper_v2')
+    if engine is not None:
+        try:
+            engine.close_observation_sources()
+        except Exception as exc:
+            log_error('[SOURCE_OBSERVATION_SHUTDOWN_FAILED] type=' + type(exc).__name__)
     with _COMPACTOR_LOCK:
         _TERMINATION_DRAIN_ACTIVE = True
         current = _PRODUCER_COMPACTOR
@@ -591,6 +628,52 @@ def drain_pipeline_event_summary_before_termination() -> None:
 
 
 atexit.register(_flush_producer_summary_at_exit)
+
+
+ZERO_CONTEXT_FORBIDDEN_USES = (
+    "threshold_mutation,provider_route_change,order_price_relaxation,"
+    "quantity_or_cap_change,broker_guard_bypass,stale_quote_bypass,"
+    "hard_safety_guard_bypass,real_execution_quality_approval"
+)
+
+
+def zero_context_value_missing(value) -> bool:
+    if value is None:
+        return True
+    text = str(value).strip().lower()
+    return (
+        text == ""
+        or text in {"-", "none", "null", "nan", "nat", "not_evaluated"}
+        or text.startswith("not_applicable")
+    )
+
+
+def zero_context_observation_fields(
+    *, domain: str, blocker: str, states: dict
+) -> dict:
+    zero_states = {str(key): str(value) for key, value in (states or {}).items()}
+    blocking_states = [
+        value
+        for value in zero_states.values()
+        if value in {"missing_defaulted_zero", "stale_defaulted_zero"}
+    ]
+    return {
+        "zero_context_observed": bool(zero_states),
+        "zero_context_domain": str(domain or "unknown"),
+        "zero_context_blocker": str(blocker or "unknown"),
+        "zero_context_primary_state": (
+            blocking_states[0]
+            if blocking_states
+            else (
+                next(iter(zero_states.values()))
+                if zero_states
+                else "not_applicable_zero"
+            )
+        ),
+        "zero_context_defaulted_zero_field_count": len(blocking_states),
+        "zero_context_forbidden_uses": ZERO_CONTEXT_FORBIDDEN_USES,
+        **{f"zero_context_{key}_state": value for key, value in zero_states.items()},
+    }
 
 
 def sanitize_pipeline_field(value) -> str:
@@ -739,6 +822,17 @@ def _project_fields_for_text(stage: str, fields: dict[str, str]) -> dict[str, st
         # The structured source is stored once; diagnostics carry its identity.
         return {key:value for key,value in fields.items() if key!='main_stop_source'} | {
             'text_field_projection':'main_stop_source_reference_only_v1'}
+    if stage == 'scalp_trailing_input_transition':
+        # Canonical fields retain the lossless source once. Text diagnostics
+        # reference the sequence/hash instead of duplicating the large capsule.
+        keys = ('id', 'position_key', 'event_sequence', 'evaluation_at_epoch',
+                'observation_stream_contract', 'observation_buy_fill_identity',
+                'universal_trailing_quote_source_sha256', 'observation_telemetry_gap',
+                'observation_admission_failure', 'tuning_grid_source_complete',
+                'tuning_grid_source_gap_reason', 'tuning_market_type', 'evaluator',
+                'armed', 'triggered', 'decision_authority', 'runtime_effect')
+        return {key:fields[key] for key in keys if key in fields} | {
+            'text_field_projection':'trailing_quote_reference_only_v1'}
     if stage in {
         "scalping_scanner_source_fetch_census",
         "scalping_scanner_candidate_pool_census",
@@ -922,6 +1016,10 @@ def _append_partition_jsonl(
                 if created or durable_every_append:
                     os.fsync(descriptor)
                     _fsync_parent_directory(parent_descriptor, target=physical_path)
+                if physical_path.parent.name == 'pipeline_events':
+                    from src.engine.automation.main_trailing_source_store import capture_native_append
+                    capture_native_append(physical_path, before=metadata,
+                        after=os.fstat(descriptor), raw=payload)
             finally:
                 try:
                     fcntl.flock(descriptor, fcntl.LOCK_UN)
@@ -1102,11 +1200,13 @@ def emit_pipeline_event(
     try:
         with _WRITE_LOCK:
             raw_append_attempted = True
-            _append_pipeline_event_jsonl(
-                _event_path(storage_partition_date),
-                raw_line,
-                late_partition=storage_partition_date != emitted_date,
-            )
+            from src.engine.automation.main_trailing_source_store import append_record
+            with append_record(event_payload):
+                _append_pipeline_event_jsonl(
+                    _event_path(storage_partition_date),
+                    raw_line,
+                    late_partition=storage_partition_date != emitted_date,
+                )
             raw_append_succeeded = True
             if compact_line is not None:
                 compact_append_attempted = True
@@ -1130,6 +1230,12 @@ def emit_pipeline_event(
     # Diagnostic failure must never prevent raw or threshold-companion writes.
     # Its disk flush also must not hold the raw writer's process-wide lock.
     if raw_append_succeeded:
+        if safe_pipeline == 'HOLDING_PIPELINE' and safe_stage == 'sell_completed':
+            try:
+                from src.engine.scalping.initial_quantity_cap_observation import observe_position_terminal
+                observe_position_terminal(event_payload)
+            except Exception as exc:
+                log_error(f"[QUANTITY_CAPTURE_TERMINAL_SOURCE_FAILED] record_id={record_id}: {type(exc).__name__}")
         try:
             compactor = _get_producer_compactor()
             if compactor is not None:

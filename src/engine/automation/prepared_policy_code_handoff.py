@@ -158,8 +158,196 @@ def verify(data, day, *, family, policy_sha, expected, paths, actual, now=None):
                 policy_effect='unchanged', actual_pid_consumed=False)
 
 
+def resolve_prepared_code_origin(data, day, *, family, policy_sha, expected, paths,
+                                 selected_root, selected_commit):
+    """Authenticate the frozen policy origin before reviewing a new candidate.
+
+    A new readiness generation can name today's selected release while its
+    unchanged policy still carries an older code contract. Resolve that chain
+    through the selected release's existing native handoff; never invent a new
+    origin, publish a receipt, or treat candidate code as selected code.
+    """
+    from src.engine.infrastructure.runtime_release_router import selected_release
+    if family not in FAMILIES or not isinstance(paths, dict) or not paths:
+        raise ValueError('prepared_code_origin_contract_invalid')
+    _clock(day)
+    data = Path(data).resolve(strict=True)
+    root = Path(selected_root).resolve(strict=True)
+    selector = data / 'runtime/runtime_release_selection.json'
+    selector_sha = _sha(selector)
+    if selected_release(data.parent) != (root, selected_commit):
+        raise ValueError('prepared_code_origin_selection_mismatch')
+    def selected_hashes(inventory, *, missing_allowed=False):
+        result = {}
+        for key, name in inventory.items():
+            if (not isinstance(key, str) or not isinstance(name, str)
+                    or not (root / name).resolve(strict=False).is_relative_to(root)):
+                raise ValueError('prepared_code_origin_path_invalid')
+            path = root / name
+            if missing_allowed and not path.exists() and not path.is_symlink():
+                return None
+            result[key] = _sha(path)
+        return result
+    code_hashes = selected_hashes(paths, missing_allowed=True)
+    actual = _digest(code_hashes) if code_hashes is not None else None
+    selected_paths = paths
+    sources = {str(selector): selector_sha}
+    result = dict(origin_commit=selected_commit, basis='selected_exact_code_contract',
+                  selected_release_root=str(root), selected_release_commit=selected_commit,
+                  original_code_sha256=expected, selected_runtime_code_sha256=actual)
+    if actual != expected:
+        from src.engine.automation import intraday_release_handoff as H
+        path = receipt_path(data, day, selected_commit, family)
+        if not path.exists() and not path.is_symlink():
+            # A live intraday carry has its own consumed native custody. Do not
+            # require or manufacture an unissued prepared-policy receipt.
+            checked = H._verify_consumed_handoff(day, selected_commit)
+            closed = None
+            if checked.get('status') != 'pass':
+                try:
+                    closed = H.closed_consumption_observation(day)
+                    checked = H._verify_handoff(day, selected_commit, historical_observer=True)
+                except (OSError, ValueError, TypeError, KeyError) as exc:
+                    raise ValueError('prepared_code_intraday_custody_invalid') from exc
+            if checked.get('status') != 'pass':
+                raise ValueError('prepared_code_intraday_custody_invalid')
+            handoff_path, consumed_path = H._paths(day, selected_commit)
+            handoff, consumed = _read(handoff_path), _read(consumed_path)
+            manifest_path = H.bootstrap.manifest_path(day)
+            manifest = _read(manifest_path)
+            origin = manifest.get('selected_release_sha')
+            policy_path, policy_code = _policy(data, day, family, manifest)
+            if (handoff != checked.get('handoff')
+                    or _bound(manifest, family) != policy_sha or policy_code != expected
+                    or consumed.get('manifest_sha256') != manifest.get('manifest_sha256')
+                    or origin != H._preopen(day).get('selected_release_commit')):
+                raise ValueError('prepared_code_intraday_policy_binding_invalid')
+            candidate = Path(H.__file__).resolve().parents[3]
+            trigger = 'src/engine/sniper_state_handlers.py'
+            variant = H.REVIEWED_AVG_DOWN_INPUT_DEPENDENCY_VARIANTS.get(
+                (trigger, _sha(candidate / trigger)), {})
+            extensions = variant.get('contract_extensions', {}).get((origin, expected), {})
+            selected_paths = {key: name for key, name in paths.items() if name not in extensions}
+            code_hashes = selected_hashes(selected_paths)
+            actual = _digest(code_hashes)
+            H._verify_entry_code_delta(root, selected_commit, origin, selected_paths, expected)
+            sources.update(handoff['frozen_files'])
+            sources.update({str(p): _sha(p) for p in (handoff_path, consumed_path, manifest_path, policy_path)})
+            sources.update({str(root / name): code_hashes[key] for key, name in selected_paths.items()})
+            identity = consumed['pid_identity']
+            if (closed and closed['pid_identity'] != identity
+                    or not closed and H._identity(identity['pid']) != identity or _sha(selector) != selector_sha
+                    or any(_sha(name) != sha for name, sha in sources.items())):
+                raise ValueError('prepared_code_intraday_generation_changed')
+            if closed:
+                sources.update(closed['source_hashes'])
+            result.update(origin_commit=origin, basis=('verified_closed_intraday_code_handoff' if closed
+                else 'verified_selected_intraday_code_handoff'), closed_observation=closed,
+                selected_runtime_code_sha256=actual, selected_paths=selected_paths, sources=sources,
+                intraday_handoff_path=str(handoff_path), intraday_handoff_sha256=_sha(handoff_path),
+                intraday_consumed_path=str(consumed_path), intraday_consumed_sha256=_sha(consumed_path),
+                pid_identity=identity, reviewed_extension_hashes=extensions)
+            return result
+        receipt_sha = _sha(path)
+        receipt = _read(path)
+        selected_paths = receipt.get('paths')
+        if not isinstance(selected_paths, dict) or not selected_paths:
+            raise ValueError('prepared_code_origin_inventory_invalid')
+        code_hashes = selected_hashes(selected_paths)
+        actual = _digest(code_hashes)
+        proof = verify(data, day, family=family, policy_sha=policy_sha,
+                       expected=expected, paths=selected_paths, actual=actual)
+        if proof is None:
+            raise ValueError('prepared_code_origin_handoff_missing')
+        if (_sha(path) != receipt_sha or proof.get('origin_commit') != receipt.get('origin_commit')
+                or proof.get('policy_effect') != 'unchanged'
+                or proof.get('actual_pid_consumed') is not False):
+            raise ValueError('prepared_code_origin_handoff_changed')
+        extensions = H.REVIEWED_DELAY_CONTRACT_EXTENSIONS.get((proof['origin_commit'], expected), {})
+        expected_paths = dict(selected_paths)
+        for name in extensions:
+            if name in selected_paths.values():
+                continue
+            # Historical policy keys are part of their frozen digest. Stop and
+            # holding use engine-relative keys (including ../utils), whereas
+            # delay uses repository-relative keys. Only values are Git paths.
+            if family in {'main_stop', 'holding_vote'}:
+                if not name.startswith('src/engine/'):
+                    raise ValueError('prepared_code_origin_inventory_extension_unreviewed')
+                key = name[len('src/engine/'):]
+            else:
+                key = name
+            if key in expected_paths:
+                raise ValueError('prepared_code_origin_inventory_extension_unreviewed')
+            expected_paths[key] = name
+        if paths != expected_paths:
+            raise ValueError('prepared_code_origin_inventory_extension_unreviewed')
+        sources[str(path)] = receipt_sha
+        sources.update(receipt['sources'])
+        result.update(origin_commit=proof['origin_commit'],
+                      basis='verified_selected_prepared_code_handoff',
+                      selected_runtime_code_sha256=actual,
+                      reviewed_extension_hashes={name:digest for name,digest in extensions.items()
+                                                 if name not in selected_paths.values()},
+                      code_handoff_receipt_path=str(path), code_handoff_receipt_sha256=receipt_sha)
+    sources.update({str(root / name):code_hashes[key] for key,name in selected_paths.items()})
+    if (_sha(selector) != selector_sha or selected_release(data.parent) != (root, selected_commit)
+            or any(_sha(name) != digest for name, digest in sources.items())):
+        raise ValueError('prepared_code_origin_sources_changed')
+    result['sources'] = sources
+    result['selected_paths'] = selected_paths
+    return result
+
+
+def issue_selected(data, day, *, release_root):
+    """Complete native prepared-code custody before the ordered P5 consumer.
+
+    The ordered caller holds the release-set lock and its owned startup hold.
+    Reuse verified receipts without rewriting their immutable generations.
+    """
+    from src.engine.automation import intraday_release_handoff as H
+    from src.engine.automation import ordered_intraday_deploy as D
+    from src.engine.infrastructure import runtime_release_router as R
+    from src.engine.scalping import main_stop_policy as S, holding_vote_experiment as V
+    from src.engine.scalping.pre_submit_delay_initial_policy import CONTRACT_PATHS
+    data, root = Path(data).resolve(), Path(release_root).resolve(strict=True)
+    with D._existing_selector_lock(data/'runtime/runtime_release_selection.lock'):
+        selected, commit = R.selected_release(data.parent)
+        if selected != root:
+            raise ValueError('prepared_code_issuance_not_selected')
+        selection = data/'runtime/runtime_release_selection.json'
+        before = _sha(selection)
+        checked = H._verify_handoff(day, commit)
+        if checked.get('status') != 'pass' or checked.get('findings'):
+            raise ValueError('prepared_code_issuance_handoff_invalid')
+        prepared_path = Path(checked['handoff']['prepared_receipt_path'])
+        prepared = _read(prepared_path)
+        manifest = _read(prepared['manifest_path'])
+        results = []
+        for family, inventory in (('pre_submit_delay', CONTRACT_PATHS),
+                                  ('main_stop', S.implementation_paths()),
+                                  ('holding_vote', V._code_paths())):
+            paths = {name: name if family == 'pre_submit_delay' else 'src/engine/'+name
+                     for name in inventory}
+            policy_sha = _bound(manifest, family)
+            _, expected = _policy(data, day, family, manifest)
+            actual = _digest({name: _sha(root/path) for name, path in paths.items()})
+            existing = verify(data, day, family=family, policy_sha=policy_sha,
+                              expected=expected, paths=paths, actual=actual)
+            path = receipt_path(data, day, commit, family)
+            if existing is None:
+                issue(data, day, family=family, policy_sha=policy_sha, expected=expected,
+                      paths=paths, release_root=root, prepared_receipt=prepared_path,
+                      origin_verification=prepared['verification_path'], confirm=AUTHORITY)
+            results.append(dict(family=family, path=str(path), sha256=_sha(path),
+                                actual_pid_consumed=False))
+        if _sha(selection) != before or R.selected_release(data.parent) != (root, commit):
+            raise ValueError('prepared_code_issuance_selection_changed')
+        return results
+
+
 def issue(data, day, *, family, policy_sha, expected, paths, release_root,
-          prepared_receipt, origin_verification, confirm):
+          prepared_receipt, origin_verification, confirm, previous_handoff=None):
     """Issue under the deployment caller's release-set and selection locks."""
     from src.engine.infrastructure.runtime_release_router import validate_release, selected_release
     from src.engine.automation import intraday_release_handoff as H
@@ -175,10 +363,30 @@ def issue(data, day, *, family, policy_sha, expected, paths, release_root,
     commit = subprocess.check_output(['git','-C',str(root),'rev-parse','HEAD'],text=True).strip()
     validate_release(data.parent, dict(schema='runtime_release_selection_v1', workspace=str(data.parent),
                                       release_root=str(root), git_commit=commit))
-    prepared, manifest = _origin(prepared_receipt, family, day)
+    selected_root, selected_commit = selected_release(data.parent)
+    previous = None
+    historical = None
+    if previous_handoff is not None:
+        previous_path = receipt_path(data, day, selected_commit, family)
+        if Path(previous_handoff) != previous_path:
+            raise ValueError('prepared_code_previous_handoff_not_selected')
+        previous = _read(previous_path)
+        previous_sha = _sha(previous_path)
+        previous_actual = _digest({key:_sha(selected_root/name) for key,name in paths.items()})
+        verified = verify(data, day, family=family, policy_sha=policy_sha, expected=expected,
+                          paths=paths, actual=previous_actual)
+        if (verified is None or verified.get('release_commit') != selected_commit
+                or _sha(previous_path) != previous_sha
+                or previous.get('original_prepared_receipt') != str(prepared_receipt)):
+            raise ValueError('prepared_code_previous_handoff_changed')
+        historical = previous['historical_snapshots']
+        # Reuse only the native verifier's immutable original coordinates.
+        # Never restore historical aliases over the current controller/policy.
+        prepared, manifest = _origin(previous['prepared_receipt'], family, day, historical)
+    else:
+        prepared, manifest = _origin(prepared_receipt, family, day)
     origin = prepared['selected_release_commit']
-    _, selected_commit = selected_release(data.parent)
-    if selected_commit not in {origin, commit}:
+    if previous is None and selected_commit not in {origin, commit}:
         raise ValueError('prepared_code_selection_changed')
     policy_path, policy_code = _policy(data, day, family, manifest)
     if (str(origin_verification) != prepared['verification_path']
@@ -194,8 +402,9 @@ def issue(data, day, *, family, policy_sha, expected, paths, release_root,
     frozen = Path(data)/'runtime/policy_bootstrap/code_handoffs/frozen'
     frozen.mkdir(parents=True, exist_ok=True)
     for source in historical_paths:
-        before = _sha(source)
-        raw = source.read_bytes()
+        physical = Path(historical[str(source)]) if historical is not None else source
+        before = _sha(physical)
+        raw = physical.read_bytes()
         if hashlib.sha256(raw).hexdigest() != before:
             raise ValueError('prepared_code_origin_changed')
         destination = frozen/(before+'.snapshot')
@@ -204,11 +413,16 @@ def issue(data, day, *, family, policy_sha, expected, paths, release_root,
                 handle.write(raw)
         except FileExistsError:
             pass
-        if _sha(destination) != before or _sha(source) != before:
+        if _sha(destination) != before or _sha(physical) != before:
             raise ValueError('prepared_code_frozen_origin_changed')
         snapshots[str(source)] = str(destination)
     sources = {name:_sha(name) for name in snapshots.values()}
     sources[str(policy_path)] = _sha(policy_path)
+    if previous is not None:
+        if (_sha(previous_path) != previous_sha
+                or selected_release(data.parent) != (selected_root, selected_commit)):
+            raise ValueError('prepared_code_previous_handoff_changed')
+        sources[str(previous_path)] = previous_sha
     body = dict(schema=SCHEMA, authority=confirm, family=family, target_date=day,
                 release_root=str(root), release_commit=commit, origin_commit=origin,
                 policy_sha256=policy_sha, original_code_sha256=expected, runtime_code_sha256=actual,
@@ -216,6 +430,9 @@ def issue(data, day, *, family, policy_sha, expected, paths, release_root,
                 original_prepared_receipt=str(prepared_receipt), historical_snapshots=snapshots,
                 origin_verification=snapshots[str(origin_verification)], sources=sources, policy_effect='unchanged',
                 actual_pid_consumed=False, policy_published=False, provider_called=False, broker_called=False)
+    if previous is not None:
+        body['previous_handoff'] = dict(path=str(previous_path), sha256=previous_sha,
+                                       release_commit=selected_commit)
     body['receipt_sha256'] = _digest(body)
     destination = receipt_path(data, day, commit, family)
     if destination.exists() and _read(destination) != body:

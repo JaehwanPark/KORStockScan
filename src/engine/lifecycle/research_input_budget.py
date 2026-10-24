@@ -40,6 +40,27 @@ class Claim:
             _USED += size
             self.size += size
 
+    def __copy__(self):
+        """A copied resident owner must acquire its own process-local bytes."""
+        global _USED
+        result = type(self).__new__(type(self))
+        result.size = 0
+        with _LOCK:
+            if _USED + self.size > LIMIT_BYTES:
+                raise ValueError('shared_research_budget_partition_resume_required')
+            _USED += self.size
+            result.size = self.size
+        return result
+
+    def __deepcopy__(self, memo):
+        result = self.__copy__()
+        memo[id(self)] = result
+        return result
+
+    def __reduce_ex__(self, protocol):
+        # A serialized size is not an acquired reservation in another process.
+        raise TypeError('research_input_claim_process_local')
+
     def __enter__(self):
         return self
 

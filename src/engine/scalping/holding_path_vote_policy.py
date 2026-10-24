@@ -319,6 +319,103 @@ def load_bundle(
                            require_current_code=require_current_code)
 
 
+def consumed_parent_handoff(data_root: Path, bundle: dict[str, Any]) -> dict | None:
+    """Authenticate a previously consumed policy, not its mutable audit reports.
+
+    The native consumption receipt pins the prepared handoff; that handoff
+    pins the bootstrap bytes containing this exact policy and its environment.
+    This closes historical parent provenance only. The caller still checks the
+    new source, numerical comparison, parent bytes and rollback cells in full.
+    No receipt is created, no old process is claimed live and no launch is allowed.
+    """
+    from .main_stop_policy import bounded_object
+    from src.engine.monitoring.observer_artifact_io import regular_bytes
+    from itertools import islice
+    root = Path(data_root).resolve()
+    day = bundle['target_date']
+    directory = root / 'runtime/policy_bootstrap'
+    receipts = directory / 'intraday_handoff' / day
+    if not receipts.exists():
+        return None
+    if receipts.resolve() != receipts.absolute():
+        raise ValueError('holding_vote_parent_consumption_path_invalid')
+    paths = sorted(islice(receipts.glob('*.consumed.json'), 257))
+    if len(paths) > 256:
+        raise ValueError('holding_vote_parent_consumption_budget_exceeded')
+    if not paths:
+        return None
+    manifest_path = directory / f'runtime_policy_bootstrap_{day}.json'
+    env_path = directory / f'runtime_policy_bootstrap_{day}.env'
+    manifest, manifest_sha = bounded_object(manifest_path, 8 * 1024 * 1024)
+    unsigned = {k: v for k, v in manifest.items() if k != 'manifest_sha256'}
+    bound = manifest.get('holding_path_vote_policy_receipt') or {}
+    expected = dict(status=publication_status(bundle), source_date=bundle['source_date'],
+        target_date=day, bundle_sha256=bundle['bundle_sha256'],
+        policy_set_sha256=bundle['policy_set_sha256'],
+        source_report_sha256=bundle['source_report_sha256'], cell_count=len(bundle['cells']),
+        allowed_runtime_apply=True, path=str(policy_path(root, day)))
+    # Publication and bootstrap use different status labels for the same bundle.
+    expected['status'] = ('validated_successor_verified' if bundle.get('selection_mode') == 'validated_successor'
+        else 'verified_incumbent_carried' if bundle.get('schema') == SUCCESSOR_SCHEMA
+        else 'estimated_provisional_verified')
+    expected_env = {ENV_PATH: expected['path'], ENV_SHA: bundle['bundle_sha256'], ENV_DATE: day}
+    if (manifest.get('report_type') != 'runtime_policy_bootstrap'
+            or manifest.get('target_date') != day or manifest.get('manifest_sha256') != digest(unsigned)
+            or manifest.get('env_file') != str(env_path)
+            or any(bound.get(k) != v for k, v in expected.items())
+            or any((manifest.get('env_overrides') or {}).get(k) != v for k, v in expected_env.items())):
+        raise ValueError('holding_vote_parent_consumed_policy_changed')
+    env_sha = hashlib.sha256(regular_bytes(env_path, limit=MAX_BYTES)).hexdigest()
+    if env_sha != manifest.get('env_sha256'):
+        raise ValueError('holding_vote_parent_consumed_env_changed')
+    for path in paths:
+        consumed, consumed_sha = bounded_object(path)
+        if consumed.get('manifest_sha256') != manifest['manifest_sha256']:
+            continue
+        commit = path.name.removesuffix('.consumed.json')
+        if len(commit) != 40 or any(c not in '0123456789abcdef' for c in commit):
+            raise ValueError('holding_vote_parent_consumed_commit_invalid')
+        handoff_path = receipts / (commit + '.json')
+        handoff, handoff_sha = bounded_object(handoff_path)
+        identity = consumed.get('pid_identity') or {}
+        release = consumed.get('release_root')
+        frozen = handoff.get('frozen_files') or {}
+        if (consumed.get('schema') != 'intraday_policy_preserving_consumption_v1'
+                or consumed.get('status') != 'pass' or consumed.get('actual_pid_consumed') is not True
+                or consumed.get('target_date') != day or consumed.get('selected_release_commit') != commit
+                or consumed.get('handoff_sha256') != handoff_sha
+                or handoff.get('schema') != 'intraday_policy_preserving_release_handoff_v1'
+                or handoff.get('authority') != 'APPROVED_INTRADAY_POLICY_PRESERVING_RELEASE_HANDOFF'
+                or handoff.get('status') != 'prepared_verified' or handoff.get('policy_effect') != 'unchanged'
+                or handoff.get('target_date') != day or handoff.get('selected_release_commit') != commit
+                or handoff.get('manifest_sha256') != manifest['manifest_sha256']
+                or not isinstance(release, str) or not Path(release).is_absolute()
+                or handoff.get('release_root') != release or identity.get('cwd') != str(Path(release) / 'src')
+                or type(identity.get('pid')) is not int or identity['pid'] <= 0
+                or not str(identity.get('start_ticks', '')).isdigit()
+                or int(identity['start_ticks']) <= 0
+                or frozen.get(str(manifest_path)) != manifest_sha or frozen.get(str(env_path)) != env_sha):
+            raise ValueError('holding_vote_parent_consumption_invalid')
+        prepared = datetime.fromisoformat(handoff['prepared_at'])
+        consumed_at = datetime.fromisoformat(consumed['verified_at'])
+        deadline = datetime.fromisoformat(handoff['first_launch_before'])
+        if (prepared.tzinfo is None or consumed_at.tzinfo is None or deadline.tzinfo is None
+                or not prepared <= consumed_at < deadline
+                or consumed_at.astimezone(ZoneInfo('Asia/Seoul')).date().isoformat() != day):
+            raise ValueError('holding_vote_parent_consumption_clock_invalid')
+        # Recheck the entire bounded proof, not a stale PASS flag.
+        pinned = {manifest_path: manifest_sha, path: consumed_sha, handoff_path: handoff_sha}
+        if any(bounded_object(p, 8 * 1024 * 1024)[1] != sha for p, sha in pinned.items()) \
+                or hashlib.sha256(regular_bytes(env_path, limit=MAX_BYTES)).hexdigest() != env_sha:
+            raise ValueError('holding_vote_parent_consumption_changed_during_read')
+        return dict(policy_sha256=bundle['bundle_sha256'], target_date=day,
+            consumed_path=str(path), consumed_sha256=consumed_sha,
+            handoff_path=str(handoff_path), handoff_sha256=handoff_sha,
+            manifest_path=str(manifest_path), manifest_sha256=manifest_sha,
+            pid_identity=identity, authority='historical_policy_parent_only', runtime_effect=False)
+    return None
+
+
 def verify_source_handoff(data_root: Path, bundle: dict[str, Any], *, _parent_depth: int = 0,
                           require_current_code: bool = True) -> None:
     """Require report bytes, summary receipt and terminal strict handoff."""
@@ -383,8 +480,6 @@ def verify_source_handoff(data_root: Path, bundle: dict[str, Any], *, _parent_de
         # A parent's original code/bytes are historical lineage, not a claim
         # that the current release consumed that old policy in a live PID.
         native=load_bundle(root,source_date,require_current_code=False)
-        verify_source_handoff(root,native, _parent_depth=_parent_depth + 1,
-                              require_current_code=False)
         parent=bundle['parent']
         if (parent['path']!=str(policy_path(root,source_date))
             or hashlib.sha256(Path(parent['path']).read_bytes()).hexdigest()!=parent['byte_sha256']
@@ -392,6 +487,9 @@ def verify_source_handoff(data_root: Path, bundle: dict[str, Any], *, _parent_de
             or parent.get('native_policy_set_sha256',native['policy_set_sha256'])!=native['policy_set_sha256']
             or {k:c['policy'] for k,c in native['cells'].items() if not k.startswith('EXIT_BAD_ENTRY_REFINED|')}!=parent['cells']):
             raise ValueError('holding_vote_native_parent_changed')
+        if consumed_parent_handoff(root, native) is None:
+            verify_source_handoff(root, native, _parent_depth=_parent_depth + 1,
+                                  require_current_code=False)
         from src.engine.lifecycle.holding_window_generation import byte_generation
         from src.engine.lifecycle.broker_cost_reconciliation import source_generation
         if bundle.get('selection_mode') == 'validated_successor' and not bundle.get('contract_file_path'):
@@ -459,6 +557,28 @@ def runtime_policy_from_env(
                       "target_date": target_date,
                       "bundle_sha256": bundle["bundle_sha256"],
                       "source_date": bundle["source_date"]}
+
+
+def runtime_vote_input_enabled(receipt: Any, *, active_date: str) -> bool:
+    """Use the native loader's dated receipt for its mandatory vote inputs.
+
+    Baseline fallback and stale/rejected loads cannot activate this consumer.
+    This receipt permits input construction, never a signal or order.
+    """
+    if not isinstance(receipt, dict) or receipt.get("status") not in {
+        "estimated_provisional_loaded", "validated_successor_loaded", "verified_incumbent_loaded",
+    }:
+        return False
+    try:
+        valid_dates = (date.fromisoformat(active_date).isoformat() == active_date
+            and receipt.get("target_date") == active_date
+            and START_DATE <= receipt["source_date"] < active_date
+            and date.fromisoformat(receipt["source_date"]).isoformat() == receipt["source_date"])
+    except (KeyError, TypeError, ValueError):
+        return False
+    bundle = receipt.get("bundle_sha256")
+    return bool(valid_dates and isinstance(bundle, str) and len(bundle) == 64
+                and all(char in "0123456789abcdef" for char in bundle))
 
 
 SUCCESSOR_SCHEMA='holding_path_vote_selected_policy_v2'

@@ -9,7 +9,8 @@ from src.engine.automation import main_trailing_all_scope_research as owner
 from src.engine.automation import main_trailing_partitioned_research as research
 from src.engine.automation.main_trailing_population_aggregation import aggregate
 from src.engine.scalping.universal_trailing_replay import common_evaluation
-from src.tests.test_main_all_scope_research import fixture,write
+from src.tests.test_main_all_scope_research import fixture,write,entry_window_fixture
+from src.tests.test_main_all_scope_trailing import at
 
 
 @pytest.mark.parametrize('damage', [None, 'code', 'target', 'source', 'extension', 'bytes'])
@@ -36,8 +37,8 @@ def test_bounded_trailing_observation_detects_stale_generation_without_replaying
     assert bool(result['findings']) == (damage is not None)
 
 
-def sharded(tmp_path):
-    root,out=fixture(tmp_path)
+def sharded(tmp_path,source_fixture=fixture):
+    root,out=source_fixture(tmp_path)
     manifest=owner._sealed(root/'manifest.json');refs=[]
     for part in manifest.pop('partitions'):
         payload=owner._sealed(root/part['path'])
@@ -71,6 +72,36 @@ def test_v2_replay_resume_and_source_pin(tmp_path,monkeypatch):
     with pytest.raises(ValueError,match='manifest_changed'):
         owner.run(root/'manifest.json',input_root=root,output_root=tmp_path/'bad',dry_run=False)
     assert not (tmp_path/'bad'/'initial_policy_2026-10-12.json').exists()
+
+
+@pytest.mark.parametrize('evidence',['actual_completed','actual_entry_alternative_exit','enter_pass_opportunity_cf'])
+@pytest.mark.parametrize('offset',[-1,0])
+def test_v2_entry_window_censors_carry_preserves_census_and_resume(tmp_path,evidence,offset):
+    root,out=sharded(tmp_path,lambda path:entry_window_fixture(path,evidence,offset))
+    sources={str(p.relative_to(root)):byte_generation(p) for p in root.rglob('*') if p.is_file()}
+    first=owner.run(root/'manifest.json',input_root=root,output_root=out,dry_run=False)
+    refs=list(storage.iter_tree(out,first['partition_results_ref']))
+    checkpoint=out/refs[0]['path'];original=checkpoint.read_bytes()
+    results=list(research.checkpoint_results(owner._sealed(checkpoint),out))
+    assert results[0]['population_context']['main:0']['entry_at']==at('2026-10-07T00:00:00')+offset
+    assert results[0]['population_context']['main:0']['research_entry_window_start_at']==at('2026-10-07T00:00:00')
+    assert results[0]['common_ids']==([] if offset<0 else ['main:0'])
+    assert first['missing_population_ids_ref']['count']==0
+    assert first['assembly_census']=={'source_gaps':{}}
+    if offset<0:
+        assert first['counters']['entry_before_research_window']==1
+        assert all(r['status']=='source_gap' and r['reason']=='entry_before_research_window'
+            and r['modeled_net_pnl_krw'] is None and r['actual_pnl_krw'] is None
+            for r in results[0]['minimal_results']['main:0'].values())
+    again=owner.run(root/'manifest.json',input_root=root,output_root=out,dry_run=False,resume=True)
+    clean_out=tmp_path/'clean'
+    clean=owner.run(root/'manifest.json',input_root=root,output_root=clean_out,dry_run=False)
+    clean_ref=next(storage.iter_tree(clean_out,clean['partition_results_ref']))
+    assert list(research.checkpoint_results(owner._sealed(clean_out/clean_ref['path']),clean_out))==results
+    assert again['counters']=={'checkpoint_reused':2,'complete_report_reused':1}
+    assert first['common_population_evaluation']==again['common_population_evaluation']
+    assert checkpoint.read_bytes()==original
+    assert sources=={str(p.relative_to(root)):byte_generation(p) for p in root.rglob('*') if p.is_file()}
 
 
 def test_independent_handoff_recomputes_pair_metrics_not_just_tree_bytes(tmp_path):
@@ -121,6 +152,57 @@ def test_external_metrics_equal_whole_reference_and_late_conflict(tmp_path):
     assert result['conflicts_ref']['count']==1 and result['population_ids_ref']['count']==11
 
 
+@pytest.mark.parametrize('evidence', [
+    'actual_completed', 'actual_entry_alternative_exit', 'enter_pass_opportunity_cf'])
+@pytest.mark.parametrize('one_day', [False, True])
+def test_external_training_cost_cutoff_preserves_census_and_reference_parity(tmp_path,evidence,one_day):
+    full=minimal(10);identities=list(full['population_context'])
+    start=full['population_context'][identities[0]]['entry_at']
+    step=10 if one_day else 86400
+    cutoff=start+7*step
+    known=[None,cutoff+1,str(cutoff),True,cutoff-1,cutoff,cutoff-2,None,None,None]
+    for index,identity in enumerate(identities):
+        context=full['population_context'][identity]
+        clock=start+index*step
+        context.update(evidence_kind=evidence,entry_at=clock,observation_end_at=clock+2,
+                       completion_at=clock+2,actual_cost_available_at=known[index])
+        for outcome in full['minimal_results'][identity].values(): outcome['actual_pnl_krw']=50
+    full['population_context'][identities[0]].pop('actual_cost_available_at')
+    if not one_day:
+        # One row lacks both cost and path timing, another only path timing.
+        for index in (1,6): full['population_context'][identities[index]]['observation_end_at']=cutoff
+    def shards():
+        for start in range(0,len(identities),3):
+            selected=identities[start:start+3]
+            yield {**full,'population_context':{i:full['population_context'][i] for i in selected},
+                   'minimal_results':{i:full['minimal_results'][i] for i in selected},'common_ids':selected}
+    resident=common_evaluation([full]);streamed=common_evaluation(shards)
+    assert streamed==resident
+    actual=aggregate(shards,output_root=tmp_path)
+    assert list(storage.iter_tree(tmp_path,actual['common_ids_ref']))==identities
+    assert list(storage.iter_tree(tmp_path,actual['population_ids_ref']))==identities
+    assert actual['conflicts_ref']['count']==0
+    for kind,reference in resident['strata'].items():
+        external=actual['strata'][kind]
+        for field in ('common_ids','train_ids','holdout_ids','purged_ids','cost_unavailable_train_ids'):
+            assert list(storage.iter_tree(tmp_path,external[field+'_ref']))==reference[field]
+        for name in full['candidate_aliases']:
+            for split in ('train','holdout'):
+                metrics=dict(external['metrics'][name][split])
+                for field in ('worsened_ids','paired_ids','large_loss_worsened_ids'):
+                    metrics[field]=list(storage.iter_tree(tmp_path,metrics.pop(field+'_ref')))
+                assert metrics==reference['metrics'][name][split]
+    cohort=resident['strata'][evidence]
+    expected_cost=([identities[i] for i in (0,2,3,7,8,9)] if one_day
+                   else identities[:4]) if evidence=='actual_completed' else []
+    assert cohort['cost_unavailable_train_ids']==expected_cost
+    assert cohort['holdout_ids']==([] if one_day else identities[7:])
+    assert len(cohort['train_ids'])+len(cohort['holdout_ids'])+len(cohort['purged_ids'])==len(identities)
+    if evidence=='actual_completed':
+        assert identities[5] in cohort['train_ids']  # Cost known exactly at cutoff is usable.
+        assert (identities[1] in cohort['train_ids'])==one_day
+
+
 def test_population_above_single_object_limit_stays_global(tmp_path):
     def shards():
         for offset in range(0,20001,100):
@@ -154,8 +236,12 @@ def test_registered_grid_external_train_winner_and_holdout_equal_reference(tmp_p
             source=dict(status='ready',known_at=clock-1,window_bars=2,source_sha256='a'*64,
                 features=features,feature_sha256=digest(features))
             contexts[identity]=dict(entry_at=clock,observation_end_at=clock+2,completion_at=clock+2,
-                evidence_kind='actual_completed',buy_basis_krw=1000,entry_context=source)
-            deltas={'incumbent':0,'a':5 if day<7 else -2,'b':4 if day<7 else 8}
+                evidence_kind='actual_completed',
+                actual_cost_available_at=start+7*86400+1 if day==0 else clock+2,
+                buy_basis_krw=1000,entry_context=source)
+            # These six late-cost outcomes would incorrectly select b if
+            # situation fitting bypassed the common training membership.
+            deltas={'incumbent':0,'a':5 if day<7 else -2,'b':50 if day==0 else 4 if day<7 else 8}
             outcomes[identity]={aliases[name]:dict(modeled_net_pnl_krw=v,actual_pnl_krw=0,slippage_net_pnl_krw=[v,v,v]) for name,v in deltas.items()}
     part=dict(candidate_aliases=aliases,population_context=contexts,minimal_results=outcomes,common_ids=sorted(contexts))
     hypotheses=[]
@@ -166,9 +252,13 @@ def test_registered_grid_external_train_winner_and_holdout_equal_reference(tmp_p
     args=dict(grid=hypotheses,candidates={'a':a,'b':b},parent_values=parent,parent_classifier_parameters=cfg)
     old=typed.research_registered_grid([part],evaluation=common_evaluation([part]),**args)
     evaluated=aggregate(lambda:iter([part]),output_root=tmp_path)
+    assert evaluated['strata']['actual_completed']['train_ids_ref']['count']==36
+    assert evaluated['strata']['actual_completed']['cost_unavailable_train_ids_ref']['count']==6
     new=grid_research(lambda:iter([part]),evaluation=evaluated,output_root=tmp_path,**args)
     assert new['classifier']==old['classifier']
     assert new['train_grid_scores']==old['train_grid_scores']
+    selected={cell['train_selected_candidate'] for cell in new['cells'].values()}
+    assert 'a' in selected and 'b' not in selected
     for key,cell in old['cells'].items():
         current=new['cells'][key]
         assert current['train_selected_candidate']==cell['train_selected_candidate']
@@ -335,7 +425,7 @@ def test_typed_global_training_evidence_reaches_existing_selector_without_holdou
             features=dict(range_pct=1,return_pct=.1,trend_efficiency=.2,vwap_distance_pct=-1,spread_pct=.1,rebound_pct=.1)
             ctx=dict(status='ready',known_at=clock-1,window_bars=2,source_sha256='a'*64,features=features,feature_sha256=digest(features))
             contexts[identity]=dict(entry_at=clock,observation_end_at=clock+2,completion_at=clock+2,evidence_kind='actual_completed',
-                buy_basis_krw=1000,entry_context=ctx,operating_ai_required=False)
+                actual_cost_available_at=clock+2,buy_basis_krw=1000,entry_context=ctx,operating_ai_required=False)
             results[identity]={aliases[n]:dict(modeled_net_pnl_krw=d,actual_pnl_krw=0,slippage_net_pnl_krw=[d,d,d]) for n,d in [('incumbent',0),('a',5)]}
     part=dict(candidate_aliases=aliases,population_context=contexts,minimal_results=results,common_ids=sorted(contexts))
     h=dict(schema=typed.CLASSIFIER_SCHEMA,window_bars=2,trained_through=0,thresholds=dict(range_min=.5,

@@ -371,7 +371,7 @@ def test_error_detection_loop_writes_each_health_report_but_logs_one_incident(mo
     assert alerts[0][1]['audience'] == 'ADMIN_ONLY'
 
 
-@pytest.mark.parametrize('producer', [0, 1])
+@pytest.mark.parametrize('producer', [0, 1, 75])
 def test_startup_observer_uses_existing_owners_and_no_notification(tmp_path, monkeypatch, producer):
     (tmp_path/'tmp').mkdir()
     calls=[]
@@ -402,3 +402,59 @@ def test_startup_observer_busy_or_expired_never_starts_unowned_child(tmp_path, m
         fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
         result=bot_main._refresh_startup_observer(identity,monotonic=lambda:130.,heartbeat=lambda:None)
     assert result['reason']=='startup_observer_owner_busy'
+
+
+@pytest.mark.parametrize('elapsed', [104.5, 110., 125.])
+def test_startup_observer_unstarted_producer_cannot_replace_completed_report(tmp_path, monkeypatch, elapsed):
+    (tmp_path/'tmp').mkdir()
+    report=tmp_path/'data/report/buy_funnel_sentinel/submission_bottleneck_monitor_latest.json'
+    report.parent.mkdir(parents=True)
+    original=b'{"execution_status":"completed","execution_mode":"full","run_id":"current-pid"}\n'
+    report.write_bytes(original)
+    identity=dict(process_started_monotonic=0.,workspace=tmp_path,release_root=tmp_path,
+                  target_date='2026-10-19',pid=123)
+    monkeypatch.setattr(bot_main,'_startup_consumption_check',lambda identity:dict(status='ready'))
+    monkeypatch.setattr(bot_main.subprocess,'Popen',lambda *a,**k:pytest.fail('no source-only child for unstarted producer'))
+    result=bot_main._refresh_startup_observer(identity,monotonic=lambda:elapsed,heartbeat=lambda:None)
+    assert result['status']=='failed' and result['reason']=='startup_observer_deadline_expired'
+    assert result['producer_started'] is False and result['publication_attempted'] is False
+    assert report.read_bytes()==original
+
+
+@pytest.mark.parametrize('producer_seconds,observer_seconds,producer_exit,observer_exit', [
+    (50., 20., 0, 0), (999., 0., 75, 0), (50., 999., 0, 75),
+])
+def test_startup_source_and_observer_share_original_deadline_after_attestation(
+        tmp_path, monkeypatch, producer_seconds, observer_seconds, producer_exit, observer_exit):
+    (tmp_path/'tmp').mkdir()
+    clock, calls, children, beats, killed = [61.], [], {}, [], []
+    class Child:
+        def __init__(self, args, **kwargs):
+            calls.append(args)
+            self.pid = len(calls)
+            self.duration = producer_seconds if self.pid == 1 else observer_seconds
+            self.started = clock[0]
+            self.returncode = None
+            children[self.pid] = self
+        def poll(self):
+            if self.returncode is None and clock[0]-self.started >= self.duration:
+                self.returncode = 0
+            return self.returncode
+        def wait(self, timeout):
+            assert self.returncode is not None
+            return self.returncode
+    def kill(pid, sig):
+        killed.append(pid)
+        children[pid].returncode = -int(sig)
+    monkeypatch.setattr(bot_main.subprocess, 'Popen', Child)
+    monkeypatch.setattr(bot_main.os, 'killpg', kill)
+    monkeypatch.setattr(bot_main, '_startup_consumption_check', lambda identity: dict(status='ready'))
+    identity=dict(process_started_monotonic=0.,workspace=tmp_path,release_root=tmp_path,
+                  target_date='2026-10-20',pid=123)
+    result=bot_main._refresh_startup_observer(identity,monotonic=lambda:clock[0],
+        wait=lambda seconds:clock.__setitem__(0,clock[0]+seconds),heartbeat=lambda:beats.append(clock[0]))
+    assert result['producer_exit'] == producer_exit
+    assert result['observer_exit'] == observer_exit
+    assert ('--source-only' in calls[1]) == bool(producer_exit)
+    assert clock[0] <= 150. and beats and all(b-a <= 5. for a,b in zip(beats,beats[1:]))
+    assert len(killed) == int(producer_exit == 75)+int(observer_exit == 75)

@@ -934,3 +934,26 @@ def test_failed_rebuild_preserves_previous_generation(tmp_path, monkeypatch):
     assert repaired["rebuilt"] is True
     assert sum(row["event_count"] for row in rows) == 1
     assert summary.read_bytes() != previous
+
+
+def test_public_slim_summary_reuses_existing_projection_and_rechecks_changes(tmp_path, monkeypatch):
+    import gzip
+    from src.engine import pipeline_event_summary as owner
+    path = tmp_path / 'summary.jsonl.gz'
+    row = {'event_count': 1, 'bucket_start': '2026-10-19T09:00:00+09:00', 'bucket_end': '2026-10-19T09:01:00+09:00', 'stage': 'decision', 'samples': [{'secret': 'large sample'}]}
+    path.write_bytes(gzip.compress((json.dumps(row) + '\n').encode()))
+    native = owner.open_text_auto
+    reads = []
+    def counted(*args, **kwargs):
+        reads.append(1)
+        return native(*args, **kwargs)
+    monkeypatch.setattr(owner, 'open_text_auto', counted)
+    first = owner.load_summary_rows(path, include_samples=False, strict=True)
+    assert owner.load_summary_rows(path, include_samples=False, strict=True) == first
+    assert len(reads) == 1
+    row['event_count'] = 2
+    path.write_bytes(gzip.compress((json.dumps(row) + '\n').encode()))
+    assert owner.load_summary_rows(path, include_samples=False, strict=True)[0]['event_count'] == 2
+    assert len(reads) == 2
+    path.write_bytes(gzip.compress(b'invalid\n'))
+    with pytest.raises(ValueError):owner.load_summary_rows(path, include_samples=False, strict=True)

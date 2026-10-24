@@ -200,7 +200,8 @@ def test_structured_trailing_projection_flags_wrong_partition_and_missing_id(
     assert receipts[0]["logical_sha256"]
 
 
-def test_completed_projection_keeps_full_population_beyond_display_limit(monkeypatch):
+@pytest.mark.parametrize("native_terminal", [False, True])
+def test_completed_projection_keeps_full_population_beyond_display_limit(monkeypatch, native_terminal):
     trades = [
         {
             "id": index,
@@ -221,7 +222,10 @@ def test_completed_projection_keeps_full_population_beyond_display_limit(monkeyp
         for index in range(1, 13)
     ]
     monkeypatch.setattr(report_mod, "_fetch_trade_rows", lambda *_: (trades, []))
-    monkeypatch.setattr(report_mod, "_iter_target_lines", lambda *_args, **_kw: [])
+    terminal_lines = [f"[2026-09-23 09:10:00] [HOLDING_PIPELINE] test({index:06d}) "
+                      f"stage=sell_completed id={index} sell_price=10100" for index in range(1, 13)]
+    monkeypatch.setattr(report_mod, "_iter_target_lines",
+                        lambda *_args, **_kw: terminal_lines if native_terminal else [])
     monkeypatch.setattr(
         report_mod, "find_gatekeeper_snapshot_for_trade", lambda *_args: None
     )
@@ -233,6 +237,15 @@ def test_completed_projection_keeps_full_population_beyond_display_limit(monkeyp
     assert len(projection) == 12
     assert {row["id"] for row in projection} == set(range(1, 13))
     assert result["metrics"]["canonical_completed_trades"] == 12
+
+    assert report_mod.verify_completed_census_manifest(result, "2026-09-23") is None
+    assert result["metrics"]["native_sell_completed_trade_count"] == (12 if native_terminal else 0)
+    assert result["metrics"]["database_only_completed_trade_count"] == (0 if native_terminal else 12)
+    assert len(result["meta"]["sell_completed_event_ids"]) == (12 if native_terminal else 0)
+    if not native_terminal:
+        assert all(row["strict_completion_status"] == "excluded" for row in projection)
+        assert all("source_gap_native_sell_completed_event_missing" in row["strict_completion_reasons"]
+                   for row in projection)
 
 
 def test_completed_projection_requires_exact_receipt_for_cost_and_fill_time():
@@ -877,7 +890,7 @@ def test_carry_partial_sell_reconciles_prior_and_final_fill_legs():
     assert ledger["sell_fill_fees_taxes_krw"] == 20
 
 
-def test_prior_entry_fill_events_require_sealed_same_id_snapshot(monkeypatch):
+def test_prior_entry_fill_events_require_sealed_same_id_snapshot(monkeypatch, unarchived_prior_snapshots):
     snapshot = {
         "date": "2026-09-23", "meta": {"warnings": []},
         "metrics": {"open_scalp_position_projection_status": "current_db_census",
@@ -902,7 +915,7 @@ def test_prior_entry_fill_events_require_sealed_same_id_snapshot(monkeypatch):
     assert events == {}
 
 
-def test_prior_fill_events_include_intermediate_day_scale_in(monkeypatch):
+def test_prior_fill_events_include_intermediate_day_scale_in(monkeypatch, unarchived_prior_snapshots):
     def snapshot(day):
         stage = "position_rebased_after_fill" if day == "2026-09-22" else "scale_in_executed"
         return {
@@ -930,7 +943,7 @@ def test_prior_fill_events_include_intermediate_day_scale_in(monkeypatch):
     assert set(receipts) == {"2026-09-22", "2026-09-23"}
 
 
-def test_open_position_rebound_blockers_carry_as_bounded_prior_day_counts(monkeypatch):
+def test_open_position_rebound_blockers_carry_as_bounded_prior_day_counts(monkeypatch, unarchived_prior_snapshots):
     trade = {"id": 42, "rec_date": "2026-09-23", "status": "HOLDING",
              "strategy": "SCALPING", "code": "123456", "buy_qty": 1}
     blocked = [report_mod.HoldingEvent(
@@ -961,7 +974,7 @@ def test_open_position_rebound_blockers_carry_as_bounded_prior_day_counts(monkey
     assert lineage["prior_blocker_summary_gap_count"] == 0
 
 
-def test_prior_position_snapshot_without_rebound_summary_preserves_gap(monkeypatch):
+def test_prior_position_snapshot_without_rebound_summary_preserves_gap(monkeypatch, unarchived_prior_snapshots):
     snapshot = {"date": "2026-09-23", "meta": {"warnings": []},
                 "metrics": {"open_scalp_position_projection_status": "current_db_census",
                             "open_scalp_position_projection_count": 1},
@@ -1811,3 +1824,41 @@ def test_trade_review_reconciles_completed_economics_without_losing_raw_event(
     assert sell_completed["fields"]["trade_review_economics_reconciled"] == "True"
     assert sell_order_sent["fields"]["profit_rate"] == "+0.40"
     assert "trade_review_economics_reconciled" not in sell_order_sent["fields"]
+
+
+@pytest.mark.parametrize("mutation", [None, "future_date", "missing_binding", "changed_db_witness",
+                                     "duplicate_db_id", "promoted_economics", "unclassified_source",
+                                     "foreign_db_id", "duplicate_native_id"])
+def test_database_completion_observation_cannot_forge_native_terminal_or_eligibility(mutation):
+    day = "2026-10-19"
+    original = dict(id=49362, status="COMPLETED", sell_time=day + " 09:44:00", profit_rate=None)
+    witness = dict(id=49362, status="COMPLETED", sell_time=original["sell_time"],
+                   source_row_sha256=report_mod._completed_census_sha256(original))
+    row = dict(id=49362, status="COMPLETED", completion_observed_date=day, profit_rate=None,
+               completion_source_status="database_completed_native_terminal_unobserved",
+               database_completion_source_sha256=witness["source_row_sha256"],
+               strict_completion_status="excluded",
+               strict_completion_reasons=["source_gap_native_sell_completed_event_missing"])
+    report = dict(date=day, code=None, since=None,
+                  meta=dict(sell_completed_event_ids=[], database_completed_sources=[witness]),
+                  metrics=dict(canonical_completed_trades=1),
+                  sections=dict(completed_trade_projection=[row]))
+    if mutation == "future_date": witness["sell_time"] = "2026-10-20 09:44:00"
+    elif mutation == "missing_binding": row.pop("database_completion_source_sha256")
+    elif mutation == "changed_db_witness": witness["source_row_sha256"] = "f" * 64
+    elif mutation == "duplicate_db_id": report["meta"]["database_completed_sources"].append(dict(witness))
+    elif mutation == "promoted_economics": row["strict_completion_status"] = "eligible"
+    elif mutation == "unclassified_source": row.pop("completion_source_status")
+    elif mutation == "foreign_db_id": witness["id"] = 49363
+    elif mutation == "duplicate_native_id": report["meta"]["sell_completed_event_ids"] = [49362, 49362]
+    report["meta"]["completed_census_manifest"] = report_mod.completed_census_manifest(report)
+    issue = report_mod.verify_completed_census_manifest(report, day)
+    assert (issue is None) is (mutation is None)
+    assert report["sections"]["completed_trade_projection"][0]["profit_rate"] is None
+
+
+@pytest.fixture
+def unarchived_prior_snapshots(monkeypatch):
+    from src.engine import log_archive_service
+    monkeypatch.setattr(log_archive_service, "prior_entry_snapshot_rejection", lambda *a, **k: None)
+    monkeypatch.setattr(log_archive_service, "load_prior_entry_projection", lambda *a, **k: None)

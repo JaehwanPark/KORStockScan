@@ -196,24 +196,7 @@ def safe_path(root, name):
 
 def copy_tree(source_root,destination_root,reference):
     """Copy sealed evidence only, retaining both physical and logical hashes."""
-    from src.engine.scalping.pre_submit_delay_initial_policy import _atomic
-    for _ in iter_tree(source_root,reference):pass
-    def copy(ref,depth=0):
-        if depth>64:raise ValueError('research_tree_depth_invalid')
-        if 'rows' in ref:return
-        source=safe_path(source_root,ref['path']);before=byte_generation(source)
-        with Claim(before['size']*8):
-            value=json.loads(source.read_bytes())
-            if byte_generation(source)!=before or before['sha256']!=ref['sha256']:
-                raise ValueError('research_shard_generation_changed')
-            for child in value.get('children',[]):copy(child,depth+1)
-            target=safe_path(destination_root,ref['path'])
-            if target.exists():
-                if byte_generation(target)!=before:raise ValueError('research_immutable_shard_changed')
-            else:_atomic(target,value)
-            if byte_generation(target)!=before:raise ValueError('research_copied_shard_changed')
-    copy(reference)
-    for _ in iter_tree(destination_root,reference):pass
+    for _ in iter_tree(source_root,reference,copy_to=destination_root):pass
 
 
 @contextmanager
@@ -354,7 +337,7 @@ def write_tree(root, rows, *, quota=None, inline=None):
     return {**reference, 'schema':SCHEMA, 'logical_sha256':logical.hexdigest()}
 
 
-def iter_tree(root, reference):
+def iter_tree(root, reference, *, copy_to=None):
     """Validate every consumed leaf and root count; bounded depth/fanout."""
     logical, total = hashlib.sha256(), 0
 
@@ -410,6 +393,23 @@ def iter_tree(root, reference):
                 raise ValueError('research_shard_kind_invalid')
             if count != body['count']:
                 raise ValueError('research_shard_census_invalid')
+            if source_stat(path.stat()) != source_stat(before):
+                raise ValueError('research_shard_generation_changed')
+            if copy_to is not None:
+                from src.engine.scalping.pre_submit_delay_initial_policy import _atomic
+                target=safe_path(copy_to,ref['path'])
+                existing=target.exists()
+                error='research_immutable_shard_changed' if existing else 'research_copied_shard_changed'
+                if not existing:
+                    _atomic(target,body)
+                target_before=target.stat()
+                if not stat.S_ISREG(target_before.st_mode) or target_before.st_size!=len(raw):
+                    raise ValueError(error)
+                with Claim(len(raw)*2):
+                    with target.open('rb') as handle:
+                        copied=handle.read(len(raw)+1)
+                    if copied!=raw or source_stat(target.stat())!=source_stat(target_before):
+                        raise ValueError(error)
 
     for row in walk(reference):
         logical.update(encoded(logical_value(row))+b'\n'); total += 1

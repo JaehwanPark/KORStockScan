@@ -12,7 +12,7 @@ import tempfile
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Iterable
+from typing import Callable, Iterable
 
 from src.utils.constants import DATA_DIR
 from src.engine.dashboard_data_repository import (
@@ -22,11 +22,6 @@ from src.engine.dashboard_data_repository import (
 LOG_ARCHIVE_DIR = DATA_DIR / "log_archive"
 MONITOR_SNAPSHOT_DIR = DATA_DIR / "report" / "monitor_snapshots"
 MONITOR_SNAPSHOT_MANIFEST_DIR = MONITOR_SNAPSHOT_DIR / "manifests"
-
-LOG_ARCHIVE_DIR.mkdir(parents=True, exist_ok=True)
-MONITOR_SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
-MONITOR_SNAPSHOT_MANIFEST_DIR.mkdir(parents=True, exist_ok=True)
-
 
 def _env_float(name: str, default: float = 0.0) -> float:
     raw_value = str(os.getenv(name, "")).strip()
@@ -60,21 +55,252 @@ def _snapshot_manifest_path(target_date: str, profile: str) -> Path:
     )
 
 
-def load_monitor_snapshot(kind: str, target_date: str) -> dict | None:
+def load_monitor_snapshot(kind: str, target_date: str, *, section_names=None) -> dict | None:
     """Load monitor snapshots from canonical JSON/GZip files only."""
     path = _snapshot_path(kind, target_date)
     if not path.exists() and Path(f"{path}.gz").exists():
         path = Path(f"{path}.gz")
     if path.exists():
         try:
-            if path.suffix == ".gz":
-                with gzip.open(path, "rt", encoding="utf-8") as handle:
-                    return json.load(handle)
-            with open(path, encoding="utf-8") as handle:
-                return json.load(handle)
+            from src.engine.lifecycle.research_json_stream import selected_object
+            opener = gzip.open if path.suffix == '.gz' else open
+            before = path.stat()
+            with opener(path, 'rt', encoding='utf-8') as handle:
+                value = (json.load(handle) if section_names is None else selected_object(
+                    handle, {'sections': {name: None for name in section_names}, 'meta': None}))
+            after = path.stat()
+            if (before.st_ino, before.st_size, before.st_mtime_ns, before.st_ctime_ns) != (
+                    after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns):
+                return None
+            return value
         except Exception:
             pass
+    if section_names is not None:
+        return None  # Do not silently fall back to decoding the entire census.
     return load_monitor_snapshot_file_first(kind, target_date)
+
+
+def prior_entry_snapshot_rejection(target_date: str, *, data_root: Path = DATA_DIR) -> str | None:
+    """Reject a known unusable carry census before decoding its large body.
+
+    This bounded header is a negative preflight only. None grants no validation:
+    the original full reader and all row/identity checks must still run.
+    """
+    import codecs
+    import io
+    import stat
+    import zlib
+    from src.engine.lifecycle.research_json_stream import Reader
+    path = Path(data_root) / 'report/monitor_snapshots' / f'trade_review_{target_date}.json'
+    if not path.exists() and Path(str(path) + '.gz').exists():
+        path = Path(str(path) + '.gz')
+    if not path.exists():
+        return None
+    if path.is_symlink() or any(parent.is_symlink() for parent in path.parents):
+        return 'source_gap_entry_snapshot_missing'
+    try:
+        before = path.stat()
+        if not stat.S_ISREG(before.st_mode):
+            return 'source_gap_entry_snapshot_missing'
+        with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), 'rb') as handle:
+            opened = os.fstat(handle.fileno())
+            stream = gzip.GzipFile(fileobj=handle) if path.suffix == '.gz' else handle
+            try:
+                prefix = stream.read(256 * 1024)
+            finally:
+                if stream is not handle:
+                    stream.close()
+        identity = lambda value: (value.st_dev, value.st_ino, value.st_size,
+                                   value.st_mtime_ns, value.st_ctime_ns)
+        if identity(before) != identity(opened) or identity(before) != identity(path.stat()):
+            return 'source_gap_entry_snapshot_missing'
+        text = codecs.getincrementaldecoder('utf-8')().decode(prefix, final=False)
+        reader = Reader(io.StringIO(text))
+        header = {}
+        def visit(key, source):
+            if key in {'date', 'meta', 'metrics'}:
+                yield key, source.value(256 * 1024)
+            else:
+                source.skip()
+        for key, value in reader.fields(visit):
+            header[key] = value
+            if set(header) == {'date', 'meta', 'metrics'}:
+                break
+        if set(header) != {'date', 'meta', 'metrics'}:
+            return None
+        if header['date'] != target_date:
+            return 'source_gap_entry_snapshot_missing'
+        if not isinstance(header['meta'], dict) or not isinstance(header['metrics'], dict):
+            return None
+        if header['meta'].get('warnings'):
+            return 'source_gap_entry_snapshot_warning'
+        if header['metrics'].get('open_scalp_position_projection_status') != 'current_db_census':
+            return 'source_gap_entry_snapshot_census'
+    except (OSError, ValueError, TypeError, EOFError, zlib.error):
+        # An incomplete header cannot certify either the body or a specific gap.
+        return None
+    return None
+
+
+def load_prior_entry_projection(target_date: str, *, data_root: Path = DATA_DIR):
+    """Read a large, native-manifest-bound carry census without its full body.
+
+    The producer's exact byte hash grants provenance before the structural
+    timeline projection. The receipt names decoded source bytes explicitly;
+    it never claims the legacy canonical whole-object logical digest.
+    """
+    import codecs
+    import io
+    import re
+    import stat
+    from src.engine.lifecycle.research_json_stream import Reader
+    from src.engine.lifecycle.holding_window_generation import source_stat
+    root = Path(data_root).resolve()
+    logical = root / 'report/monitor_snapshots' / f'trade_review_{target_date}.json'
+    path = logical if logical.exists() else Path(str(logical) + '.gz')
+    manifest_path = logical.parent/'manifests'/f'monitor_snapshot_manifest_{target_date}_postclose_exit.json'
+    if not path.exists() or (path.stat().st_size <= 8 * 1024 * 1024
+            and not (path.suffix == '.gz' and manifest_path.exists())):
+        return None
+    for source in (path, manifest_path):
+        if source.is_symlink() or any(parent.is_symlink() for parent in source.parents):
+            raise ValueError('prior_entry_projection_source_symlink')
+    before, manifest_before = path.stat(), manifest_path.stat()
+    if (not stat.S_ISREG(before.st_mode) or not stat.S_ISREG(manifest_before.st_mode)
+            or manifest_before.st_size > 65536):
+        raise ValueError('prior_entry_projection_source_unbounded')
+    manifest_bytes = manifest_path.read_bytes()
+    manifest = json.loads(manifest_bytes)
+    expected = (manifest.get('snapshot_sha256') or {}).get('trade_review')
+    if (manifest.get('target_date') != target_date or manifest.get('profile') != 'postclose_exit'
+            or (manifest.get('snapshot_paths') or {}).get('trade_review') != str(logical)
+            or not re.fullmatch('[0-9a-f]{64}', str(expected or ''))):
+        raise ValueError('prior_entry_projection_manifest_invalid')
+    pattern = re.compile(rb'(?m)^  "([^"\\\r\n]{1,128})":|^    "open_scalp_position_projection": \[')
+    keys, arrays, seen = [], [], set()
+    sha, offset, tail = hashlib.sha256(), 0, b''
+    allowed = {'position_rebased_after_fill', 'scale_in_executed',
+        'avg_down_shared_rebound_signal', 'holding_path_signal_snapshot',
+        'scale_in_order_submitted', 'scale_in_order_leg_submitted',
+        'entry_buy_order_terminal_confirmed', 'scale_in_buy_order_terminal_confirmed',
+        'sell_partial_fill_progress', 'nxt_rising_missed_tp1_partial_fill_progress',
+        'nxt_rising_missed_tp1_partial_sell_completed'}
+    projected_bytes = [0]
+    def event(reader):
+        item = {}
+        def field(key, source):
+            if key in {'stage', 'timestamp'}:
+                item[key] = source.value(4096)
+            elif key == 'fields':
+                if 'stage' not in item:
+                    raise ValueError('prior_entry_projection_timeline_field_order_invalid')
+                if item['stage'] in allowed:
+                    item[key] = source.value(2 * 1024 * 1024)
+                else:
+                    source.skip()
+            else:
+                source.skip()
+            return iter(())
+        for _ in reader.fields(field):
+            pass
+        return item if item.get('stage') in allowed else None
+    def position(reader):
+        row = {}
+        def field(key, source):
+            if key in {'id', 'name', 'code'}:
+                row[key] = source.value(4096)
+            elif key == 'avg_down_rebound_blocker_summary':
+                row[key] = source.value(256 * 1024)
+            elif key == 'timeline':
+                row[key] = []
+                for item in source.array(event):
+                    if item is not None:
+                        projected_bytes[0] += len(json.dumps(item, ensure_ascii=False).encode('utf-8'))
+                        if projected_bytes[0] > 16 * 1024 * 1024:
+                            raise ValueError('prior_entry_projection_event_budget')
+                        row[key].append(item)
+            else:
+                source.skip()
+            return iter(())
+        for _ in reader.fields(field):
+            pass
+        projected_bytes[0] += len(json.dumps({k:v for k,v in row.items() if k != 'timeline'},
+                                             ensure_ascii=False).encode('utf-8'))
+        if projected_bytes[0] > 16 * 1024 * 1024:
+            raise ValueError('prior_entry_projection_event_budget')
+        return row
+    with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), 'rb') as raw:
+        if source_stat(os.fstat(raw.fileno())) != source_stat(before):
+            raise ValueError('prior_entry_projection_source_changed')
+        stream = gzip.GzipFile(fileobj=raw) if path.suffix == '.gz' else raw
+        try:
+            while block := stream.read(1024 * 1024):
+                sha.update(block)
+                # An overlap can start inside an indented JSON line. Prefix a
+                # non-newline byte so that its artificial start is never
+                # mistaken for a root key by the multiline anchors.
+                chunk = b'\x00' + tail + block
+                base = offset - len(tail) - 1
+                for match in pattern.finditer(chunk):
+                    absolute = base + match.start()
+                    if absolute in seen:
+                        continue
+                    seen.add(absolute)
+                    if match.group(1) is not None:
+                        keys.append((absolute, match.group(1).decode('ascii')))
+                        if len(keys) > 256:
+                            raise ValueError('prior_entry_projection_root_budget')
+                    else:
+                        arrays.append(base + match.end() - 1)
+                offset += len(block)
+                tail = chunk[-256:]
+            if sha.hexdigest() != expected:
+                raise ValueError('prior_entry_projection_source_hash_invalid')
+            sections = [at for at, key in keys if key == 'sections']
+            if len(sections) != 1:
+                raise ValueError('prior_entry_projection_sections_invalid')
+            upper = min((at for at, _ in keys if at > sections[0]), default=offset)
+            targets = [at for at in arrays if sections[0] < at < upper]
+            if len(targets) != 1:
+                raise ValueError('prior_entry_projection_array_invalid')
+            stream.seek(0)
+            prefix = codecs.getincrementaldecoder('utf-8')().decode(stream.read(256 * 1024), final=False)
+            header_reader = Reader(io.StringIO(prefix))
+            header = {}
+            def header_field(key, source):
+                if key in {'date', 'meta', 'metrics'}:
+                    yield key, source.value(256 * 1024)
+                else:
+                    source.skip()
+            for key, value in header_reader.fields(header_field):
+                header[key] = value
+                if set(header) == {'date', 'meta', 'metrics'}:
+                    break
+            if set(header) != {'date', 'meta', 'metrics'}:
+                raise ValueError('prior_entry_projection_header_invalid')
+            stream.seek(targets[0])
+            text = io.TextIOWrapper(stream, encoding='utf-8')
+            try:
+                rows = []
+                for row in Reader(text).array(position):
+                    if len(rows) >= 10000:
+                        raise ValueError('prior_entry_projection_census_budget')
+                    rows.append(row)
+            finally:
+                text.detach()
+        finally:
+            if stream is not raw:
+                stream.close()
+    if (source_stat(path.stat()) != source_stat(before)
+            or source_stat(manifest_path.stat()) != source_stat(manifest_before)):
+        raise ValueError('prior_entry_projection_source_changed')
+    snapshot = {**header, 'sections': {'open_scalp_position_projection': rows}}
+    receipt = dict(schema='prior_entry_fill_projection_v1', source_decoded_sha256=expected,
+        source_decoded_bytes=offset, source_path=str(path),
+        manifest_path=str(manifest_path), manifest_sha256=hashlib.sha256(manifest_bytes).hexdigest(),
+        projection_sha256=hashlib.sha256(json.dumps(snapshot, ensure_ascii=False,
+            sort_keys=True, separators=(',', ':')).encode('utf-8')).hexdigest())
+    return snapshot, receipt
 
 
 def save_monitor_snapshot(kind: str, target_date: str, payload: dict) -> Path:
@@ -100,30 +326,38 @@ def save_monitor_snapshot(kind: str, target_date: str, payload: dict) -> Path:
     from src.engine.infrastructure.research_release_transition import journal_json
     if journal_json(path,payload,ensure_ascii=False,indent=2):
         return path
-    path.parent.mkdir(parents=True, exist_ok=True)
-    file_descriptor, temp_name = tempfile.mkstemp(
-        prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
-    )
-    tmp_path = Path(temp_name)
-    try:
-        with os.fdopen(file_descriptor, "w", encoding="utf-8") as handle:
-            json.dump(payload, handle, ensure_ascii=False, indent=2)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(tmp_path, path)
-    finally:
-        tmp_path.unlink(missing_ok=True)
+    def publish_snapshot():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        file_descriptor, temp_name = tempfile.mkstemp(
+            prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
+        )
+        tmp_path = Path(temp_name)
+        try:
+            with os.fdopen(file_descriptor, "w", encoding="utf-8") as handle:
+                from src.engine.infrastructure.validation_digest_session import NativeJSONWriter
+                native_writer=NativeJSONWriter(handle)
+                json.dump(payload, native_writer, ensure_ascii=False, indent=2)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(tmp_path, path)
+        finally:
+            tmp_path.unlink(missing_ok=True)
+        from src.engine.infrastructure.validation_digest_session import publish_native_bytes
+        if path.parent.name=='monitor_snapshots' and path.parent.parent.name=='report':
+            publish_native_bytes(path.parent.parent.parent,path,native_writer.generation(path))
     if (kind == "trade_review"
-        and (payload.get("meta") or {}).get("snapshot_profile") == "postclose_exit"
-        and isinstance((payload.get("meta") or {}).get(
-            "completed_census_manifest"), dict)
-        and isinstance((payload.get("sections") or {}).get(
-            "open_scalp_position_projection"), list)):
-        _save_trade_review_completed_projection(path, payload)
+            and (payload.get("meta") or {}).get("snapshot_profile") == "postclose_exit"):
+        if payload.get("date") != target_date:
+            raise ValueError("trade_review_completed_projection_invalid:completed_census_source_date_mismatch")
+        _save_trade_review_completed_projection(path, payload, publish_snapshot=publish_snapshot)
+    else:
+        publish_snapshot()
     return path
 
 
-def _save_trade_review_completed_projection(path: Path, payload: dict) -> Path:
+def _save_trade_review_completed_projection(
+    path: Path, payload: dict, *, publish_snapshot: Callable[[], None] | None = None,
+) -> Path:
     """Seal the small holding/exit input beside a potentially huge snapshot."""
     from src.engine.sniper_trade_review_report import verify_completed_census_manifest
 
@@ -134,6 +368,8 @@ def _save_trade_review_completed_projection(path: Path, payload: dict) -> Path:
     sections = payload.get("sections") or {}
     if not isinstance(sections.get("open_scalp_position_projection"), list):
         raise ValueError("trade_review_open_position_projection_missing")
+    if publish_snapshot is not None:
+        publish_snapshot()
     stat = path.stat()
     body = {
         "schema": "trade_review_completed_projection_sidecar_v1",
@@ -158,6 +394,11 @@ def _save_trade_review_completed_projection(path: Path, payload: dict) -> Path:
             "mtime_ns": stat.st_mtime_ns, "ctime_ns": stat.st_ctime_ns,
         },
     }
+    if "database_completed_sources" in (payload.get("meta") or {}):
+        body["meta"]["database_completed_sources"] = payload["meta"]["database_completed_sources"]
+    for key in ("native_sell_completed_trade_count", "database_only_completed_trade_count"):
+        if key in (payload.get("metrics") or {}):
+            body["metrics"][key] = payload["metrics"][key]
     body["artifact_sha256"] = hashlib.sha256(json.dumps(
         body, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
     ).encode("utf-8")).hexdigest()
@@ -167,18 +408,30 @@ def _save_trade_review_completed_projection(path: Path, payload: dict) -> Path:
     temporary = Path(name)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            json.dump(body, handle, ensure_ascii=False, separators=(",", ":"))
+            from src.engine.infrastructure.validation_digest_session import NativeJSONWriter
+            native_writer=NativeJSONWriter(handle)
+            json.dump(body, native_writer, ensure_ascii=False, separators=(",", ":"))
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(temporary, destination)
     finally:
         temporary.unlink(missing_ok=True)
+    from src.engine.infrastructure.validation_digest_session import publish_native_bytes
+    if path.parent.name=='monitor_snapshots' and path.parent.parent.name=='report':
+        publish_native_bytes(path.parent.parent.parent,destination,native_writer.generation(destination))
     # Dependency consumers need the sealed metadata, not another decode of
     # every timeline. This receipt is emitted by the verified projection
     # producer and bound to the independently verifiable exact file bytes.
     from src.engine.lifecycle.holding_window_generation import seal_dependency_receipt
     fact_projection = _save_trade_review_fact_projection(path, payload, body)
-    seal_dependency_receipt(destination, body, fact_projection=fact_projection)
+    native_generation=None;trailing_index=None
+    if path.parent.name=='monitor_snapshots' and path.parent.parent.name=='report':
+        from src.engine.automation.main_trailing_completed_store import publish
+        native_generation=native_writer.generation(destination)
+        trailing_index=publish(path.parent.parent.parent,destination,body,
+            projection_generation=native_generation)
+    seal_dependency_receipt(destination, body, fact_projection=fact_projection,
+        projection_generation=native_generation,trailing_completed_index=trailing_index)
     return destination
 
 
@@ -345,6 +598,15 @@ def _postclose_pipeline_guard(data_root, day):
     return {'schema': 'postclose_prefix_raw_generation_v1', 'partitions': generations}
 
 
+
+def _postclose_prefix_producer_code_generation():
+    """Bind reuse to the code that computes and publishes the three reports."""
+    engine = Path(__file__).resolve().parent
+    return {name: _sha256_file(engine / name) for name in (
+        'log_archive_service.py', 'sniper_trade_review_report.py',
+        'sniper_post_sell_feedback.py', 'sniper_missed_entry_counterfactual.py')}
+
+
 def _postclose_prefix_guard(data_root,day,manifest_path=None):
     from src.engine.lifecycle.holding_window_generation import source_stat
     directory=Path(data_root)/'report/monitor_snapshots'
@@ -360,6 +622,7 @@ def _postclose_prefix_guard(data_root,day,manifest_path=None):
         if path.is_symlink():raise ValueError('postclose_exit_prefix_path_invalid')
         result[str(path)]=source_stat(path.stat()) if path.exists() else None
     result['raw_pipeline_generation'] = _postclose_pipeline_guard(data_root, day)
+    result['producer_code_generation'] = _postclose_prefix_producer_code_generation()
     return result
 
 
@@ -381,7 +644,7 @@ def _postclose_prefix_native_proof(data_root,day):
     return dict(native_trade_generation=native,fact_projection=fact)
 
 
-def save_postclose_exit_prefix_manifest(target_date,*,snapshots,raw_pipeline_generation):
+def save_postclose_exit_prefix_manifest(target_date,*,snapshots,raw_pipeline_generation,producer_code_generation):
     from src.engine.lifecycle.broker_cost_reconciliation import digest
     from src.engine.scalping.pre_submit_delay_initial_policy import _atomic
     if set(snapshots)!=POSTCLOSE_PREFIX_KINDS:
@@ -389,6 +652,8 @@ def save_postclose_exit_prefix_manifest(target_date,*,snapshots,raw_pipeline_gen
     before=_postclose_prefix_guard(DATA_DIR,target_date)
     if before['raw_pipeline_generation'] != raw_pipeline_generation:
         raise ValueError('postclose_exit_prefix_pipeline_changed_during_build')
+    if before['producer_code_generation'] != producer_code_generation:
+        raise ValueError('postclose_exit_prefix_producer_changed_during_build')
     proof=_postclose_prefix_native_proof(DATA_DIR,target_date)
     payload=dict(schema='monitor_snapshot_completion_prefix_v1',target_date=target_date,
         profile='postclose_exit',postclose_phase='completion_prefix',
@@ -397,6 +662,7 @@ def save_postclose_exit_prefix_manifest(target_date,*,snapshots,raw_pipeline_gen
         snapshot_paths=dict(snapshots),snapshot_sha256={key:_sha256_file(Path(value)) for key,value in snapshots.items()},
         actual_cost_source_generation=proof['native_trade_generation']['cost_generation'],
         raw_pipeline_generation=raw_pipeline_generation,
+        producer_code_generation=producer_code_generation,
         native_source_proof=proof)
     if _postclose_prefix_guard(DATA_DIR,target_date)!=before:
         raise ValueError('postclose_exit_prefix_changed_during_publication')
@@ -424,6 +690,8 @@ def _read_verified_postclose_exit_prefix(target_date,*,data_root):
             or set(body.get('snapshot_paths') or {})!=POSTCLOSE_PREFIX_KINDS
             or set(body.get('snapshot_sha256') or {})!=POSTCLOSE_PREFIX_KINDS):
         raise ValueError('postclose_exit_prefix_manifest_invalid')
+    if body.get('producer_code_generation') != before['producer_code_generation']:
+        raise ValueError('postclose_exit_prefix_producer_generation_changed')
     if body.get('raw_pipeline_generation') != before['raw_pipeline_generation']:
         raise ValueError('postclose_exit_prefix_pipeline_generation_changed')
     for kind in POSTCLOSE_PREFIX_KINDS:
@@ -561,16 +829,38 @@ def _read_matching_lines(
 ) -> list[str]:
     if not path.exists() or not path.is_file():
         return []
-
-    opener = gzip.open if path.suffix == ".gz" else open
+    from src.engine.infrastructure.validation_digest_session import ACTIVE, MAX_ENTRIES, identity
+    import time
+    session = ACTIVE.get()
+    if session is not None and session.invocation_pid != os.getpid():
+        session = None
+    before = identity(path) if session is not None else None
+    key = ('dated_log_lines', str(path.absolute()), target_date)
+    entry = session.semantic_objects.get(key) if session is not None else None
+    if entry and entry[0] == before and time.monotonic() - entry[2] <= session.ttl:
+        return [line for line in entry[1] if not marker or marker in line]
+    opener = gzip.open if path.suffix == '.gz' else open
     lines: list[str] = []
-    with opener(path, "rt", encoding="utf-8", errors="ignore") as handle:
+    cached_lines = [] if session is not None else None
+    cached_bytes = 0
+    with opener(path, 'rt', encoding='utf-8', errors='ignore') as handle:
         for raw_line in handle:
-            if f"[{target_date}" not in raw_line:
+            if f'[{target_date}' not in raw_line:
                 continue
-            if marker and marker not in raw_line:
-                continue
-            lines.append(raw_line.strip())
+            line = raw_line.strip()
+            if not marker or marker in raw_line:
+                lines.append(line)
+            if cached_lines is not None:
+                cached_bytes += len(line.encode('utf-8'))
+                if cached_bytes <= 1024 * 1024:
+                    cached_lines.append(line)
+                else:
+                    cached_lines = None
+    if cached_lines is not None and identity(path) == before:
+        if session.semantic_bytes + cached_bytes > 4 * 1024 * 1024 or len(session.semantic_objects) >= MAX_ENTRIES:
+            session.semantic_objects.clear();session.semantic_bytes = 0
+        session.semantic_objects[key] = (before, cached_lines, time.monotonic(), cached_bytes)
+        session.semantic_bytes += cached_bytes
     return lines
 
 
@@ -768,6 +1058,8 @@ def save_monitor_snapshots_for_date_with_profile(
     if trend_max_dates is not None:
         result["trend_max_dates"] = str(trend_max_dates)
 
+    producer_before = (_postclose_prefix_producer_code_generation()
+                       if postclose_phase == 'completion_prefix' else None)
     selected_kinds = allowed_by_profile[normalized_profile]
     if postclose_phase=='completion_prefix':selected_kinds=POSTCLOSE_PREFIX_KINDS
     elif postclose_phase=='holding_suffix':selected_kinds={'holding_exit_observation'}
@@ -828,7 +1120,7 @@ def save_monitor_snapshots_for_date_with_profile(
         if postclose_phase=='completion_prefix':
             manifest=save_postclose_exit_prefix_manifest(target_date,
                 snapshots={key:result[key] for key in POSTCLOSE_PREFIX_KINDS},
-                raw_pipeline_generation=pipeline_before)
+                raw_pipeline_generation=pipeline_before,producer_code_generation=producer_before)
             result['snapshot_manifest']=str(manifest)
             return result
         if prefix_guard is not None and _postclose_prefix_guard(DATA_DIR,target_date,prefix_manifest)!=prefix_guard:
@@ -862,3 +1154,15 @@ def save_monitor_snapshots_for_date_with_profile(
         return result
 
     return _finalize_snapshot_manifest()
+
+
+def tail_log_lines(path: Path, count: int = 5000) -> list[str]:
+    """Read the final newline-delimited log lines without loading the prefix."""
+    if count <= 0:return []
+    chunks=[];newlines=0
+    with Path(path).open('rb') as handle:
+        handle.seek(0,os.SEEK_END);offset=handle.tell()
+        while offset and newlines<=count:
+            size=min(offset,65536);offset-=size;handle.seek(offset)
+            block=handle.read(size);chunks.append(block);newlines+=block.count(b'\n')
+    return b''.join(reversed(chunks)).decode('utf-8',errors='replace').splitlines()[-count:]

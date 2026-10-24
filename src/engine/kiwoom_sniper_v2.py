@@ -48,10 +48,11 @@ from sqlalchemy import text
 
 # 💡 Level 1 & 2 공통 모듈 (경로 및 패키지 구조에 맞게 통일)
 from src.utils import kiwoom_utils
+from src.utils.numeric import safe_float as _safe_float
 from src.utils.logger import log_error, log_info
 from src.utils.constants import DATA_DIR, RESTART_FLAG_PATH, TRADING_RULES
 from src.utils.pipeline_event_logger import emit_pipeline_event
-from src.engine.infrastructure.restart_requests import consume_restart_request
+from src.engine.infrastructure.restart_requests import consume_restart_request, request_shutdown, shutdown_requested
 from src.database.db_manager import (
     DBManager,
     SWING_REAL_WATCHING_ENABLED_ENV,
@@ -334,6 +335,7 @@ _ZERO_BASE_PROBE_EXECUTOR = ThreadPoolExecutor(
 _ZERO_BASE_PROBE_SLOTS = threading.BoundedSemaphore(MAX_CONCURRENT_PROBES)
 _ZERO_BASE_PROBE_IN_FLIGHT = set()
 _ZERO_BASE_PROBE_LOCK = threading.Lock()
+_ZERO_BASE_PROBE_CLOSING = threading.Event()
 _ZERO_BASE_HANDOFFS = {}
 _ZERO_BASE_CLEANUP_RETRIES = {}
 _ZERO_BASE_MAIN_INBOX = Queue(maxsize=MAX_CONCURRENT_PROBES)
@@ -1339,6 +1341,7 @@ def _is_ok_response(res):
 
 
 def _prune_ws_subscriptions_for_inactive_targets(targets):
+    from src.engine.scalping.pre_submit_delay_observation import should_retain_ws_subscription as retain_delay_source
     if not WS_MANAGER:
         return
     subscribed_codes = list(getattr(WS_MANAGER, "subscribed_codes", set()) or [])
@@ -1366,6 +1369,8 @@ def _prune_ws_subscriptions_for_inactive_targets(targets):
         # normal micro-reversion demotion, which may replace plain/_NX/_AL and
         # silently break the post-sell observer's executable route contract.
         if should_retain_ws_subscription(norm, now_ts=now_ts):
+            continue
+        if retain_delay_source(norm, now_ts=now_ts):
             continue
         if _is_scanner_promotion_pending_attach(norm, now_ts=now_ts):
             continue
@@ -1782,28 +1787,6 @@ def _safe_int(value, default=0):
         if not math.isfinite(numeric):
             return default
         return int(numeric)
-    except Exception:
-        return default
-
-
-def _safe_float(value, default=0.0):
-    try:
-        if value is None:
-            return default
-        if isinstance(value, str) and value.strip().lower() in {
-            "",
-            "nan",
-            "nat",
-            "none",
-            "inf",
-            "+inf",
-            "-inf",
-        }:
-            return default
-        numeric = float(value)
-        if not math.isfinite(numeric):
-            return default
-        return numeric
     except Exception:
         return default
 
@@ -6060,11 +6043,13 @@ def _expire_scalping_watch_budget_targets(
         for target in active_targets or []
         if str(target.get("status") or "").upper() not in {"COMPLETED", "EXPIRED"}
     }
+    from src.engine.scalping.pre_submit_delay_observation import should_retain_ws_subscription as retain_delay_source
     unregister_codes = [
         code
         for code in sorted(set(expired_codes))
         if code not in active_codes
         and not should_retain_ws_subscription(code)
+        and not retain_delay_source(code)
         and not sniper_state_handlers.should_retain_rising_missed_nxt_post_block_subscription(
             code
         )
@@ -8705,6 +8690,25 @@ def _retry_zero_base_cleanup():
             log_error('[ZERO_BASE_PROBE_RELEASE] retry:' + type(exc).__name__)
 
 
+def _drain_zero_base_probe_leases(*, timeout=45.0):
+    """Finish existing diagnostic leases while their native socket is live.
+
+    Admission closes first. Existing probe deadlines, exact REMOVE authority,
+    futures and retry receipts stay with their ordinary owners.
+    """
+    deadline = time.monotonic() + timeout
+    with _ZERO_BASE_PROBE_LOCK:
+        _ZERO_BASE_PROBE_CLOSING.set()
+    while True:
+        _retry_zero_base_cleanup()
+        with _ZERO_BASE_PROBE_LOCK:
+            if not _ZERO_BASE_PROBE_IN_FLIGHT:
+                return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(min(.05, max(0., deadline-time.monotonic())))
+
+
 def _zero_base_probe_observation_profile(session_regime):
     thin_session = session_regime in {
         session_contract.MARKET_SESSION_REGIME_LEGACY_PREMARKET,
@@ -8779,11 +8783,17 @@ def handle_zero_base_probe_requested(request):
         _zero_base_probe_result(request, "probe_capacity_deferred", "probe_worker_capacity")
         return
     with _ZERO_BASE_PROBE_LOCK:
-        if code in _ZERO_BASE_PROBE_IN_FLIGHT:
+        closing = _ZERO_BASE_PROBE_CLOSING.is_set()
+        if not closing and code in _ZERO_BASE_PROBE_IN_FLIGHT:
             _ZERO_BASE_PROBE_SLOTS.release()
             _zero_base_probe_result(request, "probe_capacity_deferred", "same_code_probe_in_flight")
             return
-        _ZERO_BASE_PROBE_IN_FLIGHT.add(code)
+        if not closing:
+            _ZERO_BASE_PROBE_IN_FLIGHT.add(code)
+    if closing:
+        _ZERO_BASE_PROBE_SLOTS.release()
+        _zero_base_probe_result(request, "probe_capacity_deferred", "probe_executor_unavailable")
+        return
 
     def worker():
         probe_lease_id = claim.get('physical_probe_lease_id') or uuid.uuid4().hex
@@ -12212,6 +12222,15 @@ def _restore_holding_runtime_state(targets):
                 )
             else:
                 stock["buy_fill_identity_restore_status"] = fill_restore
+                from src.engine.scalping.main_stop_quantity_source import (
+                    restore_terminal_quantity_source,
+                )
+                # Source-only terminal recovery after native BUY receipts. An
+                # active bundle remains owned by its existing runtime path.
+                stock["main_stop_quantity_restore_status"] = restore_terminal_quantity_source(
+                    stock, bundle_root=DATA_DIR / "runtime/initial_quantity/bundles",
+                    at=time.time(),
+                )
 
         if stock.get("buy_time") and not stock.get("holding_started_at"):
             stock["holding_started_at"] = stock.get("buy_time")
@@ -12510,27 +12529,3429 @@ def _start_post_sell_bbo_observer_worker() -> threading.Thread:
     return thread
 
 
+def _run_sniper_iterations(
+    *, is_test_mode, targets, admin_id, radar, ai_engine,
+    last_db_poll_time, last_msg_min, scanner_ws_reg_last_emit_ts, scanner_ws_repair_cycle_state_by_code,
+    log_error, log_info,
+):
+    """Execute native Main iterations after existing startup has bound dependencies.
+
+    Live Main consumes this iterator. Offline measurement may advance it with
+    frozen external inputs; evaluation, scheduling and safety remain native.
+    A yield marks the existing end-of-iteration wake boundary, not an order.
+    """
+    while not shutdown_requested():
+        loop_work_started = time.perf_counter()
+        from src.engine.monitoring.runtime_performance import record_main_phase
+        record_main_phase('loop_prepare')
+        now_ts = time.time()
+        from src.engine.scalping.pre_submit_delay_observation import prune as prune_delay_observations
+        prune_delay_observations(now_ts)
+        now = datetime.now()
+        now_t = now.time()
+        run_sniper.runtime_pause_state = is_buy_side_paused()
+        current_market_regime = _current_market_regime_code()
+        from src.engine.scalping.avg_down_replay_capture import record_main_market_regime
+        record_main_market_regime(current_market_regime, now_ts=now_ts)
+        _ensure_state_handler_deps()
+
+        from src.engine.error_detectors.process_health import (
+            write_heartbeat as _sn_whb,
+        )
+
+        _sn_whb("sniper_engine")
+
+        if RESTART_FLAG_PATH.exists():
+            restart_guard = consume_restart_request(
+                RESTART_FLAG_PATH,
+                main_bot_pid=os.getpid(),
+            )
+            if not restart_guard.get("claimed"):
+                continue
+            if not restart_guard.get("allowed"):
+                log_error(
+                    "[MAIN_BOT_RESTART_BLOCKED] Samsung morning authority/custody "
+                    f"guard reason={restart_guard.get('reason')}"
+                )
+                continue
+            print(
+                "🔄 [우아한 종료] 재시작 깃발을 확인했습니다. 시스템을 안전하게 정지합니다."
+            )
+            event_bus.publish(
+                "TELEGRAM_BROADCAST",
+                {
+                    "message": "🛑 스나이퍼 엔진이 하던 작업을 마치고 우아하게 재시작됩니다."
+                },
+            )
+            _sn_whb("sniper_engine", alive=False)
+            request_shutdown()
+            break
+
+        today_key = now.date().isoformat()
+        if (
+            now_t >= TIME_09_00
+            and getattr(run_sniper, "krx_open_watchlist_reset_date", None)
+            != today_key
+        ):
+            reset_codes = _reset_krx_open_watch_targets(targets, now_dt=now)
+            run_sniper.krx_open_watchlist_reset_date = today_key
+            if reset_codes:
+                log_info(
+                    "[KRX_OPEN_WATCHLIST_RESET] expired pre-open WATCHING targets "
+                    f"count={len(reset_codes)} codes={','.join(sorted(set(reset_codes)))}"
+                )
+
+        scalp_sim_sync = (
+            sniper_state_handlers.sync_scalp_simulator_targets_if_state_changed(
+                targets,
+                last_mtime=getattr(run_sniper, "last_scalp_sim_state_mtime", None),
+            )
+        )
+        run_sniper.last_scalp_sim_state_mtime = scalp_sim_sync.get("state_mtime")
+        swing_probe_sync = sniper_state_handlers.sync_swing_intraday_probe_targets_if_state_changed(
+            targets,
+            last_mtime=getattr(run_sniper, "last_swing_probe_state_mtime", None),
+        )
+        run_sniper.last_swing_probe_state_mtime = swing_probe_sync.get(
+            "state_mtime"
+        )
+
+        if not is_test_mode and now_t >= TIME_20_00:
+            unresolved_scalping = (
+                sniper_state_handlers.unresolved_scalping_terminal_positions(
+                    targets,
+                    observed_at=now,
+                )
+            )
+            terminal_reason = "market_close"
+            if unresolved_scalping:
+                terminal_reason = "market_close_unresolved_scalping_positions"
+                unresolved_codes = ",".join(
+                    sorted(
+                        {
+                            str(item.get("code") or "-")
+                            for item in unresolved_scalping
+                        }
+                    )
+                )
+                log_error(
+                    "[SCALPING_SAME_SESSION_TERMINAL_FAIL] unresolved positions "
+                    f"count={len(unresolved_scalping)} codes={unresolved_codes}; "
+                    "a valid positive-net exit or nonpositive-net HOLD decision "
+                    "is missing and broker/receipt reconciliation is required"
+                )
+                event_bus.publish(
+                    "TELEGRAM_BROADCAST",
+                    {
+                        "message": (
+                            "🚨 **[스캘핑 당일 종결 미완료]**\n"
+                            f"미종결: `{len(unresolved_scalping)}건` "
+                            f"(`{unresolved_codes}`)\n"
+                            "양수 비용차감 청산 또는 비양수 HOLD 판정이 "
+                            "확인되지 않아 다음 기동에서 브로커/체결 "
+                            "영수증 재조정이 필요합니다."
+                        )
+                    },
+                )
+            print("🌙 장 마감 시간이 다가와 감시를 종료합니다.")
+            highest_prices.clear()
+            alerted_stocks.clear()
+            cooldowns.clear()
+            LAST_AI_CALL_TIMES.clear()
+            ACTIVE_TARGETS.clear()
+            _sn_whb(
+                "sniper_engine",
+                alive=False,
+                terminal_reason=terminal_reason,
+                unresolved_scalping_count=len(unresolved_scalping),
+                unresolved_scalping_codes="|".join(
+                    str(item.get("code") or "-") for item in unresolved_scalping
+                ),
+            )
+            break
+
+        # =====================================================
+        # 신규 DB 타겟 polling (P0 계측 포함)
+        # =====================================================
+        _t0_db = time.perf_counter()
+        record_main_phase('target_db_and_fixed_watch_reconcile')
+        if now_ts - last_db_poll_time > 5:
+            db_targets = DB.get_active_targets() or []
+            for dt in db_targets:
+                attach_db_poll_target_if_missing(dt, targets, now_ts)
+            last_db_poll_time = now_ts
+        _db_elapsed_ms = (time.perf_counter() - _t0_db) * 1000
+        if (main_fixed_watch.enabled_symbols() or any(
+            main_fixed_watch.is_fixed_watch(target) for target in targets
+        )) and now_ts - getattr(
+            run_sniper, "last_fixed_watch_reconcile_time", 0.0
+        ) >= 5.0:
+            _reconcile_main_fixed_watch(targets, now_ts=now_ts, publish_reg=True)
+            run_sniper.last_fixed_watch_reconcile_time = now_ts
+
+        # =====================================================
+        # WATCHING TTL / FIFO
+        # =====================================================
+        if (
+            now_ts - getattr(run_sniper, "last_opening_rotation_ttl_sweep_time", 0)
+            >= 1.0
+        ):
+            opening_ttl_sweep = (
+                sniper_state_handlers.sweep_expired_opening_rotation_watch_slots(
+                    targets,
+                    now_ts=now_ts,
+                )
+            )
+            run_sniper.last_opening_rotation_ttl_sweep_time = now_ts
+            if opening_ttl_sweep.get("failed_count", 0) > 0:
+                log_error(
+                    "[OPENING_ROTATION_TTL_SWEEP] expiration incomplete "
+                    f"eligible={opening_ttl_sweep.get('eligible_count', 0)} "
+                    f"expired={opening_ttl_sweep.get('expired_count', 0)} "
+                    f"failed={opening_ttl_sweep.get('failed_count', 0)}"
+                )
+        if now_ts - getattr(run_sniper, "last_fifo_time", 0) > 10:
+            watching_stocks = [t for t in targets if t.get("status") == "WATCHING"]
+            expired_ids = []
+            expired_names = []
+
+            watching_stocks.sort(
+                key=lambda x: _runtime_added_time_for_target(x, now_ts=now_ts)
+            )
+            scalp_fifo_targets = _scalping_fifo_candidates(watching_stocks, now_ts)
+            scalping_watching_ttl_sec = _scalping_watching_ttl_sec()
+
+            for t in scalp_fifo_targets:
+                # Observation of this existing owner contract only. It does
+                # not extend TTL, reserve cash, or change watch eligibility.
+                t["entry_economic_watch_lifetime"] = {
+                    "owner": "kiwoom_sniper_v2._scanner_evaluation_lifetime_anchor/_scalping_watching_ttl_sec",
+                    "scanner_promotion_id": t.get("scanner_promotion_id"),
+                    "deadline_epoch": _scanner_evaluation_lifetime_anchor(t, now_ts=now_ts) + scalping_watching_ttl_sec,
+                    "observed_epoch": now_ts,
+                }
+                if (
+                    now_ts - _scanner_evaluation_lifetime_anchor(t, now_ts=now_ts)
+                    > scalping_watching_ttl_sec
+                    or (
+                        _is_zero_base_watch_target(t)
+                        and not _zero_base_watch_session_matches(t, now_ts)
+                    )
+                ):
+                    expired_ids.append(t["id"])
+                    expired_names.append(t["name"])
+
+            scalp_remaining = [
+                t for t in scalp_fifo_targets if t["id"] not in expired_ids
+            ]
+            for t in _scalping_watch_budget_overflow_candidates(
+                scalp_remaining, now_ts
+            ):
+                expired_ids.append(t["id"])
+                expired_names.append(t["name"])
+
+            if expired_ids:
+                try:
+                    with DB.get_session() as session:
+                        session.query(RecommendationHistory).filter(
+                            RecommendationHistory.id.in_(expired_ids)
+                        ).update({"status": "EXPIRED"}, synchronize_session=False)
+                except Exception as e:
+                    log_error(f"🚨 FIFO 큐 DB 업데이트 에러: {e}")
+
+                for t in targets:
+                    if t.get("id") in expired_ids:
+                        t["status"] = "EXPIRED"
+                        _record_machine_watch_terminal(t, now_ts=now_ts)
+
+                print(
+                    f"🗑️ [스캘핑 큐 정리] {len(expired_ids)}개 단기 종목 감시 만료"
+                )
+                if len(expired_names) <= 10:
+                    print(f"   └ 만료 종목: {', '.join(expired_names)}")
+
+            run_sniper.last_fifo_time = now_ts
+
+        # =====================================================
+        # 90초 lifecycle reconciliation과 45초 read-only broker snapshot
+        # =====================================================
+        _t0_acct = time.perf_counter()
+        record_main_phase('account_task_admission')
+        if (
+            now_ts - getattr(run_sniper, "last_account_sync_time", 0)
+            > ACCOUNT_RECONCILIATION_INTERVAL_SEC
+        ):
+            if _submit_account_sync(reason="periodic_90s"):
+                run_sniper.last_account_sync_time = now_ts
+                run_sniper.last_broker_snapshot_refresh_time = now_ts
+        elif (
+            now_ts - getattr(run_sniper, "last_broker_snapshot_refresh_time", 0)
+            > BROKER_SNAPSHOT_REFRESH_INTERVAL_SEC
+            and _periodic_broker_snapshot_required(targets)
+        ):
+            if _submit_account_task(
+                task_kind="broker_snapshot_read_only",
+                reason="periodic_holding_context_45s",
+            ):
+                run_sniper.last_broker_snapshot_refresh_time = now_ts
+        _acct_elapsed_ms = (time.perf_counter() - _t0_acct) * 1000
+        record_main_phase('prequeue_maintenance')
+
+        # Legacy overnight AI is retired. Holding AI remains active through
+        # the close; the post-effective terminal rule only adds a SELL when
+        # the fresh executable return is positive after configured costs.
+        eod_ai_holding_fallback = False
+
+        # =====================================================
+        # 상태 로그
+        # =====================================================
+        if now_t.minute % 5 == 0 and now_t.minute != last_msg_min:
+            watching_count = len(
+                [t for t in targets if t.get("status") == "WATCHING"]
+            )
+            holding_targets = [t for t in targets if t.get("status") == "HOLDING"]
+            real_holding_count = len(
+                [t for t in holding_targets if not _is_runtime_simulation_target(t)]
+            )
+            scalp_sim_holding_count = len(
+                [t for t in holding_targets if _is_runtime_scalp_sim_target(t)]
+            )
+            probe_holding_count = len(
+                [t for t in holding_targets if _is_runtime_probe_target(t)]
+            )
+            other_sim_holding_count = max(
+                0,
+                len(holding_targets)
+                - real_holding_count
+                - scalp_sim_holding_count
+                - probe_holding_count,
+            )
+            print(
+                f"💓 [{now.strftime('%H:%M:%S')}] 다중 감시망 가동 중... "
+                f"(감시: {watching_count} / 보유: {real_holding_count} / "
+                f"scalp_sim: {scalp_sim_holding_count} / probe: {probe_holding_count} / "
+                f"other_sim: {other_sim_holding_count})"
+            )
+            last_msg_min = now_t.minute
+
+        # =====================================================
+        # 상태 라우팅
+        # ✅ 주문대기 상태는 ws_data 없이도 먼저 처리
+        # =====================================================
+        attach_guard_queue = _runtime_iteration_targets(
+            targets,
+            now_ts=time.time(),
+        )
+        if _scanner_scheduler_startup_mode() in {
+            "deadline_v1",
+            "async_v1",
+        } and not _scanner_scheduler_attach_must_yield_to_runtime_work(
+            attach_guard_queue
+        ):
+            _drain_scanner_promotion_inbox(
+                run_sniper.scanner_runtime_scheduler,
+                max_items=1,
+            )
+            _scanner_scheduler_reconcile_active_targets(
+                run_sniper.scanner_runtime_scheduler,
+                targets,
+                now_epoch=time.time(),
+            )
+        record_main_phase('async_completion_drain')
+        async_coordinator = getattr(
+            run_sniper,
+            "scanner_async_eval_coordinator",
+            None,
+        )
+
+        def _scanner_async_commit_ready_for_main_thread() -> bool:
+            """Yield between synchronous units when a COMMIT is ready.
+
+                Scanner output needs the next outer drain and COMMIT lane.
+                Exact fixed-watch output can use its remaining Main visit.
+                This is deliberately a main-thread-only cooperative yield:
+                it neither applies a result nor changes any trading state.
+                """
+
+            return bool(
+                _scanner_scheduler_startup_mode() == "async_v1"
+                and isinstance(async_coordinator, ScannerAsyncEvalCoordinator)
+                and async_coordinator.has_undrained_result(
+                    direct_fixed_requests={
+                        (target.get('_scanner_async_generation_id'),
+                         target.get('_scanner_async_cache_key'))
+                        for target in runtime_work_queue
+                        if target.get('status') == 'WATCHING'
+                        and main_fixed_watch.is_fixed_watch(target)
+                        and target.get('_scanner_async_generation_id')
+                        and target.get('_scanner_async_cache_key')})
+            )
+
+        if _scanner_scheduler_startup_mode() == "async_v1" and isinstance(
+            async_coordinator, ScannerAsyncEvalCoordinator
+        ):
+            for async_result in async_coordinator.drain_completed():
+                if async_result.generation_kind == "fixed_watch":
+                    # The native WATCHING handler owns take/commit. A
+                    # scanner-only target lookup must not discard it.
+                    sniper_state_handlers._discard_orphaned_fixed_watch_result(
+                        async_coordinator, async_result, targets)
+                    continue
+                async_target = next(
+                    (
+                        target
+                        for target in targets
+                        if str(
+                            (target or {}).get("scanner_generation_id") or ""
+                        ).strip()
+                        == async_result.generation_id
+                        and _is_scanner_watching_target(target)
+                    ),
+                    None,
+                )
+                async_transport = {
+                    "allowed": False,
+                    "reason": "result_not_commit_eligible",
+                    "namespace": "unknown",
+                }
+                if (
+                    async_target is not None
+                    and async_result.status == "completed"
+                    and not async_result.observation_only
+                ):
+                    with ENTRY_LOCK:
+                        async_transport = _restore_scanner_async_commit_transport(
+                            async_target,
+                            async_result,
+                        )
+                if (
+                    async_target is None
+                    or async_result.status != "completed"
+                    or async_result.observation_only
+                    or not async_transport.get("allowed")
+                ):
+                    async_recheck_fields = {}
+                    async_coordinator.discard_completed(
+                        generation_id=async_result.generation_id,
+                        cache_key=async_result.cache_key,
+                        reason=async_transport.get('reason') if async_target else 'target_removed',
+                    )
+                    if async_target is not None:
+                        with ENTRY_LOCK:
+                            async_slot_owned = _scanner_async_result_owns_target_slot(async_target, async_result)
+                            async_recheck_fields = (
+                                _arm_scanner_async_rejected_result_recheck(
+                                    async_target,
+                                    async_result,
+                                    now_epoch=time.time(),
+                                )
+                            )
+                            sniper_state_handlers._clear_scanner_async_identity(async_target,
+                                generation_id=async_result.generation_id,
+                                cache_key=async_result.cache_key)
+                            async_park_reason = (
+                                "async_preparation_deadline_expired_"
+                                "generation_warm_parked"
+                                if async_result.status == "preparation_deadline_expired"
+                                else "async_result_rejected_generation_warm_parked"
+                            )
+                            if async_slot_owned:
+                                _scanner_scheduler_park_target_generation(
+                                    run_sniper.scanner_runtime_scheduler,
+                                    async_target,
+                                    now_epoch=time.time(),
+                                    reason=async_park_reason,
+                                )
+                    _emit_scanner_scheduler_event(
+                        payload={
+                            "code": async_result.code,
+                            "effective_venue": async_result.venue,
+                        },
+                        stage="scalping_scanner_async_result_rejected",
+                        fields={
+                            "metric_role": "runtime_scheduler_latency",
+                            "decision_authority": (
+                                "scanner_async_observation_only_reject"
+                            ),
+                            "window_policy": (
+                                "per_scanner_generation_action_timestamps"
+                            ),
+                            "sample_floor": "one_completed_async_result",
+                            "primary_decision_metric": "result_to_commit_sec",
+                            "source_quality_gate": (
+                                "current_generation_and_watching_required"
+                            ),
+                            "forbidden_uses": (
+                                "standalone_buy,broker_submit,threshold_mutation,"
+                                "provider_route_change,order_price_change,"
+                                "quantity_or_cap_change,broker_guard_bypass"
+                            ),
+                            "runtime_effect": False,
+                            "actual_order_submitted": False,
+                            "broker_order_forbidden": True,
+                            "scanner_generation_id": (async_result.generation_id),
+                            "scanner_async_cache_key": async_result.cache_key,
+                            "scanner_async_result_status": async_result.status,
+                            "scanner_async_result_observation_only": bool(
+                                async_result.observation_only
+                            ),
+                            "scanner_async_result_reject_reason": (
+                                "target_or_generation_missing"
+                                if async_target is None
+                                else (
+                                    async_transport.get("reason")
+                                    or "result_not_commit_eligible"
+                                )
+                            ),
+                            "scanner_async_transport_namespace": (
+                                async_transport.get("namespace")
+                                or "not_available_target_or_generation_missing"
+                            ),
+                            **async_recheck_fields,
+                        },
+                    )
+                    continue
+                _emit_scanner_scheduler_event(
+                    payload=async_target,
+                    target=async_target,
+                    stage="scalping_scanner_async_transport_ready",
+                    fields={
+                        "metric_role": "runtime_scheduler_latency",
+                        "decision_authority": (
+                            "scanner_async_commit_transport_only"
+                        ),
+                        "window_policy": (
+                            "per_scanner_generation_action_timestamps"
+                        ),
+                        "sample_floor": "one_completed_async_result",
+                        "primary_decision_metric": "result_to_commit_sec",
+                        "source_quality_gate": (
+                            "exact_generation_cache_and_state_version_required"
+                        ),
+                        "forbidden_uses": (
+                            "standalone_buy,broker_submit,threshold_mutation,"
+                            "provider_route_change,order_price_change,"
+                            "quantity_or_cap_change,broker_guard_bypass"
+                        ),
+                        "runtime_effect": False,
+                        "actual_order_submitted": False,
+                        "broker_order_forbidden": True,
+                        "scanner_generation_id": async_result.generation_id,
+                        "scanner_async_cache_key": async_result.cache_key,
+                        "scanner_async_transport_namespace": (
+                            async_transport.get("namespace")
+                            or "not_available_missing_transport_namespace"
+                        ),
+                        "scanner_async_transport_reason": (
+                            async_transport.get("reason")
+                            or "not_available_missing_transport_reason"
+                        ),
+                    },
+                )
+                commit_enqueued_epoch = time.time()
+                commit_decision = _scanner_scheduler_enqueue_target(
+                    run_sniper.scanner_runtime_scheduler,
+                    async_target,
+                    lane=ScannerLane.COMMIT,
+                    owner="scanner_async_result_ready",
+                    enqueued_epoch=commit_enqueued_epoch,
+                    # The worker completion timestamp remains the
+                    # attribution anchor.  The scheduler's dispatch
+                    # budget begins only once the main thread has
+                    # received and enqueued that exact result.
+                    # A ready result can be discovered near the end of a
+                    # busy outer loop.  Keep one bounded 5-second window
+                    # so the next main-thread COMMIT claim can consume it;
+                    # the commit guard still requires the generation,
+                    # state, venue, and current quote to remain valid.
+                    deadline_epoch=commit_enqueued_epoch + 5.0,
+                )
+                if commit_decision is None or commit_decision.action != "enqueued":
+                    async_coordinator.discard_completed(
+                        generation_id=async_result.generation_id,
+                        cache_key=async_result.cache_key,
+                        reason='async_commit_enqueue_rejected',
+                    )
+                    with ENTRY_LOCK:
+                        async_slot_owned = _scanner_async_result_owns_target_slot(async_target, async_result)
+                        sniper_state_handlers._clear_scanner_async_identity(async_target,
+                            generation_id=async_result.generation_id,
+                            cache_key=async_result.cache_key)
+                        if async_slot_owned:
+                            _scanner_scheduler_park_target_generation(
+                                run_sniper.scanner_runtime_scheduler,
+                                async_target,
+                                now_epoch=time.time(),
+                                reason="async_commit_enqueue_rejected_generation_warm_parked",
+                            )
+        record_main_phase('target_source_preparation')
+        queue_context = _runtime_queue_context(targets, now_ts=now_ts)
+        active_scanner_watch_codes = {
+            str(t.get("code", "")).strip()[:6]
+            for t in targets
+            if _is_scanner_watching_target(t)
+        }
+        _prune_scanner_watch_full_eval_deferred_state(targets)
+        for stale_code in list(scanner_ws_repair_cycle_state_by_code.keys()):
+            if stale_code not in active_scanner_watch_codes:
+                scanner_ws_repair_cycle_state_by_code.pop(stale_code, None)
+        scanner_ws_snapshot_cache = _runtime_scanner_ws_snapshot_cache(
+            queue_context["iteration_targets"]
+        )
+        scanner_full_eval_count = 0
+        scanner_rising_full_eval_relief_count = 0
+        scanner_full_eval_base_limit = _scanner_full_eval_max_per_loop()
+        scanner_full_eval_limit = _scanner_full_eval_effective_limit(
+            queue_context,
+            base_limit=scanner_full_eval_base_limit,
+        )
+        scanner_rising_full_eval_extra_limit = min(
+            _scanner_rising_full_eval_extra_per_loop(),
+            max(0, 40 - scanner_full_eval_limit),
+        )
+        delayed_scanner_heavy_eval = []
+        pending_scanner_ws_reg: dict[str, set[str]] = {}
+        pending_scanner_ws_persistent_repair: dict[str, set[str]] = {}
+        deferred_scanner_pipeline_events = []
+        deferred_scanner_skip_events = []
+        scanner_precheck_seen = False
+        scanner_heavy_eval_flushed = False
+        scanner_async_commit_yield_requested = False
+        scanner_rest_quote_fallback_loop_limit = (
+            _scanner_rest_quote_fallback_max_per_loop()
+        )
+        scanner_rest_quote_fallback_loop_count = 0
+        scanner_no_trade_eviction_loop_limit = (
+            _scanner_no_trade_eviction_max_per_loop()
+        )
+        scanner_no_trade_eviction_loop_count = 0
+        scanner_queue_lag_eviction_loop_limit = (
+            _scanner_queue_lag_eviction_max_per_loop()
+        )
+        scanner_queue_lag_eviction_loop_count = 0
+        scanner_full_eval_deferred_eviction_loop_limit = (
+            _scanner_full_eval_deferred_eviction_max_per_loop()
+        )
+        scanner_full_eval_deferred_eviction_loop_count = 0
+
+        def _defer_scanner_entry_pipeline_log(
+            stock_value, code_value, stage, fields
+        ):
+            deferred_scanner_pipeline_events.append(
+                (
+                    _scanner_pipeline_stock_snapshot(stock_value),
+                    str(code_value or "").strip()[:6],
+                    str(stage or ""),
+                    dict(fields or {}),
+                )
+            )
+
+        def _flush_deferred_scanner_pipeline_events():
+            if not deferred_scanner_pipeline_events:
+                return
+            events = list(deferred_scanner_pipeline_events)
+            deferred_scanner_pipeline_events.clear()
+
+            for stock_value, code_value, stage, fields in events:
+                _SCANNER_OBSERVATION_QUEUE.submit(
+                    sniper_state_handlers._log_entry_pipeline,
+                    stock_value, code_value, stage, **fields)
+
+        def _defer_emit_scanner_fast_precheck(
+            stock_value,
+            code_value,
+            *,
+            now_value,
+            ws_snapshot,
+            queue_rank,
+            scanner_queue_rank,
+            watching_count,
+            scanner_watching_count,
+            throttle_sec=5,
+        ):
+            if not sniper_state_handlers._is_scanner_watching_runtime_observation_target(
+                stock_value
+            ):
+                return False
+            sniper_state_handlers._capture_rising_missed_entry_turn_bbo(
+                stock_value,
+                code_value,
+                ws_snapshot,
+                now_ts=float(now_value),
+            )
+            throttle = max(0, int(throttle_sec or 0))
+            last_logged = _safe_float(
+                stock_value.get("_scanner_fast_precheck_logged_at"), 0.0
+            )
+            if throttle > 0 and float(now_value) - last_logged < throttle:
+                return False
+            stock_value["_scanner_fast_precheck_logged_at"] = float(now_value)
+            entry_realtime_fields = _scanner_record_first_entry_realtime(
+                stock_value,
+                ws_snapshot,
+                now_ts=float(now_value),
+            )
+            fields = sniper_state_handlers._scanner_fast_precheck_fields(
+                stock_value,
+                now_ts=float(now_value),
+                code=code_value,
+                ws_data=ws_snapshot,
+                queue_rank=queue_rank,
+                scanner_queue_rank=scanner_queue_rank,
+                watching_count=watching_count,
+                scanner_watching_count=scanner_watching_count,
+            )
+            fields.update(entry_realtime_fields)
+            if (
+                fields.get("fast_precheck_result")
+                == "eligible_for_heavy_entry_eval"
+            ):
+                stock_value["_scanner_heavy_queue_enter_epoch"] = float(now_value)
+            stock_value["_scanner_fast_precheck_result"] = fields.get(
+                "fast_precheck_result"
+            )
+            stock_value["_scanner_fast_precheck_reason"] = fields.get(
+                "fast_precheck_reason"
+            )
+            stock_value["_scanner_fast_precheck_fields"] = dict(fields)
+            _defer_scanner_entry_pipeline_log(
+                stock_value,
+                code_value,
+                "scalping_scanner_promotion_latency_trace",
+                _scanner_promotion_latency_trace_fields(
+                    stock_value,
+                    ws_snapshot,
+                    now_ts=float(now_value),
+                    trace_phase="fast_precheck",
+                    fast_precheck_fields=fields,
+                ),
+            )
+            _defer_scanner_entry_pipeline_log(
+                stock_value,
+                code_value,
+                "scalping_scanner_fast_precheck",
+                fields,
+            )
+            return True
+
+        def _defer_emit_scanner_runtime_queue_lag(
+            stock_value,
+            code_value,
+            *,
+            now_value,
+            queue_rank,
+            scanner_queue_rank,
+            watching_count,
+            scanner_watching_count,
+            real_holding_count,
+            non_real_holding_count,
+            pre_scanner_runtime_count,
+            loop_started_epoch,
+            throttle_sec=10,
+        ):
+            if not sniper_state_handlers._is_scanner_watching_runtime_observation_target(
+                stock_value
+            ):
+                return None
+            throttle = max(0, int(throttle_sec or 0))
+            last_logged = _safe_float(
+                stock_value.get("_scanner_runtime_queue_lag_logged_at"), 0.0
+            )
+            if throttle > 0 and float(now_value) - last_logged < throttle:
+                return None
+            stock_value["_scanner_runtime_queue_lag_logged_at"] = float(now_value)
+            fields = sniper_state_handlers._scanner_runtime_queue_lag_fields(
+                stock_value,
+                now_ts=float(now_value),
+                queue_rank=queue_rank,
+                scanner_queue_rank=scanner_queue_rank,
+                watching_count=watching_count,
+                scanner_watching_count=scanner_watching_count,
+                real_holding_count=real_holding_count,
+                non_real_holding_count=non_real_holding_count,
+                pre_scanner_runtime_count=pre_scanner_runtime_count,
+                loop_started_epoch=float(loop_started_epoch),
+            )
+            _defer_scanner_entry_pipeline_log(
+                stock_value,
+                code_value,
+                "scalping_scanner_runtime_queue_lag",
+                fields,
+            )
+            return fields
+
+        def _defer_emit_scanner_heavy_eval_lag(
+            stock_value,
+            code_value,
+            *,
+            now_value,
+            queue_enter_epoch,
+            throttle_sec=5,
+        ):
+            if not sniper_state_handlers._is_scanner_watching_runtime_observation_target(
+                stock_value
+            ):
+                return False
+            throttle = max(0, int(throttle_sec or 0))
+            last_logged = _safe_float(
+                stock_value.get("_scanner_heavy_eval_lag_logged_at"), 0.0
+            )
+            if throttle > 0 and float(now_value) - last_logged < throttle:
+                return False
+            stock_value["_scanner_heavy_eval_lag_logged_at"] = float(now_value)
+            fields = sniper_state_handlers._scanner_heavy_eval_lag_fields(
+                stock_value,
+                now_ts=float(now_value),
+                queue_enter_epoch=queue_enter_epoch,
+            )
+            _defer_scanner_entry_pipeline_log(
+                stock_value,
+                code_value,
+                "scalping_scanner_promotion_latency_trace",
+                _scanner_promotion_latency_trace_fields(
+                    stock_value,
+                    {},
+                    now_ts=float(now_value),
+                    trace_phase="heavy_eval",
+                    heavy_queue_enter_epoch=queue_enter_epoch,
+                ),
+            )
+            _defer_scanner_entry_pipeline_log(
+                stock_value,
+                code_value,
+                "scalping_scanner_heavy_eval_lag",
+                fields,
+            )
+            return True
+
+        def _defer_emit_scanner_heavy_eval_completion(
+            stock_value,
+            code_value,
+            *,
+            started_epoch,
+            completed_epoch,
+            queue_enter_epoch,
+            outcome,
+        ):
+            if not sniper_state_handlers._is_scanner_watching_runtime_observation_target(
+                stock_value
+            ):
+                return False
+            fields = sniper_state_handlers._scanner_heavy_eval_completion_fields(
+                stock_value,
+                started_epoch=float(started_epoch),
+                completed_epoch=float(completed_epoch),
+                queue_enter_epoch=queue_enter_epoch,
+                outcome=outcome,
+            )
+            _defer_scanner_entry_pipeline_log(
+                stock_value,
+                code_value,
+                "scalping_scanner_heavy_eval_completion",
+                fields,
+            )
+            return True
+
+        def _defer_scanner_watching_runtime_skip(stock_value, code_value, **kwargs):
+            deferred_scanner_skip_events.append(
+                (stock_value, code_value, dict(kwargs))
+            )
+
+        def _flush_deferred_scanner_skip_events():
+            if not deferred_scanner_skip_events:
+                return
+            events = list(deferred_scanner_skip_events)
+            deferred_scanner_skip_events.clear()
+
+            for stock_value, code_value, kwargs in events:
+                kwargs = dict(kwargs)
+                kwargs["ws_data"] = sniper_state_handlers.scanner_skip_observation_snapshot(
+                    kwargs.get("ws_data"))
+                _SCANNER_OBSERVATION_QUEUE.submit(
+                    sniper_state_handlers.emit_scanner_watching_runtime_skip,
+                    _scanner_pipeline_stock_snapshot(stock_value), code_value,
+                    observation_receipt=True, **kwargs)
+
+        def _queue_scanner_ws_reg(code_value, source):
+            norm_code = str(code_value or "").strip()[:6]
+            if not norm_code:
+                return
+            source_key = str(source or "scanner_watching_ws_snapshot_recovery")
+            if not _scanner_ws_reg_recovery_throttle_allows(
+                scanner_ws_reg_last_emit_ts,
+                source_key,
+                norm_code,
+                time.time(),
+            ):
+                return
+            pending_scanner_ws_reg.setdefault(source_key, set()).add(norm_code)
+
+        def _queue_scanner_ws_persistent_repair(
+            stock_value, code_value, ws_snapshot, recovery_fields
+        ):
+            fields = dict(recovery_fields or {})
+            if not fields.get("ws_repair_batch_required"):
+                return {}
+            norm_code = str(code_value or "").strip()[:6]
+            if not norm_code:
+                return {
+                    "ws_repair_batch_queued": False,
+                    "ws_repair_batch_reason": "missing_code",
+                }
+            now_value = time.time()
+            recheck_snapshot, recheck_fields = (
+                _scanner_ws_subscription_recheck_snapshot_and_fields(
+                    WS_MANAGER,
+                    norm_code,
+                    ws_snapshot,
+                    now_ts=now_value,
+                )
+            )
+            repair_state = (
+                stock_value.setdefault("_scanner_ws_persistent_repair", {})
+                if isinstance(stock_value, dict)
+                else {}
+            )
+            if not isinstance(repair_state, dict):
+                repair_state = {}
+                if isinstance(stock_value, dict):
+                    stock_value["_scanner_ws_persistent_repair"] = repair_state
+            cycle_id = str(fields.get("ws_repair_cycle_id") or "")
+            min_interval_sec = _scanner_ws_persistent_repair_min_interval_sec()
+            last_batch_ts = _safe_float(
+                repair_state.get("last_repair_batch_ts"), 0.0
+            )
+            last_cycle_id = str(repair_state.get("last_repair_cycle_id") or "")
+            if not recheck_fields.get("ws_subscription_repair_needed", True):
+                repair_state["last_repair_outcome"] = (
+                    "snapshot_arrived_after_subscription_recheck"
+                )
+                return {
+                    **recheck_fields,
+                    "_ws_subscription_recheck_snapshot": recheck_snapshot,
+                    "ws_repair_batch_queued": False,
+                    "ws_repair_batch_reason": "snapshot_arrived_after_subscription_recheck",
+                    "ws_recovery_outcome": "ws_snapshot_arrived_after_subscription_recheck",
+                }
+            if (
+                last_cycle_id == cycle_id
+                and last_batch_ts > 0
+                and now_value - last_batch_ts < min_interval_sec
+            ):
+                next_after = last_batch_ts + min_interval_sec
+                repair_state["last_repair_outcome"] = (
+                    "persistent_repair_batch_deferred"
+                )
+                return {
+                    **recheck_fields,
+                    "ws_repair_batch_queued": False,
+                    "ws_repair_batch_reason": "persistent_repair_batch_interval_active",
+                    "ws_repair_batch_next_after_epoch": f"{next_after:.3f}",
+                    "ws_repair_batch_min_interval_sec": round(min_interval_sec, 3),
+                }
+            source_key = "scanner_persistent_ws_gap_recovery"
+            pending_scanner_ws_persistent_repair.setdefault(source_key, set()).add(
+                norm_code
+            )
+            repair_state["last_repair_batch_ts"] = now_value
+            repair_state["last_repair_cycle_id"] = cycle_id
+            repair_state["last_repair_outcome"] = "persistent_repair_batch_queued"
+            repair_state["last_subscription_recheck_status"] = recheck_fields.get(
+                "ws_subscription_recheck_status"
+            )
+            return {
+                **recheck_fields,
+                "ws_repair_batch_queued": True,
+                "ws_repair_batch_reason": "persistent_ws_gap_repair_batch_queued",
+                "ws_repair_batch_source": source_key,
+                "ws_repair_batch_force": True,
+                "ws_repair_batch_min_interval_sec": round(min_interval_sec, 3),
+            }
+
+        def _scanner_rest_quote_recovery_options(stock_value, recovery_now_ts):
+            nonlocal scanner_rest_quote_fallback_loop_count
+            allowed = _scanner_rest_quote_fallback_allowed_for_ws_gap(stock_value)
+            deferred_reason = ""
+            if _scanner_rest_quote_fallback_due(
+                stock_value,
+                recovery_now_ts,
+                allow_early_rest_fallback=allowed,
+            ):
+                if (
+                    scanner_rest_quote_fallback_loop_count
+                    >= scanner_rest_quote_fallback_loop_limit
+                ):
+                    deferred_reason = "rest_quote_loop_budget_deferred"
+                else:
+                    scanner_rest_quote_fallback_loop_count += 1
+            return allowed, deferred_reason
+
+        def _scanner_market_data_enrichment_for_fast_precheck(
+            stock_value,
+            code_value,
+            ws_snapshot,
+            now_value,
+        ):
+            nonlocal scanner_rest_quote_fallback_loop_count
+            ws_snapshot = ws_snapshot if isinstance(ws_snapshot, dict) else {}
+            if not _scanner_market_data_enrichment_candidate(
+                stock_value, ws_snapshot, now_value
+            ):
+                return ws_snapshot, {}
+            cached = _scanner_market_data_enrichment_cached(code_value, now_value)
+            packet_fields = {
+                "market_data_enrichment_attempted": True,
+                "market_data_enrichment_packet_source": "scanner_fast_precheck",
+            }
+            if cached:
+                enriched_ws, envelope_fields = build_market_data_enrichment(
+                    ws_data=ws_snapshot,
+                    rest_orderbook=cached.get("rest_orderbook"),
+                    rest_signed_ticks=cached.get("rest_signed_ticks"),
+                    candidate_metadata={
+                        "source_signature": (stock_value or {}).get(
+                            "source_signature"
+                        )
+                        or (stock_value or {}).get("scanner_promotion_reason")
+                        or "scanner_fast_precheck",
+                    },
+                    now_ts=now_value,
+                    prefer_freshest_source=True,
+                )
+                packet_fields.update(envelope_fields)
+                packet_fields["market_data_enrichment_packet_source"] = (
+                    "scanner_cache"
+                )
+                enriched_ws.update(packet_fields)
+                return enriched_ws, packet_fields
+            if (
+                scanner_rest_quote_fallback_loop_count
+                >= scanner_rest_quote_fallback_loop_limit
+            ):
+                enriched_ws, envelope_fields = build_market_data_enrichment(
+                    ws_data=ws_snapshot,
+                    candidate_metadata={
+                        "source_signature": "scanner_loop_budget_deferred"
+                    },
+                    now_ts=now_value,
+                )
+                packet_fields.update(envelope_fields)
+                packet_fields["market_data_enrichment_fetch_reason"] = (
+                    "rest_quote_loop_budget_deferred"
+                )
+                enriched_ws.update(packet_fields)
+                return enriched_ws, packet_fields
+            rate_allowed, rate_reason = _scanner_rest_quote_fallback_rate_limit(
+                now_value,
+                priority=True,
+            )
+            if not rate_allowed:
+                enriched_ws, envelope_fields = build_market_data_enrichment(
+                    ws_data=ws_snapshot,
+                    candidate_metadata={"source_signature": "scanner_rate_limited"},
+                    now_ts=now_value,
+                )
+                packet_fields.update(envelope_fields)
+                packet_fields["market_data_enrichment_fetch_reason"] = rate_reason
+                enriched_ws.update(packet_fields)
+                return enriched_ws, packet_fields
+            scanner_rest_quote_fallback_loop_count += 1
+            rest_orderbook, rest_signed_ticks, fetch_fields = (
+                _fetch_scanner_market_data_enrichment_packet(
+                    code_value,
+                    now_value,
+                )
+            )
+            enriched_ws, envelope_fields = build_market_data_enrichment(
+                ws_data=ws_snapshot,
+                rest_orderbook=rest_orderbook,
+                rest_signed_ticks=rest_signed_ticks,
+                candidate_metadata={
+                    "source_signature": (stock_value or {}).get("source_signature")
+                    or (stock_value or {}).get("scanner_promotion_reason")
+                    or "scanner_fast_precheck",
+                },
+                now_ts=now_value,
+                prefer_freshest_source=True,
+            )
+            packet_fields.update(envelope_fields)
+            packet_fields.update(fetch_fields)
+            packet_fields["market_data_enrichment_rate_limit_reason"] = rate_reason
+            enriched_ws.update(packet_fields)
+            return enriched_ws, packet_fields
+
+        def _scanner_no_trade_hot_slot_eviction_allowed():
+            nonlocal scanner_no_trade_eviction_loop_count
+            if scanner_no_trade_eviction_loop_limit <= 0:
+                return False
+            if (
+                scanner_no_trade_eviction_loop_count
+                >= scanner_no_trade_eviction_loop_limit
+            ):
+                return False
+            scanner_no_trade_eviction_loop_count += 1
+            return True
+
+        def _scanner_queue_lag_hot_slot_eviction_allowed():
+            nonlocal scanner_queue_lag_eviction_loop_count
+            if scanner_queue_lag_eviction_loop_limit <= 0:
+                return False
+            if (
+                scanner_queue_lag_eviction_loop_count
+                >= scanner_queue_lag_eviction_loop_limit
+            ):
+                return False
+            scanner_queue_lag_eviction_loop_count += 1
+            return True
+
+        def _scanner_full_eval_deferred_hot_slot_eviction_allowed():
+            nonlocal scanner_full_eval_deferred_eviction_loop_count
+            if scanner_full_eval_deferred_eviction_loop_limit <= 0:
+                return False
+            if (
+                scanner_full_eval_deferred_eviction_loop_count
+                >= scanner_full_eval_deferred_eviction_loop_limit
+            ):
+                return False
+            scanner_full_eval_deferred_eviction_loop_count += 1
+            return True
+
+        def _apply_subscription_recheck_snapshot_if_ready(
+            ws_snapshot, recovery_fields, *, phase
+        ):
+            fields = dict(recovery_fields or {})
+            recheck_snapshot = fields.pop("_ws_subscription_recheck_snapshot", None)
+            if (
+                fields.get("ws_recovery_outcome")
+                != "ws_snapshot_arrived_after_subscription_recheck"
+                or not isinstance(recheck_snapshot, dict)
+                or _safe_int(recheck_snapshot.get("curr"), 0) <= 0
+            ):
+                return ws_snapshot, fields, False
+            recheck_snapshot = dict(recheck_snapshot)
+            recheck_age_sec = _safe_float(
+                fields.get("ws_subscription_recheck_age_sec"), 999999.0
+            )
+            recheck_fresh_sec = _safe_float(
+                fields.get("ws_subscription_recheck_fresh_sec"), 0.0
+            )
+            if (
+                str(fields.get("ws_subscription_recheck_status") or "")
+                == "subscribed_fresh_snapshot"
+                and recheck_fresh_sec > 0
+                and recheck_age_sec <= recheck_fresh_sec
+            ):
+                recheck_snapshot["scanner_subscription_recheck_entry_relief"] = True
+                recheck_snapshot["scanner_subscription_recheck_age_sec"] = round(
+                    recheck_age_sec, 3
+                )
+                recheck_snapshot["scanner_subscription_recheck_fresh_sec"] = round(
+                    recheck_fresh_sec, 3
+                )
+            fields["ws_subscription_recheck_snapshot_applied"] = True
+            fields["ws_subscription_recheck_snapshot_apply_phase"] = str(
+                phase or "unknown"
+            )
+            return recheck_snapshot, fields, True
+
+        def _flush_pending_scanner_ws_reg():
+            if pending_scanner_ws_reg:
+                for source_key, code_set in list(pending_scanner_ws_reg.items()):
+                    if code_set:
+                        event_bus.publish(
+                            "COMMAND_WS_REG",
+                            {"codes": sorted(code_set), "source": source_key},
+                        )
+                pending_scanner_ws_reg.clear()
+            if pending_scanner_ws_persistent_repair:
+                for source_key, code_set in list(
+                    pending_scanner_ws_persistent_repair.items()
+                ):
+                    if code_set:
+                        event_bus.publish(
+                            "COMMAND_WS_REG",
+                            {
+                                "codes": sorted(code_set),
+                                "source": source_key,
+                                "force": True,
+                                "repair_cycle": "persistent_ws_gap",
+                            },
+                        )
+                pending_scanner_ws_persistent_repair.clear()
+
+        def _flush_delayed_scanner_heavy_eval():
+            nonlocal scanner_async_commit_yield_requested
+            nonlocal scanner_heavy_eval_flushed
+            if scanner_async_commit_yield_requested:
+                return
+            if scanner_heavy_eval_flushed:
+                return
+            # A completed async preparation has a one-second COMMIT
+            # budget.  Do not start another synchronous heavy unit before
+            # the outer loop drains and schedules that commit.
+            if _scanner_async_commit_ready_for_main_thread():
+                return
+            # Guarantee backlog progress before newly attached watches preempt it.
+            heavy_eval_attempted = False
+            while delayed_scanner_heavy_eval:
+                if _scanner_async_commit_ready_for_main_thread():
+                    return
+                if heavy_eval_attempted and _admit_runtime_live_attaches():
+                    return
+                delayed_scanner_heavy_eval.sort(
+                    key=lambda item: _safe_float(
+                        (item[0] or {}).get("_scanner_scheduler_deadline_epoch"),
+                        float("inf"),
+                    )
+                )
+                (
+                    delayed_stock,
+                    delayed_code,
+                    delayed_ws_data,
+                    queue_enter_epoch,
+                ) = delayed_scanner_heavy_eval.pop(0)
+                if delayed_stock.get("status") != "WATCHING":
+                    scheduler = getattr(
+                        run_sniper, "scanner_runtime_scheduler", None
+                    )
+                    if isinstance(scheduler, ScannerRuntimeScheduler):
+                        scheduler.invalidate(
+                            delayed_code,
+                            now_epoch=time.time(),
+                            reason="heavy_eval_target_not_watching",
+                        )
+                    continue
+                scheduler = getattr(run_sniper, "scanner_runtime_scheduler", None)
+                scheduler_generation = (
+                    _scanner_scheduler_target_generation(scheduler, delayed_stock)
+                    if _scanner_scheduler_enabled_for_venue(
+                        delayed_stock.get("effective_venue")
+                        or delayed_stock.get("venue")
+                    )
+                    else None
+                )
+                scheduler_heavy_item = None
+                if scheduler_generation is not None:
+                    # A promotion received while another unit was blocking
+                    # must supersede the same-symbol item before heavy
+                    # evaluation begins.  An unrelated inbox envelope must
+                    # not preempt the first ready heavy unit indefinitely.
+                    if (
+                        _SCANNER_PROMOTION_INBOX.pending_for(delayed_code)
+                        is not None
+                    ):
+                        delayed_scanner_heavy_eval.append(
+                            (
+                                delayed_stock,
+                                delayed_code,
+                                delayed_ws_data,
+                                queue_enter_epoch,
+                            )
+                        )
+                        _admit_runtime_live_attaches()
+                        return
+                    scheduler_generation = _scanner_scheduler_target_generation(
+                        scheduler, delayed_stock
+                    )
+                    if scheduler_generation is None:
+                        continue
+                    scheduler_claim = _scanner_scheduler_claim_target(
+                        scheduler,
+                        delayed_stock,
+                        lane=ScannerLane.HEAVY_EVAL,
+                        now_epoch=time.time(),
+                    )
+                    if scheduler_claim.action == "not_next":
+                        delayed_scanner_heavy_eval.append(
+                            (
+                                delayed_stock,
+                                delayed_code,
+                                delayed_ws_data,
+                                queue_enter_epoch,
+                            )
+                        )
+                        return
+                    if scheduler_claim.action == "deadline_expired":
+                        _scanner_scheduler_park_target_generation(
+                            scheduler,
+                            delayed_stock,
+                            now_epoch=time.time(),
+                            reason="heavy_eval_deadline_generation_warm_parked",
+                            expected_generation=scheduler_claim.item.generation,
+                        )
+                        scanner_heavy_eval_flushed = False
+                        return
+                    if scheduler_claim.action == "missing":
+                        _scanner_scheduler_enqueue_fresh_precheck(
+                            scheduler,
+                            delayed_stock,
+                            now_epoch=time.time(),
+                            owner="heavy_eval_missing_fresh_precheck",
+                        )
+                        _runtime_requeue_expired_heavy_target(
+                            runtime_work_queue,
+                            delayed_stock,
+                        )
+                        scanner_heavy_eval_flushed = False
+                        return
+                    if scheduler_claim.action != "dispatch":
+                        continue
+                    scheduler_heavy_item = scheduler_claim.item
+                heavy_eval_attempted = True
+                delayed_stock["_scanner_last_heavy_eval_attempt_epoch"] = (
+                    time.time()
+                )
+                delayed_stock["_scanner_last_heavy_eval_evidence_fingerprint"] = (
+                    _scanner_heavy_eval_evidence_fingerprint(delayed_ws_data)
+                )
+                eval_ws_data = delayed_ws_data
+                opening_rotation_handoff_allowed = False
+                if _is_scanner_watching_target(delayed_stock):
+                    recheck_snapshot, recheck_fields = (
+                        _scanner_ws_subscription_recheck_snapshot_and_fields(
+                            WS_MANAGER,
+                            delayed_code,
+                            delayed_ws_data,
+                            now_ts=time.time(),
+                        )
+                    )
+                    heavy_recheck_age_sec = _safe_float(
+                        recheck_fields.get("ws_subscription_recheck_age_sec"),
+                        999999.0,
+                    )
+                    heavy_recheck_fresh_sec = (
+                        _scanner_heavy_eval_recheck_fresh_sec()
+                    )
+                    heavy_recheck_repair_needed = (
+                        bool(recheck_fields.get("ws_subscription_repair_needed"))
+                        or heavy_recheck_age_sec > heavy_recheck_fresh_sec
+                    )
+                    opening_rotation_handoff_fields = sniper_state_handlers._opening_rotation_upstream_handoff_fields(
+                        delayed_stock,
+                        delayed_ws_data,
+                        now_ts=time.time(),
+                    )
+                    opening_rotation_handoff_allowed = bool(
+                        opening_rotation_handoff_fields.get(
+                            "opening_rotation_upstream_handoff_allowed"
+                        )
+                    )
+                    if (
+                        heavy_recheck_repair_needed
+                        and opening_rotation_handoff_allowed
+                    ):
+                        eval_ws_data = delayed_ws_data
+                        delayed_stock[
+                            "_opening_rotation_upstream_handoff_applied"
+                        ] = True
+                        delayed_stock[
+                            "_opening_rotation_upstream_handoff_reason"
+                        ] = opening_rotation_handoff_fields.get(
+                            "opening_rotation_upstream_handoff_reason"
+                        )
+                        delayed_stock[
+                            "_scanner_heavy_eval_ws_snapshot_refresh_status"
+                        ] = "opening_rotation_quote_envelope_pending"
+                        delayed_stock[
+                            "_scanner_heavy_eval_ws_snapshot_apply_phase"
+                        ] = "opening_rotation_bounded_handoff"
+                    elif heavy_recheck_repair_needed:
+                        recheck_fields["scanner_heavy_eval_recheck_fresh_sec"] = (
+                            round(
+                                heavy_recheck_fresh_sec,
+                                3,
+                            )
+                        )
+                        recheck_fields["scanner_heavy_eval_recheck_age_sec"] = (
+                            round(heavy_recheck_age_sec, 3)
+                            if heavy_recheck_age_sec < 999999.0
+                            else "not_available_ws_age_sec"
+                        )
+                        recheck_fields[
+                            "scanner_heavy_eval_recheck_repair_needed"
+                        ] = True
+                        rest_quote_allowed, rest_quote_deferred_reason = (
+                            _scanner_rest_quote_recovery_options(
+                                delayed_stock,
+                                time.time(),
+                            )
+                        )
+                        _recovered_ws_data, recovery_fields = (
+                            _recover_missing_ws_snapshot(
+                                delayed_stock,
+                                delayed_code,
+                                time.time(),
+                                recheck_snapshot or delayed_ws_data,
+                                ws_reg_source="scanner_heavy_eval_stale_ws_recovery",
+                                publish_ws_reg=False,
+                                allow_early_rest_fallback=rest_quote_allowed,
+                                rest_quote_deferred_reason=rest_quote_deferred_reason,
+                                cycle_state_store=scanner_ws_repair_cycle_state_by_code,
+                            )
+                        )
+                        if recovery_fields.get("ws_repair_batch_required"):
+                            recovery_fields.update(
+                                _queue_scanner_ws_persistent_repair(
+                                    delayed_stock,
+                                    delayed_code,
+                                    recheck_snapshot or delayed_ws_data,
+                                    recovery_fields,
+                                )
+                            )
+                        elif recovery_fields.get(
+                            "ws_repair_cycle_reg_allowed", True
+                        ):
+                            _queue_scanner_ws_reg(
+                                delayed_code,
+                                "scanner_heavy_eval_stale_ws_recovery",
+                            )
+                        (
+                            recovered_eval_ws_data,
+                            recovery_fields,
+                            recovery_snapshot_applied,
+                        ) = _apply_subscription_recheck_snapshot_if_ready(
+                            _recovered_ws_data
+                            or recheck_snapshot
+                            or delayed_ws_data,
+                            recovery_fields,
+                            phase="heavy_eval_repair",
+                        )
+                        if recovery_snapshot_applied:
+                            eval_ws_data = recovered_eval_ws_data
+                            delayed_stock[
+                                "_scanner_heavy_eval_ws_snapshot_refreshed"
+                            ] = True
+                            delayed_stock[
+                                "_scanner_heavy_eval_ws_snapshot_refresh_status"
+                            ] = (
+                                recovery_fields.get(
+                                    "ws_subscription_recheck_status"
+                                )
+                                or "fresh_snapshot_recovered"
+                            )
+                            delayed_stock[
+                                "_scanner_heavy_eval_ws_snapshot_apply_phase"
+                            ] = "heavy_eval_repair"
+                        else:
+                            heavy_recheck_skip_fields = {
+                                **recheck_fields,
+                                **recovery_fields,
+                            }
+                            _defer_scanner_watching_runtime_skip(
+                                delayed_stock,
+                                delayed_code,
+                                skip_reason="scanner_heavy_eval_stale_snapshot_recheck",
+                                now_ts=time.time(),
+                                ws_data=recheck_snapshot or delayed_ws_data,
+                                ws_manager_available=bool(WS_MANAGER),
+                                **heavy_recheck_skip_fields,
+                            )
+                            if scheduler_heavy_item is not None:
+                                _scanner_scheduler_complete_target(
+                                    scheduler,
+                                    delayed_stock,
+                                    item=scheduler_heavy_item,
+                                    completed_epoch=time.time(),
+                                    outcome=("heavy_eval_stale_snapshot_recheck"),
+                                )
+                                _scanner_scheduler_park_target_generation(
+                                    scheduler,
+                                    delayed_stock,
+                                    now_epoch=time.time(),
+                                    reason=(
+                                        "heavy_eval_stale_snapshot_generation_"
+                                        "warm_parked"
+                                    ),
+                                    expected_generation=(
+                                        scheduler_heavy_item.generation
+                                    ),
+                                )
+                            continue
+                    if (
+                        not recheck_fields.get(
+                            "ws_subscription_repair_needed", True
+                        )
+                        and _safe_int(recheck_snapshot.get("curr"), 0) > 0
+                    ):
+                        eval_ws_data = recheck_snapshot
+                        delayed_stock[
+                            "_scanner_heavy_eval_ws_snapshot_refreshed"
+                        ] = True
+                        delayed_stock[
+                            "_scanner_heavy_eval_ws_snapshot_refresh_status"
+                        ] = (
+                            recheck_fields.get("ws_subscription_recheck_status")
+                            or "fresh_snapshot_rechecked"
+                        )
+                if (
+                    delayed_stock.get("_scanner_fast_precheck_result")
+                    == "eligible_for_heavy_entry_eval"
+                ):
+                    _defer_emit_scanner_heavy_eval_lag(
+                        delayed_stock,
+                        delayed_code,
+                        now_value=time.time(),
+                        queue_enter_epoch=queue_enter_epoch,
+                    )
+                _scanner_watch_reset_full_eval_deferred_eviction_state(
+                    delayed_stock
+                )
+                _flush_deferred_scanner_pipeline_events()
+                handler_now_ts = (
+                    time.time() if opening_rotation_handoff_allowed else now_ts
+                )
+                handler_now_dt = (
+                    datetime.fromtimestamp(handler_now_ts)
+                    if opening_rotation_handoff_allowed
+                    else now
+                )
+                # The handler may transition status/position ownership.
+                # Keep immutable scanner lineage so completion telemetry
+                # cannot disappear after a successful state transition.
+                heavy_eval_completion_stock = dict(delayed_stock)
+                heavy_eval_started_epoch = time.time()
+                try:
+                    handle_watching_state(
+                        delayed_stock,
+                        delayed_code,
+                        eval_ws_data,
+                        admin_id,
+                        now_ts=handler_now_ts,
+                        now_dt=handler_now_dt,
+                        radar=radar,
+                        ai_engine=ai_engine,
+                        scanner_async_eval_coordinator=(
+                            getattr(
+                                run_sniper,
+                                "scanner_async_eval_coordinator",
+                                None,
+                            )
+                            if _scanner_scheduler_startup_mode() == "async_v1"
+                            else None
+                        ),
+                        scanner_async_generation=(
+                            scheduler_generation
+                            if _scanner_scheduler_startup_mode() == "async_v1"
+                            else None
+                        ),
+                        scanner_async_commit_phase=False,
+                    )
+                except Exception:
+                    _defer_emit_scanner_heavy_eval_completion(
+                        heavy_eval_completion_stock,
+                        delayed_code,
+                        started_epoch=heavy_eval_started_epoch,
+                        completed_epoch=time.time(),
+                        queue_enter_epoch=queue_enter_epoch,
+                        outcome="heavy_eval_exception",
+                    )
+                    _flush_deferred_scanner_pipeline_events()
+                    if scheduler_heavy_item is not None:
+                        _scanner_scheduler_complete_target(
+                            scheduler,
+                            delayed_stock,
+                            item=scheduler_heavy_item,
+                            completed_epoch=time.time(),
+                            outcome="heavy_eval_exception",
+                        )
+                    raise
+                _defer_emit_scanner_heavy_eval_completion(
+                    heavy_eval_completion_stock,
+                    delayed_code,
+                    started_epoch=heavy_eval_started_epoch,
+                    completed_epoch=time.time(),
+                    queue_enter_epoch=queue_enter_epoch,
+                    outcome=str(
+                        delayed_stock.get("status") or "heavy_eval_completed"
+                    ),
+                )
+                _flush_deferred_scanner_pipeline_events()
+                if scheduler_heavy_item is not None:
+                    heavy_completed = _scanner_scheduler_complete_target(
+                        scheduler,
+                        delayed_stock,
+                        item=scheduler_heavy_item,
+                        completed_epoch=time.time(),
+                        outcome=str(
+                            delayed_stock.get("status") or "heavy_eval_completed"
+                        ),
+                    )
+                    if (
+                        heavy_completed is not None
+                        and heavy_completed.action == "completed"
+                        and _is_scanner_watching_target(delayed_stock)
+                        and not (
+                            str(
+                                delayed_stock.get("_scanner_async_cache_key")
+                                or delayed_stock.get(
+                                    "_scanner_opening_rotation_async_cache_key"
+                                )
+                                or ""
+                            ).strip()
+                        )
+                    ):
+                        _scanner_scheduler_continue_bounded_recheck_or_park(
+                            scheduler,
+                            delayed_stock,
+                            now_epoch=time.time(),
+                            park_reason=(
+                                "heavy_eval_completed_generation_warm_parked"
+                            ),
+                            expected_generation=(
+                                scheduler_heavy_item.generation
+                                if scheduler_heavy_item is not None
+                                else None
+                            ),
+                            evidence_snapshot=delayed_ws_data,
+                        )
+                if _is_scanner_watching_target(delayed_stock):
+                    delayed_stock["_scanner_last_full_eval_epoch"] = time.time()
+                    _maybe_expire_scanner_watch_after_full_eval(
+                        delayed_stock,
+                        delayed_code,
+                        targets,
+                        now_ts=time.time(),
+                        emit_event_fn=_defer_scanner_entry_pipeline_log,
+                    )
+                if (
+                    _scanner_scheduler_startup_mode() == "async_v1"
+                    and str(
+                        delayed_stock.get("_scanner_async_cache_key")
+                        or delayed_stock.get(
+                            "_scanner_opening_rotation_async_cache_key"
+                        )
+                        or ""
+                    ).strip()
+                ):
+                    # The worker usually completes within a fraction of a
+                    # second.  Yield this local target pass immediately
+                    # instead of starting another synchronous heavy unit;
+                    # the next outer iteration owns COMMIT draining.
+                    scanner_async_commit_yield_requested = True
+                    return
+            if heavy_eval_attempted and _admit_runtime_live_attaches():
+                return
+            scanner_heavy_eval_flushed = True
+
+        runtime_work_queue = list(queue_context["iteration_targets"])
+        record_main_phase('target_queue')
+        runtime_iteration_accounting_targets = list(runtime_work_queue)
+        runtime_processed_target_ids = set()
+        runtime_native_revisited_ids = set()
+        runtime_live_attach_ids = set()
+        runtime_scheduler_forced_target_ids = set()
+
+        def _admit_runtime_live_attaches():
+            _drain_zero_base_main_inbox()
+            nonlocal runtime_work_queue, scanner_heavy_eval_flushed
+            runtime_work_queue, scheduler_continuations = (
+                _runtime_requeue_pending_scanner_scheduler_targets(
+                    runtime_work_queue,
+                    targets,
+                    scheduler=run_sniper.scanner_runtime_scheduler,
+                    now_ts=time.time(),
+                    processed_target_ids=runtime_processed_target_ids,
+                )
+            )
+            if scheduler_continuations:
+                queue_context.update(_runtime_queue_rank_fields(runtime_work_queue))
+                log_info(
+                    "[SCANNER_RUNTIME_SCHEDULER_CONTINUATION] "
+                    f"requeued={len(scheduler_continuations)} "
+                    "codes="
+                    + ",".join(
+                        str(target.get("code") or "").strip()[:6]
+                        for target in scheduler_continuations
+                    )
+                )
+            if _scanner_scheduler_startup_mode() in {
+                "deadline_v1",
+                "async_v1",
+            } and not _scanner_scheduler_attach_must_yield_to_runtime_work(
+                runtime_work_queue
+            ):
+                drain_result = _drain_scanner_promotion_inbox(
+                    run_sniper.scanner_runtime_scheduler,
+                    max_items=1,
+                )
+                registered_targets = list(drain_result.get("applied_targets") or ())
+                if registered_targets:
+                    delayed_scanner_heavy_eval[:] = (
+                        _runtime_discard_superseded_delayed_heavy(
+                            delayed_scanner_heavy_eval,
+                            registered_targets,
+                        )
+                    )
+                    runtime_work_queue = (
+                        _runtime_prioritize_registered_scanner_targets(
+                            runtime_work_queue,
+                            registered_targets,
+                        )
+                    )
+            else:
+                registered_targets = []
+            runtime_work_queue, live_attaches = (
+                _runtime_admit_live_scanner_attaches(
+                    runtime_work_queue,
+                    targets,
+                    processed_target_ids=runtime_processed_target_ids,
+                    admitted_target_ids=runtime_live_attach_ids,
+                    now_ts=time.time(),
+                    max_new_targets=(
+                        _scalping_fifo_base_max_active()
+                        if _scanner_scheduler_startup_mode()
+                        in {"deadline_v1", "async_v1"}
+                        else 8
+                    ),
+                )
+            )
+            admitted_targets = []
+            admitted_ids = set()
+            for target in [*registered_targets, *live_attaches]:
+                if id(target) in admitted_ids:
+                    continue
+                admitted_targets.append(target)
+                admitted_ids.add(id(target))
+            if admitted_targets:
+                scanner_heavy_eval_flushed = False
+                runtime_live_attach_ids.update(
+                    id(target) for target in admitted_targets
+                )
+                accounting_ids = {
+                    id(target) for target in runtime_iteration_accounting_targets
+                }
+                runtime_iteration_accounting_targets.extend(
+                    target
+                    for target in admitted_targets
+                    if id(target) not in accounting_ids
+                )
+                refreshed_queue_context = _runtime_queue_context(
+                    runtime_iteration_accounting_targets,
+                    now_ts=queue_context["loop_started_epoch"],
+                )
+                queue_context.update(refreshed_queue_context)
+                queue_context.update(_runtime_queue_rank_fields(runtime_work_queue))
+                scanner_ws_snapshot_cache.update(
+                    _runtime_scanner_ws_snapshot_cache(admitted_targets)
+                )
+                log_info(
+                    "[SCANNER_RUNTIME_LIVE_ATTACH] "
+                    f"admitted={len(admitted_targets)} "
+                    f"total={len(runtime_live_attach_ids)} "
+                    f"codes={','.join(str(target.get('code') or '').strip()[:6] for target in admitted_targets)}"
+                )
+            return len(admitted_targets)
+
+        while True:
+            # A worker can finish while a prior target was handled.  End
+            # this local pass so the next outer iteration drains it into
+            # ScannerLane.COMMIT before handling unrelated WATCHING work.
+            if (
+                scanner_async_commit_yield_requested
+                or _scanner_async_commit_ready_for_main_thread()
+            ):
+                break
+            record_main_phase('target_admission')
+            from src.engine.monitoring.runtime_performance import (
+                prioritize_native_watches, acknowledge_native_watch_visit)
+            native_visit_tokens = {}
+            runtime_work_queue = prioritize_native_watches(runtime_work_queue, now=time.time(),
+                completed_requests=(async_coordinator.fixed_watch_ready_requests()
+                    if isinstance(async_coordinator, ScannerAsyncEvalCoordinator) else None),
+                all_targets=targets, processed_target_ids=runtime_processed_target_ids,
+                revisited_target_ids=runtime_native_revisited_ids, visit_tokens=native_visit_tokens)
+            if not runtime_work_queue:
+                _flush_delayed_scanner_heavy_eval()
+                if scanner_async_commit_yield_requested:
+                    break
+                if runtime_work_queue:
+                    continue
+            _admit_runtime_live_attaches()
+            if not runtime_work_queue:
+                break
+            runtime_work_queue = prioritize_native_watches(runtime_work_queue, now=time.time(),
+                completed_requests=(async_coordinator.fixed_watch_ready_requests()
+                    if isinstance(async_coordinator, ScannerAsyncEvalCoordinator) else None),
+                all_targets=targets, processed_target_ids=runtime_processed_target_ids,
+                revisited_target_ids=runtime_native_revisited_ids, visit_tokens=native_visit_tokens)
+            stock = runtime_work_queue.pop(0)
+            record_main_phase('target_visit', stock.get('code'))
+            acknowledge_native_watch_visit(stock, native_visit_tokens.get(id(stock)), now=time.time())
+            runtime_processed_target_ids.add(id(stock))
+            code = str(stock.get("code", "")).strip()[:6]
+            status = stock.get("status")
+            if (
+                scanner_precheck_seen
+                and not scanner_heavy_eval_flushed
+                and not _is_scanner_watching_target(stock)
+                and not main_fixed_watch.is_fixed_watch(stock)
+            ):
+                _flush_delayed_scanner_heavy_eval()
+                if scanner_async_commit_yield_requested:
+                    break
+
+            if status == "BUY_ORDERED":
+                handle_buy_ordered_state(stock, code)
+                continue
+
+            if status == "SELL_ORDERED":
+                try:
+                    pending_sell_ws_data = (
+                        WS_MANAGER.get_latest_data(code) if WS_MANAGER else {}
+                    )
+                    sniper_state_handlers.observe_pending_sell_smoothing_source_only_paths(
+                        stock,
+                        code,
+                        pending_sell_ws_data or {},
+                        now_ts=now_ts,
+                    )
+                    if sniper_state_handlers.pre_submit_delay_observation_due(stock, now_ts=time.time()):
+                        sniper_state_handlers.observe_pre_submit_delay_quote(stock, code,
+                            pending_sell_ws_data or {}, now_ts=time.time())
+                except Exception as exc:
+                    log_error(
+                        "[SMOOTHING_SELL_ORDERED] source-only observer failed "
+                        f"without order effect code={code}: {exc}"
+                    )
+                handle_sell_ordered_state(stock, code)
+                continue
+
+            if (
+                _is_scanner_watching_target(stock)
+                and code in scanner_ws_snapshot_cache
+            ):
+                ws_data = scanner_ws_snapshot_cache.get(code) or {}
+            elif status == "WATCHING" and main_fixed_watch.is_fixed_watch(stock):
+                route = main_fixed_watch.session_route(now_ts, code)
+                ws_data = (
+                    WS_MANAGER.get_exact_item_data(code, route["item"])
+                    if WS_MANAGER is not None and route is not None
+                    else {}
+                )
+            else:
+                ws_data = WS_MANAGER.get_latest_data(code) if WS_MANAGER else {}
+            if sniper_state_handlers.pre_submit_delay_observation_due(stock, now_ts=time.time()):
+                try:
+                    sniper_state_handlers.observe_pre_submit_delay_quote(stock, code, ws_data or {}, now_ts=time.time())
+                except (ValueError, TypeError, KeyError, AttributeError):
+                    from src.engine.monitoring.runtime_performance import failure
+                    failure('pre_submit_delay_observation', 'source_unobservable', emit_log=False)
+            if (status == "WATCHING" and main_fixed_watch.is_fixed_watch(stock)
+                    and isinstance(async_coordinator, ScannerAsyncEvalCoordinator)
+                    and async_coordinator.has_completed(
+                        generation_id=stock.get('_scanner_async_generation_id', ''),
+                        cache_key=stock.get('_scanner_async_cache_key', ''))):
+                sniper_state_handlers.handle_watching_state(stock, code, ws_data or {}, admin_id,
+                    now_ts=time.time(), now_dt=datetime.now(), radar=radar, ai_engine=ai_engine,
+                    scanner_async_eval_coordinator=async_coordinator,
+                    scanner_async_commit_phase=True)
+                continue
+            if status == "WATCHING" and main_fixed_watch.is_fixed_watch(stock):
+                if not main_fixed_watch.symbol_enabled(code):
+                    continue
+                ready, wait_reason = main_fixed_watch.observation_ready(
+                    stock, ws_data, now_epoch=now_ts,
+                )
+                if not ready:
+                    if now_ts - float(stock.get("_fixed_last_wait_log_epoch") or 0) >= 10:
+                        stock["_fixed_last_wait_log_epoch"] = now_ts
+                        sniper_state_handlers._log_entry_pipeline(
+                            stock, code, "main_fixed_watch_observation_wait",
+                            watch_origin=main_fixed_watch.WATCH_ORIGIN,
+                            watch_admission_id=stock.get("watch_admission_id"),
+                            watch_generation_id=stock.get("watch_generation_id"),
+                            source_quality_reason=wait_reason,
+                            actual_order_submitted=False,
+                            broker_order_forbidden=True,
+                        )
+                    continue
+            revive_quote_barrier_fields = {}
+            if _is_scanner_watching_target(stock):
+                ws_data, revive_quote_barrier_fields = (
+                    _discard_pre_revive_scanner_snapshot(
+                        stock,
+                        ws_data,
+                        now_ts=now_ts,
+                    )
+                )
+            scheduler = getattr(
+                run_sniper,
+                "scanner_runtime_scheduler",
+                None,
+            )
+            _scanner_scheduler_register_revived_watch_on_fresh_ws(
+                scheduler,
+                stock,
+                ws_data,
+                revive_quote_barrier_fields=revive_quote_barrier_fields,
+                now_epoch=time.time(),
+            )
+            _scanner_scheduler_reactivate_cold_park_on_fresh_ws(
+                scheduler,
+                stock,
+                ws_data,
+                now_epoch=time.time(),
+            )
+            _scanner_scheduler_reactivate_opening_rotation_source_gap_on_fresh_ws(
+                scheduler,
+                stock,
+                ws_data,
+                now_epoch=time.time(),
+            )
+            _scanner_scheduler_reactivate_deadline_park_on_fresh_ws(
+                scheduler,
+                stock,
+                ws_data,
+                now_epoch=time.time(),
+            )
+            _scanner_scheduler_reactivate_stale_snapshot_park_on_fresh_ws(
+                scheduler,
+                stock,
+                ws_data,
+                now_epoch=time.time(),
+            )
+            _scanner_scheduler_reactivate_ai_contention_park_on_fresh_ws(
+                scheduler,
+                stock,
+                ws_data,
+                now_epoch=time.time(),
+            )
+            _scanner_scheduler_reactivate_rising_cross_park_on_fresh_ws(
+                scheduler,
+                stock,
+                ws_data,
+                now_epoch=time.time(),
+            )
+            scanner_pre_recovery_block_reason = (
+                _scanner_scheduler_pre_recovery_block_reason(
+                    stock,
+                    scheduler=scheduler,
+                )
+            )
+            if scanner_pre_recovery_block_reason:
+                scanner_runtime_venue = normalize_scanner_scheduler_venue(
+                    stock.get("effective_venue") or stock.get("venue")
+                )
+                _defer_scanner_watching_runtime_skip(
+                    stock,
+                    code,
+                    skip_reason=scanner_pre_recovery_block_reason,
+                    now_ts=time.time(),
+                    ws_data=ws_data,
+                    ws_manager_available=bool(WS_MANAGER),
+                    scanner_observed_venue=(scanner_runtime_venue or "UNKNOWN"),
+                    scanner_observed_venue_resolution=stock.get("venue_resolution")
+                    or "missing_tradable_explicit_venue",
+                    scanner_scheduler_registration_blocked=bool(
+                        stock.get("_scanner_scheduler_registration_blocked")
+                    ),
+                    scanner_scheduler_registration_reason=stock.get(
+                        "_scanner_scheduler_registration_reason"
+                    )
+                    or "generation_not_registered",
+                )
+                continue
+            scheduler_owns_missing_ws_lane = (
+                _scanner_scheduler_owns_missing_ws_lane(
+                    stock,
+                    scheduler=scheduler,
+                )
+            )
+            if not scheduler_owns_missing_ws_lane and (
+                not ws_data or ws_data.get("curr", 0) == 0
+            ):
+                if status == "WATCHING":
+                    recheck_snapshot_applied = False
+                    rest_quote_allowed, rest_quote_deferred_reason = (
+                        _scanner_rest_quote_recovery_options(stock, now_ts)
+                        if _is_scanner_watching_target(stock)
+                        else (False, "")
+                    )
+                    ws_data, recovery_fields = (
+                        _recover_missing_ws_snapshot(
+                            stock,
+                            code,
+                            now_ts,
+                            ws_data,
+                            publish_ws_reg=False,
+                            allow_early_rest_fallback=rest_quote_allowed,
+                            rest_quote_deferred_reason=rest_quote_deferred_reason,
+                            cycle_state_store=scanner_ws_repair_cycle_state_by_code,
+                        )
+                        if _is_scanner_watching_target(stock)
+                        else (ws_data, {})
+                    )
+                    if _is_scanner_watching_target(stock):
+                        recovery_fields = {
+                            **revive_quote_barrier_fields,
+                            **recovery_fields,
+                        }
+                        if recovery_fields.get("ws_repair_batch_required"):
+                            recovery_fields.update(
+                                _queue_scanner_ws_persistent_repair(
+                                    stock,
+                                    code,
+                                    ws_data,
+                                    recovery_fields,
+                                )
+                            )
+                        elif recovery_fields.get(
+                            "ws_repair_cycle_reg_allowed", True
+                        ):
+                            _queue_scanner_ws_reg(
+                                code, "scanner_watching_ws_snapshot_recovery"
+                            )
+                        ws_data, recovery_fields, recheck_snapshot_applied = (
+                            _apply_subscription_recheck_snapshot_if_ready(
+                                ws_data,
+                                recovery_fields,
+                                phase="watching_missing_or_zero",
+                            )
+                        )
+                        recovery_fields = (
+                            _scanner_rest_quote_entry_realtime_outcome_fields(
+                                recovery_fields
+                            )
+                        )
+                    if (
+                        recovery_fields.get("ws_recovery_outcome")
+                        == "rest_quote_applied"
+                    ):
+                        _scanner_watch_reset_stale_eviction_state(stock)
+                        _defer_scanner_watching_runtime_skip(
+                            stock,
+                            code,
+                            skip_reason="ws_snapshot_missing_or_zero_recovered",
+                            now_ts=now_ts,
+                            ws_data=ws_data,
+                            ws_manager_available=bool(WS_MANAGER),
+                            throttle_sec=0,
+                            **recovery_fields,
+                        )
+                    elif (
+                        recovery_fields.get("ws_recovery_outcome")
+                        == "ws_snapshot_arrived_after_subscription_recheck"
+                        and recheck_snapshot_applied
+                    ):
+                        _scanner_watch_reset_stale_eviction_state(stock)
+                        _defer_scanner_watching_runtime_skip(
+                            stock,
+                            code,
+                            skip_reason="ws_snapshot_missing_or_zero_recovered",
+                            now_ts=now_ts,
+                            ws_data=ws_data,
+                            ws_manager_available=bool(WS_MANAGER),
+                            throttle_sec=0,
+                            **recovery_fields,
+                        )
+                    if not ws_data or ws_data.get("curr", 0) == 0:
+                        _defer_scanner_watching_runtime_skip(
+                            stock,
+                            code,
+                            skip_reason="ws_snapshot_missing_or_zero",
+                            now_ts=now_ts,
+                            ws_data=ws_data,
+                            ws_manager_available=bool(WS_MANAGER),
+                            **recovery_fields,
+                        )
+                        _maybe_expire_scanner_watch_for_stale(
+                            stock,
+                            code,
+                            targets,
+                            now_ts=now_ts,
+                            stale_reason="ws_snapshot_missing_or_zero",
+                            recovery_fields=recovery_fields,
+                            emit_event_fn=_defer_scanner_entry_pipeline_log,
+                        )
+                        continue
+                else:
+                    if status == "HOLDING":
+                        holding_observed_at = time.time()
+                        handle_holding_state(
+                            stock,
+                            code,
+                            ws_data or {},
+                            admin_id,
+                            current_market_regime,
+                            radar=radar,
+                            ai_engine=ai_engine,
+                            now_ts=holding_observed_at,
+                            now_dt=datetime.fromtimestamp(holding_observed_at),
+                        )
+                    continue
+
+            if (
+                _is_scanner_watching_target(stock)
+                and not scheduler_owns_missing_ws_lane
+            ):
+                no_trade_decision = _scanner_watch_eviction_decision_from_no_trade(
+                    stock,
+                    ws_data,
+                    now_ts=now_ts,
+                )
+                if (
+                    no_trade_decision.get("should_evict")
+                    and _scanner_no_trade_hot_slot_eviction_allowed()
+                ):
+                    if _expire_scanner_watch_target(
+                        stock,
+                        code,
+                        targets,
+                        decision=no_trade_decision,
+                        emit_event_fn=_defer_scanner_entry_pipeline_log,
+                    ):
+                        continue
+
+            if (
+                sniper_state_handlers._is_scalp_simulator_target(stock)
+                and status == sniper_state_handlers.SCALP_SIM_PENDING_STATUS
+            ):
+                sniper_state_handlers.handle_scalp_simulator_pending_entry(
+                    stock,
+                    code,
+                    ws_data,
+                    now_ts=now_ts,
+                )
+                continue
+
+            if status == "WATCHING":
+                if _is_scanner_watching_target(stock):
+                    scanner_precheck_seen = True
+                    heavy_queue_enter_epoch = time.time()
+                    scanner_runtime_venue = normalize_scanner_scheduler_venue(
+                        stock.get("effective_venue") or stock.get("venue")
+                    )
+                    scheduler_selected = _scanner_scheduler_enabled_for_venue(
+                        scanner_runtime_venue
+                    )
+                    scheduler_generation = (
+                        _scanner_scheduler_target_generation(scheduler, stock)
+                        if scheduler_selected
+                        else None
+                    )
+                    scheduler_precheck_item = None
+                    scheduler_recovery_item = None
+                    scheduler_recovery_only = False
+                    if scheduler_generation is not None:
+                        scheduled_lane_value = str(
+                            stock.get("_scanner_scheduler_lane")
+                            or ScannerLane.FAST_PRECHECK.value
+                        )
+                        try:
+                            scheduled_lane = ScannerLane(scheduled_lane_value)
+                        except ValueError:
+                            scheduled_lane = ScannerLane.FAST_PRECHECK
+                        if scheduled_lane is ScannerLane.FAST_PRECHECK:
+                            heavy_retry_due, _heavy_retry_after_epoch = (
+                                _scanner_heavy_eval_retry_due(
+                                    stock,
+                                    now_epoch=heavy_queue_enter_epoch,
+                                    allow_explicit_recheck=True,
+                                )
+                            )
+                            if not heavy_retry_due:
+                                # The current generation already consumed a
+                                # heavy unit. Leave any queued fresh
+                                # precheck untouched and avoid rebuilding
+                                # missing work until the bounded retry time.
+                                # COMMIT/RECOVERY, a newly promoted
+                                # generation, and a new explicit bounded
+                                # recheck bypass this branch.
+                                continue
+                        if scheduled_lane is ScannerLane.HEAVY_EVAL:
+                            delayed_scanner_heavy_eval.append(
+                                (
+                                    stock,
+                                    code,
+                                    ws_data,
+                                    heavy_queue_enter_epoch,
+                                )
+                            )
+                            scanner_heavy_eval_flushed = False
+                            continue
+                        scheduler_claim = _scanner_scheduler_claim_target(
+                            scheduler,
+                            stock,
+                            lane=scheduled_lane,
+                            now_epoch=heavy_queue_enter_epoch,
+                        )
+                        if scheduler_claim is None or scheduler_claim.action in {
+                            "missing",
+                            "deadline_expired",
+                        }:
+                            if scheduled_lane is ScannerLane.COMMIT:
+                                async_coordinator = getattr(
+                                    run_sniper,
+                                    "scanner_async_eval_coordinator",
+                                    None,
+                                )
+                                async_cache_key = str(
+                                    stock.get("_scanner_async_cache_key")
+                                    or stock.get(
+                                        "_scanner_opening_rotation_async_cache_key"
+                                    )
+                                    or ""
+                                ).strip()
+                                if (
+                                    isinstance(
+                                        async_coordinator,
+                                        ScannerAsyncEvalCoordinator,
+                                    )
+                                    and scheduler_generation is not None
+                                    and async_cache_key
+                                ):
+                                    async_coordinator.discard_completed(
+                                        generation_id=(
+                                            scheduler_generation.generation_id
+                                        ),
+                                        cache_key=async_cache_key,
+                                        reason='async_commit_branch_closed',
+                                    )
+                                if scheduler_generation is not None and async_cache_key:
+                                    sniper_state_handlers._clear_scanner_async_identity(stock,
+                                        generation_id=scheduler_generation.generation_id,
+                                        cache_key=async_cache_key)
+                            scheduler_claim = (
+                                _scanner_scheduler_refresh_claim_after_expiry(
+                                    scheduler,
+                                    stock,
+                                    previous_decision=scheduler_claim,
+                                    now_epoch=heavy_queue_enter_epoch,
+                                )
+                            )
+                            scheduled_lane = ScannerLane.FAST_PRECHECK
+                            if scheduler_claim is None:
+                                continue
+                        if scheduler_claim.action == "not_next":
+                            deferred_winner = (
+                                _runtime_scheduler_deferred_winner_target(
+                                    scheduler_claim,
+                                    targets,
+                                    queued_target_ids={
+                                        id(target) for target in runtime_work_queue
+                                    },
+                                    delayed_target_ids={
+                                        id(item[0])
+                                        for item in delayed_scanner_heavy_eval
+                                    },
+                                    forced_target_ids=(
+                                        runtime_scheduler_forced_target_ids
+                                    ),
+                                )
+                            )
+                            if deferred_winner is not None:
+                                runtime_scheduler_forced_target_ids.add(
+                                    id(deferred_winner)
+                                )
+                                runtime_work_queue.insert(0, deferred_winner)
+                                log_info(
+                                    "[SCANNER_RUNTIME_SCHEDULER_EDF_YIELD] "
+                                    "candidate="
+                                    f"{code} winner="
+                                    f"{str(deferred_winner.get('code') or '').strip()[:6]} "
+                                    "forced_once=true"
+                                )
+                            continue
+                        if scheduler_claim.action != "dispatch":
+                            continue
+                        if scheduled_lane is ScannerLane.COMMIT:
+                            async_coordinator = getattr(
+                                run_sniper,
+                                "scanner_async_eval_coordinator",
+                                None,
+                            )
+                            if not isinstance(
+                                async_coordinator,
+                                ScannerAsyncEvalCoordinator,
+                            ):
+                                _scanner_scheduler_complete_target(
+                                    scheduler,
+                                    stock,
+                                    item=scheduler_claim.item,
+                                    completed_epoch=time.time(),
+                                    outcome="async_coordinator_missing",
+                                )
+                                _scanner_scheduler_park_target_generation(
+                                    scheduler,
+                                    stock,
+                                    now_epoch=time.time(),
+                                    reason=(
+                                        "async_commit_coordinator_missing_"
+                                        "generation_warm_parked"
+                                    ),
+                                    expected_generation=(
+                                        scheduler_claim.item.generation
+                                    ),
+                                )
+                                continue
+                            try:
+                                async_cache_key = str(
+                                    stock.get("_scanner_async_cache_key")
+                                    or stock.get(
+                                        "_scanner_opening_rotation_async_cache_key"
+                                    )
+                                    or ""
+                                ).strip()
+                                opening_rotation_context_commit = bool(
+                                    stock.get(
+                                        "_scanner_opening_rotation_async_cache_key"
+                                    )
+                                    and not stock.get("_scanner_async_cache_key")
+                                )
+                                if opening_rotation_context_commit:
+                                    opening_rotation_commit_handled = sniper_state_handlers.handle_scanner_async_opening_rotation_commit(
+                                        stock,
+                                        code,
+                                        ws_data,
+                                        admin_id,
+                                        now_ts=time.time(),
+                                        now_dt=datetime.now(),
+                                        ai_engine=ai_engine,
+                                        scanner_async_eval_coordinator=(
+                                            async_coordinator
+                                        ),
+                                        scanner_async_generation=(
+                                            scheduler_generation
+                                        ),
+                                    )
+                                    opening_rotation_handoff_generation_id = str(
+                                        stock.get(
+                                            "_opening_rotation_general_entry_handoff_once_generation_id"
+                                        )
+                                        or ""
+                                    ).strip()
+                                    if (
+                                        not opening_rotation_commit_handled
+                                        and opening_rotation_handoff_generation_id
+                                        == scheduler_generation.generation_id
+                                    ):
+                                        handle_watching_state(
+                                            stock,
+                                            code,
+                                            ws_data,
+                                            admin_id,
+                                            now_ts=time.time(),
+                                            now_dt=datetime.now(),
+                                            radar=radar,
+                                            ai_engine=ai_engine,
+                                            skip_rising_missed_hook=True,
+                                            scanner_async_eval_coordinator=(
+                                                async_coordinator
+                                            ),
+                                            scanner_async_generation=(
+                                                scheduler_generation
+                                            ),
+                                            scanner_async_commit_phase=False,
+                                        )
+                                else:
+                                    handle_watching_state(
+                                        stock,
+                                        code,
+                                        ws_data,
+                                        admin_id,
+                                        now_ts=time.time(),
+                                        now_dt=datetime.now(),
+                                        radar=radar,
+                                        ai_engine=ai_engine,
+                                        scanner_async_eval_coordinator=(
+                                            async_coordinator
+                                        ),
+                                        scanner_async_generation=(
+                                            scheduler_generation
+                                        ),
+                                        scanner_async_commit_phase=True,
+                                    )
+                            except Exception:
+                                _scanner_scheduler_complete_target(
+                                    scheduler,
+                                    stock,
+                                    item=scheduler_claim.item,
+                                    completed_epoch=time.time(),
+                                    outcome="async_commit_exception",
+                                )
+                                raise
+                            if async_cache_key:
+                                unused_result = async_coordinator.discard_completed(
+                                    generation_id=(
+                                        scheduler_generation.generation_id
+                                    ),
+                                    cache_key=async_cache_key,
+                                )
+                                if unused_result is not None:
+                                    sniper_state_handlers._clear_scanner_async_identity(stock,
+                                        generation_id=unused_result.generation_id,
+                                        cache_key=unused_result.cache_key)
+                                    _emit_scanner_scheduler_event(
+                                        payload=stock,
+                                        target=stock,
+                                        stage=(
+                                            "scalping_scanner_async_commit_unused"
+                                        ),
+                                        fields={
+                                            "metric_role": (
+                                                "runtime_scheduler_latency"
+                                            ),
+                                            "decision_authority": (
+                                                "scanner_main_thread_commit_guard"
+                                            ),
+                                            "window_policy": (
+                                                "per_scanner_generation_action_timestamps"
+                                            ),
+                                            "sample_floor": (
+                                                "one_completed_async_result"
+                                            ),
+                                            "primary_decision_metric": (
+                                                "result_to_commit_sec"
+                                            ),
+                                            "source_quality_gate": (
+                                                "current_pre_ai_mechanical_gate_required"
+                                            ),
+                                            "forbidden_uses": (
+                                                "standalone_buy,broker_submit,"
+                                                "threshold_mutation,provider_route_change,"
+                                                "order_price_change,quantity_or_cap_change,"
+                                                "broker_guard_bypass"
+                                            ),
+                                            "scheduler_action": (
+                                                "async_result_discarded"
+                                            ),
+                                            "scheduler_reason": (
+                                                "main_thread_pre_ai_gate_no_longer_eligible"
+                                            ),
+                                            "scanner_generation_id": (
+                                                scheduler_generation.generation_id
+                                            ),
+                                            "scanner_async_cache_key": (
+                                                async_cache_key
+                                            ),
+                                            "runtime_effect": False,
+                                            "actual_order_submitted": False,
+                                            "broker_order_forbidden": True,
+                                        },
+                                    )
+                            _scanner_scheduler_complete_target(
+                                scheduler,
+                                stock,
+                                item=scheduler_claim.item,
+                                completed_epoch=time.time(),
+                                outcome=str(
+                                    stock.get("status") or "async_commit_completed"
+                                ),
+                            )
+                            if _is_scanner_watching_target(stock):
+                                followup_async_wait_state = (
+                                    _scanner_async_transport_wait_state(
+                                        stock,
+                                        scheduler_claim.item.generation,
+                                        async_coordinator,
+                                    )
+                                )
+                                if followup_async_wait_state in {
+                                    "pending",
+                                    "ready_for_commit",
+                                }:
+                                    # A freshness/context COMMIT can
+                                    # dispatch entry AI for the same
+                                    # generation. Keep that generation
+                                    # current until the follow-up result
+                                    # reaches its own COMMIT; parking here
+                                    # would cancel it as
+                                    # superseded_before_ai.
+                                    scanner_async_commit_yield_requested = True
+                                else:
+                                    _scanner_scheduler_continue_bounded_recheck_or_park(
+                                        scheduler,
+                                        stock,
+                                        now_epoch=time.time(),
+                                        park_reason=(
+                                            "async_commit_completed_generation_"
+                                            "warm_parked"
+                                        ),
+                                        expected_generation=(
+                                            scheduler_claim.item.generation
+                                        ),
+                                    )
+                            continue
+                        if scheduled_lane is ScannerLane.RECOVERY:
+                            scheduler_recovery_item = scheduler_claim.item
+                            scheduler_recovery_only = True
+                        else:
+                            scheduler_precheck_item = scheduler_claim.item
+                    if not scheduler_recovery_only:
+                        stock.update(
+                            {
+                                f"_scanner_{key}": value
+                                for key, value in _scanner_rising_entry_relief_fields(
+                                    stock,
+                                    reason="precheck_observation",
+                                    budget_source="standard",
+                                ).items()
+                            }
+                        )
+                        if scheduler_generation is not None:
+                            # deadline_v1 makes the first action WS-only.
+                            market_data_enrichment_fields = {
+                                "market_data_enrichment_attempted": False,
+                                "market_data_enrichment_packet_source": (
+                                    "scanner_scheduler_ws_only_fast_precheck"
+                                ),
+                                "market_data_enrichment_fetch_reason": (
+                                    "deferred_to_recovery_lane"
+                                ),
+                            }
+                        else:
+                            ws_data, market_data_enrichment_fields = (
+                                _scanner_market_data_enrichment_for_fast_precheck(
+                                    stock,
+                                    code,
+                                    ws_data,
+                                    heavy_queue_enter_epoch,
+                                )
+                            )
+                        if market_data_enrichment_fields:
+                            stock["_scanner_market_data_enrichment_fields"] = dict(
+                                market_data_enrichment_fields
+                            )
+                            stock["_scanner_market_data_enrichment_ws_data"] = dict(
+                                ws_data or {}
+                            )
+                            stock["_scanner_market_data_enrichment_stored_at"] = (
+                                heavy_queue_enter_epoch
+                            )
+                        _defer_emit_scanner_fast_precheck(
+                            stock,
+                            code,
+                            now_value=heavy_queue_enter_epoch,
+                            ws_snapshot=ws_data,
+                            queue_rank=queue_context["queue_rank_by_obj"].get(
+                                id(stock), 0
+                            ),
+                            scanner_queue_rank=queue_context[
+                                "scanner_rank_by_obj"
+                            ].get(id(stock), 0),
+                            watching_count=queue_context["watching_count"],
+                            scanner_watching_count=queue_context[
+                                "scanner_watching_count"
+                            ],
+                            throttle_sec=(
+                                0 if scheduler_generation is not None else 5
+                            ),
+                        )
+                    queue_lag_fields = (
+                        None
+                        if scheduler_generation is not None
+                        else _defer_emit_scanner_runtime_queue_lag(
+                            stock,
+                            code,
+                            now_value=heavy_queue_enter_epoch,
+                            queue_rank=queue_context["queue_rank_by_obj"].get(
+                                id(stock), 0
+                            ),
+                            scanner_queue_rank=queue_context[
+                                "scanner_rank_by_obj"
+                            ].get(id(stock), 0),
+                            watching_count=queue_context["watching_count"],
+                            scanner_watching_count=queue_context[
+                                "scanner_watching_count"
+                            ],
+                            real_holding_count=queue_context["real_holding_count"],
+                            non_real_holding_count=queue_context[
+                                "non_real_holding_count"
+                            ],
+                            pre_scanner_runtime_count=queue_context[
+                                "pre_scanner_runtime_count"
+                            ],
+                            loop_started_epoch=queue_context["loop_started_epoch"],
+                        )
+                    )
+                    fast_precheck_result = str(
+                        stock.get("_scanner_fast_precheck_result") or ""
+                    )
+                    fast_precheck_reason = str(
+                        stock.get("_scanner_fast_precheck_reason") or ""
+                    )
+                    recovery_fields = {}
+                    fast_precheck_stale_like = (
+                        fast_precheck_reason in SCANNER_WATCH_EVICTION_STALE_REASONS
+                    )
+                    fast_precheck_requires_recovery = (
+                        _scanner_fast_precheck_requires_recovery(
+                            fast_precheck_result,
+                            fast_precheck_reason,
+                        )
+                    )
+                    if scheduler_precheck_item is not None:
+                        precheck_completed = _scanner_scheduler_complete_target(
+                            scheduler,
+                            stock,
+                            item=scheduler_precheck_item,
+                            completed_epoch=time.time(),
+                            outcome=fast_precheck_result,
+                        )
+                        if (
+                            precheck_completed is None
+                            or precheck_completed.action == "superseded_result"
+                        ):
+                            continue
+                        if fast_precheck_requires_recovery:
+                            _scanner_scheduler_enqueue_target(
+                                scheduler,
+                                stock,
+                                lane=ScannerLane.RECOVERY,
+                                owner="ws_gap_recovery_after_precheck",
+                                enqueued_epoch=time.time(),
+                                attempt=max(
+                                    1,
+                                    _safe_int(
+                                        stock.get("_scanner_scheduler_attempt"),
+                                        1,
+                                    ),
+                                ),
+                            )
+                            continue
+                    if (
+                        fast_precheck_result != "eligible_for_heavy_entry_eval"
+                        and queue_lag_fields
+                        and _scanner_queue_lag_eviction_allowed_before_recovery(
+                            fast_precheck_reason
+                        )
+                    ):
+                        queue_lag_decision = (
+                            _scanner_watch_eviction_decision_from_queue_lag(
+                                stock,
+                                now_ts=heavy_queue_enter_epoch,
+                                queue_lag_fields=queue_lag_fields,
+                            )
+                        )
+                        if (
+                            queue_lag_decision.get("should_evict")
+                            and _scanner_queue_lag_hot_slot_eviction_allowed()
+                            and _expire_scanner_watch_target(
+                                stock,
+                                code,
+                                targets,
+                                decision=queue_lag_decision,
+                                emit_event_fn=_defer_scanner_entry_pipeline_log,
+                            )
+                        ):
+                            continue
+                    if fast_precheck_requires_recovery:
+                        rest_quote_allowed, rest_quote_deferred_reason = (
+                            _scanner_rest_quote_recovery_options(
+                                stock,
+                                heavy_queue_enter_epoch,
+                            )
+                        )
+                        ws_data, recovery_fields = _recover_missing_ws_snapshot(
+                            stock,
+                            code,
+                            heavy_queue_enter_epoch,
+                            ws_data,
+                            ws_reg_source="scanner_fast_precheck_stale_ws_recovery",
+                            publish_ws_reg=False,
+                            allow_early_rest_fallback=rest_quote_allowed,
+                            rest_quote_deferred_reason=rest_quote_deferred_reason,
+                            cycle_state_store=scanner_ws_repair_cycle_state_by_code,
+                        )
+                        if recovery_fields.get("ws_repair_batch_required"):
+                            recovery_fields.update(
+                                _queue_scanner_ws_persistent_repair(
+                                    stock,
+                                    code,
+                                    ws_data,
+                                    recovery_fields,
+                                )
+                            )
+                        elif recovery_fields.get(
+                            "ws_repair_cycle_reg_allowed", True
+                        ):
+                            _queue_scanner_ws_reg(
+                                code, "scanner_fast_precheck_stale_ws_recovery"
+                            )
+                        ws_data, recovery_fields, recheck_snapshot_applied = (
+                            _apply_subscription_recheck_snapshot_if_ready(
+                                ws_data,
+                                recovery_fields,
+                                phase="fast_precheck",
+                            )
+                        )
+                        recovery_fields = (
+                            _scanner_rest_quote_entry_realtime_outcome_fields(
+                                recovery_fields
+                            )
+                        )
+                        if recovery_fields.get("ws_recovery_outcome") in {
+                            "rest_quote_applied",
+                            "ws_snapshot_arrived_after_subscription_recheck",
+                        }:
+                            _scanner_watch_reset_stale_eviction_state(stock)
+                            _defer_scanner_watching_runtime_skip(
+                                stock,
+                                code,
+                                skip_reason=(
+                                    "scanner_fast_precheck_subscription_recheck_snapshot_applied"
+                                    if recheck_snapshot_applied
+                                    else "scanner_fast_precheck_stale_ws_recovered"
+                                ),
+                                now_ts=heavy_queue_enter_epoch,
+                                ws_data=ws_data,
+                                ws_manager_available=bool(WS_MANAGER),
+                                throttle_sec=0,
+                                queue_rank=queue_context["queue_rank_by_obj"].get(
+                                    id(stock), 0
+                                ),
+                                scanner_queue_rank=queue_context[
+                                    "scanner_rank_by_obj"
+                                ].get(id(stock), 0),
+                                watching_count=queue_context["watching_count"],
+                                scanner_watching_count=queue_context[
+                                    "scanner_watching_count"
+                                ],
+                                fast_precheck_result=fast_precheck_result or "-",
+                                fast_precheck_reason=fast_precheck_reason or "-",
+                                **recovery_fields,
+                            )
+                            _defer_emit_scanner_fast_precheck(
+                                stock,
+                                code,
+                                now_value=heavy_queue_enter_epoch,
+                                ws_snapshot=ws_data,
+                                queue_rank=queue_context["queue_rank_by_obj"].get(
+                                    id(stock), 0
+                                ),
+                                scanner_queue_rank=queue_context[
+                                    "scanner_rank_by_obj"
+                                ].get(id(stock), 0),
+                                watching_count=queue_context["watching_count"],
+                                scanner_watching_count=queue_context[
+                                    "scanner_watching_count"
+                                ],
+                                throttle_sec=0,
+                            )
+                            fast_precheck_result = str(
+                                stock.get("_scanner_fast_precheck_result") or ""
+                            )
+                            fast_precheck_reason = str(
+                                stock.get("_scanner_fast_precheck_reason") or ""
+                            )
+                    if scheduler_recovery_item is not None:
+                        recovery_completed = _scanner_scheduler_complete_target(
+                            scheduler,
+                            stock,
+                            item=scheduler_recovery_item,
+                            completed_epoch=time.time(),
+                            outcome=(
+                                recovery_fields.get("ws_recovery_outcome")
+                                or fast_precheck_result
+                            ),
+                        )
+                        if (
+                            recovery_completed is None
+                            or recovery_completed.action == "superseded_result"
+                        ):
+                            continue
+                    if fast_precheck_reason != "scanner_ws_stale_backoff_active":
+                        _reset_scanner_ws_backoff_watch_retention(stock)
+                    if (
+                        fast_precheck_result == "eligible_for_heavy_entry_eval"
+                        and fast_precheck_reason
+                        == "rising_rest_quote_recovery_without_realtime_strength"
+                    ):
+                        price_only_recovery_fields = dict(recovery_fields or {})
+                        price_only_recovery_fields.update(
+                            {
+                                "ws_recovery_outcome": (
+                                    "source_quality_unresolved_price_only_rest_quote"
+                                ),
+                                "source_quality_detail_route": (
+                                    "price_only_rest_quote_strength_history_missing"
+                                ),
+                                "rest_quote_price_recovery_only": True,
+                                "entry_evaluable_fresh_after_rest_quote": False,
+                                "scanner_source_quality_reallocation_candidate": True,
+                            }
+                        )
+                        if _maybe_expire_scanner_watch_for_stale(
+                            stock,
+                            code,
+                            targets,
+                            now_ts=heavy_queue_enter_epoch,
+                            stale_reason=fast_precheck_reason,
+                            recovery_fields=price_only_recovery_fields,
+                            emit_event_fn=_defer_scanner_entry_pipeline_log,
+                        ):
+                            continue
+                    if fast_precheck_result != "eligible_for_heavy_entry_eval":
+                        fast_precheck_budget_decision = None
+                        if fast_precheck_result == "budget_reallocated":
+                            fast_precheck_budget_decision = _scanner_watch_eviction_decision_from_fast_precheck_budget(
+                                stock,
+                                now_ts=heavy_queue_enter_epoch,
+                            )
+                        skip_reason = (
+                            "scanner_fast_precheck_budget_reallocated"
+                            if fast_precheck_result == "budget_reallocated"
+                            else (
+                                "scanner_fast_precheck_stability_pending"
+                                if fast_precheck_result == "stability_pending"
+                                else (
+                                    "scanner_fast_precheck_source_quality_blocked"
+                                    if fast_precheck_result
+                                    == "source_quality_blocked"
+                                    else "scanner_fast_precheck_not_eligible"
+                                )
+                            )
+                        )
+                        skip_recovery_fields = dict(recovery_fields or {})
+                        if fast_precheck_budget_decision:
+                            for field_name in (
+                                "retention_active",
+                                "retention_reason",
+                                "ws_backoff_retention_active",
+                                "ws_backoff_retention_reason",
+                                "ws_backoff_retention_first_epoch",
+                                "ws_backoff_retention_age_sec",
+                                "ws_backoff_retention_min_sec",
+                                "ws_backoff_retention_max_sec",
+                                "ws_backoff_retention_attempt_count",
+                                "ws_backoff_retention_min_count",
+                                "initial_entry_ws_receipt_pending",
+                                "initial_entry_ws_receipt_required_types",
+                                "initial_entry_ws_receipt_observed_types",
+                                "initial_entry_ws_receipt_reported_types",
+                                "initial_entry_ws_receipt_attach_epoch",
+                                "initial_entry_ws_receipt_lifetime_contract_sec",
+                                "ws_backoff_until",
+                            ):
+                                if field_name in fast_precheck_budget_decision:
+                                    skip_recovery_fields[field_name] = (
+                                        fast_precheck_budget_decision[field_name]
+                                    )
+                        skip_recovery_fields.setdefault(
+                            "ws_recovery_action",
+                            (
+                                "ws_reg_reissued"
+                                if fast_precheck_stale_like
+                                else "not_applicable_ws_recovery_action"
+                            ),
+                        )
+                        skip_recovery_fields.setdefault(
+                            "ws_recovery_outcome",
+                            (
+                                "ws_reg_reissued_waiting_snapshot"
+                                if fast_precheck_stale_like
+                                else "not_applicable_ws_recovery_outcome"
+                            ),
+                        )
+                        skip_recovery_fields.setdefault(
+                            "ws_recovery_miss_count",
+                            "not_applicable_ws_recovery_miss_count",
+                        )
+                        if (
+                            skip_recovery_fields.get(
+                                "ws_subscription_recheck_snapshot_applied"
+                            )
+                            and fast_precheck_stale_like
+                        ):
+                            skip_recovery_fields[
+                                "subscription_alive_but_entry_stale"
+                            ] = True
+                            skip_recovery_fields[
+                                "entry_freshness_after_subscription_recheck"
+                            ] = fast_precheck_reason
+                            skip_recovery_fields[
+                                "entry_evaluable_fresh_after_subscription_recheck"
+                            ] = False
+                        _defer_scanner_watching_runtime_skip(
+                            stock,
+                            code,
+                            skip_reason=skip_reason,
+                            now_ts=heavy_queue_enter_epoch,
+                            ws_data=ws_data,
+                            ws_manager_available=bool(WS_MANAGER),
+                            queue_rank=queue_context["queue_rank_by_obj"].get(
+                                id(stock), 0
+                            ),
+                            scanner_queue_rank=queue_context[
+                                "scanner_rank_by_obj"
+                            ].get(id(stock), 0),
+                            watching_count=queue_context["watching_count"],
+                            scanner_watching_count=queue_context[
+                                "scanner_watching_count"
+                            ],
+                            fast_precheck_result=fast_precheck_result or "-",
+                            fast_precheck_reason=fast_precheck_reason or "-",
+                            fast_precheck_fields=dict(
+                                stock.get("_scanner_fast_precheck_fields") or {}
+                            ),
+                            **skip_recovery_fields,
+                        )
+                        if fast_precheck_stale_like:
+                            _maybe_expire_scanner_watch_for_stale(
+                                stock,
+                                code,
+                                targets,
+                                now_ts=heavy_queue_enter_epoch,
+                                stale_reason=fast_precheck_reason,
+                                recovery_fields=recovery_fields,
+                                emit_event_fn=_defer_scanner_entry_pipeline_log,
+                            )
+                        elif fast_precheck_result == "budget_reallocated":
+                            if _maybe_expire_scanner_watch_for_fast_precheck_budget(
+                                stock,
+                                code,
+                                targets,
+                                now_ts=heavy_queue_enter_epoch,
+                                emit_event_fn=_defer_scanner_entry_pipeline_log,
+                                decision=fast_precheck_budget_decision,
+                            ):
+                                continue
+                            if bool(
+                                (fast_precheck_budget_decision or {}).get(
+                                    "retention_active"
+                                )
+                            ):
+                                if scheduler_generation is not None:
+                                    _scanner_scheduler_enqueue_fresh_precheck(
+                                        scheduler,
+                                        stock,
+                                        now_epoch=time.time(),
+                                        owner=("budget_retention_fresh_recheck"),
+                                        evidence_snapshot=ws_data,
+                                    )
+                                continue
+                        if queue_lag_fields:
+                            queue_lag_decision = (
+                                _scanner_watch_eviction_decision_from_queue_lag(
+                                    stock,
+                                    now_ts=heavy_queue_enter_epoch,
+                                    queue_lag_fields=queue_lag_fields,
+                                )
+                            )
+                            if (
+                                queue_lag_decision.get("should_evict")
+                                and _scanner_queue_lag_hot_slot_eviction_allowed()
+                                and _expire_scanner_watch_target(
+                                    stock,
+                                    code,
+                                    targets,
+                                    decision=queue_lag_decision,
+                                    emit_event_fn=_defer_scanner_entry_pipeline_log,
+                                )
+                            ):
+                                continue
+                        if scheduler_generation is not None:
+                            _scanner_scheduler_continue_bounded_recheck_or_park(
+                                scheduler,
+                                stock,
+                                now_epoch=time.time(),
+                                park_reason=(
+                                    "precheck_not_eligible_generation_warm_parked"
+                                ),
+                                expected_generation=scheduler_generation,
+                                evidence_snapshot=ws_data,
+                            )
+                        continue
+                    if queue_lag_fields:
+                        _scanner_watch_eviction_decision_from_queue_lag(
+                            stock,
+                            now_ts=heavy_queue_enter_epoch,
+                            queue_lag_fields=queue_lag_fields,
+                        )
+                    if _scanner_strength_recheck_waiting(
+                        stock, now_ts=heavy_queue_enter_epoch
+                    ):
+                        _scanner_watch_reset_terminal_eviction_state(stock)
+                        recheck_after_epoch = _safe_float(
+                            stock.get(
+                                "entry_strength_momentum_recheck_after_epoch"
+                            ),
+                            0.0,
+                        )
+                        _defer_scanner_watching_runtime_skip(
+                            stock,
+                            code,
+                            skip_reason="strength_momentum_stability_recheck_waiting",
+                            now_ts=heavy_queue_enter_epoch,
+                            ws_data=ws_data,
+                            ws_manager_available=bool(WS_MANAGER),
+                            queue_rank=queue_context["queue_rank_by_obj"].get(
+                                id(stock), 0
+                            ),
+                            scanner_queue_rank=queue_context[
+                                "scanner_rank_by_obj"
+                            ].get(id(stock), 0),
+                            watching_count=queue_context["watching_count"],
+                            scanner_watching_count=queue_context[
+                                "scanner_watching_count"
+                            ],
+                            recheck_after_epoch=f"{recheck_after_epoch:.3f}",
+                            recheck_wait_sec=round(
+                                max(
+                                    0.0,
+                                    recheck_after_epoch - heavy_queue_enter_epoch,
+                                ),
+                                3,
+                            ),
+                            recheck_attempt_count=_safe_int(
+                                stock.get("entry_strength_momentum_recheck_count"),
+                                0,
+                            ),
+                            recheck_reason=stock.get(
+                                "entry_strength_momentum_recheck_reason"
+                            )
+                            or "-",
+                        )
+                        if scheduler_generation is not None:
+                            _scanner_scheduler_enqueue_fresh_precheck(
+                                scheduler,
+                                stock,
+                                now_epoch=time.time(),
+                                owner="strength_stability_fresh_recheck",
+                            )
+                        continue
+                    if scheduler_generation is None:
+                        legacy_retry_preview_due, legacy_retry_after_epoch = (
+                            _scanner_heavy_eval_retry_due(
+                                stock,
+                                now_epoch=heavy_queue_enter_epoch,
+                                allow_explicit_recheck=True,
+                            )
+                        )
+                        if not legacy_retry_preview_due:
+                            stock["_scanner_heavy_eval_retry_after_epoch"] = (
+                                legacy_retry_after_epoch
+                            )
+                            continue
+                    budget_source = "standard"
+                    if (
+                        scheduler_generation is None
+                        and scanner_full_eval_count >= scanner_full_eval_limit
+                    ):
+                        relief_allowed = (
+                            scanner_rising_full_eval_relief_count
+                            < scanner_rising_full_eval_extra_limit
+                            and _scanner_is_rising_entry_relief_candidate(stock)
+                        )
+                        if relief_allowed:
+                            budget_source = "rising_full_eval_relief"
+                            scanner_rising_full_eval_relief_count += 1
+                            stock.update(
+                                {
+                                    f"_scanner_{key}": value
+                                    for key, value in _scanner_rising_entry_relief_fields(
+                                        stock,
+                                        reason="rising_full_eval_relief_applied",
+                                        budget_source=budget_source,
+                                    ).items()
+                                }
+                            )
+                        else:
+                            relief_reason = (
+                                "rising_full_eval_relief_budget_exhausted"
+                                if _scanner_is_rising_entry_relief_candidate(stock)
+                                else "not_rising_entry_relief_candidate"
+                            )
+                            if scanner_rising_full_eval_extra_limit <= 0:
+                                relief_reason = "rising_full_eval_relief_disabled"
+                            stock.update(
+                                {
+                                    f"_scanner_{key}": value
+                                    for key, value in _scanner_rising_entry_relief_fields(
+                                        stock,
+                                        reason=relief_reason,
+                                        budget_source="deferred_no_relief",
+                                    ).items()
+                                }
+                            )
+                    if (
+                        scheduler_generation is None
+                        and scanner_full_eval_count >= scanner_full_eval_limit
+                        and budget_source != "rising_full_eval_relief"
+                    ):
+                        _scanner_watch_reset_terminal_eviction_state(stock)
+                        full_eval_deferred_fields = {
+                            "skip_reason": "scanner_full_eval_loop_budget_deferred",
+                            "now_ts": heavy_queue_enter_epoch,
+                            "ws_data": ws_data,
+                            "ws_manager_available": bool(WS_MANAGER),
+                            "queue_rank": queue_context["queue_rank_by_obj"].get(
+                                id(stock), 0
+                            ),
+                            "scanner_queue_rank": queue_context[
+                                "scanner_rank_by_obj"
+                            ].get(id(stock), 0),
+                            "watching_count": queue_context["watching_count"],
+                            "scanner_watching_count": queue_context[
+                                "scanner_watching_count"
+                            ],
+                            "scanner_full_eval_base_limit": scanner_full_eval_base_limit,
+                            "scanner_full_eval_limit": scanner_full_eval_limit,
+                            "scanner_full_eval_count": scanner_full_eval_count,
+                            "scanner_rising_full_eval_extra_limit": scanner_rising_full_eval_extra_limit,
+                            "scanner_rising_full_eval_relief_count": scanner_rising_full_eval_relief_count,
+                            "fast_precheck_result": fast_precheck_result or "-",
+                            "fast_precheck_reason": fast_precheck_reason or "-",
+                            **_scanner_common_watch_budget_priority_fields(stock),
+                        }
+                        full_eval_deferred_decision = _scanner_watch_eviction_decision_from_full_eval_deferred(
+                            stock,
+                            now_ts=heavy_queue_enter_epoch,
+                            skip_fields=full_eval_deferred_fields,
+                        )
+                        full_eval_deferred_fields.update(
+                            {
+                                "full_eval_deferred_eviction_reason": full_eval_deferred_decision.get(
+                                    "eviction_reason",
+                                    "not_available_full_eval_deferred_eviction_reason",
+                                ),
+                                "full_eval_deferred_should_evict": bool(
+                                    full_eval_deferred_decision.get("should_evict")
+                                ),
+                                "full_eval_deferred_attempt_count": full_eval_deferred_decision.get(
+                                    "eviction_attempt_count",
+                                    0,
+                                ),
+                                "full_eval_deferred_first_observed_epoch": full_eval_deferred_decision.get(
+                                    "full_eval_deferred_first_observed_epoch",
+                                    "not_available_full_eval_deferred_first_observed_epoch",
+                                ),
+                                "full_eval_deferred_watch_age_sec": full_eval_deferred_decision.get(
+                                    "full_eval_deferred_watch_age_sec",
+                                    "not_available_full_eval_deferred_watch_age_sec",
+                                ),
+                                "full_eval_deferred_min_age_sec": full_eval_deferred_decision.get(
+                                    "full_eval_deferred_min_age_sec",
+                                    "not_available_full_eval_deferred_min_age_sec",
+                                ),
+                                "full_eval_deferred_min_count": full_eval_deferred_decision.get(
+                                    "full_eval_deferred_min_count",
+                                    "not_available_full_eval_deferred_min_count",
+                                ),
+                                "full_eval_deferred_anchor_field": full_eval_deferred_decision.get(
+                                    "full_eval_deferred_anchor_field",
+                                    "not_available_full_eval_deferred_anchor_field",
+                                ),
+                                "full_eval_deferred_state_source": full_eval_deferred_decision.get(
+                                    "full_eval_deferred_state_source",
+                                    "not_available_full_eval_deferred_state_source",
+                                ),
+                            }
+                        )
+                        _defer_scanner_watching_runtime_skip(
+                            stock,
+                            code,
+                            **full_eval_deferred_fields,
+                        )
+                        if (
+                            full_eval_deferred_decision.get("should_evict")
+                            and _scanner_full_eval_deferred_hot_slot_eviction_allowed()
+                            and _expire_scanner_watch_target(
+                                stock,
+                                code,
+                                targets,
+                                decision=full_eval_deferred_decision,
+                                emit_event_fn=_defer_scanner_entry_pipeline_log,
+                            )
+                        ):
+                            continue
+                        continue
+                    heavy_retry_min_sec = _scanner_heavy_eval_min_retry_sec()
+                    last_heavy_attempt_epoch = _safe_float(
+                        stock.get("_scanner_last_heavy_eval_attempt_epoch"),
+                        0.0,
+                    )
+                    current_heavy_evidence = (
+                        _scanner_heavy_eval_evidence_fingerprint(ws_data)
+                    )
+                    previous_heavy_evidence = str(
+                        stock.get("_scanner_last_heavy_eval_evidence_fingerprint")
+                        or ""
+                    )
+                    heavy_evidence_changed = bool(
+                        previous_heavy_evidence
+                        and previous_heavy_evidence != current_heavy_evidence
+                    )
+                    if scheduler_generation is not None:
+                        async_wait_state = _scanner_async_transport_wait_state(
+                            stock,
+                            scheduler_generation,
+                            getattr(
+                                run_sniper,
+                                "scanner_async_eval_coordinator",
+                                None,
+                            ),
+                        )
+                        if async_wait_state in {"pending", "ready_for_commit"}:
+                            _emit_scanner_heavy_eval_coalesced(
+                                stock,
+                                generation=scheduler_generation,
+                                now_epoch=time.time(),
+                                reason=f"async_transport_{async_wait_state}",
+                                retry_min_sec=heavy_retry_min_sec,
+                                last_attempt_epoch=last_heavy_attempt_epoch,
+                                evidence_changed=heavy_evidence_changed,
+                            )
+                            continue
+                    heavy_retry_due, heavy_retry_after_epoch = (
+                        _scanner_heavy_eval_retry_due(
+                            stock,
+                            now_epoch=time.time(),
+                            allow_explicit_recheck=True,
+                            consume_explicit_recheck=True,
+                        )
+                    )
+                    if not heavy_retry_due:
+                        if scheduler_generation is not None:
+                            _emit_scanner_heavy_eval_coalesced(
+                                stock,
+                                generation=scheduler_generation,
+                                now_epoch=time.time(),
+                                reason=(
+                                    "same_generation_min_retry_window"
+                                    if not heavy_evidence_changed
+                                    else (
+                                        "same_generation_tick_churn_does_not_"
+                                        "bypass_min_retry"
+                                    )
+                                ),
+                                retry_min_sec=heavy_retry_min_sec,
+                                last_attempt_epoch=last_heavy_attempt_epoch,
+                                evidence_changed=heavy_evidence_changed,
+                            )
+                        stock["_scanner_heavy_eval_retry_after_epoch"] = (
+                            heavy_retry_after_epoch
+                        )
+                        continue
+                    if scheduler_generation is not None:
+                        heavy_decision = _scanner_scheduler_enqueue_target(
+                            scheduler,
+                            stock,
+                            lane=ScannerLane.HEAVY_EVAL,
+                            owner="eligible_precheck_heavy_eval",
+                            enqueued_epoch=time.time(),
+                            attempt=max(
+                                1,
+                                _safe_int(
+                                    stock.get("_scanner_scheduler_attempt"), 1
+                                ),
+                            ),
+                        )
+                        if (
+                            heavy_decision is None
+                            or heavy_decision.action != "enqueued"
+                        ):
+                            continue
+                        scanner_heavy_eval_flushed = False
+                    else:
+                        scanner_full_eval_count += 1
+                    delayed_scanner_heavy_eval.append(
+                        (stock, code, ws_data, heavy_queue_enter_epoch)
+                    )
+                    if scheduler_generation is not None:
+                        # Stage-1 deadline mode keeps preparation on the
+                        # main thread.  Dispatch one ready heavy unit now
+                        # so a stream of synchronous promotion attaches
+                        # cannot age every heavy item past its deadline.
+                        _flush_delayed_scanner_heavy_eval()
+                    if (
+                        scheduler_generation is None
+                        and scanner_full_eval_count >= scanner_full_eval_limit
+                    ):
+                        _flush_delayed_scanner_heavy_eval()
+                    continue
+                handle_watching_state(
+                    stock,
+                    code,
+                    ws_data,
+                    admin_id,
+                    now_ts=now_ts,
+                    now_dt=now,
+                    radar=radar,
+                    ai_engine=ai_engine,
+                    scanner_async_eval_coordinator=run_sniper.scanner_async_eval_coordinator,
+                )
+                if _is_scanner_watching_target(stock):
+                    stock["_scanner_last_full_eval_epoch"] = time.time()
+                    if (
+                        bool(stock.get("entry_strength_momentum_recheck_pending"))
+                        and _scanner_is_rising_entry_relief_candidate(stock)
+                        and str(
+                            stock.get(
+                                "entry_strength_momentum_recheck_source_quality_block_reason"
+                            )
+                            or ""
+                        )
+                        .strip()
+                        .lower()
+                        == "stale_ws_snapshot"
+                    ):
+                        _queue_scanner_ws_reg(
+                            code, "scanner_strength_recheck_stale_ws_recovery"
+                        )
+                    _maybe_expire_scanner_watch_after_full_eval(
+                        stock,
+                        code,
+                        targets,
+                        now_ts=time.time(),
+                        emit_event_fn=_defer_scanner_entry_pipeline_log,
+                    )
+            elif status == "HOLDING":
+                holding_ai_engine = None if eod_ai_holding_fallback else ai_engine
+                holding_observed_at = time.time()
+                handle_holding_state(
+                    stock,
+                    code,
+                    ws_data,
+                    admin_id,
+                    current_market_regime,
+                    now_ts=holding_observed_at,
+                    now_dt=datetime.fromtimestamp(holding_observed_at),
+                    radar=radar,
+                    ai_engine=holding_ai_engine,
+                )
+
+        record_main_phase('post_target_maintenance')
+        _flush_delayed_scanner_heavy_eval()
+        _flush_pending_scanner_ws_reg()
+        _flush_deferred_scanner_pipeline_events()
+        _flush_deferred_scanner_skip_events()
+        sniper_state_handlers.observe_rising_missed_nxt_post_block_samplers()
+        sniper_state_handlers.observe_rising_missed_adverse_micro_recovery_observations()
+        try:
+            sniper_state_handlers.observe_non_revive_smoothing_post_sell_paths(
+                now_ts=time.time()
+            )
+        except Exception as exc:
+            log_error(
+                "[SMOOTHING_POST_SELL] detached observer failed without "
+                f"runtime effect: {exc}"
+            )
+        try:
+            sniper_state_handlers.observe_risky_micro_episode_executable_bbo_paths(
+                now_ts=time.time()
+            )
+        except Exception as exc:
+            log_info(
+                "[RISKY_MICRO_BBO_OBSERVER] bounded observer failed without "
+                f"runtime effect: {exc}"
+            )
+
+        targets[:] = [
+            t for t in targets if t.get("status") not in ["COMPLETED", "EXPIRED"]
+        ]
+        if now_ts - getattr(run_sniper, "last_ws_prune_time", 0) >= 5:
+            _prune_ws_subscriptions_for_inactive_targets(targets)
+            run_sniper.last_ws_prune_time = now_ts
+
+        # ── P0: 루프 계측 로그 (60초마다) ─────────────────────
+        _loop_elapsed_ms = (time.time() - now_ts) * 1000
+        # An async worker was dispatched during this pass.  Do not add the
+        # normal polling sleep before the next pass drains its COMMIT
+        # result.  The yield flag is scoped to one outer iteration, so
+        # this cannot turn an idle runtime into a busy loop.
+        _sleep_ms = 0 if scanner_async_commit_yield_requested else 1000
+        _target_count = len(targets)
+        _watching_count = len([t for t in targets if t.get("status") == "WATCHING"])
+        _holding_count = len([t for t in targets if t.get("status") == "HOLDING"])
+        _update_scalping_dynamic_watch_cap(
+            _loop_elapsed_ms,
+            now_ts=now_ts,
+            buy_time_allowed=is_scalping_buy_time_allowed(now),
+        )
+        if _scanner_scheduler_startup_mode() == "legacy":
+            _update_scanner_full_eval_pressure(
+                _loop_elapsed_ms,
+                queue_context=queue_context,
+                now_ts=now_ts,
+                buy_time_allowed=is_scalping_buy_time_allowed(now),
+            )
+        from src.engine.monitoring.runtime_performance import observe, log_snapshot
+        record_main_phase('loop_diagnostics')
+        observe('loop_work', time.perf_counter() - loop_work_started)
+        global _LOOP_METRICS_LAST_LOG_TS
+        if now_ts - _LOOP_METRICS_LAST_LOG_TS >= 60:
+            log_info(
+                f"[LOOP_METRICS] "
+                f"loop_elapsed_ms={_loop_elapsed_ms:.1f} "
+                f"sleep_ms={_sleep_ms} "
+                f"db_active_targets_ms={_db_elapsed_ms:.1f} "
+                f"account_sync_ms={_acct_elapsed_ms:.1f} "
+                f"target_count={_target_count} "
+                f"watching={_watching_count} "
+                f"holding={_holding_count}"
+            )
+            log_snapshot()
+            _LOOP_METRICS_LAST_LOG_TS = now_ts
+
+        coordinator = getattr(run_sniper, 'scanner_async_eval_coordinator', None)
+        record_main_phase('idle_wait')
+        if coordinator is not None:
+            coordinator.wait_for_completion(_sleep_ms / 1000.0)
+        else:
+            time.sleep(_sleep_ms / 1000.0)
+        record_main_phase('main_wake')
+        yield None
+
+
+def close_observation_sources():
+    """Shared diagnostic cleanup for native finally and controlled self-stop."""
+    before = _SCANNER_OBSERVATION_QUEUE.snapshot()
+    complete = False
+    try:
+        from src.engine.scalping.pre_submit_delay_observation import shutdown as close_delay_observations
+        complete = close_delay_observations()
+        from src.engine.scalping.initial_quantity_cap_observation import configure_sink as configure_quantity_sink
+        configure_quantity_sink(None)
+        from src.engine.scalping.main_stop_policy import configure_source_sink as configure_stop_sink
+        configure_stop_sink(None)
+        from src.utils.pipeline_event_logger import configure_trailing_observation_sink
+        configure_trailing_observation_sink(None)
+        from src.engine.scalping.reversal_anchor_index import configure_sink as configure_anchor_sink
+        configure_anchor_sink(None)
+    finally:
+        drained = _SCANNER_OBSERVATION_QUEUE.close(timeout=1.0)
+    after = _SCANNER_OBSERVATION_QUEUE.snapshot()
+    complete = complete and drained and all(after[key] == before[key] for key in (
+        'append_failed', 'append_unobservable', 'intentionally_not_written', 'unavailable'))
+    if not complete:
+        log_error('[SOURCE_OBSERVATION_SHUTDOWN_INCOMPLETE] pending=' + str(after['pending_items']))
+    return complete
+
+
 def run_sniper(is_test_mode=False):
     global KIWOOM_TOKEN, WS_MANAGER, ACTIVE_TARGETS, AI_ENGINE
     global _SCANNER_PROMOTION_INBOX
+    _ZERO_BASE_PROBE_CLOSING.clear()
 
     from src.utils.logger import log_error, log_info
 
     log_info(f"[DEBUG] run_sniper started at {datetime.now()}")
-    from src.engine.scalping.pre_submit_delay_tuning import prepare_runtime_policy
-    run_sniper.pre_submit_delay_preparation = prepare_runtime_policy()
-    from src.engine.scalping.pre_submit_delay_observation import configure_sink
+    from src.engine.infrastructure.main_policy_loading import load_main_policies
+    from src.utils.constants import DATA_DIR
+    policy_clock = datetime.now(__import__('zoneinfo').ZoneInfo('Asia/Seoul'))
+    run_sniper.policy_loading = load_main_policies(
+        target_date=os.getenv('KORSTOCKSCAN_RUNTIME_POLICY_BOOTSTRAP_DATE') or policy_clock.date().isoformat(),
+        observed_at=policy_clock, data_root=DATA_DIR, env=os.environ)
+    run_sniper.pre_submit_delay_preparation = run_sniper.policy_loading['delay_preparation']
+    run_sniper.trailing_situation_preparation = run_sniper.policy_loading['trailing_preparation']
+    from src.engine.automation.main_trailing_source_store import prepare_for_day
+    try:
+        prepare_for_day(DATA_DIR,policy_clock.date().isoformat())
+    except Exception as exc:
+        log_error('[TRAILING_SOURCE_INDEX_PREPARATION] '+type(exc).__name__)
+    from src.engine.scalping.pre_submit_delay_observation import configure_sink, configure_sampler
     configure_sink(_SCANNER_OBSERVATION_QUEUE.submit)
+    configure_sampler(lambda code: WS_MANAGER.get_pre_submit_delay_depth(code) if WS_MANAGER else {},
+                      sniper_state_handlers.observe_pre_submit_delay_quote)
     from src.engine.scalping.initial_quantity_cap_observation import configure_sink as configure_quantity_sink
     configure_quantity_sink(_SCANNER_OBSERVATION_QUEUE.submit,recover_pending=True)
     from src.engine.scalping.main_stop_policy import configure_source_sink as configure_stop_sink
     configure_stop_sink(_SCANNER_OBSERVATION_QUEUE.submit)
+    from src.utils.pipeline_event_logger import configure_trailing_observation_sink
+    configure_trailing_observation_sink(_SCANNER_OBSERVATION_QUEUE.submit)
     from src.engine.scalping.reversal_anchor_index import configure_sink as configure_anchor_sink
     configure_anchor_sink(_SCANNER_OBSERVATION_QUEUE.submit)
-    from src.engine.scalping.trailing_situation_policy import prepare_runtime as prepare_trailing_situations
-    run_sniper.trailing_situation_preparation = prepare_trailing_situations(env=os.environ,
-        parent_sha256=os.getenv('KORSTOCKSCAN_SCALP_TRAILING_MECHANICAL_VECTOR_SHA256'),
-        target_date=os.getenv('KORSTOCKSCAN_RUNTIME_POLICY_BOOTSTRAP_DATE') or datetime.now().date().isoformat())
     run_sniper.last_fifo_time = 0
     run_sniper.last_account_sync_time = 0
     run_sniper.last_broker_snapshot_refresh_time = 0
@@ -12748,24 +16169,7 @@ def run_sniper(is_test_mode=False):
     ]
     if runtime_role == "main" and openai_api_keys:
         try:
-            ai_engine = GPTSniperEngine(
-                api_keys=openai_api_keys, announce_startup=False
-            )
-            fast_model = str(
-                getattr(TRADING_RULES, "GPT_FAST_MODEL", "gpt-5-nano") or "gpt-5-nano"
-            )
-            deep_model = str(
-                getattr(TRADING_RULES, "GPT_DEEP_MODEL", fast_model) or fast_model
-            )
-            report_model = str(
-                getattr(TRADING_RULES, "GPT_REPORT_MODEL", fast_model) or fast_model
-            )
-            ai_engine.set_model_names(
-                fast_model=fast_model,
-                deep_model=deep_model,
-                report_model=report_model,
-                announce=True,
-            )
+            ai_engine = GPTSniperEngine(api_keys=openai_api_keys)
             AI_ENGINE = ai_engine
             # Explicit Main owner: other roles and offline engines never start it.
             try:
@@ -12777,10 +16181,6 @@ def run_sniper(is_test_mode=False):
                     )
             except Exception as warmup_error:
                 log_error(f"[AI_TRANSPORT_WARMUP_START_FAILED] type={type(warmup_error).__name__}")
-            print(
-                "🧠 메인 OpenAI AI 엔진 고정 완료 "
-                f"(FAST: {fast_model} / DEEP: {deep_model} / REPORT: {report_model})"
-            )
         except Exception as e:
             log_error(f"🚨 OpenAI AI 엔진 초기화 실패: {e}")
             event_bus.publish(
@@ -13042,3357 +16442,15 @@ def run_sniper(is_test_mode=False):
                 f"day={source_prepare_day} seconds={time.perf_counter() - source_prepare_started:.3f} "
                 "main_entry_evaluation_started=false exit_monitor_started=true"
             )
-        while True:
-            loop_work_started = time.perf_counter()
-            from src.engine.monitoring.runtime_performance import record_main_phase
-            record_main_phase('loop_prepare')
-            now_ts = time.time()
-            from src.engine.scalping.pre_submit_delay_observation import prune as prune_delay_observations
-            prune_delay_observations(now_ts)
-            now = datetime.now()
-            now_t = now.time()
-            run_sniper.runtime_pause_state = is_buy_side_paused()
-            current_market_regime = _current_market_regime_code()
-            from src.engine.scalping.avg_down_replay_capture import record_main_market_regime
-            record_main_market_regime(current_market_regime, now_ts=now_ts)
-            _ensure_state_handler_deps()
-
-            from src.engine.error_detectors.process_health import (
-                write_heartbeat as _sn_whb,
-            )
-
-            _sn_whb("sniper_engine")
-
-            if RESTART_FLAG_PATH.exists():
-                restart_guard = consume_restart_request(
-                    RESTART_FLAG_PATH,
-                    main_bot_pid=os.getpid(),
-                )
-                if not restart_guard.get("claimed"):
-                    continue
-                if not restart_guard.get("allowed"):
-                    log_error(
-                        "[MAIN_BOT_RESTART_BLOCKED] Samsung morning authority/custody "
-                        f"guard reason={restart_guard.get('reason')}"
-                    )
-                    continue
-                print(
-                    "🔄 [우아한 종료] 재시작 깃발을 확인했습니다. 시스템을 안전하게 정지합니다."
-                )
-                event_bus.publish(
-                    "TELEGRAM_BROADCAST",
-                    {
-                        "message": "🛑 스나이퍼 엔진이 하던 작업을 마치고 우아하게 재시작됩니다."
-                    },
-                )
-                _sn_whb("sniper_engine", alive=False)
-                from src.utils.pipeline_event_logger import drain_pipeline_event_summary_before_termination
-                drain_pipeline_event_summary_before_termination()
-                os.kill(os.getpid(), signal.SIGTERM)
-                break
-
-            today_key = now.date().isoformat()
-            if (
-                now_t >= TIME_09_00
-                and getattr(run_sniper, "krx_open_watchlist_reset_date", None)
-                != today_key
-            ):
-                reset_codes = _reset_krx_open_watch_targets(targets, now_dt=now)
-                run_sniper.krx_open_watchlist_reset_date = today_key
-                if reset_codes:
-                    log_info(
-                        "[KRX_OPEN_WATCHLIST_RESET] expired pre-open WATCHING targets "
-                        f"count={len(reset_codes)} codes={','.join(sorted(set(reset_codes)))}"
-                    )
-
-            scalp_sim_sync = (
-                sniper_state_handlers.sync_scalp_simulator_targets_if_state_changed(
-                    targets,
-                    last_mtime=getattr(run_sniper, "last_scalp_sim_state_mtime", None),
-                )
-            )
-            run_sniper.last_scalp_sim_state_mtime = scalp_sim_sync.get("state_mtime")
-            swing_probe_sync = sniper_state_handlers.sync_swing_intraday_probe_targets_if_state_changed(
-                targets,
-                last_mtime=getattr(run_sniper, "last_swing_probe_state_mtime", None),
-            )
-            run_sniper.last_swing_probe_state_mtime = swing_probe_sync.get(
-                "state_mtime"
-            )
-
-            if not is_test_mode and now_t >= TIME_20_00:
-                unresolved_scalping = (
-                    sniper_state_handlers.unresolved_scalping_terminal_positions(
-                        targets,
-                        observed_at=now,
-                    )
-                )
-                terminal_reason = "market_close"
-                if unresolved_scalping:
-                    terminal_reason = "market_close_unresolved_scalping_positions"
-                    unresolved_codes = ",".join(
-                        sorted(
-                            {
-                                str(item.get("code") or "-")
-                                for item in unresolved_scalping
-                            }
-                        )
-                    )
-                    log_error(
-                        "[SCALPING_SAME_SESSION_TERMINAL_FAIL] unresolved positions "
-                        f"count={len(unresolved_scalping)} codes={unresolved_codes}; "
-                        "a valid positive-net exit or nonpositive-net HOLD decision "
-                        "is missing and broker/receipt reconciliation is required"
-                    )
-                    event_bus.publish(
-                        "TELEGRAM_BROADCAST",
-                        {
-                            "message": (
-                                "🚨 **[스캘핑 당일 종결 미완료]**\n"
-                                f"미종결: `{len(unresolved_scalping)}건` "
-                                f"(`{unresolved_codes}`)\n"
-                                "양수 비용차감 청산 또는 비양수 HOLD 판정이 "
-                                "확인되지 않아 다음 기동에서 브로커/체결 "
-                                "영수증 재조정이 필요합니다."
-                            )
-                        },
-                    )
-                print("🌙 장 마감 시간이 다가와 감시를 종료합니다.")
-                highest_prices.clear()
-                alerted_stocks.clear()
-                cooldowns.clear()
-                LAST_AI_CALL_TIMES.clear()
-                ACTIVE_TARGETS.clear()
-                _sn_whb(
-                    "sniper_engine",
-                    alive=False,
-                    terminal_reason=terminal_reason,
-                    unresolved_scalping_count=len(unresolved_scalping),
-                    unresolved_scalping_codes="|".join(
-                        str(item.get("code") or "-") for item in unresolved_scalping
-                    ),
-                )
-                break
-
-            # =====================================================
-            # 신규 DB 타겟 polling (P0 계측 포함)
-            # =====================================================
-            _t0_db = time.perf_counter()
-            record_main_phase('target_db_and_fixed_watch_reconcile')
-            if now_ts - last_db_poll_time > 5:
-                db_targets = DB.get_active_targets() or []
-                for dt in db_targets:
-                    attach_db_poll_target_if_missing(dt, targets, now_ts)
-                last_db_poll_time = now_ts
-            _db_elapsed_ms = (time.perf_counter() - _t0_db) * 1000
-            if (main_fixed_watch.enabled_symbols() or any(
-                main_fixed_watch.is_fixed_watch(target) for target in targets
-            )) and now_ts - getattr(
-                run_sniper, "last_fixed_watch_reconcile_time", 0.0
-            ) >= 5.0:
-                _reconcile_main_fixed_watch(targets, now_ts=now_ts, publish_reg=True)
-                run_sniper.last_fixed_watch_reconcile_time = now_ts
-
-            # =====================================================
-            # WATCHING TTL / FIFO
-            # =====================================================
-            if (
-                now_ts - getattr(run_sniper, "last_opening_rotation_ttl_sweep_time", 0)
-                >= 1.0
-            ):
-                opening_ttl_sweep = (
-                    sniper_state_handlers.sweep_expired_opening_rotation_watch_slots(
-                        targets,
-                        now_ts=now_ts,
-                    )
-                )
-                run_sniper.last_opening_rotation_ttl_sweep_time = now_ts
-                if opening_ttl_sweep.get("failed_count", 0) > 0:
-                    log_error(
-                        "[OPENING_ROTATION_TTL_SWEEP] expiration incomplete "
-                        f"eligible={opening_ttl_sweep.get('eligible_count', 0)} "
-                        f"expired={opening_ttl_sweep.get('expired_count', 0)} "
-                        f"failed={opening_ttl_sweep.get('failed_count', 0)}"
-                    )
-            if now_ts - getattr(run_sniper, "last_fifo_time", 0) > 10:
-                watching_stocks = [t for t in targets if t.get("status") == "WATCHING"]
-                expired_ids = []
-                expired_names = []
-
-                watching_stocks.sort(
-                    key=lambda x: _runtime_added_time_for_target(x, now_ts=now_ts)
-                )
-                scalp_fifo_targets = _scalping_fifo_candidates(watching_stocks, now_ts)
-                scalping_watching_ttl_sec = _scalping_watching_ttl_sec()
-
-                for t in scalp_fifo_targets:
-                    # Observation of this existing owner contract only. It does
-                    # not extend TTL, reserve cash, or change watch eligibility.
-                    t["entry_economic_watch_lifetime"] = {
-                        "owner": "kiwoom_sniper_v2._scanner_evaluation_lifetime_anchor/_scalping_watching_ttl_sec",
-                        "scanner_promotion_id": t.get("scanner_promotion_id"),
-                        "deadline_epoch": _scanner_evaluation_lifetime_anchor(t, now_ts=now_ts) + scalping_watching_ttl_sec,
-                        "observed_epoch": now_ts,
-                    }
-                    if (
-                        now_ts - _scanner_evaluation_lifetime_anchor(t, now_ts=now_ts)
-                        > scalping_watching_ttl_sec
-                        or (
-                            _is_zero_base_watch_target(t)
-                            and not _zero_base_watch_session_matches(t, now_ts)
-                        )
-                    ):
-                        expired_ids.append(t["id"])
-                        expired_names.append(t["name"])
-
-                scalp_remaining = [
-                    t for t in scalp_fifo_targets if t["id"] not in expired_ids
-                ]
-                for t in _scalping_watch_budget_overflow_candidates(
-                    scalp_remaining, now_ts
-                ):
-                    expired_ids.append(t["id"])
-                    expired_names.append(t["name"])
-
-                if expired_ids:
-                    try:
-                        with DB.get_session() as session:
-                            session.query(RecommendationHistory).filter(
-                                RecommendationHistory.id.in_(expired_ids)
-                            ).update({"status": "EXPIRED"}, synchronize_session=False)
-                    except Exception as e:
-                        log_error(f"🚨 FIFO 큐 DB 업데이트 에러: {e}")
-
-                    for t in targets:
-                        if t.get("id") in expired_ids:
-                            t["status"] = "EXPIRED"
-                            _record_machine_watch_terminal(t, now_ts=now_ts)
-
-                    print(
-                        f"🗑️ [스캘핑 큐 정리] {len(expired_ids)}개 단기 종목 감시 만료"
-                    )
-                    if len(expired_names) <= 10:
-                        print(f"   └ 만료 종목: {', '.join(expired_names)}")
-
-                run_sniper.last_fifo_time = now_ts
-
-            # =====================================================
-            # 90초 lifecycle reconciliation과 45초 read-only broker snapshot
-            # =====================================================
-            _t0_acct = time.perf_counter()
-            record_main_phase('account_task_admission')
-            if (
-                now_ts - getattr(run_sniper, "last_account_sync_time", 0)
-                > ACCOUNT_RECONCILIATION_INTERVAL_SEC
-            ):
-                if _submit_account_sync(reason="periodic_90s"):
-                    run_sniper.last_account_sync_time = now_ts
-                    run_sniper.last_broker_snapshot_refresh_time = now_ts
-            elif (
-                now_ts - getattr(run_sniper, "last_broker_snapshot_refresh_time", 0)
-                > BROKER_SNAPSHOT_REFRESH_INTERVAL_SEC
-                and _periodic_broker_snapshot_required(targets)
-            ):
-                if _submit_account_task(
-                    task_kind="broker_snapshot_read_only",
-                    reason="periodic_holding_context_45s",
-                ):
-                    run_sniper.last_broker_snapshot_refresh_time = now_ts
-            _acct_elapsed_ms = (time.perf_counter() - _t0_acct) * 1000
-            record_main_phase('prequeue_maintenance')
-
-            # Legacy overnight AI is retired. Holding AI remains active through
-            # the close; the post-effective terminal rule only adds a SELL when
-            # the fresh executable return is positive after configured costs.
-            eod_ai_holding_fallback = False
-
-            # =====================================================
-            # 상태 로그
-            # =====================================================
-            if now_t.minute % 5 == 0 and now_t.minute != last_msg_min:
-                watching_count = len(
-                    [t for t in targets if t.get("status") == "WATCHING"]
-                )
-                holding_targets = [t for t in targets if t.get("status") == "HOLDING"]
-                real_holding_count = len(
-                    [t for t in holding_targets if not _is_runtime_simulation_target(t)]
-                )
-                scalp_sim_holding_count = len(
-                    [t for t in holding_targets if _is_runtime_scalp_sim_target(t)]
-                )
-                probe_holding_count = len(
-                    [t for t in holding_targets if _is_runtime_probe_target(t)]
-                )
-                other_sim_holding_count = max(
-                    0,
-                    len(holding_targets)
-                    - real_holding_count
-                    - scalp_sim_holding_count
-                    - probe_holding_count,
-                )
-                print(
-                    f"💓 [{now.strftime('%H:%M:%S')}] 다중 감시망 가동 중... "
-                    f"(감시: {watching_count} / 보유: {real_holding_count} / "
-                    f"scalp_sim: {scalp_sim_holding_count} / probe: {probe_holding_count} / "
-                    f"other_sim: {other_sim_holding_count})"
-                )
-                last_msg_min = now_t.minute
-
-            # =====================================================
-            # 상태 라우팅
-            # ✅ 주문대기 상태는 ws_data 없이도 먼저 처리
-            # =====================================================
-            attach_guard_queue = _runtime_iteration_targets(
-                targets,
-                now_ts=time.time(),
-            )
-            if _scanner_scheduler_startup_mode() in {
-                "deadline_v1",
-                "async_v1",
-            } and not _scanner_scheduler_attach_must_yield_to_runtime_work(
-                attach_guard_queue
-            ):
-                _drain_scanner_promotion_inbox(
-                    run_sniper.scanner_runtime_scheduler,
-                    max_items=1,
-                )
-                _scanner_scheduler_reconcile_active_targets(
-                    run_sniper.scanner_runtime_scheduler,
-                    targets,
-                    now_epoch=time.time(),
-                )
-            record_main_phase('async_completion_drain')
-            async_coordinator = getattr(
-                run_sniper,
-                "scanner_async_eval_coordinator",
-                None,
-            )
-
-            def _scanner_async_commit_ready_for_main_thread() -> bool:
-                """Yield between synchronous units when a COMMIT is ready.
-
-                Scanner output needs the next outer drain and COMMIT lane.
-                Exact fixed-watch output can use its remaining Main visit.
-                This is deliberately a main-thread-only cooperative yield:
-                it neither applies a result nor changes any trading state.
-                """
-
-                return bool(
-                    _scanner_scheduler_startup_mode() == "async_v1"
-                    and isinstance(async_coordinator, ScannerAsyncEvalCoordinator)
-                    and async_coordinator.has_undrained_result(
-                        direct_fixed_requests={
-                            (target.get('_scanner_async_generation_id'),
-                             target.get('_scanner_async_cache_key'))
-                            for target in runtime_work_queue
-                            if target.get('status') == 'WATCHING'
-                            and main_fixed_watch.is_fixed_watch(target)
-                            and target.get('_scanner_async_generation_id')
-                            and target.get('_scanner_async_cache_key')})
-                )
-
-            if _scanner_scheduler_startup_mode() == "async_v1" and isinstance(
-                async_coordinator, ScannerAsyncEvalCoordinator
-            ):
-                for async_result in async_coordinator.drain_completed():
-                    if async_result.generation_kind == "fixed_watch":
-                        # The native WATCHING handler owns take/commit. A
-                        # scanner-only target lookup must not discard it.
-                        sniper_state_handlers._discard_orphaned_fixed_watch_result(
-                            async_coordinator, async_result, targets)
-                        continue
-                    async_target = next(
-                        (
-                            target
-                            for target in targets
-                            if str(
-                                (target or {}).get("scanner_generation_id") or ""
-                            ).strip()
-                            == async_result.generation_id
-                            and _is_scanner_watching_target(target)
-                        ),
-                        None,
-                    )
-                    async_transport = {
-                        "allowed": False,
-                        "reason": "result_not_commit_eligible",
-                        "namespace": "unknown",
-                    }
-                    if (
-                        async_target is not None
-                        and async_result.status == "completed"
-                        and not async_result.observation_only
-                    ):
-                        with ENTRY_LOCK:
-                            async_transport = _restore_scanner_async_commit_transport(
-                                async_target,
-                                async_result,
-                            )
-                    if (
-                        async_target is None
-                        or async_result.status != "completed"
-                        or async_result.observation_only
-                        or not async_transport.get("allowed")
-                    ):
-                        async_recheck_fields = {}
-                        async_coordinator.discard_completed(
-                            generation_id=async_result.generation_id,
-                            cache_key=async_result.cache_key,
-                            reason=async_transport.get('reason') if async_target else 'target_removed',
-                        )
-                        if async_target is not None:
-                            with ENTRY_LOCK:
-                                async_slot_owned = _scanner_async_result_owns_target_slot(async_target, async_result)
-                                async_recheck_fields = (
-                                    _arm_scanner_async_rejected_result_recheck(
-                                        async_target,
-                                        async_result,
-                                        now_epoch=time.time(),
-                                    )
-                                )
-                                sniper_state_handlers._clear_scanner_async_identity(async_target,
-                                    generation_id=async_result.generation_id,
-                                    cache_key=async_result.cache_key)
-                                async_park_reason = (
-                                    "async_preparation_deadline_expired_"
-                                    "generation_warm_parked"
-                                    if async_result.status == "preparation_deadline_expired"
-                                    else "async_result_rejected_generation_warm_parked"
-                                )
-                                if async_slot_owned:
-                                    _scanner_scheduler_park_target_generation(
-                                        run_sniper.scanner_runtime_scheduler,
-                                        async_target,
-                                        now_epoch=time.time(),
-                                        reason=async_park_reason,
-                                    )
-                        _emit_scanner_scheduler_event(
-                            payload={
-                                "code": async_result.code,
-                                "effective_venue": async_result.venue,
-                            },
-                            stage="scalping_scanner_async_result_rejected",
-                            fields={
-                                "metric_role": "runtime_scheduler_latency",
-                                "decision_authority": (
-                                    "scanner_async_observation_only_reject"
-                                ),
-                                "window_policy": (
-                                    "per_scanner_generation_action_timestamps"
-                                ),
-                                "sample_floor": "one_completed_async_result",
-                                "primary_decision_metric": "result_to_commit_sec",
-                                "source_quality_gate": (
-                                    "current_generation_and_watching_required"
-                                ),
-                                "forbidden_uses": (
-                                    "standalone_buy,broker_submit,threshold_mutation,"
-                                    "provider_route_change,order_price_change,"
-                                    "quantity_or_cap_change,broker_guard_bypass"
-                                ),
-                                "runtime_effect": False,
-                                "actual_order_submitted": False,
-                                "broker_order_forbidden": True,
-                                "scanner_generation_id": (async_result.generation_id),
-                                "scanner_async_cache_key": async_result.cache_key,
-                                "scanner_async_result_status": async_result.status,
-                                "scanner_async_result_observation_only": bool(
-                                    async_result.observation_only
-                                ),
-                                "scanner_async_result_reject_reason": (
-                                    "target_or_generation_missing"
-                                    if async_target is None
-                                    else (
-                                        async_transport.get("reason")
-                                        or "result_not_commit_eligible"
-                                    )
-                                ),
-                                "scanner_async_transport_namespace": (
-                                    async_transport.get("namespace")
-                                    or "not_available_target_or_generation_missing"
-                                ),
-                                **async_recheck_fields,
-                            },
-                        )
-                        continue
-                    _emit_scanner_scheduler_event(
-                        payload=async_target,
-                        target=async_target,
-                        stage="scalping_scanner_async_transport_ready",
-                        fields={
-                            "metric_role": "runtime_scheduler_latency",
-                            "decision_authority": (
-                                "scanner_async_commit_transport_only"
-                            ),
-                            "window_policy": (
-                                "per_scanner_generation_action_timestamps"
-                            ),
-                            "sample_floor": "one_completed_async_result",
-                            "primary_decision_metric": "result_to_commit_sec",
-                            "source_quality_gate": (
-                                "exact_generation_cache_and_state_version_required"
-                            ),
-                            "forbidden_uses": (
-                                "standalone_buy,broker_submit,threshold_mutation,"
-                                "provider_route_change,order_price_change,"
-                                "quantity_or_cap_change,broker_guard_bypass"
-                            ),
-                            "runtime_effect": False,
-                            "actual_order_submitted": False,
-                            "broker_order_forbidden": True,
-                            "scanner_generation_id": async_result.generation_id,
-                            "scanner_async_cache_key": async_result.cache_key,
-                            "scanner_async_transport_namespace": (
-                                async_transport.get("namespace")
-                                or "not_available_missing_transport_namespace"
-                            ),
-                            "scanner_async_transport_reason": (
-                                async_transport.get("reason")
-                                or "not_available_missing_transport_reason"
-                            ),
-                        },
-                    )
-                    commit_enqueued_epoch = time.time()
-                    commit_decision = _scanner_scheduler_enqueue_target(
-                        run_sniper.scanner_runtime_scheduler,
-                        async_target,
-                        lane=ScannerLane.COMMIT,
-                        owner="scanner_async_result_ready",
-                        enqueued_epoch=commit_enqueued_epoch,
-                        # The worker completion timestamp remains the
-                        # attribution anchor.  The scheduler's dispatch
-                        # budget begins only once the main thread has
-                        # received and enqueued that exact result.
-                        # A ready result can be discovered near the end of a
-                        # busy outer loop.  Keep one bounded 5-second window
-                        # so the next main-thread COMMIT claim can consume it;
-                        # the commit guard still requires the generation,
-                        # state, venue, and current quote to remain valid.
-                        deadline_epoch=commit_enqueued_epoch + 5.0,
-                    )
-                    if commit_decision is None or commit_decision.action != "enqueued":
-                        async_coordinator.discard_completed(
-                            generation_id=async_result.generation_id,
-                            cache_key=async_result.cache_key,
-                            reason='async_commit_enqueue_rejected',
-                        )
-                        with ENTRY_LOCK:
-                            async_slot_owned = _scanner_async_result_owns_target_slot(async_target, async_result)
-                            sniper_state_handlers._clear_scanner_async_identity(async_target,
-                                generation_id=async_result.generation_id,
-                                cache_key=async_result.cache_key)
-                            if async_slot_owned:
-                                _scanner_scheduler_park_target_generation(
-                                    run_sniper.scanner_runtime_scheduler,
-                                    async_target,
-                                    now_epoch=time.time(),
-                                    reason="async_commit_enqueue_rejected_generation_warm_parked",
-                                )
-            record_main_phase('target_source_preparation')
-            queue_context = _runtime_queue_context(targets, now_ts=now_ts)
-            active_scanner_watch_codes = {
-                str(t.get("code", "")).strip()[:6]
-                for t in targets
-                if _is_scanner_watching_target(t)
-            }
-            _prune_scanner_watch_full_eval_deferred_state(targets)
-            for stale_code in list(scanner_ws_repair_cycle_state_by_code.keys()):
-                if stale_code not in active_scanner_watch_codes:
-                    scanner_ws_repair_cycle_state_by_code.pop(stale_code, None)
-            scanner_ws_snapshot_cache = _runtime_scanner_ws_snapshot_cache(
-                queue_context["iteration_targets"]
-            )
-            scanner_full_eval_count = 0
-            scanner_rising_full_eval_relief_count = 0
-            scanner_full_eval_base_limit = _scanner_full_eval_max_per_loop()
-            scanner_full_eval_limit = _scanner_full_eval_effective_limit(
-                queue_context,
-                base_limit=scanner_full_eval_base_limit,
-            )
-            scanner_rising_full_eval_extra_limit = min(
-                _scanner_rising_full_eval_extra_per_loop(),
-                max(0, 40 - scanner_full_eval_limit),
-            )
-            delayed_scanner_heavy_eval = []
-            pending_scanner_ws_reg: dict[str, set[str]] = {}
-            pending_scanner_ws_persistent_repair: dict[str, set[str]] = {}
-            deferred_scanner_pipeline_events = []
-            deferred_scanner_skip_events = []
-            scanner_precheck_seen = False
-            scanner_heavy_eval_flushed = False
-            scanner_async_commit_yield_requested = False
-            scanner_rest_quote_fallback_loop_limit = (
-                _scanner_rest_quote_fallback_max_per_loop()
-            )
-            scanner_rest_quote_fallback_loop_count = 0
-            scanner_no_trade_eviction_loop_limit = (
-                _scanner_no_trade_eviction_max_per_loop()
-            )
-            scanner_no_trade_eviction_loop_count = 0
-            scanner_queue_lag_eviction_loop_limit = (
-                _scanner_queue_lag_eviction_max_per_loop()
-            )
-            scanner_queue_lag_eviction_loop_count = 0
-            scanner_full_eval_deferred_eviction_loop_limit = (
-                _scanner_full_eval_deferred_eviction_max_per_loop()
-            )
-            scanner_full_eval_deferred_eviction_loop_count = 0
-
-            def _defer_scanner_entry_pipeline_log(
-                stock_value, code_value, stage, fields
-            ):
-                deferred_scanner_pipeline_events.append(
-                    (
-                        _scanner_pipeline_stock_snapshot(stock_value),
-                        str(code_value or "").strip()[:6],
-                        str(stage or ""),
-                        dict(fields or {}),
-                    )
-                )
-
-            def _flush_deferred_scanner_pipeline_events():
-                if not deferred_scanner_pipeline_events:
-                    return
-                events = list(deferred_scanner_pipeline_events)
-                deferred_scanner_pipeline_events.clear()
-
-                for stock_value, code_value, stage, fields in events:
-                    _SCANNER_OBSERVATION_QUEUE.submit(
-                        sniper_state_handlers._log_entry_pipeline,
-                        stock_value, code_value, stage, **fields)
-
-            def _defer_emit_scanner_fast_precheck(
-                stock_value,
-                code_value,
-                *,
-                now_value,
-                ws_snapshot,
-                queue_rank,
-                scanner_queue_rank,
-                watching_count,
-                scanner_watching_count,
-                throttle_sec=5,
-            ):
-                if not sniper_state_handlers._is_scanner_watching_runtime_observation_target(
-                    stock_value
-                ):
-                    return False
-                sniper_state_handlers._capture_rising_missed_entry_turn_bbo(
-                    stock_value,
-                    code_value,
-                    ws_snapshot,
-                    now_ts=float(now_value),
-                )
-                throttle = max(0, int(throttle_sec or 0))
-                last_logged = _safe_float(
-                    stock_value.get("_scanner_fast_precheck_logged_at"), 0.0
-                )
-                if throttle > 0 and float(now_value) - last_logged < throttle:
-                    return False
-                stock_value["_scanner_fast_precheck_logged_at"] = float(now_value)
-                entry_realtime_fields = _scanner_record_first_entry_realtime(
-                    stock_value,
-                    ws_snapshot,
-                    now_ts=float(now_value),
-                )
-                fields = sniper_state_handlers._scanner_fast_precheck_fields(
-                    stock_value,
-                    now_ts=float(now_value),
-                    code=code_value,
-                    ws_data=ws_snapshot,
-                    queue_rank=queue_rank,
-                    scanner_queue_rank=scanner_queue_rank,
-                    watching_count=watching_count,
-                    scanner_watching_count=scanner_watching_count,
-                )
-                fields.update(entry_realtime_fields)
-                if (
-                    fields.get("fast_precheck_result")
-                    == "eligible_for_heavy_entry_eval"
-                ):
-                    stock_value["_scanner_heavy_queue_enter_epoch"] = float(now_value)
-                stock_value["_scanner_fast_precheck_result"] = fields.get(
-                    "fast_precheck_result"
-                )
-                stock_value["_scanner_fast_precheck_reason"] = fields.get(
-                    "fast_precheck_reason"
-                )
-                stock_value["_scanner_fast_precheck_fields"] = dict(fields)
-                _defer_scanner_entry_pipeline_log(
-                    stock_value,
-                    code_value,
-                    "scalping_scanner_promotion_latency_trace",
-                    _scanner_promotion_latency_trace_fields(
-                        stock_value,
-                        ws_snapshot,
-                        now_ts=float(now_value),
-                        trace_phase="fast_precheck",
-                        fast_precheck_fields=fields,
-                    ),
-                )
-                _defer_scanner_entry_pipeline_log(
-                    stock_value,
-                    code_value,
-                    "scalping_scanner_fast_precheck",
-                    fields,
-                )
-                return True
-
-            def _defer_emit_scanner_runtime_queue_lag(
-                stock_value,
-                code_value,
-                *,
-                now_value,
-                queue_rank,
-                scanner_queue_rank,
-                watching_count,
-                scanner_watching_count,
-                real_holding_count,
-                non_real_holding_count,
-                pre_scanner_runtime_count,
-                loop_started_epoch,
-                throttle_sec=10,
-            ):
-                if not sniper_state_handlers._is_scanner_watching_runtime_observation_target(
-                    stock_value
-                ):
-                    return None
-                throttle = max(0, int(throttle_sec or 0))
-                last_logged = _safe_float(
-                    stock_value.get("_scanner_runtime_queue_lag_logged_at"), 0.0
-                )
-                if throttle > 0 and float(now_value) - last_logged < throttle:
-                    return None
-                stock_value["_scanner_runtime_queue_lag_logged_at"] = float(now_value)
-                fields = sniper_state_handlers._scanner_runtime_queue_lag_fields(
-                    stock_value,
-                    now_ts=float(now_value),
-                    queue_rank=queue_rank,
-                    scanner_queue_rank=scanner_queue_rank,
-                    watching_count=watching_count,
-                    scanner_watching_count=scanner_watching_count,
-                    real_holding_count=real_holding_count,
-                    non_real_holding_count=non_real_holding_count,
-                    pre_scanner_runtime_count=pre_scanner_runtime_count,
-                    loop_started_epoch=float(loop_started_epoch),
-                )
-                _defer_scanner_entry_pipeline_log(
-                    stock_value,
-                    code_value,
-                    "scalping_scanner_runtime_queue_lag",
-                    fields,
-                )
-                return fields
-
-            def _defer_emit_scanner_heavy_eval_lag(
-                stock_value,
-                code_value,
-                *,
-                now_value,
-                queue_enter_epoch,
-                throttle_sec=5,
-            ):
-                if not sniper_state_handlers._is_scanner_watching_runtime_observation_target(
-                    stock_value
-                ):
-                    return False
-                throttle = max(0, int(throttle_sec or 0))
-                last_logged = _safe_float(
-                    stock_value.get("_scanner_heavy_eval_lag_logged_at"), 0.0
-                )
-                if throttle > 0 and float(now_value) - last_logged < throttle:
-                    return False
-                stock_value["_scanner_heavy_eval_lag_logged_at"] = float(now_value)
-                fields = sniper_state_handlers._scanner_heavy_eval_lag_fields(
-                    stock_value,
-                    now_ts=float(now_value),
-                    queue_enter_epoch=queue_enter_epoch,
-                )
-                _defer_scanner_entry_pipeline_log(
-                    stock_value,
-                    code_value,
-                    "scalping_scanner_promotion_latency_trace",
-                    _scanner_promotion_latency_trace_fields(
-                        stock_value,
-                        {},
-                        now_ts=float(now_value),
-                        trace_phase="heavy_eval",
-                        heavy_queue_enter_epoch=queue_enter_epoch,
-                    ),
-                )
-                _defer_scanner_entry_pipeline_log(
-                    stock_value,
-                    code_value,
-                    "scalping_scanner_heavy_eval_lag",
-                    fields,
-                )
-                return True
-
-            def _defer_emit_scanner_heavy_eval_completion(
-                stock_value,
-                code_value,
-                *,
-                started_epoch,
-                completed_epoch,
-                queue_enter_epoch,
-                outcome,
-            ):
-                if not sniper_state_handlers._is_scanner_watching_runtime_observation_target(
-                    stock_value
-                ):
-                    return False
-                fields = sniper_state_handlers._scanner_heavy_eval_completion_fields(
-                    stock_value,
-                    started_epoch=float(started_epoch),
-                    completed_epoch=float(completed_epoch),
-                    queue_enter_epoch=queue_enter_epoch,
-                    outcome=outcome,
-                )
-                _defer_scanner_entry_pipeline_log(
-                    stock_value,
-                    code_value,
-                    "scalping_scanner_heavy_eval_completion",
-                    fields,
-                )
-                return True
-
-            def _defer_scanner_watching_runtime_skip(stock_value, code_value, **kwargs):
-                deferred_scanner_skip_events.append(
-                    (stock_value, code_value, dict(kwargs))
-                )
-
-            def _flush_deferred_scanner_skip_events():
-                if not deferred_scanner_skip_events:
-                    return
-                events = list(deferred_scanner_skip_events)
-                deferred_scanner_skip_events.clear()
-
-                for stock_value, code_value, kwargs in events:
-                    kwargs = dict(kwargs)
-                    kwargs["ws_data"] = sniper_state_handlers.scanner_skip_observation_snapshot(
-                        kwargs.get("ws_data"))
-                    _SCANNER_OBSERVATION_QUEUE.submit(
-                        sniper_state_handlers.emit_scanner_watching_runtime_skip,
-                        _scanner_pipeline_stock_snapshot(stock_value), code_value,
-                        observation_receipt=True, **kwargs)
-
-            def _queue_scanner_ws_reg(code_value, source):
-                norm_code = str(code_value or "").strip()[:6]
-                if not norm_code:
-                    return
-                source_key = str(source or "scanner_watching_ws_snapshot_recovery")
-                if not _scanner_ws_reg_recovery_throttle_allows(
-                    scanner_ws_reg_last_emit_ts,
-                    source_key,
-                    norm_code,
-                    time.time(),
-                ):
-                    return
-                pending_scanner_ws_reg.setdefault(source_key, set()).add(norm_code)
-
-            def _queue_scanner_ws_persistent_repair(
-                stock_value, code_value, ws_snapshot, recovery_fields
-            ):
-                fields = dict(recovery_fields or {})
-                if not fields.get("ws_repair_batch_required"):
-                    return {}
-                norm_code = str(code_value or "").strip()[:6]
-                if not norm_code:
-                    return {
-                        "ws_repair_batch_queued": False,
-                        "ws_repair_batch_reason": "missing_code",
-                    }
-                now_value = time.time()
-                recheck_snapshot, recheck_fields = (
-                    _scanner_ws_subscription_recheck_snapshot_and_fields(
-                        WS_MANAGER,
-                        norm_code,
-                        ws_snapshot,
-                        now_ts=now_value,
-                    )
-                )
-                repair_state = (
-                    stock_value.setdefault("_scanner_ws_persistent_repair", {})
-                    if isinstance(stock_value, dict)
-                    else {}
-                )
-                if not isinstance(repair_state, dict):
-                    repair_state = {}
-                    if isinstance(stock_value, dict):
-                        stock_value["_scanner_ws_persistent_repair"] = repair_state
-                cycle_id = str(fields.get("ws_repair_cycle_id") or "")
-                min_interval_sec = _scanner_ws_persistent_repair_min_interval_sec()
-                last_batch_ts = _safe_float(
-                    repair_state.get("last_repair_batch_ts"), 0.0
-                )
-                last_cycle_id = str(repair_state.get("last_repair_cycle_id") or "")
-                if not recheck_fields.get("ws_subscription_repair_needed", True):
-                    repair_state["last_repair_outcome"] = (
-                        "snapshot_arrived_after_subscription_recheck"
-                    )
-                    return {
-                        **recheck_fields,
-                        "_ws_subscription_recheck_snapshot": recheck_snapshot,
-                        "ws_repair_batch_queued": False,
-                        "ws_repair_batch_reason": "snapshot_arrived_after_subscription_recheck",
-                        "ws_recovery_outcome": "ws_snapshot_arrived_after_subscription_recheck",
-                    }
-                if (
-                    last_cycle_id == cycle_id
-                    and last_batch_ts > 0
-                    and now_value - last_batch_ts < min_interval_sec
-                ):
-                    next_after = last_batch_ts + min_interval_sec
-                    repair_state["last_repair_outcome"] = (
-                        "persistent_repair_batch_deferred"
-                    )
-                    return {
-                        **recheck_fields,
-                        "ws_repair_batch_queued": False,
-                        "ws_repair_batch_reason": "persistent_repair_batch_interval_active",
-                        "ws_repair_batch_next_after_epoch": f"{next_after:.3f}",
-                        "ws_repair_batch_min_interval_sec": round(min_interval_sec, 3),
-                    }
-                source_key = "scanner_persistent_ws_gap_recovery"
-                pending_scanner_ws_persistent_repair.setdefault(source_key, set()).add(
-                    norm_code
-                )
-                repair_state["last_repair_batch_ts"] = now_value
-                repair_state["last_repair_cycle_id"] = cycle_id
-                repair_state["last_repair_outcome"] = "persistent_repair_batch_queued"
-                repair_state["last_subscription_recheck_status"] = recheck_fields.get(
-                    "ws_subscription_recheck_status"
-                )
-                return {
-                    **recheck_fields,
-                    "ws_repair_batch_queued": True,
-                    "ws_repair_batch_reason": "persistent_ws_gap_repair_batch_queued",
-                    "ws_repair_batch_source": source_key,
-                    "ws_repair_batch_force": True,
-                    "ws_repair_batch_min_interval_sec": round(min_interval_sec, 3),
-                }
-
-            def _scanner_rest_quote_recovery_options(stock_value, recovery_now_ts):
-                nonlocal scanner_rest_quote_fallback_loop_count
-                allowed = _scanner_rest_quote_fallback_allowed_for_ws_gap(stock_value)
-                deferred_reason = ""
-                if _scanner_rest_quote_fallback_due(
-                    stock_value,
-                    recovery_now_ts,
-                    allow_early_rest_fallback=allowed,
-                ):
-                    if (
-                        scanner_rest_quote_fallback_loop_count
-                        >= scanner_rest_quote_fallback_loop_limit
-                    ):
-                        deferred_reason = "rest_quote_loop_budget_deferred"
-                    else:
-                        scanner_rest_quote_fallback_loop_count += 1
-                return allowed, deferred_reason
-
-            def _scanner_market_data_enrichment_for_fast_precheck(
-                stock_value,
-                code_value,
-                ws_snapshot,
-                now_value,
-            ):
-                nonlocal scanner_rest_quote_fallback_loop_count
-                ws_snapshot = ws_snapshot if isinstance(ws_snapshot, dict) else {}
-                if not _scanner_market_data_enrichment_candidate(
-                    stock_value, ws_snapshot, now_value
-                ):
-                    return ws_snapshot, {}
-                cached = _scanner_market_data_enrichment_cached(code_value, now_value)
-                packet_fields = {
-                    "market_data_enrichment_attempted": True,
-                    "market_data_enrichment_packet_source": "scanner_fast_precheck",
-                }
-                if cached:
-                    enriched_ws, envelope_fields = build_market_data_enrichment(
-                        ws_data=ws_snapshot,
-                        rest_orderbook=cached.get("rest_orderbook"),
-                        rest_signed_ticks=cached.get("rest_signed_ticks"),
-                        candidate_metadata={
-                            "source_signature": (stock_value or {}).get(
-                                "source_signature"
-                            )
-                            or (stock_value or {}).get("scanner_promotion_reason")
-                            or "scanner_fast_precheck",
-                        },
-                        now_ts=now_value,
-                        prefer_freshest_source=True,
-                    )
-                    packet_fields.update(envelope_fields)
-                    packet_fields["market_data_enrichment_packet_source"] = (
-                        "scanner_cache"
-                    )
-                    enriched_ws.update(packet_fields)
-                    return enriched_ws, packet_fields
-                if (
-                    scanner_rest_quote_fallback_loop_count
-                    >= scanner_rest_quote_fallback_loop_limit
-                ):
-                    enriched_ws, envelope_fields = build_market_data_enrichment(
-                        ws_data=ws_snapshot,
-                        candidate_metadata={
-                            "source_signature": "scanner_loop_budget_deferred"
-                        },
-                        now_ts=now_value,
-                    )
-                    packet_fields.update(envelope_fields)
-                    packet_fields["market_data_enrichment_fetch_reason"] = (
-                        "rest_quote_loop_budget_deferred"
-                    )
-                    enriched_ws.update(packet_fields)
-                    return enriched_ws, packet_fields
-                rate_allowed, rate_reason = _scanner_rest_quote_fallback_rate_limit(
-                    now_value,
-                    priority=True,
-                )
-                if not rate_allowed:
-                    enriched_ws, envelope_fields = build_market_data_enrichment(
-                        ws_data=ws_snapshot,
-                        candidate_metadata={"source_signature": "scanner_rate_limited"},
-                        now_ts=now_value,
-                    )
-                    packet_fields.update(envelope_fields)
-                    packet_fields["market_data_enrichment_fetch_reason"] = rate_reason
-                    enriched_ws.update(packet_fields)
-                    return enriched_ws, packet_fields
-                scanner_rest_quote_fallback_loop_count += 1
-                rest_orderbook, rest_signed_ticks, fetch_fields = (
-                    _fetch_scanner_market_data_enrichment_packet(
-                        code_value,
-                        now_value,
-                    )
-                )
-                enriched_ws, envelope_fields = build_market_data_enrichment(
-                    ws_data=ws_snapshot,
-                    rest_orderbook=rest_orderbook,
-                    rest_signed_ticks=rest_signed_ticks,
-                    candidate_metadata={
-                        "source_signature": (stock_value or {}).get("source_signature")
-                        or (stock_value or {}).get("scanner_promotion_reason")
-                        or "scanner_fast_precheck",
-                    },
-                    now_ts=now_value,
-                    prefer_freshest_source=True,
-                )
-                packet_fields.update(envelope_fields)
-                packet_fields.update(fetch_fields)
-                packet_fields["market_data_enrichment_rate_limit_reason"] = rate_reason
-                enriched_ws.update(packet_fields)
-                return enriched_ws, packet_fields
-
-            def _scanner_no_trade_hot_slot_eviction_allowed():
-                nonlocal scanner_no_trade_eviction_loop_count
-                if scanner_no_trade_eviction_loop_limit <= 0:
-                    return False
-                if (
-                    scanner_no_trade_eviction_loop_count
-                    >= scanner_no_trade_eviction_loop_limit
-                ):
-                    return False
-                scanner_no_trade_eviction_loop_count += 1
-                return True
-
-            def _scanner_queue_lag_hot_slot_eviction_allowed():
-                nonlocal scanner_queue_lag_eviction_loop_count
-                if scanner_queue_lag_eviction_loop_limit <= 0:
-                    return False
-                if (
-                    scanner_queue_lag_eviction_loop_count
-                    >= scanner_queue_lag_eviction_loop_limit
-                ):
-                    return False
-                scanner_queue_lag_eviction_loop_count += 1
-                return True
-
-            def _scanner_full_eval_deferred_hot_slot_eviction_allowed():
-                nonlocal scanner_full_eval_deferred_eviction_loop_count
-                if scanner_full_eval_deferred_eviction_loop_limit <= 0:
-                    return False
-                if (
-                    scanner_full_eval_deferred_eviction_loop_count
-                    >= scanner_full_eval_deferred_eviction_loop_limit
-                ):
-                    return False
-                scanner_full_eval_deferred_eviction_loop_count += 1
-                return True
-
-            def _apply_subscription_recheck_snapshot_if_ready(
-                ws_snapshot, recovery_fields, *, phase
-            ):
-                fields = dict(recovery_fields or {})
-                recheck_snapshot = fields.pop("_ws_subscription_recheck_snapshot", None)
-                if (
-                    fields.get("ws_recovery_outcome")
-                    != "ws_snapshot_arrived_after_subscription_recheck"
-                    or not isinstance(recheck_snapshot, dict)
-                    or _safe_int(recheck_snapshot.get("curr"), 0) <= 0
-                ):
-                    return ws_snapshot, fields, False
-                recheck_snapshot = dict(recheck_snapshot)
-                recheck_age_sec = _safe_float(
-                    fields.get("ws_subscription_recheck_age_sec"), 999999.0
-                )
-                recheck_fresh_sec = _safe_float(
-                    fields.get("ws_subscription_recheck_fresh_sec"), 0.0
-                )
-                if (
-                    str(fields.get("ws_subscription_recheck_status") or "")
-                    == "subscribed_fresh_snapshot"
-                    and recheck_fresh_sec > 0
-                    and recheck_age_sec <= recheck_fresh_sec
-                ):
-                    recheck_snapshot["scanner_subscription_recheck_entry_relief"] = True
-                    recheck_snapshot["scanner_subscription_recheck_age_sec"] = round(
-                        recheck_age_sec, 3
-                    )
-                    recheck_snapshot["scanner_subscription_recheck_fresh_sec"] = round(
-                        recheck_fresh_sec, 3
-                    )
-                fields["ws_subscription_recheck_snapshot_applied"] = True
-                fields["ws_subscription_recheck_snapshot_apply_phase"] = str(
-                    phase or "unknown"
-                )
-                return recheck_snapshot, fields, True
-
-            def _flush_pending_scanner_ws_reg():
-                if pending_scanner_ws_reg:
-                    for source_key, code_set in list(pending_scanner_ws_reg.items()):
-                        if code_set:
-                            event_bus.publish(
-                                "COMMAND_WS_REG",
-                                {"codes": sorted(code_set), "source": source_key},
-                            )
-                    pending_scanner_ws_reg.clear()
-                if pending_scanner_ws_persistent_repair:
-                    for source_key, code_set in list(
-                        pending_scanner_ws_persistent_repair.items()
-                    ):
-                        if code_set:
-                            event_bus.publish(
-                                "COMMAND_WS_REG",
-                                {
-                                    "codes": sorted(code_set),
-                                    "source": source_key,
-                                    "force": True,
-                                    "repair_cycle": "persistent_ws_gap",
-                                },
-                            )
-                    pending_scanner_ws_persistent_repair.clear()
-
-            def _flush_delayed_scanner_heavy_eval():
-                nonlocal scanner_async_commit_yield_requested
-                nonlocal scanner_heavy_eval_flushed
-                if scanner_async_commit_yield_requested:
-                    return
-                if scanner_heavy_eval_flushed:
-                    return
-                # A completed async preparation has a one-second COMMIT
-                # budget.  Do not start another synchronous heavy unit before
-                # the outer loop drains and schedules that commit.
-                if _scanner_async_commit_ready_for_main_thread():
-                    return
-                # Guarantee backlog progress before newly attached watches preempt it.
-                heavy_eval_attempted = False
-                while delayed_scanner_heavy_eval:
-                    if _scanner_async_commit_ready_for_main_thread():
-                        return
-                    if heavy_eval_attempted and _admit_runtime_live_attaches():
-                        return
-                    delayed_scanner_heavy_eval.sort(
-                        key=lambda item: _safe_float(
-                            (item[0] or {}).get("_scanner_scheduler_deadline_epoch"),
-                            float("inf"),
-                        )
-                    )
-                    (
-                        delayed_stock,
-                        delayed_code,
-                        delayed_ws_data,
-                        queue_enter_epoch,
-                    ) = delayed_scanner_heavy_eval.pop(0)
-                    if delayed_stock.get("status") != "WATCHING":
-                        scheduler = getattr(
-                            run_sniper, "scanner_runtime_scheduler", None
-                        )
-                        if isinstance(scheduler, ScannerRuntimeScheduler):
-                            scheduler.invalidate(
-                                delayed_code,
-                                now_epoch=time.time(),
-                                reason="heavy_eval_target_not_watching",
-                            )
-                        continue
-                    scheduler = getattr(run_sniper, "scanner_runtime_scheduler", None)
-                    scheduler_generation = (
-                        _scanner_scheduler_target_generation(scheduler, delayed_stock)
-                        if _scanner_scheduler_enabled_for_venue(
-                            delayed_stock.get("effective_venue")
-                            or delayed_stock.get("venue")
-                        )
-                        else None
-                    )
-                    scheduler_heavy_item = None
-                    if scheduler_generation is not None:
-                        # A promotion received while another unit was blocking
-                        # must supersede the same-symbol item before heavy
-                        # evaluation begins.  An unrelated inbox envelope must
-                        # not preempt the first ready heavy unit indefinitely.
-                        if (
-                            _SCANNER_PROMOTION_INBOX.pending_for(delayed_code)
-                            is not None
-                        ):
-                            delayed_scanner_heavy_eval.append(
-                                (
-                                    delayed_stock,
-                                    delayed_code,
-                                    delayed_ws_data,
-                                    queue_enter_epoch,
-                                )
-                            )
-                            _admit_runtime_live_attaches()
-                            return
-                        scheduler_generation = _scanner_scheduler_target_generation(
-                            scheduler, delayed_stock
-                        )
-                        if scheduler_generation is None:
-                            continue
-                        scheduler_claim = _scanner_scheduler_claim_target(
-                            scheduler,
-                            delayed_stock,
-                            lane=ScannerLane.HEAVY_EVAL,
-                            now_epoch=time.time(),
-                        )
-                        if scheduler_claim.action == "not_next":
-                            delayed_scanner_heavy_eval.append(
-                                (
-                                    delayed_stock,
-                                    delayed_code,
-                                    delayed_ws_data,
-                                    queue_enter_epoch,
-                                )
-                            )
-                            return
-                        if scheduler_claim.action == "deadline_expired":
-                            _scanner_scheduler_park_target_generation(
-                                scheduler,
-                                delayed_stock,
-                                now_epoch=time.time(),
-                                reason="heavy_eval_deadline_generation_warm_parked",
-                                expected_generation=scheduler_claim.item.generation,
-                            )
-                            scanner_heavy_eval_flushed = False
-                            return
-                        if scheduler_claim.action == "missing":
-                            _scanner_scheduler_enqueue_fresh_precheck(
-                                scheduler,
-                                delayed_stock,
-                                now_epoch=time.time(),
-                                owner="heavy_eval_missing_fresh_precheck",
-                            )
-                            _runtime_requeue_expired_heavy_target(
-                                runtime_work_queue,
-                                delayed_stock,
-                            )
-                            scanner_heavy_eval_flushed = False
-                            return
-                        if scheduler_claim.action != "dispatch":
-                            continue
-                        scheduler_heavy_item = scheduler_claim.item
-                    heavy_eval_attempted = True
-                    delayed_stock["_scanner_last_heavy_eval_attempt_epoch"] = (
-                        time.time()
-                    )
-                    delayed_stock["_scanner_last_heavy_eval_evidence_fingerprint"] = (
-                        _scanner_heavy_eval_evidence_fingerprint(delayed_ws_data)
-                    )
-                    eval_ws_data = delayed_ws_data
-                    opening_rotation_handoff_allowed = False
-                    if _is_scanner_watching_target(delayed_stock):
-                        recheck_snapshot, recheck_fields = (
-                            _scanner_ws_subscription_recheck_snapshot_and_fields(
-                                WS_MANAGER,
-                                delayed_code,
-                                delayed_ws_data,
-                                now_ts=time.time(),
-                            )
-                        )
-                        heavy_recheck_age_sec = _safe_float(
-                            recheck_fields.get("ws_subscription_recheck_age_sec"),
-                            999999.0,
-                        )
-                        heavy_recheck_fresh_sec = (
-                            _scanner_heavy_eval_recheck_fresh_sec()
-                        )
-                        heavy_recheck_repair_needed = (
-                            bool(recheck_fields.get("ws_subscription_repair_needed"))
-                            or heavy_recheck_age_sec > heavy_recheck_fresh_sec
-                        )
-                        opening_rotation_handoff_fields = sniper_state_handlers._opening_rotation_upstream_handoff_fields(
-                            delayed_stock,
-                            delayed_ws_data,
-                            now_ts=time.time(),
-                        )
-                        opening_rotation_handoff_allowed = bool(
-                            opening_rotation_handoff_fields.get(
-                                "opening_rotation_upstream_handoff_allowed"
-                            )
-                        )
-                        if (
-                            heavy_recheck_repair_needed
-                            and opening_rotation_handoff_allowed
-                        ):
-                            eval_ws_data = delayed_ws_data
-                            delayed_stock[
-                                "_opening_rotation_upstream_handoff_applied"
-                            ] = True
-                            delayed_stock[
-                                "_opening_rotation_upstream_handoff_reason"
-                            ] = opening_rotation_handoff_fields.get(
-                                "opening_rotation_upstream_handoff_reason"
-                            )
-                            delayed_stock[
-                                "_scanner_heavy_eval_ws_snapshot_refresh_status"
-                            ] = "opening_rotation_quote_envelope_pending"
-                            delayed_stock[
-                                "_scanner_heavy_eval_ws_snapshot_apply_phase"
-                            ] = "opening_rotation_bounded_handoff"
-                        elif heavy_recheck_repair_needed:
-                            recheck_fields["scanner_heavy_eval_recheck_fresh_sec"] = (
-                                round(
-                                    heavy_recheck_fresh_sec,
-                                    3,
-                                )
-                            )
-                            recheck_fields["scanner_heavy_eval_recheck_age_sec"] = (
-                                round(heavy_recheck_age_sec, 3)
-                                if heavy_recheck_age_sec < 999999.0
-                                else "not_available_ws_age_sec"
-                            )
-                            recheck_fields[
-                                "scanner_heavy_eval_recheck_repair_needed"
-                            ] = True
-                            rest_quote_allowed, rest_quote_deferred_reason = (
-                                _scanner_rest_quote_recovery_options(
-                                    delayed_stock,
-                                    time.time(),
-                                )
-                            )
-                            _recovered_ws_data, recovery_fields = (
-                                _recover_missing_ws_snapshot(
-                                    delayed_stock,
-                                    delayed_code,
-                                    time.time(),
-                                    recheck_snapshot or delayed_ws_data,
-                                    ws_reg_source="scanner_heavy_eval_stale_ws_recovery",
-                                    publish_ws_reg=False,
-                                    allow_early_rest_fallback=rest_quote_allowed,
-                                    rest_quote_deferred_reason=rest_quote_deferred_reason,
-                                    cycle_state_store=scanner_ws_repair_cycle_state_by_code,
-                                )
-                            )
-                            if recovery_fields.get("ws_repair_batch_required"):
-                                recovery_fields.update(
-                                    _queue_scanner_ws_persistent_repair(
-                                        delayed_stock,
-                                        delayed_code,
-                                        recheck_snapshot or delayed_ws_data,
-                                        recovery_fields,
-                                    )
-                                )
-                            elif recovery_fields.get(
-                                "ws_repair_cycle_reg_allowed", True
-                            ):
-                                _queue_scanner_ws_reg(
-                                    delayed_code,
-                                    "scanner_heavy_eval_stale_ws_recovery",
-                                )
-                            (
-                                recovered_eval_ws_data,
-                                recovery_fields,
-                                recovery_snapshot_applied,
-                            ) = _apply_subscription_recheck_snapshot_if_ready(
-                                _recovered_ws_data
-                                or recheck_snapshot
-                                or delayed_ws_data,
-                                recovery_fields,
-                                phase="heavy_eval_repair",
-                            )
-                            if recovery_snapshot_applied:
-                                eval_ws_data = recovered_eval_ws_data
-                                delayed_stock[
-                                    "_scanner_heavy_eval_ws_snapshot_refreshed"
-                                ] = True
-                                delayed_stock[
-                                    "_scanner_heavy_eval_ws_snapshot_refresh_status"
-                                ] = (
-                                    recovery_fields.get(
-                                        "ws_subscription_recheck_status"
-                                    )
-                                    or "fresh_snapshot_recovered"
-                                )
-                                delayed_stock[
-                                    "_scanner_heavy_eval_ws_snapshot_apply_phase"
-                                ] = "heavy_eval_repair"
-                            else:
-                                heavy_recheck_skip_fields = {
-                                    **recheck_fields,
-                                    **recovery_fields,
-                                }
-                                _defer_scanner_watching_runtime_skip(
-                                    delayed_stock,
-                                    delayed_code,
-                                    skip_reason="scanner_heavy_eval_stale_snapshot_recheck",
-                                    now_ts=time.time(),
-                                    ws_data=recheck_snapshot or delayed_ws_data,
-                                    ws_manager_available=bool(WS_MANAGER),
-                                    **heavy_recheck_skip_fields,
-                                )
-                                if scheduler_heavy_item is not None:
-                                    _scanner_scheduler_complete_target(
-                                        scheduler,
-                                        delayed_stock,
-                                        item=scheduler_heavy_item,
-                                        completed_epoch=time.time(),
-                                        outcome=("heavy_eval_stale_snapshot_recheck"),
-                                    )
-                                    _scanner_scheduler_park_target_generation(
-                                        scheduler,
-                                        delayed_stock,
-                                        now_epoch=time.time(),
-                                        reason=(
-                                            "heavy_eval_stale_snapshot_generation_"
-                                            "warm_parked"
-                                        ),
-                                        expected_generation=(
-                                            scheduler_heavy_item.generation
-                                        ),
-                                    )
-                                continue
-                        if (
-                            not recheck_fields.get(
-                                "ws_subscription_repair_needed", True
-                            )
-                            and _safe_int(recheck_snapshot.get("curr"), 0) > 0
-                        ):
-                            eval_ws_data = recheck_snapshot
-                            delayed_stock[
-                                "_scanner_heavy_eval_ws_snapshot_refreshed"
-                            ] = True
-                            delayed_stock[
-                                "_scanner_heavy_eval_ws_snapshot_refresh_status"
-                            ] = (
-                                recheck_fields.get("ws_subscription_recheck_status")
-                                or "fresh_snapshot_rechecked"
-                            )
-                    if (
-                        delayed_stock.get("_scanner_fast_precheck_result")
-                        == "eligible_for_heavy_entry_eval"
-                    ):
-                        _defer_emit_scanner_heavy_eval_lag(
-                            delayed_stock,
-                            delayed_code,
-                            now_value=time.time(),
-                            queue_enter_epoch=queue_enter_epoch,
-                        )
-                    _scanner_watch_reset_full_eval_deferred_eviction_state(
-                        delayed_stock
-                    )
-                    _flush_deferred_scanner_pipeline_events()
-                    handler_now_ts = (
-                        time.time() if opening_rotation_handoff_allowed else now_ts
-                    )
-                    handler_now_dt = (
-                        datetime.fromtimestamp(handler_now_ts)
-                        if opening_rotation_handoff_allowed
-                        else now
-                    )
-                    # The handler may transition status/position ownership.
-                    # Keep immutable scanner lineage so completion telemetry
-                    # cannot disappear after a successful state transition.
-                    heavy_eval_completion_stock = dict(delayed_stock)
-                    heavy_eval_started_epoch = time.time()
-                    try:
-                        handle_watching_state(
-                            delayed_stock,
-                            delayed_code,
-                            eval_ws_data,
-                            admin_id,
-                            now_ts=handler_now_ts,
-                            now_dt=handler_now_dt,
-                            radar=radar,
-                            ai_engine=ai_engine,
-                            scanner_async_eval_coordinator=(
-                                getattr(
-                                    run_sniper,
-                                    "scanner_async_eval_coordinator",
-                                    None,
-                                )
-                                if _scanner_scheduler_startup_mode() == "async_v1"
-                                else None
-                            ),
-                            scanner_async_generation=(
-                                scheduler_generation
-                                if _scanner_scheduler_startup_mode() == "async_v1"
-                                else None
-                            ),
-                            scanner_async_commit_phase=False,
-                        )
-                    except Exception:
-                        _defer_emit_scanner_heavy_eval_completion(
-                            heavy_eval_completion_stock,
-                            delayed_code,
-                            started_epoch=heavy_eval_started_epoch,
-                            completed_epoch=time.time(),
-                            queue_enter_epoch=queue_enter_epoch,
-                            outcome="heavy_eval_exception",
-                        )
-                        _flush_deferred_scanner_pipeline_events()
-                        if scheduler_heavy_item is not None:
-                            _scanner_scheduler_complete_target(
-                                scheduler,
-                                delayed_stock,
-                                item=scheduler_heavy_item,
-                                completed_epoch=time.time(),
-                                outcome="heavy_eval_exception",
-                            )
-                        raise
-                    _defer_emit_scanner_heavy_eval_completion(
-                        heavy_eval_completion_stock,
-                        delayed_code,
-                        started_epoch=heavy_eval_started_epoch,
-                        completed_epoch=time.time(),
-                        queue_enter_epoch=queue_enter_epoch,
-                        outcome=str(
-                            delayed_stock.get("status") or "heavy_eval_completed"
-                        ),
-                    )
-                    _flush_deferred_scanner_pipeline_events()
-                    if scheduler_heavy_item is not None:
-                        heavy_completed = _scanner_scheduler_complete_target(
-                            scheduler,
-                            delayed_stock,
-                            item=scheduler_heavy_item,
-                            completed_epoch=time.time(),
-                            outcome=str(
-                                delayed_stock.get("status") or "heavy_eval_completed"
-                            ),
-                        )
-                        if (
-                            heavy_completed is not None
-                            and heavy_completed.action == "completed"
-                            and _is_scanner_watching_target(delayed_stock)
-                            and not (
-                                str(
-                                    delayed_stock.get("_scanner_async_cache_key")
-                                    or delayed_stock.get(
-                                        "_scanner_opening_rotation_async_cache_key"
-                                    )
-                                    or ""
-                                ).strip()
-                            )
-                        ):
-                            _scanner_scheduler_continue_bounded_recheck_or_park(
-                                scheduler,
-                                delayed_stock,
-                                now_epoch=time.time(),
-                                park_reason=(
-                                    "heavy_eval_completed_generation_warm_parked"
-                                ),
-                                expected_generation=(
-                                    scheduler_heavy_item.generation
-                                    if scheduler_heavy_item is not None
-                                    else None
-                                ),
-                                evidence_snapshot=delayed_ws_data,
-                            )
-                    if _is_scanner_watching_target(delayed_stock):
-                        delayed_stock["_scanner_last_full_eval_epoch"] = time.time()
-                        _maybe_expire_scanner_watch_after_full_eval(
-                            delayed_stock,
-                            delayed_code,
-                            targets,
-                            now_ts=time.time(),
-                            emit_event_fn=_defer_scanner_entry_pipeline_log,
-                        )
-                    if (
-                        _scanner_scheduler_startup_mode() == "async_v1"
-                        and str(
-                            delayed_stock.get("_scanner_async_cache_key")
-                            or delayed_stock.get(
-                                "_scanner_opening_rotation_async_cache_key"
-                            )
-                            or ""
-                        ).strip()
-                    ):
-                        # The worker usually completes within a fraction of a
-                        # second.  Yield this local target pass immediately
-                        # instead of starting another synchronous heavy unit;
-                        # the next outer iteration owns COMMIT draining.
-                        scanner_async_commit_yield_requested = True
-                        return
-                if heavy_eval_attempted and _admit_runtime_live_attaches():
-                    return
-                scanner_heavy_eval_flushed = True
-
-            runtime_work_queue = list(queue_context["iteration_targets"])
-            record_main_phase('target_queue')
-            runtime_iteration_accounting_targets = list(runtime_work_queue)
-            runtime_processed_target_ids = set()
-            runtime_native_revisited_ids = set()
-            runtime_live_attach_ids = set()
-            runtime_scheduler_forced_target_ids = set()
-
-            def _admit_runtime_live_attaches():
-                _drain_zero_base_main_inbox()
-                nonlocal runtime_work_queue, scanner_heavy_eval_flushed
-                runtime_work_queue, scheduler_continuations = (
-                    _runtime_requeue_pending_scanner_scheduler_targets(
-                        runtime_work_queue,
-                        targets,
-                        scheduler=run_sniper.scanner_runtime_scheduler,
-                        now_ts=time.time(),
-                        processed_target_ids=runtime_processed_target_ids,
-                    )
-                )
-                if scheduler_continuations:
-                    queue_context.update(_runtime_queue_rank_fields(runtime_work_queue))
-                    log_info(
-                        "[SCANNER_RUNTIME_SCHEDULER_CONTINUATION] "
-                        f"requeued={len(scheduler_continuations)} "
-                        "codes="
-                        + ",".join(
-                            str(target.get("code") or "").strip()[:6]
-                            for target in scheduler_continuations
-                        )
-                    )
-                if _scanner_scheduler_startup_mode() in {
-                    "deadline_v1",
-                    "async_v1",
-                } and not _scanner_scheduler_attach_must_yield_to_runtime_work(
-                    runtime_work_queue
-                ):
-                    drain_result = _drain_scanner_promotion_inbox(
-                        run_sniper.scanner_runtime_scheduler,
-                        max_items=1,
-                    )
-                    registered_targets = list(drain_result.get("applied_targets") or ())
-                    if registered_targets:
-                        delayed_scanner_heavy_eval[:] = (
-                            _runtime_discard_superseded_delayed_heavy(
-                                delayed_scanner_heavy_eval,
-                                registered_targets,
-                            )
-                        )
-                        runtime_work_queue = (
-                            _runtime_prioritize_registered_scanner_targets(
-                                runtime_work_queue,
-                                registered_targets,
-                            )
-                        )
-                else:
-                    registered_targets = []
-                runtime_work_queue, live_attaches = (
-                    _runtime_admit_live_scanner_attaches(
-                        runtime_work_queue,
-                        targets,
-                        processed_target_ids=runtime_processed_target_ids,
-                        admitted_target_ids=runtime_live_attach_ids,
-                        now_ts=time.time(),
-                        max_new_targets=(
-                            _scalping_fifo_base_max_active()
-                            if _scanner_scheduler_startup_mode()
-                            in {"deadline_v1", "async_v1"}
-                            else 8
-                        ),
-                    )
-                )
-                admitted_targets = []
-                admitted_ids = set()
-                for target in [*registered_targets, *live_attaches]:
-                    if id(target) in admitted_ids:
-                        continue
-                    admitted_targets.append(target)
-                    admitted_ids.add(id(target))
-                if admitted_targets:
-                    scanner_heavy_eval_flushed = False
-                    runtime_live_attach_ids.update(
-                        id(target) for target in admitted_targets
-                    )
-                    accounting_ids = {
-                        id(target) for target in runtime_iteration_accounting_targets
-                    }
-                    runtime_iteration_accounting_targets.extend(
-                        target
-                        for target in admitted_targets
-                        if id(target) not in accounting_ids
-                    )
-                    refreshed_queue_context = _runtime_queue_context(
-                        runtime_iteration_accounting_targets,
-                        now_ts=queue_context["loop_started_epoch"],
-                    )
-                    queue_context.update(refreshed_queue_context)
-                    queue_context.update(_runtime_queue_rank_fields(runtime_work_queue))
-                    scanner_ws_snapshot_cache.update(
-                        _runtime_scanner_ws_snapshot_cache(admitted_targets)
-                    )
-                    log_info(
-                        "[SCANNER_RUNTIME_LIVE_ATTACH] "
-                        f"admitted={len(admitted_targets)} "
-                        f"total={len(runtime_live_attach_ids)} "
-                        f"codes={','.join(str(target.get('code') or '').strip()[:6] for target in admitted_targets)}"
-                    )
-                return len(admitted_targets)
-
-            while True:
-                # A worker can finish while a prior target was handled.  End
-                # this local pass so the next outer iteration drains it into
-                # ScannerLane.COMMIT before handling unrelated WATCHING work.
-                if (
-                    scanner_async_commit_yield_requested
-                    or _scanner_async_commit_ready_for_main_thread()
-                ):
-                    break
-                record_main_phase('target_admission')
-                from src.engine.monitoring.runtime_performance import (
-                    prioritize_native_watches, acknowledge_native_watch_visit)
-                native_visit_tokens = {}
-                runtime_work_queue = prioritize_native_watches(runtime_work_queue, now=time.time(),
-                    completed_requests=(async_coordinator.fixed_watch_ready_requests()
-                        if isinstance(async_coordinator, ScannerAsyncEvalCoordinator) else None),
-                    all_targets=targets, processed_target_ids=runtime_processed_target_ids,
-                    revisited_target_ids=runtime_native_revisited_ids, visit_tokens=native_visit_tokens)
-                if not runtime_work_queue:
-                    _flush_delayed_scanner_heavy_eval()
-                    if scanner_async_commit_yield_requested:
-                        break
-                    if runtime_work_queue:
-                        continue
-                _admit_runtime_live_attaches()
-                if not runtime_work_queue:
-                    break
-                runtime_work_queue = prioritize_native_watches(runtime_work_queue, now=time.time(),
-                    completed_requests=(async_coordinator.fixed_watch_ready_requests()
-                        if isinstance(async_coordinator, ScannerAsyncEvalCoordinator) else None),
-                    all_targets=targets, processed_target_ids=runtime_processed_target_ids,
-                    revisited_target_ids=runtime_native_revisited_ids, visit_tokens=native_visit_tokens)
-                stock = runtime_work_queue.pop(0)
-                record_main_phase('target_visit', stock.get('code'))
-                acknowledge_native_watch_visit(stock, native_visit_tokens.get(id(stock)), now=time.time())
-                runtime_processed_target_ids.add(id(stock))
-                code = str(stock.get("code", "")).strip()[:6]
-                status = stock.get("status")
-                if (
-                    scanner_precheck_seen
-                    and not scanner_heavy_eval_flushed
-                    and not _is_scanner_watching_target(stock)
-                    and not main_fixed_watch.is_fixed_watch(stock)
-                ):
-                    _flush_delayed_scanner_heavy_eval()
-                    if scanner_async_commit_yield_requested:
-                        break
-
-                if status == "BUY_ORDERED":
-                    handle_buy_ordered_state(stock, code)
-                    continue
-
-                if status == "SELL_ORDERED":
-                    try:
-                        pending_sell_ws_data = (
-                            WS_MANAGER.get_latest_data(code) if WS_MANAGER else {}
-                        )
-                        sniper_state_handlers.observe_pending_sell_smoothing_source_only_paths(
-                            stock,
-                            code,
-                            pending_sell_ws_data or {},
-                            now_ts=now_ts,
-                        )
-                        if sniper_state_handlers.pre_submit_delay_observation_due(stock, now_ts=time.time()):
-                            sniper_state_handlers.observe_pre_submit_delay_quote(stock, code,
-                                pending_sell_ws_data or {}, now_ts=time.time())
-                    except Exception as exc:
-                        log_error(
-                            "[SMOOTHING_SELL_ORDERED] source-only observer failed "
-                            f"without order effect code={code}: {exc}"
-                        )
-                    handle_sell_ordered_state(stock, code)
-                    continue
-
-                if (
-                    _is_scanner_watching_target(stock)
-                    and code in scanner_ws_snapshot_cache
-                ):
-                    ws_data = scanner_ws_snapshot_cache.get(code) or {}
-                elif status == "WATCHING" and main_fixed_watch.is_fixed_watch(stock):
-                    route = main_fixed_watch.session_route(now_ts, code)
-                    ws_data = (
-                        WS_MANAGER.get_exact_item_data(code, route["item"])
-                        if WS_MANAGER is not None and route is not None
-                        else {}
-                    )
-                else:
-                    ws_data = WS_MANAGER.get_latest_data(code) if WS_MANAGER else {}
-                if sniper_state_handlers.pre_submit_delay_observation_due(stock, now_ts=time.time()):
-                    try:
-                        sniper_state_handlers.observe_pre_submit_delay_quote(stock, code, ws_data or {}, now_ts=time.time())
-                    except (ValueError, TypeError, KeyError, AttributeError):
-                        from src.engine.monitoring.runtime_performance import failure
-                        failure('pre_submit_delay_observation', 'source_unobservable', emit_log=False)
-                if (status == "WATCHING" and main_fixed_watch.is_fixed_watch(stock)
-                        and isinstance(async_coordinator, ScannerAsyncEvalCoordinator)
-                        and async_coordinator.has_completed(
-                            generation_id=stock.get('_scanner_async_generation_id', ''),
-                            cache_key=stock.get('_scanner_async_cache_key', ''))):
-                    sniper_state_handlers.handle_watching_state(stock, code, ws_data or {}, admin_id,
-                        now_ts=time.time(), now_dt=datetime.now(), radar=radar, ai_engine=ai_engine,
-                        scanner_async_eval_coordinator=async_coordinator,
-                        scanner_async_commit_phase=True)
-                    continue
-                if status == "WATCHING" and main_fixed_watch.is_fixed_watch(stock):
-                    if not main_fixed_watch.symbol_enabled(code):
-                        continue
-                    ready, wait_reason = main_fixed_watch.observation_ready(
-                        stock, ws_data, now_epoch=now_ts,
-                    )
-                    if not ready:
-                        if now_ts - float(stock.get("_fixed_last_wait_log_epoch") or 0) >= 10:
-                            stock["_fixed_last_wait_log_epoch"] = now_ts
-                            sniper_state_handlers._log_entry_pipeline(
-                                stock, code, "main_fixed_watch_observation_wait",
-                                watch_origin=main_fixed_watch.WATCH_ORIGIN,
-                                watch_admission_id=stock.get("watch_admission_id"),
-                                watch_generation_id=stock.get("watch_generation_id"),
-                                source_quality_reason=wait_reason,
-                                actual_order_submitted=False,
-                                broker_order_forbidden=True,
-                            )
-                        continue
-                revive_quote_barrier_fields = {}
-                if _is_scanner_watching_target(stock):
-                    ws_data, revive_quote_barrier_fields = (
-                        _discard_pre_revive_scanner_snapshot(
-                            stock,
-                            ws_data,
-                            now_ts=now_ts,
-                        )
-                    )
-                scheduler = getattr(
-                    run_sniper,
-                    "scanner_runtime_scheduler",
-                    None,
-                )
-                _scanner_scheduler_register_revived_watch_on_fresh_ws(
-                    scheduler,
-                    stock,
-                    ws_data,
-                    revive_quote_barrier_fields=revive_quote_barrier_fields,
-                    now_epoch=time.time(),
-                )
-                _scanner_scheduler_reactivate_cold_park_on_fresh_ws(
-                    scheduler,
-                    stock,
-                    ws_data,
-                    now_epoch=time.time(),
-                )
-                _scanner_scheduler_reactivate_opening_rotation_source_gap_on_fresh_ws(
-                    scheduler,
-                    stock,
-                    ws_data,
-                    now_epoch=time.time(),
-                )
-                _scanner_scheduler_reactivate_deadline_park_on_fresh_ws(
-                    scheduler,
-                    stock,
-                    ws_data,
-                    now_epoch=time.time(),
-                )
-                _scanner_scheduler_reactivate_stale_snapshot_park_on_fresh_ws(
-                    scheduler,
-                    stock,
-                    ws_data,
-                    now_epoch=time.time(),
-                )
-                _scanner_scheduler_reactivate_ai_contention_park_on_fresh_ws(
-                    scheduler,
-                    stock,
-                    ws_data,
-                    now_epoch=time.time(),
-                )
-                _scanner_scheduler_reactivate_rising_cross_park_on_fresh_ws(
-                    scheduler,
-                    stock,
-                    ws_data,
-                    now_epoch=time.time(),
-                )
-                scanner_pre_recovery_block_reason = (
-                    _scanner_scheduler_pre_recovery_block_reason(
-                        stock,
-                        scheduler=scheduler,
-                    )
-                )
-                if scanner_pre_recovery_block_reason:
-                    scanner_runtime_venue = normalize_scanner_scheduler_venue(
-                        stock.get("effective_venue") or stock.get("venue")
-                    )
-                    _defer_scanner_watching_runtime_skip(
-                        stock,
-                        code,
-                        skip_reason=scanner_pre_recovery_block_reason,
-                        now_ts=time.time(),
-                        ws_data=ws_data,
-                        ws_manager_available=bool(WS_MANAGER),
-                        scanner_observed_venue=(scanner_runtime_venue or "UNKNOWN"),
-                        scanner_observed_venue_resolution=stock.get("venue_resolution")
-                        or "missing_tradable_explicit_venue",
-                        scanner_scheduler_registration_blocked=bool(
-                            stock.get("_scanner_scheduler_registration_blocked")
-                        ),
-                        scanner_scheduler_registration_reason=stock.get(
-                            "_scanner_scheduler_registration_reason"
-                        )
-                        or "generation_not_registered",
-                    )
-                    continue
-                scheduler_owns_missing_ws_lane = (
-                    _scanner_scheduler_owns_missing_ws_lane(
-                        stock,
-                        scheduler=scheduler,
-                    )
-                )
-                if not scheduler_owns_missing_ws_lane and (
-                    not ws_data or ws_data.get("curr", 0) == 0
-                ):
-                    if status == "WATCHING":
-                        recheck_snapshot_applied = False
-                        rest_quote_allowed, rest_quote_deferred_reason = (
-                            _scanner_rest_quote_recovery_options(stock, now_ts)
-                            if _is_scanner_watching_target(stock)
-                            else (False, "")
-                        )
-                        ws_data, recovery_fields = (
-                            _recover_missing_ws_snapshot(
-                                stock,
-                                code,
-                                now_ts,
-                                ws_data,
-                                publish_ws_reg=False,
-                                allow_early_rest_fallback=rest_quote_allowed,
-                                rest_quote_deferred_reason=rest_quote_deferred_reason,
-                                cycle_state_store=scanner_ws_repair_cycle_state_by_code,
-                            )
-                            if _is_scanner_watching_target(stock)
-                            else (ws_data, {})
-                        )
-                        if _is_scanner_watching_target(stock):
-                            recovery_fields = {
-                                **revive_quote_barrier_fields,
-                                **recovery_fields,
-                            }
-                            if recovery_fields.get("ws_repair_batch_required"):
-                                recovery_fields.update(
-                                    _queue_scanner_ws_persistent_repair(
-                                        stock,
-                                        code,
-                                        ws_data,
-                                        recovery_fields,
-                                    )
-                                )
-                            elif recovery_fields.get(
-                                "ws_repair_cycle_reg_allowed", True
-                            ):
-                                _queue_scanner_ws_reg(
-                                    code, "scanner_watching_ws_snapshot_recovery"
-                                )
-                            ws_data, recovery_fields, recheck_snapshot_applied = (
-                                _apply_subscription_recheck_snapshot_if_ready(
-                                    ws_data,
-                                    recovery_fields,
-                                    phase="watching_missing_or_zero",
-                                )
-                            )
-                            recovery_fields = (
-                                _scanner_rest_quote_entry_realtime_outcome_fields(
-                                    recovery_fields
-                                )
-                            )
-                        if (
-                            recovery_fields.get("ws_recovery_outcome")
-                            == "rest_quote_applied"
-                        ):
-                            _scanner_watch_reset_stale_eviction_state(stock)
-                            _defer_scanner_watching_runtime_skip(
-                                stock,
-                                code,
-                                skip_reason="ws_snapshot_missing_or_zero_recovered",
-                                now_ts=now_ts,
-                                ws_data=ws_data,
-                                ws_manager_available=bool(WS_MANAGER),
-                                throttle_sec=0,
-                                **recovery_fields,
-                            )
-                        elif (
-                            recovery_fields.get("ws_recovery_outcome")
-                            == "ws_snapshot_arrived_after_subscription_recheck"
-                            and recheck_snapshot_applied
-                        ):
-                            _scanner_watch_reset_stale_eviction_state(stock)
-                            _defer_scanner_watching_runtime_skip(
-                                stock,
-                                code,
-                                skip_reason="ws_snapshot_missing_or_zero_recovered",
-                                now_ts=now_ts,
-                                ws_data=ws_data,
-                                ws_manager_available=bool(WS_MANAGER),
-                                throttle_sec=0,
-                                **recovery_fields,
-                            )
-                        if not ws_data or ws_data.get("curr", 0) == 0:
-                            _defer_scanner_watching_runtime_skip(
-                                stock,
-                                code,
-                                skip_reason="ws_snapshot_missing_or_zero",
-                                now_ts=now_ts,
-                                ws_data=ws_data,
-                                ws_manager_available=bool(WS_MANAGER),
-                                **recovery_fields,
-                            )
-                            _maybe_expire_scanner_watch_for_stale(
-                                stock,
-                                code,
-                                targets,
-                                now_ts=now_ts,
-                                stale_reason="ws_snapshot_missing_or_zero",
-                                recovery_fields=recovery_fields,
-                                emit_event_fn=_defer_scanner_entry_pipeline_log,
-                            )
-                            continue
-                    else:
-                        if status == "HOLDING":
-                            handle_holding_state(
-                                stock,
-                                code,
-                                ws_data or {},
-                                admin_id,
-                                current_market_regime,
-                                radar=radar,
-                                ai_engine=ai_engine,
-                                now_ts=now_ts,
-                                now_dt=now,
-                            )
-                        continue
-
-                if (
-                    _is_scanner_watching_target(stock)
-                    and not scheduler_owns_missing_ws_lane
-                ):
-                    no_trade_decision = _scanner_watch_eviction_decision_from_no_trade(
-                        stock,
-                        ws_data,
-                        now_ts=now_ts,
-                    )
-                    if (
-                        no_trade_decision.get("should_evict")
-                        and _scanner_no_trade_hot_slot_eviction_allowed()
-                    ):
-                        if _expire_scanner_watch_target(
-                            stock,
-                            code,
-                            targets,
-                            decision=no_trade_decision,
-                            emit_event_fn=_defer_scanner_entry_pipeline_log,
-                        ):
-                            continue
-
-                if (
-                    sniper_state_handlers._is_scalp_simulator_target(stock)
-                    and status == sniper_state_handlers.SCALP_SIM_PENDING_STATUS
-                ):
-                    sniper_state_handlers.handle_scalp_simulator_pending_entry(
-                        stock,
-                        code,
-                        ws_data,
-                        now_ts=now_ts,
-                    )
-                    continue
-
-                if status == "WATCHING":
-                    if _is_scanner_watching_target(stock):
-                        scanner_precheck_seen = True
-                        heavy_queue_enter_epoch = time.time()
-                        scanner_runtime_venue = normalize_scanner_scheduler_venue(
-                            stock.get("effective_venue") or stock.get("venue")
-                        )
-                        scheduler_selected = _scanner_scheduler_enabled_for_venue(
-                            scanner_runtime_venue
-                        )
-                        scheduler_generation = (
-                            _scanner_scheduler_target_generation(scheduler, stock)
-                            if scheduler_selected
-                            else None
-                        )
-                        scheduler_precheck_item = None
-                        scheduler_recovery_item = None
-                        scheduler_recovery_only = False
-                        if scheduler_generation is not None:
-                            scheduled_lane_value = str(
-                                stock.get("_scanner_scheduler_lane")
-                                or ScannerLane.FAST_PRECHECK.value
-                            )
-                            try:
-                                scheduled_lane = ScannerLane(scheduled_lane_value)
-                            except ValueError:
-                                scheduled_lane = ScannerLane.FAST_PRECHECK
-                            if scheduled_lane is ScannerLane.FAST_PRECHECK:
-                                heavy_retry_due, _heavy_retry_after_epoch = (
-                                    _scanner_heavy_eval_retry_due(
-                                        stock,
-                                        now_epoch=heavy_queue_enter_epoch,
-                                        allow_explicit_recheck=True,
-                                    )
-                                )
-                                if not heavy_retry_due:
-                                    # The current generation already consumed a
-                                    # heavy unit. Leave any queued fresh
-                                    # precheck untouched and avoid rebuilding
-                                    # missing work until the bounded retry time.
-                                    # COMMIT/RECOVERY, a newly promoted
-                                    # generation, and a new explicit bounded
-                                    # recheck bypass this branch.
-                                    continue
-                            if scheduled_lane is ScannerLane.HEAVY_EVAL:
-                                delayed_scanner_heavy_eval.append(
-                                    (
-                                        stock,
-                                        code,
-                                        ws_data,
-                                        heavy_queue_enter_epoch,
-                                    )
-                                )
-                                scanner_heavy_eval_flushed = False
-                                continue
-                            scheduler_claim = _scanner_scheduler_claim_target(
-                                scheduler,
-                                stock,
-                                lane=scheduled_lane,
-                                now_epoch=heavy_queue_enter_epoch,
-                            )
-                            if scheduler_claim is None or scheduler_claim.action in {
-                                "missing",
-                                "deadline_expired",
-                            }:
-                                if scheduled_lane is ScannerLane.COMMIT:
-                                    async_coordinator = getattr(
-                                        run_sniper,
-                                        "scanner_async_eval_coordinator",
-                                        None,
-                                    )
-                                    async_cache_key = str(
-                                        stock.get("_scanner_async_cache_key")
-                                        or stock.get(
-                                            "_scanner_opening_rotation_async_cache_key"
-                                        )
-                                        or ""
-                                    ).strip()
-                                    if (
-                                        isinstance(
-                                            async_coordinator,
-                                            ScannerAsyncEvalCoordinator,
-                                        )
-                                        and scheduler_generation is not None
-                                        and async_cache_key
-                                    ):
-                                        async_coordinator.discard_completed(
-                                            generation_id=(
-                                                scheduler_generation.generation_id
-                                            ),
-                                            cache_key=async_cache_key,
-                                            reason='async_commit_branch_closed',
-                                        )
-                                    if scheduler_generation is not None and async_cache_key:
-                                        sniper_state_handlers._clear_scanner_async_identity(stock,
-                                            generation_id=scheduler_generation.generation_id,
-                                            cache_key=async_cache_key)
-                                scheduler_claim = (
-                                    _scanner_scheduler_refresh_claim_after_expiry(
-                                        scheduler,
-                                        stock,
-                                        previous_decision=scheduler_claim,
-                                        now_epoch=heavy_queue_enter_epoch,
-                                    )
-                                )
-                                scheduled_lane = ScannerLane.FAST_PRECHECK
-                                if scheduler_claim is None:
-                                    continue
-                            if scheduler_claim.action == "not_next":
-                                deferred_winner = (
-                                    _runtime_scheduler_deferred_winner_target(
-                                        scheduler_claim,
-                                        targets,
-                                        queued_target_ids={
-                                            id(target) for target in runtime_work_queue
-                                        },
-                                        delayed_target_ids={
-                                            id(item[0])
-                                            for item in delayed_scanner_heavy_eval
-                                        },
-                                        forced_target_ids=(
-                                            runtime_scheduler_forced_target_ids
-                                        ),
-                                    )
-                                )
-                                if deferred_winner is not None:
-                                    runtime_scheduler_forced_target_ids.add(
-                                        id(deferred_winner)
-                                    )
-                                    runtime_work_queue.insert(0, deferred_winner)
-                                    log_info(
-                                        "[SCANNER_RUNTIME_SCHEDULER_EDF_YIELD] "
-                                        "candidate="
-                                        f"{code} winner="
-                                        f"{str(deferred_winner.get('code') or '').strip()[:6]} "
-                                        "forced_once=true"
-                                    )
-                                continue
-                            if scheduler_claim.action != "dispatch":
-                                continue
-                            if scheduled_lane is ScannerLane.COMMIT:
-                                async_coordinator = getattr(
-                                    run_sniper,
-                                    "scanner_async_eval_coordinator",
-                                    None,
-                                )
-                                if not isinstance(
-                                    async_coordinator,
-                                    ScannerAsyncEvalCoordinator,
-                                ):
-                                    _scanner_scheduler_complete_target(
-                                        scheduler,
-                                        stock,
-                                        item=scheduler_claim.item,
-                                        completed_epoch=time.time(),
-                                        outcome="async_coordinator_missing",
-                                    )
-                                    _scanner_scheduler_park_target_generation(
-                                        scheduler,
-                                        stock,
-                                        now_epoch=time.time(),
-                                        reason=(
-                                            "async_commit_coordinator_missing_"
-                                            "generation_warm_parked"
-                                        ),
-                                        expected_generation=(
-                                            scheduler_claim.item.generation
-                                        ),
-                                    )
-                                    continue
-                                try:
-                                    async_cache_key = str(
-                                        stock.get("_scanner_async_cache_key")
-                                        or stock.get(
-                                            "_scanner_opening_rotation_async_cache_key"
-                                        )
-                                        or ""
-                                    ).strip()
-                                    opening_rotation_context_commit = bool(
-                                        stock.get(
-                                            "_scanner_opening_rotation_async_cache_key"
-                                        )
-                                        and not stock.get("_scanner_async_cache_key")
-                                    )
-                                    if opening_rotation_context_commit:
-                                        opening_rotation_commit_handled = sniper_state_handlers.handle_scanner_async_opening_rotation_commit(
-                                            stock,
-                                            code,
-                                            ws_data,
-                                            admin_id,
-                                            now_ts=time.time(),
-                                            now_dt=datetime.now(),
-                                            ai_engine=ai_engine,
-                                            scanner_async_eval_coordinator=(
-                                                async_coordinator
-                                            ),
-                                            scanner_async_generation=(
-                                                scheduler_generation
-                                            ),
-                                        )
-                                        opening_rotation_handoff_generation_id = str(
-                                            stock.get(
-                                                "_opening_rotation_general_entry_handoff_once_generation_id"
-                                            )
-                                            or ""
-                                        ).strip()
-                                        if (
-                                            not opening_rotation_commit_handled
-                                            and opening_rotation_handoff_generation_id
-                                            == scheduler_generation.generation_id
-                                        ):
-                                            handle_watching_state(
-                                                stock,
-                                                code,
-                                                ws_data,
-                                                admin_id,
-                                                now_ts=time.time(),
-                                                now_dt=datetime.now(),
-                                                radar=radar,
-                                                ai_engine=ai_engine,
-                                                skip_rising_missed_hook=True,
-                                                scanner_async_eval_coordinator=(
-                                                    async_coordinator
-                                                ),
-                                                scanner_async_generation=(
-                                                    scheduler_generation
-                                                ),
-                                                scanner_async_commit_phase=False,
-                                            )
-                                    else:
-                                        handle_watching_state(
-                                            stock,
-                                            code,
-                                            ws_data,
-                                            admin_id,
-                                            now_ts=time.time(),
-                                            now_dt=datetime.now(),
-                                            radar=radar,
-                                            ai_engine=ai_engine,
-                                            scanner_async_eval_coordinator=(
-                                                async_coordinator
-                                            ),
-                                            scanner_async_generation=(
-                                                scheduler_generation
-                                            ),
-                                            scanner_async_commit_phase=True,
-                                        )
-                                except Exception:
-                                    _scanner_scheduler_complete_target(
-                                        scheduler,
-                                        stock,
-                                        item=scheduler_claim.item,
-                                        completed_epoch=time.time(),
-                                        outcome="async_commit_exception",
-                                    )
-                                    raise
-                                if async_cache_key:
-                                    unused_result = async_coordinator.discard_completed(
-                                        generation_id=(
-                                            scheduler_generation.generation_id
-                                        ),
-                                        cache_key=async_cache_key,
-                                    )
-                                    if unused_result is not None:
-                                        sniper_state_handlers._clear_scanner_async_identity(stock,
-                                            generation_id=unused_result.generation_id,
-                                            cache_key=unused_result.cache_key)
-                                        _emit_scanner_scheduler_event(
-                                            payload=stock,
-                                            target=stock,
-                                            stage=(
-                                                "scalping_scanner_async_commit_unused"
-                                            ),
-                                            fields={
-                                                "metric_role": (
-                                                    "runtime_scheduler_latency"
-                                                ),
-                                                "decision_authority": (
-                                                    "scanner_main_thread_commit_guard"
-                                                ),
-                                                "window_policy": (
-                                                    "per_scanner_generation_action_timestamps"
-                                                ),
-                                                "sample_floor": (
-                                                    "one_completed_async_result"
-                                                ),
-                                                "primary_decision_metric": (
-                                                    "result_to_commit_sec"
-                                                ),
-                                                "source_quality_gate": (
-                                                    "current_pre_ai_mechanical_gate_required"
-                                                ),
-                                                "forbidden_uses": (
-                                                    "standalone_buy,broker_submit,"
-                                                    "threshold_mutation,provider_route_change,"
-                                                    "order_price_change,quantity_or_cap_change,"
-                                                    "broker_guard_bypass"
-                                                ),
-                                                "scheduler_action": (
-                                                    "async_result_discarded"
-                                                ),
-                                                "scheduler_reason": (
-                                                    "main_thread_pre_ai_gate_no_longer_eligible"
-                                                ),
-                                                "scanner_generation_id": (
-                                                    scheduler_generation.generation_id
-                                                ),
-                                                "scanner_async_cache_key": (
-                                                    async_cache_key
-                                                ),
-                                                "runtime_effect": False,
-                                                "actual_order_submitted": False,
-                                                "broker_order_forbidden": True,
-                                            },
-                                        )
-                                _scanner_scheduler_complete_target(
-                                    scheduler,
-                                    stock,
-                                    item=scheduler_claim.item,
-                                    completed_epoch=time.time(),
-                                    outcome=str(
-                                        stock.get("status") or "async_commit_completed"
-                                    ),
-                                )
-                                if _is_scanner_watching_target(stock):
-                                    followup_async_wait_state = (
-                                        _scanner_async_transport_wait_state(
-                                            stock,
-                                            scheduler_claim.item.generation,
-                                            async_coordinator,
-                                        )
-                                    )
-                                    if followup_async_wait_state in {
-                                        "pending",
-                                        "ready_for_commit",
-                                    }:
-                                        # A freshness/context COMMIT can
-                                        # dispatch entry AI for the same
-                                        # generation. Keep that generation
-                                        # current until the follow-up result
-                                        # reaches its own COMMIT; parking here
-                                        # would cancel it as
-                                        # superseded_before_ai.
-                                        scanner_async_commit_yield_requested = True
-                                    else:
-                                        _scanner_scheduler_continue_bounded_recheck_or_park(
-                                            scheduler,
-                                            stock,
-                                            now_epoch=time.time(),
-                                            park_reason=(
-                                                "async_commit_completed_generation_"
-                                                "warm_parked"
-                                            ),
-                                            expected_generation=(
-                                                scheduler_claim.item.generation
-                                            ),
-                                        )
-                                continue
-                            if scheduled_lane is ScannerLane.RECOVERY:
-                                scheduler_recovery_item = scheduler_claim.item
-                                scheduler_recovery_only = True
-                            else:
-                                scheduler_precheck_item = scheduler_claim.item
-                        if not scheduler_recovery_only:
-                            stock.update(
-                                {
-                                    f"_scanner_{key}": value
-                                    for key, value in _scanner_rising_entry_relief_fields(
-                                        stock,
-                                        reason="precheck_observation",
-                                        budget_source="standard",
-                                    ).items()
-                                }
-                            )
-                            if scheduler_generation is not None:
-                                # deadline_v1 makes the first action WS-only.
-                                market_data_enrichment_fields = {
-                                    "market_data_enrichment_attempted": False,
-                                    "market_data_enrichment_packet_source": (
-                                        "scanner_scheduler_ws_only_fast_precheck"
-                                    ),
-                                    "market_data_enrichment_fetch_reason": (
-                                        "deferred_to_recovery_lane"
-                                    ),
-                                }
-                            else:
-                                ws_data, market_data_enrichment_fields = (
-                                    _scanner_market_data_enrichment_for_fast_precheck(
-                                        stock,
-                                        code,
-                                        ws_data,
-                                        heavy_queue_enter_epoch,
-                                    )
-                                )
-                            if market_data_enrichment_fields:
-                                stock["_scanner_market_data_enrichment_fields"] = dict(
-                                    market_data_enrichment_fields
-                                )
-                                stock["_scanner_market_data_enrichment_ws_data"] = dict(
-                                    ws_data or {}
-                                )
-                                stock["_scanner_market_data_enrichment_stored_at"] = (
-                                    heavy_queue_enter_epoch
-                                )
-                            _defer_emit_scanner_fast_precheck(
-                                stock,
-                                code,
-                                now_value=heavy_queue_enter_epoch,
-                                ws_snapshot=ws_data,
-                                queue_rank=queue_context["queue_rank_by_obj"].get(
-                                    id(stock), 0
-                                ),
-                                scanner_queue_rank=queue_context[
-                                    "scanner_rank_by_obj"
-                                ].get(id(stock), 0),
-                                watching_count=queue_context["watching_count"],
-                                scanner_watching_count=queue_context[
-                                    "scanner_watching_count"
-                                ],
-                                throttle_sec=(
-                                    0 if scheduler_generation is not None else 5
-                                ),
-                            )
-                        queue_lag_fields = (
-                            None
-                            if scheduler_generation is not None
-                            else _defer_emit_scanner_runtime_queue_lag(
-                                stock,
-                                code,
-                                now_value=heavy_queue_enter_epoch,
-                                queue_rank=queue_context["queue_rank_by_obj"].get(
-                                    id(stock), 0
-                                ),
-                                scanner_queue_rank=queue_context[
-                                    "scanner_rank_by_obj"
-                                ].get(id(stock), 0),
-                                watching_count=queue_context["watching_count"],
-                                scanner_watching_count=queue_context[
-                                    "scanner_watching_count"
-                                ],
-                                real_holding_count=queue_context["real_holding_count"],
-                                non_real_holding_count=queue_context[
-                                    "non_real_holding_count"
-                                ],
-                                pre_scanner_runtime_count=queue_context[
-                                    "pre_scanner_runtime_count"
-                                ],
-                                loop_started_epoch=queue_context["loop_started_epoch"],
-                            )
-                        )
-                        fast_precheck_result = str(
-                            stock.get("_scanner_fast_precheck_result") or ""
-                        )
-                        fast_precheck_reason = str(
-                            stock.get("_scanner_fast_precheck_reason") or ""
-                        )
-                        recovery_fields = {}
-                        fast_precheck_stale_like = (
-                            fast_precheck_reason in SCANNER_WATCH_EVICTION_STALE_REASONS
-                        )
-                        fast_precheck_requires_recovery = (
-                            _scanner_fast_precheck_requires_recovery(
-                                fast_precheck_result,
-                                fast_precheck_reason,
-                            )
-                        )
-                        if scheduler_precheck_item is not None:
-                            precheck_completed = _scanner_scheduler_complete_target(
-                                scheduler,
-                                stock,
-                                item=scheduler_precheck_item,
-                                completed_epoch=time.time(),
-                                outcome=fast_precheck_result,
-                            )
-                            if (
-                                precheck_completed is None
-                                or precheck_completed.action == "superseded_result"
-                            ):
-                                continue
-                            if fast_precheck_requires_recovery:
-                                _scanner_scheduler_enqueue_target(
-                                    scheduler,
-                                    stock,
-                                    lane=ScannerLane.RECOVERY,
-                                    owner="ws_gap_recovery_after_precheck",
-                                    enqueued_epoch=time.time(),
-                                    attempt=max(
-                                        1,
-                                        _safe_int(
-                                            stock.get("_scanner_scheduler_attempt"),
-                                            1,
-                                        ),
-                                    ),
-                                )
-                                continue
-                        if (
-                            fast_precheck_result != "eligible_for_heavy_entry_eval"
-                            and queue_lag_fields
-                            and _scanner_queue_lag_eviction_allowed_before_recovery(
-                                fast_precheck_reason
-                            )
-                        ):
-                            queue_lag_decision = (
-                                _scanner_watch_eviction_decision_from_queue_lag(
-                                    stock,
-                                    now_ts=heavy_queue_enter_epoch,
-                                    queue_lag_fields=queue_lag_fields,
-                                )
-                            )
-                            if (
-                                queue_lag_decision.get("should_evict")
-                                and _scanner_queue_lag_hot_slot_eviction_allowed()
-                                and _expire_scanner_watch_target(
-                                    stock,
-                                    code,
-                                    targets,
-                                    decision=queue_lag_decision,
-                                    emit_event_fn=_defer_scanner_entry_pipeline_log,
-                                )
-                            ):
-                                continue
-                        if fast_precheck_requires_recovery:
-                            rest_quote_allowed, rest_quote_deferred_reason = (
-                                _scanner_rest_quote_recovery_options(
-                                    stock,
-                                    heavy_queue_enter_epoch,
-                                )
-                            )
-                            ws_data, recovery_fields = _recover_missing_ws_snapshot(
-                                stock,
-                                code,
-                                heavy_queue_enter_epoch,
-                                ws_data,
-                                ws_reg_source="scanner_fast_precheck_stale_ws_recovery",
-                                publish_ws_reg=False,
-                                allow_early_rest_fallback=rest_quote_allowed,
-                                rest_quote_deferred_reason=rest_quote_deferred_reason,
-                                cycle_state_store=scanner_ws_repair_cycle_state_by_code,
-                            )
-                            if recovery_fields.get("ws_repair_batch_required"):
-                                recovery_fields.update(
-                                    _queue_scanner_ws_persistent_repair(
-                                        stock,
-                                        code,
-                                        ws_data,
-                                        recovery_fields,
-                                    )
-                                )
-                            elif recovery_fields.get(
-                                "ws_repair_cycle_reg_allowed", True
-                            ):
-                                _queue_scanner_ws_reg(
-                                    code, "scanner_fast_precheck_stale_ws_recovery"
-                                )
-                            ws_data, recovery_fields, recheck_snapshot_applied = (
-                                _apply_subscription_recheck_snapshot_if_ready(
-                                    ws_data,
-                                    recovery_fields,
-                                    phase="fast_precheck",
-                                )
-                            )
-                            recovery_fields = (
-                                _scanner_rest_quote_entry_realtime_outcome_fields(
-                                    recovery_fields
-                                )
-                            )
-                            if recovery_fields.get("ws_recovery_outcome") in {
-                                "rest_quote_applied",
-                                "ws_snapshot_arrived_after_subscription_recheck",
-                            }:
-                                _scanner_watch_reset_stale_eviction_state(stock)
-                                _defer_scanner_watching_runtime_skip(
-                                    stock,
-                                    code,
-                                    skip_reason=(
-                                        "scanner_fast_precheck_subscription_recheck_snapshot_applied"
-                                        if recheck_snapshot_applied
-                                        else "scanner_fast_precheck_stale_ws_recovered"
-                                    ),
-                                    now_ts=heavy_queue_enter_epoch,
-                                    ws_data=ws_data,
-                                    ws_manager_available=bool(WS_MANAGER),
-                                    throttle_sec=0,
-                                    queue_rank=queue_context["queue_rank_by_obj"].get(
-                                        id(stock), 0
-                                    ),
-                                    scanner_queue_rank=queue_context[
-                                        "scanner_rank_by_obj"
-                                    ].get(id(stock), 0),
-                                    watching_count=queue_context["watching_count"],
-                                    scanner_watching_count=queue_context[
-                                        "scanner_watching_count"
-                                    ],
-                                    fast_precheck_result=fast_precheck_result or "-",
-                                    fast_precheck_reason=fast_precheck_reason or "-",
-                                    **recovery_fields,
-                                )
-                                _defer_emit_scanner_fast_precheck(
-                                    stock,
-                                    code,
-                                    now_value=heavy_queue_enter_epoch,
-                                    ws_snapshot=ws_data,
-                                    queue_rank=queue_context["queue_rank_by_obj"].get(
-                                        id(stock), 0
-                                    ),
-                                    scanner_queue_rank=queue_context[
-                                        "scanner_rank_by_obj"
-                                    ].get(id(stock), 0),
-                                    watching_count=queue_context["watching_count"],
-                                    scanner_watching_count=queue_context[
-                                        "scanner_watching_count"
-                                    ],
-                                    throttle_sec=0,
-                                )
-                                fast_precheck_result = str(
-                                    stock.get("_scanner_fast_precheck_result") or ""
-                                )
-                                fast_precheck_reason = str(
-                                    stock.get("_scanner_fast_precheck_reason") or ""
-                                )
-                        if scheduler_recovery_item is not None:
-                            recovery_completed = _scanner_scheduler_complete_target(
-                                scheduler,
-                                stock,
-                                item=scheduler_recovery_item,
-                                completed_epoch=time.time(),
-                                outcome=(
-                                    recovery_fields.get("ws_recovery_outcome")
-                                    or fast_precheck_result
-                                ),
-                            )
-                            if (
-                                recovery_completed is None
-                                or recovery_completed.action == "superseded_result"
-                            ):
-                                continue
-                        if fast_precheck_reason != "scanner_ws_stale_backoff_active":
-                            _reset_scanner_ws_backoff_watch_retention(stock)
-                        if (
-                            fast_precheck_result == "eligible_for_heavy_entry_eval"
-                            and fast_precheck_reason
-                            == "rising_rest_quote_recovery_without_realtime_strength"
-                        ):
-                            price_only_recovery_fields = dict(recovery_fields or {})
-                            price_only_recovery_fields.update(
-                                {
-                                    "ws_recovery_outcome": (
-                                        "source_quality_unresolved_price_only_rest_quote"
-                                    ),
-                                    "source_quality_detail_route": (
-                                        "price_only_rest_quote_strength_history_missing"
-                                    ),
-                                    "rest_quote_price_recovery_only": True,
-                                    "entry_evaluable_fresh_after_rest_quote": False,
-                                    "scanner_source_quality_reallocation_candidate": True,
-                                }
-                            )
-                            if _maybe_expire_scanner_watch_for_stale(
-                                stock,
-                                code,
-                                targets,
-                                now_ts=heavy_queue_enter_epoch,
-                                stale_reason=fast_precheck_reason,
-                                recovery_fields=price_only_recovery_fields,
-                                emit_event_fn=_defer_scanner_entry_pipeline_log,
-                            ):
-                                continue
-                        if fast_precheck_result != "eligible_for_heavy_entry_eval":
-                            fast_precheck_budget_decision = None
-                            if fast_precheck_result == "budget_reallocated":
-                                fast_precheck_budget_decision = _scanner_watch_eviction_decision_from_fast_precheck_budget(
-                                    stock,
-                                    now_ts=heavy_queue_enter_epoch,
-                                )
-                            skip_reason = (
-                                "scanner_fast_precheck_budget_reallocated"
-                                if fast_precheck_result == "budget_reallocated"
-                                else (
-                                    "scanner_fast_precheck_stability_pending"
-                                    if fast_precheck_result == "stability_pending"
-                                    else (
-                                        "scanner_fast_precheck_source_quality_blocked"
-                                        if fast_precheck_result
-                                        == "source_quality_blocked"
-                                        else "scanner_fast_precheck_not_eligible"
-                                    )
-                                )
-                            )
-                            skip_recovery_fields = dict(recovery_fields or {})
-                            if fast_precheck_budget_decision:
-                                for field_name in (
-                                    "retention_active",
-                                    "retention_reason",
-                                    "ws_backoff_retention_active",
-                                    "ws_backoff_retention_reason",
-                                    "ws_backoff_retention_first_epoch",
-                                    "ws_backoff_retention_age_sec",
-                                    "ws_backoff_retention_min_sec",
-                                    "ws_backoff_retention_max_sec",
-                                    "ws_backoff_retention_attempt_count",
-                                    "ws_backoff_retention_min_count",
-                                    "initial_entry_ws_receipt_pending",
-                                    "initial_entry_ws_receipt_required_types",
-                                    "initial_entry_ws_receipt_observed_types",
-                                    "initial_entry_ws_receipt_reported_types",
-                                    "initial_entry_ws_receipt_attach_epoch",
-                                    "initial_entry_ws_receipt_lifetime_contract_sec",
-                                    "ws_backoff_until",
-                                ):
-                                    if field_name in fast_precheck_budget_decision:
-                                        skip_recovery_fields[field_name] = (
-                                            fast_precheck_budget_decision[field_name]
-                                        )
-                            skip_recovery_fields.setdefault(
-                                "ws_recovery_action",
-                                (
-                                    "ws_reg_reissued"
-                                    if fast_precheck_stale_like
-                                    else "not_applicable_ws_recovery_action"
-                                ),
-                            )
-                            skip_recovery_fields.setdefault(
-                                "ws_recovery_outcome",
-                                (
-                                    "ws_reg_reissued_waiting_snapshot"
-                                    if fast_precheck_stale_like
-                                    else "not_applicable_ws_recovery_outcome"
-                                ),
-                            )
-                            skip_recovery_fields.setdefault(
-                                "ws_recovery_miss_count",
-                                "not_applicable_ws_recovery_miss_count",
-                            )
-                            if (
-                                skip_recovery_fields.get(
-                                    "ws_subscription_recheck_snapshot_applied"
-                                )
-                                and fast_precheck_stale_like
-                            ):
-                                skip_recovery_fields[
-                                    "subscription_alive_but_entry_stale"
-                                ] = True
-                                skip_recovery_fields[
-                                    "entry_freshness_after_subscription_recheck"
-                                ] = fast_precheck_reason
-                                skip_recovery_fields[
-                                    "entry_evaluable_fresh_after_subscription_recheck"
-                                ] = False
-                            _defer_scanner_watching_runtime_skip(
-                                stock,
-                                code,
-                                skip_reason=skip_reason,
-                                now_ts=heavy_queue_enter_epoch,
-                                ws_data=ws_data,
-                                ws_manager_available=bool(WS_MANAGER),
-                                queue_rank=queue_context["queue_rank_by_obj"].get(
-                                    id(stock), 0
-                                ),
-                                scanner_queue_rank=queue_context[
-                                    "scanner_rank_by_obj"
-                                ].get(id(stock), 0),
-                                watching_count=queue_context["watching_count"],
-                                scanner_watching_count=queue_context[
-                                    "scanner_watching_count"
-                                ],
-                                fast_precheck_result=fast_precheck_result or "-",
-                                fast_precheck_reason=fast_precheck_reason or "-",
-                                fast_precheck_fields=dict(
-                                    stock.get("_scanner_fast_precheck_fields") or {}
-                                ),
-                                **skip_recovery_fields,
-                            )
-                            if fast_precheck_stale_like:
-                                _maybe_expire_scanner_watch_for_stale(
-                                    stock,
-                                    code,
-                                    targets,
-                                    now_ts=heavy_queue_enter_epoch,
-                                    stale_reason=fast_precheck_reason,
-                                    recovery_fields=recovery_fields,
-                                    emit_event_fn=_defer_scanner_entry_pipeline_log,
-                                )
-                            elif fast_precheck_result == "budget_reallocated":
-                                if _maybe_expire_scanner_watch_for_fast_precheck_budget(
-                                    stock,
-                                    code,
-                                    targets,
-                                    now_ts=heavy_queue_enter_epoch,
-                                    emit_event_fn=_defer_scanner_entry_pipeline_log,
-                                    decision=fast_precheck_budget_decision,
-                                ):
-                                    continue
-                                if bool(
-                                    (fast_precheck_budget_decision or {}).get(
-                                        "retention_active"
-                                    )
-                                ):
-                                    if scheduler_generation is not None:
-                                        _scanner_scheduler_enqueue_fresh_precheck(
-                                            scheduler,
-                                            stock,
-                                            now_epoch=time.time(),
-                                            owner=("budget_retention_fresh_recheck"),
-                                            evidence_snapshot=ws_data,
-                                        )
-                                    continue
-                            if queue_lag_fields:
-                                queue_lag_decision = (
-                                    _scanner_watch_eviction_decision_from_queue_lag(
-                                        stock,
-                                        now_ts=heavy_queue_enter_epoch,
-                                        queue_lag_fields=queue_lag_fields,
-                                    )
-                                )
-                                if (
-                                    queue_lag_decision.get("should_evict")
-                                    and _scanner_queue_lag_hot_slot_eviction_allowed()
-                                    and _expire_scanner_watch_target(
-                                        stock,
-                                        code,
-                                        targets,
-                                        decision=queue_lag_decision,
-                                        emit_event_fn=_defer_scanner_entry_pipeline_log,
-                                    )
-                                ):
-                                    continue
-                            if scheduler_generation is not None:
-                                _scanner_scheduler_continue_bounded_recheck_or_park(
-                                    scheduler,
-                                    stock,
-                                    now_epoch=time.time(),
-                                    park_reason=(
-                                        "precheck_not_eligible_generation_warm_parked"
-                                    ),
-                                    expected_generation=scheduler_generation,
-                                    evidence_snapshot=ws_data,
-                                )
-                            continue
-                        if queue_lag_fields:
-                            _scanner_watch_eviction_decision_from_queue_lag(
-                                stock,
-                                now_ts=heavy_queue_enter_epoch,
-                                queue_lag_fields=queue_lag_fields,
-                            )
-                        if _scanner_strength_recheck_waiting(
-                            stock, now_ts=heavy_queue_enter_epoch
-                        ):
-                            _scanner_watch_reset_terminal_eviction_state(stock)
-                            recheck_after_epoch = _safe_float(
-                                stock.get(
-                                    "entry_strength_momentum_recheck_after_epoch"
-                                ),
-                                0.0,
-                            )
-                            _defer_scanner_watching_runtime_skip(
-                                stock,
-                                code,
-                                skip_reason="strength_momentum_stability_recheck_waiting",
-                                now_ts=heavy_queue_enter_epoch,
-                                ws_data=ws_data,
-                                ws_manager_available=bool(WS_MANAGER),
-                                queue_rank=queue_context["queue_rank_by_obj"].get(
-                                    id(stock), 0
-                                ),
-                                scanner_queue_rank=queue_context[
-                                    "scanner_rank_by_obj"
-                                ].get(id(stock), 0),
-                                watching_count=queue_context["watching_count"],
-                                scanner_watching_count=queue_context[
-                                    "scanner_watching_count"
-                                ],
-                                recheck_after_epoch=f"{recheck_after_epoch:.3f}",
-                                recheck_wait_sec=round(
-                                    max(
-                                        0.0,
-                                        recheck_after_epoch - heavy_queue_enter_epoch,
-                                    ),
-                                    3,
-                                ),
-                                recheck_attempt_count=_safe_int(
-                                    stock.get("entry_strength_momentum_recheck_count"),
-                                    0,
-                                ),
-                                recheck_reason=stock.get(
-                                    "entry_strength_momentum_recheck_reason"
-                                )
-                                or "-",
-                            )
-                            if scheduler_generation is not None:
-                                _scanner_scheduler_enqueue_fresh_precheck(
-                                    scheduler,
-                                    stock,
-                                    now_epoch=time.time(),
-                                    owner="strength_stability_fresh_recheck",
-                                )
-                            continue
-                        if scheduler_generation is None:
-                            legacy_retry_preview_due, legacy_retry_after_epoch = (
-                                _scanner_heavy_eval_retry_due(
-                                    stock,
-                                    now_epoch=heavy_queue_enter_epoch,
-                                    allow_explicit_recheck=True,
-                                )
-                            )
-                            if not legacy_retry_preview_due:
-                                stock["_scanner_heavy_eval_retry_after_epoch"] = (
-                                    legacy_retry_after_epoch
-                                )
-                                continue
-                        budget_source = "standard"
-                        if (
-                            scheduler_generation is None
-                            and scanner_full_eval_count >= scanner_full_eval_limit
-                        ):
-                            relief_allowed = (
-                                scanner_rising_full_eval_relief_count
-                                < scanner_rising_full_eval_extra_limit
-                                and _scanner_is_rising_entry_relief_candidate(stock)
-                            )
-                            if relief_allowed:
-                                budget_source = "rising_full_eval_relief"
-                                scanner_rising_full_eval_relief_count += 1
-                                stock.update(
-                                    {
-                                        f"_scanner_{key}": value
-                                        for key, value in _scanner_rising_entry_relief_fields(
-                                            stock,
-                                            reason="rising_full_eval_relief_applied",
-                                            budget_source=budget_source,
-                                        ).items()
-                                    }
-                                )
-                            else:
-                                relief_reason = (
-                                    "rising_full_eval_relief_budget_exhausted"
-                                    if _scanner_is_rising_entry_relief_candidate(stock)
-                                    else "not_rising_entry_relief_candidate"
-                                )
-                                if scanner_rising_full_eval_extra_limit <= 0:
-                                    relief_reason = "rising_full_eval_relief_disabled"
-                                stock.update(
-                                    {
-                                        f"_scanner_{key}": value
-                                        for key, value in _scanner_rising_entry_relief_fields(
-                                            stock,
-                                            reason=relief_reason,
-                                            budget_source="deferred_no_relief",
-                                        ).items()
-                                    }
-                                )
-                        if (
-                            scheduler_generation is None
-                            and scanner_full_eval_count >= scanner_full_eval_limit
-                            and budget_source != "rising_full_eval_relief"
-                        ):
-                            _scanner_watch_reset_terminal_eviction_state(stock)
-                            full_eval_deferred_fields = {
-                                "skip_reason": "scanner_full_eval_loop_budget_deferred",
-                                "now_ts": heavy_queue_enter_epoch,
-                                "ws_data": ws_data,
-                                "ws_manager_available": bool(WS_MANAGER),
-                                "queue_rank": queue_context["queue_rank_by_obj"].get(
-                                    id(stock), 0
-                                ),
-                                "scanner_queue_rank": queue_context[
-                                    "scanner_rank_by_obj"
-                                ].get(id(stock), 0),
-                                "watching_count": queue_context["watching_count"],
-                                "scanner_watching_count": queue_context[
-                                    "scanner_watching_count"
-                                ],
-                                "scanner_full_eval_base_limit": scanner_full_eval_base_limit,
-                                "scanner_full_eval_limit": scanner_full_eval_limit,
-                                "scanner_full_eval_count": scanner_full_eval_count,
-                                "scanner_rising_full_eval_extra_limit": scanner_rising_full_eval_extra_limit,
-                                "scanner_rising_full_eval_relief_count": scanner_rising_full_eval_relief_count,
-                                "fast_precheck_result": fast_precheck_result or "-",
-                                "fast_precheck_reason": fast_precheck_reason or "-",
-                                **_scanner_common_watch_budget_priority_fields(stock),
-                            }
-                            full_eval_deferred_decision = _scanner_watch_eviction_decision_from_full_eval_deferred(
-                                stock,
-                                now_ts=heavy_queue_enter_epoch,
-                                skip_fields=full_eval_deferred_fields,
-                            )
-                            full_eval_deferred_fields.update(
-                                {
-                                    "full_eval_deferred_eviction_reason": full_eval_deferred_decision.get(
-                                        "eviction_reason",
-                                        "not_available_full_eval_deferred_eviction_reason",
-                                    ),
-                                    "full_eval_deferred_should_evict": bool(
-                                        full_eval_deferred_decision.get("should_evict")
-                                    ),
-                                    "full_eval_deferred_attempt_count": full_eval_deferred_decision.get(
-                                        "eviction_attempt_count",
-                                        0,
-                                    ),
-                                    "full_eval_deferred_first_observed_epoch": full_eval_deferred_decision.get(
-                                        "full_eval_deferred_first_observed_epoch",
-                                        "not_available_full_eval_deferred_first_observed_epoch",
-                                    ),
-                                    "full_eval_deferred_watch_age_sec": full_eval_deferred_decision.get(
-                                        "full_eval_deferred_watch_age_sec",
-                                        "not_available_full_eval_deferred_watch_age_sec",
-                                    ),
-                                    "full_eval_deferred_min_age_sec": full_eval_deferred_decision.get(
-                                        "full_eval_deferred_min_age_sec",
-                                        "not_available_full_eval_deferred_min_age_sec",
-                                    ),
-                                    "full_eval_deferred_min_count": full_eval_deferred_decision.get(
-                                        "full_eval_deferred_min_count",
-                                        "not_available_full_eval_deferred_min_count",
-                                    ),
-                                    "full_eval_deferred_anchor_field": full_eval_deferred_decision.get(
-                                        "full_eval_deferred_anchor_field",
-                                        "not_available_full_eval_deferred_anchor_field",
-                                    ),
-                                    "full_eval_deferred_state_source": full_eval_deferred_decision.get(
-                                        "full_eval_deferred_state_source",
-                                        "not_available_full_eval_deferred_state_source",
-                                    ),
-                                }
-                            )
-                            _defer_scanner_watching_runtime_skip(
-                                stock,
-                                code,
-                                **full_eval_deferred_fields,
-                            )
-                            if (
-                                full_eval_deferred_decision.get("should_evict")
-                                and _scanner_full_eval_deferred_hot_slot_eviction_allowed()
-                                and _expire_scanner_watch_target(
-                                    stock,
-                                    code,
-                                    targets,
-                                    decision=full_eval_deferred_decision,
-                                    emit_event_fn=_defer_scanner_entry_pipeline_log,
-                                )
-                            ):
-                                continue
-                            continue
-                        heavy_retry_min_sec = _scanner_heavy_eval_min_retry_sec()
-                        last_heavy_attempt_epoch = _safe_float(
-                            stock.get("_scanner_last_heavy_eval_attempt_epoch"),
-                            0.0,
-                        )
-                        current_heavy_evidence = (
-                            _scanner_heavy_eval_evidence_fingerprint(ws_data)
-                        )
-                        previous_heavy_evidence = str(
-                            stock.get("_scanner_last_heavy_eval_evidence_fingerprint")
-                            or ""
-                        )
-                        heavy_evidence_changed = bool(
-                            previous_heavy_evidence
-                            and previous_heavy_evidence != current_heavy_evidence
-                        )
-                        if scheduler_generation is not None:
-                            async_wait_state = _scanner_async_transport_wait_state(
-                                stock,
-                                scheduler_generation,
-                                getattr(
-                                    run_sniper,
-                                    "scanner_async_eval_coordinator",
-                                    None,
-                                ),
-                            )
-                            if async_wait_state in {"pending", "ready_for_commit"}:
-                                _emit_scanner_heavy_eval_coalesced(
-                                    stock,
-                                    generation=scheduler_generation,
-                                    now_epoch=time.time(),
-                                    reason=f"async_transport_{async_wait_state}",
-                                    retry_min_sec=heavy_retry_min_sec,
-                                    last_attempt_epoch=last_heavy_attempt_epoch,
-                                    evidence_changed=heavy_evidence_changed,
-                                )
-                                continue
-                        heavy_retry_due, heavy_retry_after_epoch = (
-                            _scanner_heavy_eval_retry_due(
-                                stock,
-                                now_epoch=time.time(),
-                                allow_explicit_recheck=True,
-                                consume_explicit_recheck=True,
-                            )
-                        )
-                        if not heavy_retry_due:
-                            if scheduler_generation is not None:
-                                _emit_scanner_heavy_eval_coalesced(
-                                    stock,
-                                    generation=scheduler_generation,
-                                    now_epoch=time.time(),
-                                    reason=(
-                                        "same_generation_min_retry_window"
-                                        if not heavy_evidence_changed
-                                        else (
-                                            "same_generation_tick_churn_does_not_"
-                                            "bypass_min_retry"
-                                        )
-                                    ),
-                                    retry_min_sec=heavy_retry_min_sec,
-                                    last_attempt_epoch=last_heavy_attempt_epoch,
-                                    evidence_changed=heavy_evidence_changed,
-                                )
-                            stock["_scanner_heavy_eval_retry_after_epoch"] = (
-                                heavy_retry_after_epoch
-                            )
-                            continue
-                        if scheduler_generation is not None:
-                            heavy_decision = _scanner_scheduler_enqueue_target(
-                                scheduler,
-                                stock,
-                                lane=ScannerLane.HEAVY_EVAL,
-                                owner="eligible_precheck_heavy_eval",
-                                enqueued_epoch=time.time(),
-                                attempt=max(
-                                    1,
-                                    _safe_int(
-                                        stock.get("_scanner_scheduler_attempt"), 1
-                                    ),
-                                ),
-                            )
-                            if (
-                                heavy_decision is None
-                                or heavy_decision.action != "enqueued"
-                            ):
-                                continue
-                            scanner_heavy_eval_flushed = False
-                        else:
-                            scanner_full_eval_count += 1
-                        delayed_scanner_heavy_eval.append(
-                            (stock, code, ws_data, heavy_queue_enter_epoch)
-                        )
-                        if scheduler_generation is not None:
-                            # Stage-1 deadline mode keeps preparation on the
-                            # main thread.  Dispatch one ready heavy unit now
-                            # so a stream of synchronous promotion attaches
-                            # cannot age every heavy item past its deadline.
-                            _flush_delayed_scanner_heavy_eval()
-                        if (
-                            scheduler_generation is None
-                            and scanner_full_eval_count >= scanner_full_eval_limit
-                        ):
-                            _flush_delayed_scanner_heavy_eval()
-                        continue
-                    handle_watching_state(
-                        stock,
-                        code,
-                        ws_data,
-                        admin_id,
-                        now_ts=now_ts,
-                        now_dt=now,
-                        radar=radar,
-                        ai_engine=ai_engine,
-                        scanner_async_eval_coordinator=run_sniper.scanner_async_eval_coordinator,
-                    )
-                    if _is_scanner_watching_target(stock):
-                        stock["_scanner_last_full_eval_epoch"] = time.time()
-                        if (
-                            bool(stock.get("entry_strength_momentum_recheck_pending"))
-                            and _scanner_is_rising_entry_relief_candidate(stock)
-                            and str(
-                                stock.get(
-                                    "entry_strength_momentum_recheck_source_quality_block_reason"
-                                )
-                                or ""
-                            )
-                            .strip()
-                            .lower()
-                            == "stale_ws_snapshot"
-                        ):
-                            _queue_scanner_ws_reg(
-                                code, "scanner_strength_recheck_stale_ws_recovery"
-                            )
-                        _maybe_expire_scanner_watch_after_full_eval(
-                            stock,
-                            code,
-                            targets,
-                            now_ts=time.time(),
-                            emit_event_fn=_defer_scanner_entry_pipeline_log,
-                        )
-                elif status == "HOLDING":
-                    holding_ai_engine = None if eod_ai_holding_fallback else ai_engine
-                    handle_holding_state(
-                        stock,
-                        code,
-                        ws_data,
-                        admin_id,
-                        current_market_regime,
-                        now_ts=now_ts,
-                        now_dt=now,
-                        radar=radar,
-                        ai_engine=holding_ai_engine,
-                    )
-
-            record_main_phase('post_target_maintenance')
-            _flush_delayed_scanner_heavy_eval()
-            _flush_pending_scanner_ws_reg()
-            _flush_deferred_scanner_pipeline_events()
-            _flush_deferred_scanner_skip_events()
-            sniper_state_handlers.observe_rising_missed_nxt_post_block_samplers()
-            sniper_state_handlers.observe_rising_missed_adverse_micro_recovery_observations()
-            try:
-                sniper_state_handlers.observe_non_revive_smoothing_post_sell_paths(
-                    now_ts=time.time()
-                )
-            except Exception as exc:
-                log_error(
-                    "[SMOOTHING_POST_SELL] detached observer failed without "
-                    f"runtime effect: {exc}"
-                )
-            try:
-                sniper_state_handlers.observe_risky_micro_episode_executable_bbo_paths(
-                    now_ts=time.time()
-                )
-            except Exception as exc:
-                log_info(
-                    "[RISKY_MICRO_BBO_OBSERVER] bounded observer failed without "
-                    f"runtime effect: {exc}"
-                )
-
-            targets[:] = [
-                t for t in targets if t.get("status") not in ["COMPLETED", "EXPIRED"]
-            ]
-            if now_ts - getattr(run_sniper, "last_ws_prune_time", 0) >= 5:
-                _prune_ws_subscriptions_for_inactive_targets(targets)
-                run_sniper.last_ws_prune_time = now_ts
-
-            # ── P0: 루프 계측 로그 (60초마다) ─────────────────────
-            _loop_elapsed_ms = (time.time() - now_ts) * 1000
-            # An async worker was dispatched during this pass.  Do not add the
-            # normal polling sleep before the next pass drains its COMMIT
-            # result.  The yield flag is scoped to one outer iteration, so
-            # this cannot turn an idle runtime into a busy loop.
-            _sleep_ms = 0 if scanner_async_commit_yield_requested else 1000
-            _target_count = len(targets)
-            _watching_count = len([t for t in targets if t.get("status") == "WATCHING"])
-            _holding_count = len([t for t in targets if t.get("status") == "HOLDING"])
-            _update_scalping_dynamic_watch_cap(
-                _loop_elapsed_ms,
-                now_ts=now_ts,
-                buy_time_allowed=is_scalping_buy_time_allowed(now),
-            )
-            if _scanner_scheduler_startup_mode() == "legacy":
-                _update_scanner_full_eval_pressure(
-                    _loop_elapsed_ms,
-                    queue_context=queue_context,
-                    now_ts=now_ts,
-                    buy_time_allowed=is_scalping_buy_time_allowed(now),
-                )
-            from src.engine.monitoring.runtime_performance import observe, log_snapshot
-            record_main_phase('loop_diagnostics')
-            observe('loop_work', time.perf_counter() - loop_work_started)
-            global _LOOP_METRICS_LAST_LOG_TS
-            if now_ts - _LOOP_METRICS_LAST_LOG_TS >= 60:
-                log_info(
-                    f"[LOOP_METRICS] "
-                    f"loop_elapsed_ms={_loop_elapsed_ms:.1f} "
-                    f"sleep_ms={_sleep_ms} "
-                    f"db_active_targets_ms={_db_elapsed_ms:.1f} "
-                    f"account_sync_ms={_acct_elapsed_ms:.1f} "
-                    f"target_count={_target_count} "
-                    f"watching={_watching_count} "
-                    f"holding={_holding_count}"
-                )
-                log_snapshot()
-                _LOOP_METRICS_LAST_LOG_TS = now_ts
-
-            coordinator = getattr(run_sniper, 'scanner_async_eval_coordinator', None)
-            record_main_phase('idle_wait')
-            if coordinator is not None:
-                coordinator.wait_for_completion(_sleep_ms / 1000.0)
-            else:
-                time.sleep(_sleep_ms / 1000.0)
-            record_main_phase('main_wake')
+        for _ in _run_sniper_iterations(
+            is_test_mode=is_test_mode, targets=targets, admin_id=admin_id,
+            radar=radar, ai_engine=ai_engine, last_db_poll_time=last_db_poll_time,
+            last_msg_min=last_msg_min,
+            scanner_ws_reg_last_emit_ts=scanner_ws_reg_last_emit_ts,
+            scanner_ws_repair_cycle_state_by_code=scanner_ws_repair_cycle_state_by_code,
+            log_error=log_error, log_info=log_info,
+        ):
+            pass
 
     except Exception as e:
         log_error(f"🔥 스나이퍼 루프 치명적 에러: {e}\n{traceback.format_exc()}")
@@ -16406,64 +16464,61 @@ def run_sniper(is_test_mode=False):
         print("\n🛑 스나이퍼 매매 엔진 종료")
 
     finally:
-        radar.shutdown()
         try:
-            if getattr(AI_ENGINE, '_transport_warmup', None) is not None:
-                AI_ENGINE.stop_transport_warmup()
-        except Exception as warmup_error:
-            log_error(f"[AI_TRANSPORT_WARMUP_STOP_FAILED] type={type(warmup_error).__name__}")
-        try:
-            from src.engine.error_detectors.process_health import (
-                write_heartbeat as _sniper_final_heartbeat,
-            )
+            radar.shutdown()
+            try:
+                if getattr(AI_ENGINE, '_transport_warmup', None) is not None:
+                    AI_ENGINE.stop_transport_warmup()
+            except Exception as warmup_error:
+                log_error(f"[AI_TRANSPORT_WARMUP_STOP_FAILED] type={type(warmup_error).__name__}")
+            try:
+                from src.engine.error_detectors.process_health import (
+                    write_heartbeat as _sniper_final_heartbeat,
+                )
 
-            _sniper_final_heartbeat("sniper_engine", alive=False)
-        except Exception as heartbeat_error:
-            log_error("[SNIPER_HEARTBEAT_FINALIZE_FAILED] " f"error={heartbeat_error}")
-        smoothing_source_only_observer.stop()
-        fast_exit_monitor.stop()
-        if WS_MANAGER is not None and hasattr(WS_MANAGER, "set_fast_exit_wakeup"):
-            WS_MANAGER.set_fast_exit_wakeup(None)
-        async_coordinator = getattr(
-            run_sniper,
-            "scanner_async_eval_coordinator",
-            None,
-        )
-        hot_path_dispatcher = getattr(
-            run_sniper,
-            "hot_path_ai_dispatcher",
-            None,
-        )
-        if isinstance(async_coordinator, ScannerAsyncEvalCoordinator):
+                _sniper_final_heartbeat("sniper_engine", alive=False)
+            except Exception as heartbeat_error:
+                log_error("[SNIPER_HEARTBEAT_FINALIZE_FAILED] " f"error={heartbeat_error}")
+            smoothing_source_only_observer.stop()
+            fast_exit_monitor.stop()
+            if WS_MANAGER is not None and hasattr(WS_MANAGER, "set_fast_exit_wakeup"):
+                WS_MANAGER.set_fast_exit_wakeup(None)
+            async_coordinator = getattr(
+                run_sniper,
+                "scanner_async_eval_coordinator",
+                None,
+            )
+            hot_path_dispatcher = getattr(
+                run_sniper,
+                "hot_path_ai_dispatcher",
+                None,
+            )
+            if isinstance(async_coordinator, ScannerAsyncEvalCoordinator):
+                try:
+                    async_coordinator.shutdown(wait=False)
+                except Exception as e:
+                    log_error(f"scanner async coordinator stop failed: {e}")
+                finally:
+                    from src.engine.monitoring.runtime_performance import set_native_ready_event
+                    set_native_ready_event(None)
+                    run_sniper.scanner_async_eval_coordinator = None
+            if isinstance(hot_path_dispatcher, HotPathAIDispatcher):
+                try:
+                    hot_path_dispatcher.shutdown(wait=False)
+                except Exception as e:
+                    log_error(f"hot path AI dispatcher stop failed: {e}")
+                finally:
+                    run_sniper.hot_path_ai_dispatcher = None
+        finally:
             try:
-                async_coordinator.shutdown(wait=False)
-            except Exception as e:
-                log_error(f"scanner async coordinator stop failed: {e}")
+                if not _drain_zero_base_probe_leases():
+                    raise RuntimeError("zero_base_probe_shutdown_incomplete")
             finally:
-                from src.engine.monitoring.runtime_performance import set_native_ready_event
-                set_native_ready_event(None)
-                run_sniper.scanner_async_eval_coordinator = None
-        if isinstance(hot_path_dispatcher, HotPathAIDispatcher):
-            try:
-                hot_path_dispatcher.shutdown(wait=False)
-            except Exception as e:
-                log_error(f"hot path AI dispatcher stop failed: {e}")
-            finally:
-                run_sniper.hot_path_ai_dispatcher = None
-        from src.engine.scalping.pre_submit_delay_observation import shutdown as close_delay_observations
-        close_delay_observations()
-        from src.engine.scalping.initial_quantity_cap_observation import configure_sink as configure_quantity_sink
-        configure_quantity_sink(None)
-        from src.engine.scalping.main_stop_policy import configure_source_sink as configure_stop_sink
-        configure_stop_sink(None)
-        from src.engine.scalping.reversal_anchor_index import configure_sink as configure_anchor_sink
-        configure_anchor_sink(None)
-        _SCANNER_OBSERVATION_QUEUE.close(timeout=1.0)
-        if WS_MANAGER:
-            try:
-                WS_MANAGER.stop()
-            except Exception as e:
-                log_error(f"WS manager stop failed: {e}")
+                try:
+                    if WS_MANAGER and WS_MANAGER.stop() is False:
+                        raise RuntimeError("main_collector_shutdown_incomplete")
+                finally:
+                    close_observation_sources()
 
 
 if __name__ == "__main__":
@@ -16471,6 +16526,8 @@ if __name__ == "__main__":
     python src/engine/kiwoom_sniper_v2.py 로 직접 실행할 때만 작동합니다.
     운영 환경(bot_main.py) 배포 시 이 블록은 투명인간 취급되므로 지울 필요가 없습니다!
     """
+
+    signal.signal(signal.SIGTERM, request_shutdown)
 
     # 1. 텔레그램 매니저 로드 (이벤트 리스너 가동)
     try:

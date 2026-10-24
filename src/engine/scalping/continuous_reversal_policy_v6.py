@@ -281,10 +281,13 @@ def _validate_sources(bundle, data_root, *, code_root=None):
         return bundle
     N.validate(f['native_parent_bundle'],target_date=f['native_parent_bundle']['target_date'])
     V4.validate_sources(f['native_parent_bundle'], data_root)
-    for module in contract_modules():
-        p = Path(code_root)/'src/engine/scalping'/Path(module.__file__).name if code_root else Path(module.__file__)
-        if N._source_hash(str(p), N._signature(p)) != f['contract_file_sha256'].get(p.name):
-            raise ValueError('v6_contract_code_changed:' + p.name)
+    code_paths = {Path(m.__file__).name: str(Path(m.__file__)) for m in contract_modules()}
+    actual_code = {name: N._source_hash(path, N._signature(path)) for name, path in code_paths.items()}
+    changed = [name for name, actual in actual_code.items() if actual != f['contract_file_sha256'].get(name)]
+    if changed:
+        from src.engine.infrastructure.startup_validation_code_context import verify_validation_main_code
+        if not verify_validation_main_code(bundle, code_paths, actual_code):
+            raise ValueError('v6_contract_code_changed:' + changed[0])
     for name in ('machine','auxiliary'):
         p = N.root(Path(data_root))/'sources'/('reversal-'+f[name+'_report_sha256']+'.json')
         if file_hash(p) != f['report_file_sha256'][name]:
@@ -434,7 +437,7 @@ def _attested_activation_parent(data_root, target_date, *, origin_root, origin_c
 
     A policy may have outlived several code-only deployments. Its complete
     strict validator, not the policy's old release label, proves unchanged pins.
-    This path is exclusive to staging/activating an explicit code refresh.
+    Explicit reviewed parent readers use this proof; live loading never does.
     """
     import os
     import subprocess
@@ -504,6 +507,24 @@ print(b['bundle_sha256'] if b else 'none')
     return bundle
 
 
+def _require_closed_postclose_window(data_root, source_date, target_date, clock):
+    from datetime import date, time
+    from src.engine.automation.next_preopen_readiness import _next_trading_day
+    data_root=Path(data_root)
+    local=clock.astimezone(K.KST) if clock.tzinfo is not None else None
+    bootstrap=data_root/'runtime/policy_bootstrap'
+    preopen=data_root/'report/threshold_cycle_preopen_status'/f'threshold_cycle_preopen_{target_date}.status.json'
+    if (local is None or local.date().isoformat()!=target_date
+            or local.time().replace(tzinfo=None)>=time(7,30)
+            or _next_trading_day(date.fromisoformat(source_date)).isoformat()!=target_date
+            or preopen.exists() or preopen.is_symlink()
+            or any(p.exists() or p.is_symlink() for p in (
+                bootstrap/f'runtime_policy_bootstrap_{target_date}.json',
+                bootstrap/f'runtime_policy_bootstrap_{target_date}.env',
+                bootstrap/f'runtime_policy_bootstrap_verify_{target_date}.json'))):
+        raise ValueError('v6_code_refresh_closed_postclose_window_invalid')
+
+
 def stage_code_refresh(data_root, target_date, *, expected_bundle_sha256,
                        origin_root, activation_parent_origin_root, activation_parent_origin_commit, release_commit,
                        reason, confirm, now=None, recover_failed_preopen=False, closed_postclose_source_date=None):
@@ -537,22 +558,10 @@ def stage_code_refresh(data_root, target_date, *, expected_bundle_sha256,
         original = N._read(path); f = original['continuous_reversal']
         N.validate(original,target_date=target_date)
         if closed_postclose_source_date is not None:
-            from datetime import date, time
-            from src.engine.automation.next_preopen_readiness import _next_trading_day
-            local = clock.astimezone(K.KST) if clock.tzinfo is not None else None
-            bootstrap = data_root/'runtime/policy_bootstrap'
-            preopen = data_root/'report/threshold_cycle_preopen_status'/f'threshold_cycle_preopen_{target_date}.status.json'
-            if (recover_failed_preopen or local is None or local.date().isoformat() != target_date
-                    or local.time().replace(tzinfo=None) >= time(7,30)
-                    or f.get('source_date') != closed_postclose_source_date
-                    or f.get('publication_date') != closed_postclose_source_date
-                    or _next_trading_day(date.fromisoformat(closed_postclose_source_date)).isoformat() != target_date
-                    or preopen.exists() or preopen.is_symlink()
-                    or any(p.exists() or p.is_symlink() for p in (
-                        bootstrap/f'runtime_policy_bootstrap_{target_date}.json',
-                        bootstrap/f'runtime_policy_bootstrap_{target_date}.env',
-                        bootstrap/f'runtime_policy_bootstrap_verify_{target_date}.json'))):
+            if (recover_failed_preopen or f.get('source_date') != closed_postclose_source_date
+                    or f.get('publication_date') != closed_postclose_source_date):
                 raise ValueError('v6_code_refresh_closed_postclose_window_invalid')
+            _require_closed_postclose_window(data_root,closed_postclose_source_date,target_date,clock)
         if (original['bundle_sha256'] != expected_bundle_sha256 or f['schema'] != SCHEMA
                 or f['effective_mode'] != 'next_session'):
             raise ValueError('v6_code_refresh_candidate_cas_failed')
@@ -656,6 +665,7 @@ def stage(data_root, day, publication, machine, auxiliary, *, target_date, relea
     root = N.root(Path(data_root)); root.mkdir(parents=True,exist_ok=True)
     with (root/'publisher.lock').open('a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
+        closed_recovery=False
         try:
             parent = N.load_effective(data_root=Path(data_root),target_date=publication)
         except ValueError as exc:
@@ -663,10 +673,18 @@ def stage(data_root, day, publication, machine, auxiliary, *, target_date, relea
             from src.engine.scalping import reversal_joint_registration as J
             from src.engine.scalping import reversal_cumulative_registration as Q
             change=machine.get('registration_change') or {}
-            if (change.get('operator_receipt') not in {M.AUTHORITY,J.AUTHORITY,Q.AUTHORITY} or not str(exc).startswith(
-                    ('v4_contract_code_changed:', 'v5_contract_code_changed:', 'v6_contract_code_changed:'))):
+            code_error=str(exc).startswith(
+                ('v4_contract_code_changed:', 'v5_contract_code_changed:', 'v6_contract_code_changed:'))
+            if (effective_mode=='next_session' and publication<datetime.now(K.KST).date().isoformat()
+                    and (code_error or str(exc)=='active_policy_code_reader_root_changed')):
+                from src.engine.scalping.continuous_reversal_operating_postclose import load_report_parent
+                _require_closed_postclose_window(data_root,publication,target_date,datetime.now(K.KST))
+                parent=load_report_parent(data_root,publication)
+                closed_recovery=True
+            elif (change.get('operator_receipt') not in {M.AUTHORITY,J.AUTHORITY,Q.AUTHORITY} or not code_error):
                 raise
-            parent=(Q if change.get('operator_receipt')==Q.AUTHORITY else J if change.get('operator_receipt')==J.AUTHORITY else M).load_offline_parent(data_root,publication)
+            else:
+                parent=(Q if change.get('operator_receipt')==Q.AUTHORITY else J if change.get('operator_receipt')==J.AUTHORITY else M).load_offline_parent(data_root,publication)
         if not parent or machine['parent_bundle_sha256'] != parent['bundle_sha256']:
             raise ValueError('v6_parent_cas_failed')
         for report in (machine,auxiliary):
@@ -721,6 +739,8 @@ def stage(data_root, day, publication, machine, auxiliary, *, target_date, relea
         bundle.update(source_file_sha256=file_hash(real),source_artifact_sha256=digest(f))
         bundle.pop('bundle_sha256',None); bundle['bundle_sha256'] = digest(bundle)
         N.validate(bundle,target_date=target_date); N._validate_bundle_sources(bundle,Path(data_root))
+        if closed_recovery:
+            _require_closed_postclose_window(data_root,publication,target_date,datetime.now(K.KST))
         N._atomic_write_json(root/'generations'/(bundle['bundle_sha256']+'.json'),bundle)
         N._atomic_write_json(root/('intraday_candidates' if effective_mode=='intraday' else 'candidates')/('policy_'+target_date+'.json'),bundle)
         return bundle

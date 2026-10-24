@@ -6,6 +6,8 @@ Unknown objects retain their own deepcopy protocol and cycles/aliases are kept.
 import copy
 from collections import deque
 from dataclasses import dataclass
+from collections.abc import Mapping as _Mapping
+from types import MappingProxyType as _MappingProxyType
 
 _ATOMIC = frozenset((str, int, float, bool, bytes, type(None)))
 
@@ -117,3 +119,52 @@ def snapshot_without_fields(value, fields):
         if key not in fields:
             result[snapshot_copy(key, memo)] = snapshot_copy(item, memo)
     return result
+
+
+class FrozenMapping(_Mapping):
+    """Owned recursive snapshot; foreign read-only views remain untrusted."""
+    __slots__ = ('_values', '_shareable')
+
+    def __init__(self, values):
+        children = {str(key): _freeze_owned(item) for key, item in values.items()}
+        object.__setattr__(self, '_values', _MappingProxyType(
+            {key: item for key, (item, _) in children.items()}))
+        object.__setattr__(self, '_shareable', all(owned for _, owned in children.values()))
+
+    def __setattr__(self, name, value):
+        raise TypeError('immutable_async_snapshot')
+
+    def __delattr__(self, name):
+        raise TypeError('immutable_async_snapshot')
+
+    def __getitem__(self, key):
+        return self._values[key]
+
+    def __iter__(self):
+        return iter(self._values)
+
+    def __len__(self):
+        return len(self._values)
+
+
+def _freeze_owned(value):
+    if type(value) in (str, int, float, bool, bytes, complex, type(None)):
+        return value, True
+    if type(value) is FrozenMapping and value._shareable:
+        return value, True
+    if isinstance(value, _Mapping):
+        frozen = FrozenMapping(value)
+        return frozen, frozen._shareable
+    if isinstance(value, (list, tuple, set, frozenset)):
+        children = [_freeze_owned(item) for item in value]
+        items = (item for item, _ in children)
+        frozen = frozenset(items) if isinstance(value, (set, frozenset)) else tuple(items)
+        return frozen, all(owned for _, owned in children)
+    # A copied custom object can still be mutable. Copy it again at each
+    # ownership boundary; it must never mark its parent safe for sharing.
+    return copy.deepcopy(value), False
+
+
+def immutable_mapping(value):
+    """Freeze once, then share only owned recursively immutable snapshots."""
+    return _freeze_owned(value if isinstance(value, _Mapping) else dict(value or {}))[0]

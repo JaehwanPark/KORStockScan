@@ -11,6 +11,81 @@ from src.engine.monitoring import submission_bottleneck_monitor as M
 from src.engine.monitoring.observation_budget import ObservationDeadline
 
 
+def test_detector_and_monitor_use_one_reader_owner():
+    from src.engine.error_detectors import artifact_freshness as detector
+    from src.engine.monitoring import observer_artifact_io as io
+    assert detector.observer_io is M.observer_io is io
+    for name in ('file_signature', 'regular_fd', 'regular_bytes', 'json_object'):
+        assert getattr(io, name).__module__ == io.__name__
+        assert not hasattr(detector, '_observer_' + name)
+        assert not hasattr(M, '_observer_' + name)
+
+
+@pytest.mark.parametrize('encoded,reason', [
+    ('{"x":{"key":1,"key":2}}', 'observer_json_duplicate_key'),
+    ('{"x":NaN}', 'observer_json_nonfinite'),
+    ('{"x":Infinity}', 'observer_json_nonfinite'),
+    ('{"x":-Infinity}', 'observer_json_nonfinite'),
+    ('{"x":1e999}', 'observer_json_nonfinite'),
+    ('[]', 'observer_json_object_required'),
+    ('null', 'observer_json_object_required'),
+    ('"value"', 'observer_json_object_required'),
+])
+def test_shared_observer_json_rejections(encoded, reason):
+    with pytest.raises(ValueError, match=reason):
+        M.observer_io.json_object(encoded)
+
+
+@pytest.mark.parametrize('kind', ['missing', 'symlink', 'fifo', 'oversize'])
+def test_shared_observer_file_admission(tmp_path, kind):
+    path = tmp_path/'artifact'
+    expected = 'observer_regular_file_required'
+    if kind == 'symlink':
+        target = tmp_path/'target'; target.write_text('{}'); path.symlink_to(target)
+    elif kind == 'fifo':
+        os.mkfifo(path)
+    elif kind == 'oversize':
+        path.write_text('12345'); expected = 'observer_file_size_limit'
+    if kind == 'missing':
+        with pytest.raises(FileNotFoundError):
+            M.observer_io.regular_bytes(path, limit=4)
+    else:
+        with pytest.raises(ValueError, match=expected):
+            M.observer_io.regular_bytes(path, limit=4)
+
+
+@pytest.mark.parametrize('when', ['before_open', 'during_read', 'growth'])
+def test_shared_observer_races_close_descriptor(tmp_path, monkeypatch, when):
+    io = M.observer_io
+    path = tmp_path/'artifact'; path.write_bytes(b'{}')
+    real_open, real_read = io.os.open, io.os.read
+    descriptors = []
+    def opening(selected, flags, *args, **kwargs):
+        if Path(selected) == path and when == 'before_open':
+            path.rename(tmp_path/'original'); path.write_bytes(b'{}')
+        fd = real_open(selected, flags, *args, **kwargs)
+        if Path(selected) == path: descriptors.append(fd)
+        return fd
+    changed = []
+    def reading(fd, size):
+        raw = real_read(fd, size)
+        if raw and not changed:
+            changed.append(True)
+            if when == 'during_read':
+                path.rename(tmp_path/'original'); path.write_bytes(b'{}')
+            elif when == 'growth':
+                with path.open('ab') as out: out.write(b'1234')
+        return raw
+    monkeypatch.setattr(io.os, 'open', opening)
+    monkeypatch.setattr(io.os, 'read', reading)
+    expected = {'before_open':'changed_before_read', 'during_read':'changed_during_read',
+                'growth':'file_size_limit'}[when]
+    with pytest.raises(ValueError, match=expected):
+        io.regular_bytes(path, limit=4)
+    assert len(descriptors) == 1
+    with pytest.raises(OSError): os.fstat(descriptors[0])
+
+
 @pytest.fixture
 def observer(monkeypatch, tmp_path):
     monkeypatch.setattr(M, 'PROJECT_ROOT', tmp_path)
@@ -31,7 +106,7 @@ def observer(monkeypatch, tmp_path):
     monkeypatch.setattr(M, 'source_gap_semantics', lambda *a:dict(status='observed',issues={}))
     monkeypatch.setattr(M, 'attach_source_gap_semantics', lambda r,s:r.update(source_gap_semantics=s))
     monkeypatch.setattr(M, 'entry_execution_tuning_semantics', lambda *a:dict(status='observed',issues={}))
-    monkeypatch.setattr(M, 'machine_semantics', lambda *a:dict(status='observed_receipts_match',issues={}))
+    monkeypatch.setattr(M, 'machine_semantics', lambda *a, **kw:dict(status='observed_receipts_match',issues={}))
     return tmp_path,today
 
 
@@ -45,7 +120,11 @@ def test_execution_receipts_same_run_and_no_telegram(observer, capsys, monkeypat
     latest = json.loads((root/'data/report/buy_funnel_sentinel/submission_bottleneck_monitor_latest.json').read_text())
     state = json.loads((root/'tmp/submission_bottleneck_monitor_state.json').read_text())
     dated = json.loads((root/f'data/report/buy_funnel_sentinel/submission_bottleneck_monitor_{day}.json').read_text())
-    assert state == latest == dated
+    assert latest == dated
+    assert state['persistence_schema'] == 'submission_monitor_continuation_v1'
+    for key in ('schema', 'date', 'as_of', 'run_id', 'incidents'):
+        assert state[key] == latest[key]
+    assert 'source_gap_semantics' not in state
     assert terminal['run_id'] == state['run_id']
     assert terminal['publication'] == dict(state=True,latest=True,dated=True)
 
@@ -55,15 +134,16 @@ def test_deadline_preserves_old_pending_and_publishes_deferred(observer,monkeypa
     key='machine_policy_receipt_contract'
     old=dict(status='pending',first_seen=day+'T08:00:00+09:00',last_seen=day+'T08:01:00+09:00')
     path=root/'tmp/submission_bottleneck_monitor_state.json';path.parent.mkdir()
-    path.write_text(json.dumps(dict(incidents={key:old})))
-    def expired(*a):raise ObservationDeadline('validation_deferred:deadline')
+    path.write_text(json.dumps(dict(schema=M.SCHEMA, incidents={key:old})))
+    def expired(*a, **kw):raise ObservationDeadline('validation_deferred:deadline')
     monkeypatch.setattr(M,'machine_semantics',expired)
     assert M.main(['--report',str(root/'source.json')]) == 75
     terminal=json.loads(capsys.readouterr().out)
     assert terminal['execution_status']=='deferred'
     state=json.loads(path.read_text())
     assert state['incidents'][key]==old
-    assert state['source_gap_semantics']['status']=='observed'
+    report=json.loads((root/'data/report/buy_funnel_sentinel/submission_bottleneck_monitor_latest.json').read_text())
+    assert report['source_gap_semantics']['status']=='observed'
 
 
 def test_partial_publication_is_nonzero(observer, monkeypatch, capsys):

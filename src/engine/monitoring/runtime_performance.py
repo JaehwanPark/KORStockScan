@@ -7,9 +7,10 @@ import json
 import math
 import os
 import time
+from copy import deepcopy
 from collections import deque, OrderedDict
 from pathlib import Path
-from threading import Lock
+from threading import Lock, get_native_id
 from contextlib import contextmanager
 from contextvars import ContextVar
 
@@ -27,7 +28,8 @@ _NAMES += ('entry_refresh', 'entry_evaluation', 'entry_policy', 'entry_machine_a
            'entry_machine_capture', 'entry_economics', 'entry_wire', 'entry_native_check',
            'entry_native_load', 'entry_native_claim', 'entry_native_auxiliary',
            'entry_annotation', 'entry_trace_prepare', 'entry_trace_append',
-           'entry_outcome_append', 'entry_error_processing')
+           'entry_outcome_append', 'entry_error_processing',
+           'entry_submit_native_load', 'entry_submit_auxiliary', 'entry_submit_generation')
 _ENTRY_TIMINGS = ContextVar('entry_local_stage_timings', default=None)
 _NATIVE_VISIT_HINTS = OrderedDict()
 _NATIVE_VISIT_TOKENS = {}
@@ -36,6 +38,49 @@ _MAIN_PHASE = {'name': 'not_observed', 'epoch': None, 'perf': None, 'code': None
 _MAIN_PHASE_HISTORY = deque(maxlen=256)
 _HTTP_SETTLEMENTS = deque(maxlen=128)
 _ENTRY_TIMING_GAPS = 0
+_POLICY_CALL = ContextVar('policy_validation_call', default=None)
+_POLICY_SEQUENCE = 0
+_POLICY_VALIDATIONS = deque(maxlen=128)
+_POLICY_SLOW_VALIDATIONS = deque(maxlen=32)
+
+
+@contextmanager
+def policy_validation(stage):
+    """Bounded causal timings in the existing sink; never a validity cache."""
+    global _POLICY_SEQUENCE
+    started, cpu = time.perf_counter(), time.thread_time()
+    with _LOCK:
+        _POLICY_SEQUENCE += 1
+        call_id = _POLICY_SEQUENCE
+    facts = dict(call_id=call_id, parent_call_id=(_POLICY_CALL.get() or {}).get('call_id'), stage=stage,
+                 started_epoch=time.time(), native_thread_id=get_native_id(), status='pass')
+    token = _POLICY_CALL.set(facts)
+    try:
+        yield facts
+    except BaseException as exc:
+        facts.update(status='error', error_type=type(exc).__name__, reason=str(exc)[:256])
+        raise
+    finally:
+        _POLICY_CALL.reset(token)
+        parent = _POLICY_CALL.get()
+        if parent is not None:
+            for key in ('source_digest_reads', 'source_digest_bytes'):
+                parent[key] = parent.get(key, 0) + facts.get(key, 0)
+        elapsed = max(0., time.perf_counter() - started)
+        cpu = max(0., time.thread_time() - cpu)
+        facts.update(elapsed_seconds=elapsed, thread_cpu_seconds=cpu,
+                     non_cpu_wall_seconds=max(0., elapsed-cpu))
+        with _LOCK:
+            _POLICY_VALIDATIONS.append(dict(facts))
+            if elapsed >= 1 or facts['status'] == 'error':
+                _POLICY_SLOW_VALIDATIONS.append(dict(facts))
+
+
+def record_policy_digest_read(byte_count):
+    facts = _POLICY_CALL.get()
+    if facts is not None:
+        facts['source_digest_reads'] = facts.get('source_digest_reads', 0) + 1
+        facts['source_digest_bytes'] = facts.get('source_digest_bytes', 0) + byte_count
 
 
 def record_entry_gap():
@@ -516,7 +561,11 @@ def snapshot():
         settlements = list(_HTTP_SETTLEMENTS)
         timing_gaps = _ENTRY_TIMING_GAPS
         failures = [dict(stage=k[0], reason=k[1], count=v[0]) for k, v in _FAILURES.items()]
+        policy_validations = list(_POLICY_VALIDATIONS)
+        policy_slow = list(_POLICY_SLOW_VALIDATIONS)
         selected = [dict(v) for v in _SELECTED_READY.values()]
+        raw_ready_count = len(_READY)
+        raw_ready_recent = deepcopy(list(_READY.values())[-32:])
         selected_counts = dict(_SELECTED_EVICTED, pending=0)
         lifecycle_counts = {k: _LIFECYCLE_EVICTED.get(k, 0) for k in _LIFECYCLE_STATES}
         lifecycle_append_dropped = _LIFECYCLE_APPEND_DROPPED
@@ -555,12 +604,19 @@ def snapshot():
         forbidden_uses='policy_promotion_order_authority_or_economic_claim',
         signal_denominator='native_ready_seen_at_ingress_and_claimed_missing_joins_not_inferred',
         metrics=metrics, preparation_failures=failures,
+        policy_validation=dict(recent=policy_validations, slow_or_failed=policy_slow,
+            retained_limits=dict(recent=128, slow_or_failed=32),
+            non_cpu_wall_semantics='includes_io_lock_and_scheduling_not_io_attribution'),
         observation_queue=_OBSERVATION_HEALTH() if _OBSERVATION_HEALTH else {'status': 'not_installed'},
         ai_circuit=circuit,
         provider_attempt_settlements=settlements,
         entry_timing_gap_count=timing_gaps,
         ready_coverage=coverage, ready_coverage_basis='native_ready_seen_at_ingress_not_all_market_opportunities',
         ready_coverage_window='process_lifetime',
+        native_ready_selection=dict(schema='native_ready_selection_v1',
+            retained_ready_count=raw_ready_count, recent=raw_ready_recent,
+            recent_limit=32, recent_truncated=raw_ready_count > 32,
+            coverage='bounded_raw_membership_not_all_market_opportunities', runtime_effect=False),
         selected_native_coverage=dict(count=sum(selected_counts.values()), **selected_counts,
             age_only_not_delivery_failure=True, as_of=selected_as_of, retained=len(selected), scope='selected_backend_price_band_generation',
             coverage='process_ingress_only_not_all_market_opportunities'),
@@ -656,47 +712,55 @@ def _record_native_ready_locked(B, symbol, venue, item, market, epoch):
                 last = getattr(legacy, 'last', None)
                 states[tuple(scope)] = dict(turn=(getattr(legacy, 'turn', None) or {}).get('event_id'),
                     last=tuple(last) if last else None,
+                    generation=getattr(state, 'generation', None),
                     ready_event_ids=tuple(r['event'].get('event_id') for r in state.ready),
                     ready_ids=tuple(r['event'].get('signal_id') for r in state.ready))
                 for ready in getattr(state,'ready', ()):
                     event=ready.get('event') if isinstance(ready,dict) else None
                     if event and 0 <= epoch-float(event['epoch']) <= 5:
+                        selection = _native_selection(B, native, scope, state, event, epoch)
                         records.append((event.get('signal_id') or event.get('event_id'),
                             dict(symbol=symbol, venue=venue, item=item, market=market, day=day,
+                                 signal_id=event.get('signal_id') or event.get('event_id'),
+                                 native_event_id=event.get('event_id'), native_sequence=event.get('native_sequence'),
                                  native_epoch=event.get('native_epoch'), epoch=event['epoch'],
-                                 scope_execution_hash=getattr(state,'generation',None))))
+                                 confirmation_price=event.get('confirmation_price'),
+                                 scope_execution_hash=getattr(state,'generation',None)), selection))
                         family = getattr(B, '_FAMILY', None) or {}
-                        if family.get('schema') in {'continuous_reversal_policy_v5', 'continuous_reversal_policy_v6'}:
-                            from src.engine.scalping.reversal_extended_catalog import cell_key
-                            band = cell_key(symbol, market, event['confirmation_price'])
-                            cell = family['machine_cells'][band]['routes'][venue]
-                            expected_backend = cell['backend']
-                            selected_scope = ((native is B and scope[-1] == band
-                                and expected_backend in {'union_v5','union_v6'}
-                                and state.generation == cell['scope_execution_hash'])
-                                or (native is not B and expected_backend == 'registered_v4'
-                                    and state.generation == native._GENERATION))
-                            if selected_scope:
-                                branches = set(event.get('branch_signals', {})) & {
-                                    b['branch_id'] for b in cell['payload']['branches']}
-                                if branches:
-                                    selected.append((dict(epoch=event['epoch'], signal_id=event.get('signal_id') or event['event_id'],
+                        if selection['reason'] == 'selected':
+                            from src.engine.scalping.reversal_extended_catalog import CUMULATIVE_DEFINITIONS
+                            branches = set(selection['matched_branches'])
+                            selected.append((dict(epoch=event['epoch'], signal_id=event.get('signal_id') or event['event_id'],
                                         native_event_id=event['event_id'], native_epoch=event.get('native_epoch'),
                                         native_sequence=event.get('native_sequence'),
                                         branch_membership={bid: signal.get('event_id', event['event_id'])
                                             if signal.get('decision_phase') == 'FIRST_UPTICK' else None
                                             for bid,signal in event.get('branch_signals', {}).items() if bid in branches},
+                                        branch_hold_floors={bid: (signal.get('signal_proof') or {}).get('price')
+                                            for bid,signal in event.get('branch_signals', {}).items()
+                                            if bid in branches and bid not in CUMULATIVE_DEFINITIONS
+                                            and signal.get('decision_phase') == 'FIRST_PRICE_HOLD'},
                                         selector_claimed=bool(ready.get('claimed'))),
                                         family['family_sha256'], tuple(scope), getattr(state,'generation',None)))
     with _LOCK:
-        for identity,record in records:
+        for identity,record,selection in records:
             if identity and identity not in _READY:
                 kind='fixed_watch' if symbol in {'005930','034020','036930','196170','403870'} else 'other'
                 record['kind']=kind
+                record['selections'] = []
                 _COVERAGE[kind]['ready'] += 1
                 _READY[identity]=record
                 if len(_READY)>4096:
                     _READY.popitem(last=False)
+            if identity in _READY:
+                receipts = _READY[identity]['selections']
+                source_key = ('observed_scope', 'native_backend', 'family_sha256', 'scope_execution_hash',
+                              'reason', 'expected_scope_execution_hash', 'selected_branches', 'observed_branches')
+                if not any(all(r[k] == selection[k] for k in source_key) for r in receipts):
+                    receipts.append(selection)
+                    if len(receipts) > 32:
+                        receipts.pop(0)
+                        _READY[identity]['selection_receipts_truncated'] = True
         stream = (symbol, venue, item, market, day)
         active = _ACTIVE_SELECTED.setdefault(stream, set())
         for event, family, scope, scope_hash in selected:
@@ -739,6 +803,14 @@ def _record_native_ready_locked(B, symbol, venue, item, market, epoch):
                 row['last_observed_sequence'] = last[2]
             survivors = ({bid: anchor is None or anchor == state['turn']
                           for bid,anchor in row['branch_membership'].items()} if state else {})
+            floors = row['branch_hold_floors']
+            hold_proven = bool(floors and last and row['continuous_ingress']
+                and last[0] == epoch and last[2] > row['native_sequence']
+                and all(type(f) in (int, float) and math.isfinite(f) and f > 0 for f in floors.values()))
+            if hold_proven:
+                survivors.update({bid: last[3] >= floor for bid, floor in floors.items()})
+            row['latest_native_observation'] = list(last) if last else None
+            row['ready_membership_present'] = bool(state and row['signal_id'] in state['ready_ids'])
             # Never infer validity at the deadline from a static last tick.
             if epoch >= row['original_deadline']:
                 proven = (epoch == row['original_deadline'] and last and last[0] == epoch
@@ -749,7 +821,8 @@ def _record_native_ready_locked(B, symbol, venue, item, market, epoch):
                     terminal_reason='exact_boundary_observed' if proven else 'deadline_continuity_unobserved')
             elif not state or not last:
                 row.update(terminal='unobservable', terminal_reason='native_state_unobserved')
-            elif row['family_sha256'] != (getattr(B, '_FAMILY', None) or {}).get('family_sha256'):
+            elif (row['family_sha256'] != (getattr(B, '_FAMILY', None) or {}).get('family_sha256')
+                    or state['generation'] != row['scope_execution_hash']):
                 row.update(terminal='unobservable', terminal_reason='generation_changed')
             elif not good_quote(last) or last[1] != row['native_epoch']:
                 row.update(terminal='source_or_guard_blocked_before_claim', terminal_reason='source_or_epoch_invalid')
@@ -758,7 +831,9 @@ def _record_native_ready_locked(B, symbol, venue, item, market, epoch):
                 if not any(survivors.values()):
                     replaced = state['turn'] and state['turn'] in state['ready_event_ids']
                     row.update(terminal='replaced_before_claim' if replaced else 'invalidated_before_claim',
-                               terminal_reason='first_turn_invalidated')
+                               terminal_reason='first_price_hold_breached' if hold_proven
+                                   and set(floors) == set(survivors) and not row['ready_membership_present']
+                                   else 'first_turn_invalidated')
                 elif row['signal_id'] not in state['ready_ids']:
                     row.update(terminal='unobservable', terminal_reason='ready_removed_without_terminal_receipt')
                 elif row['selector_claimed']:
@@ -789,6 +864,119 @@ def _record_native_ready_locked(B, symbol, venue, item, market, epoch):
                         row.update(terminal='unobservable', terminal_reason='date_rollover')
                         _queue_lifecycle(key, row)
     return notify
+
+
+def _native_selection(B, native, scope, state, event, observed):
+    """Explain the existing selector predicates without claiming any event."""
+    family = getattr(B, '_FAMILY', None) or {}
+    result = dict(observed_scope=list(scope),
+        native_backend='operating' if native is B else 'native_parent',
+        family_sha256=family.get('family_sha256'), scope_execution_hash=getattr(state,'generation',None),
+        expected_scope=None, expected_backend=None, expected_scope_execution_hash=None,
+        observed_branches=sorted(event.get('branch_signals') or {}), selected_branches=[],
+        matched_branches=[], observed_epoch=observed, reason='selection_contract_unobservable')
+    try:
+        if family.get('schema') not in {'continuous_reversal_policy_v5', 'continuous_reversal_policy_v6'}:
+            return result
+        from src.engine.scalping.reversal_extended_catalog import cell_key
+        band = cell_key(scope[0], scope[3], event['confirmation_price'])
+        result['expected_scope'] = band
+        cell = family['machine_cells'][band]['routes'][scope[1]]
+        expected = cell['backend']
+        branches = sorted(b['branch_id'] for b in cell['payload']['branches'])
+        matched = sorted(set(result['observed_branches']) & set(branches))
+        result.update(expected_backend=expected, expected_scope_execution_hash=cell.get('scope_execution_hash'),
+                      selected_branches=branches, matched_branches=matched)
+        if native is B and scope[-1] != band:
+            reason = 'price_band_not_selected'
+        elif not (native is B and expected in {'union_v5','union_v6'}
+                  or native is not B and expected == 'registered_v4'):
+            reason = 'carried_backend_not_selected'
+        elif state.generation != (cell['scope_execution_hash'] if native is B else native._GENERATION):
+            reason = 'scope_generation_mismatch'
+        else:
+            reason = 'selected' if matched else 'selected_branch_missing'
+        result['reason'] = reason
+    except (KeyError, TypeError, ValueError, AttributeError):
+        pass  # Missing selection proof stays diagnostic, never eligible.
+    return result
+
+
+def record_native_preclaim_guard(*, stock, code, ws_data, reason, now):
+    """Bind an actual Main return to a live selected signal, without claiming it.
+
+    Native invalidation remains a separate terminal. A later fresh Main visit
+    may still claim the signal; this receipt carries no retry/order authority.
+    """
+    if (not isinstance(stock, dict) or stock.get('watch_origin') != 'MAIN_FIXED_WATCH'
+            or not isinstance(ws_data, dict) or type(now) not in (float, int) or not math.isfinite(now)
+            or not isinstance(reason, str) or reason not in {'extreme_sell_dominant','stale_ws_snapshot','trade_tick_quiet',
+                              'insufficient_history'}):
+        return 0
+    from src.engine.scalping.continuous_reversal import market_bucket
+    try:
+        market = market_bucket(stock.get('market_session_bucket'))
+    except ValueError:
+        return 0
+    item_map = ws_data.get('last_realtime_type_item')
+    routes = ws_data.get('realtime_type_snapshots_by_route')
+    if not isinstance(item_map, dict) or not isinstance(routes, dict):
+        return 0
+    item = item_map.get('0B')
+    if not isinstance(item, str) or item.split('_',1)[0] != code:
+        return 0
+    tapes = [records.get('0B') for records in routes.values()
+             if isinstance(records, dict) and isinstance(records.get('0B'), dict)
+             and records['0B'].get('item') == item]
+    if len(tapes) != 1:
+        return 0
+    tape = tapes[0]
+    venue = {'krx_nxt_integrated':'SOR','nxt_only':'NXT','krx_only':'KRX'}.get(tape.get('market_route'))
+    from src.trading.market.session_contract import market_source_partition_venue
+    if venue is None or market_source_partition_venue(item) != venue:
+        return 0
+    stamp, epoch, sequence = (tape.get(k) for k in ('observed_epoch','transport_epoch','route_sequence'))
+    if (type(stamp) not in (int, float) or not math.isfinite(stamp) or stamp > now
+            or type(epoch) is not int or epoch <= 0 or type(sequence) is not int or sequence < 0):
+        return 0
+    recorded = 0
+    with _LOCK:
+        phase_visit = (_MAIN_PHASE.get('name') == 'target_visit' and _MAIN_PHASE.get('code') == code
+                       and type(_MAIN_PHASE.get('epoch')) in (int,float)
+                       and 0 <= now - _MAIN_PHASE['epoch'] < 5)
+        for stream, keys in _ACTIVE_SELECTED.items():
+            if stream[:4] != (code, venue, item, market):
+                continue
+            for key in keys:
+                row = _SELECTED_READY.get(key)
+                if (not row or row.get('terminal') or row.get('claimed') or row.get('selector_claimed')
+                        or row.get('bundle_sha256') != _GENERATION
+                        or (row.get('main_queue_first_visit') is None and not phase_visit)
+                        or not (row.get('main_queue_first_visit') or row['epoch']) <= now < row['original_deadline']
+                        or not row['epoch'] <= stamp <= now or row['native_epoch'] != epoch
+                        or sequence < row['native_sequence'] or 'main_preclaim_guard' in row):
+                    continue
+                row['main_preclaim_guard'] = dict(stage='blocked_strength_momentum', reason=reason,
+                    gate_action='source_quality_block', observed_epoch=now, source_observed_epoch=stamp,
+                    source_item=item, source_transport_epoch=epoch, source_sequence=sequence,
+                    main_visit_basis='queue_visit' if row.get('main_queue_first_visit') is not None else 'current_target_phase',
+                    record_id=stock.get('id'), watch_admission_id=stock.get('watch_admission_id'),
+                    watch_generation_id=stock.get('watch_generation_id'), runtime_effect=False)
+                _queue_lifecycle(key, row)
+                recorded += 1
+    return recorded
+
+
+def native_ready_lifecycle(event, family_sha256):
+    """Read one exact bounded lifecycle while the caller holds native locks."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    identity = (datetime.fromtimestamp(event['epoch'], ZoneInfo('Asia/Seoul')).date().isoformat(),
+        os.getpid(), _GENERATION, family_sha256, event.get('registry_generation'),
+        event['symbol'], event['venue'], event['source_item'], event['market'],
+        event['native_epoch'], event['signal_id'])
+    with _LOCK:
+        return deepcopy(_SELECTED_READY.get(identity))
 
 
 def record_native_visit(symbol, venue, item, market, now):

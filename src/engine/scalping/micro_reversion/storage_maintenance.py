@@ -2200,6 +2200,23 @@ def _maintain_exact_ai_artifact_storage(
                         )
                     )
                     continue
+                native_archive = artifact_kind == 'jsonl' and logical.parent.name in {
+                    'ai_decision_payloads','ai_decision_trace','ai_decision_prompts','ai_decision_requests'}
+                indexed = None
+                if native_archive:
+                    from src.engine.automation.main_trailing_source_store import generation as index_generation, InputPending
+                    from src.engine.lifecycle.snapshot_archive import file_identity
+                    source_identity = file_identity(plain_metadata)
+                    receipt_path = Path(str(owned_logical)+'.gz.archive_receipt.json')
+                    if receipt_path.exists() or receipt_path.is_symlink():
+                        raise ValueError('exact_ai_original_archive_receipt_preserved')
+                    try:
+                        indexed = index_generation(logical.parent.parent, logical)
+                    except InputPending:
+                        pass  # Native gzip SHA remains available for explicit offline enrollment.
+                    if indexed is not None and indexed['source_stat'] != [source_identity[k]
+                            for k in ('device','inode','size','mtime_ns','ctime_ns')]:
+                        raise ValueError('exact_ai_index_source_changed')
                 group_actions, failure = _compress_group_verified(
                     [owned_logical],
                     manifest_path=None,
@@ -2209,6 +2226,24 @@ def _maintain_exact_ai_artifact_storage(
                         owned_logical: str(validation["decoded_content_sha256"])
                     },
                 )
+                if native_archive and failure is None:
+                    from src.engine.compress_db_backfilled_files import native_raw_archive_receipt
+                    archive = Path(str(owned_logical)+'.gz')
+                    identity = file_identity(archive.stat())
+                    receipt = native_raw_archive_receipt(logical,
+                        logical_sha256=str(validation['decoded_content_sha256']),
+                        logical_size=source_identity['size'], source_identity=source_identity,
+                        archive_identity=identity, indexed=indexed)
+                    from dataclasses import replace
+                    from src.utils.jsonl_io import write_json_object_generation_safe
+                    receipt_logical = Path(str(logical)+'.gz.archive_receipt.json')
+                    # The source generation lease also owns its archive proof;
+                    # retain the pinned parent across source pathname removal.
+                    write_json_object_generation_safe(receipt_logical, receipt,
+                        generation=replace(pinned_generation, logical=receipt_logical)
+                        if pinned_generation is not None else None)
+                    if file_identity(archive.stat()) != identity:
+                        raise ValueError('exact_ai_archive_changed_during_publication')
                 remapped_actions = _remap_actions(
                     group_actions,
                     names={

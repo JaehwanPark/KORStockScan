@@ -15,7 +15,7 @@ from zoneinfo import ZoneInfo
 
 from src.engine.trade_profit import calculate_net_realized_pnl
 from src.engine.log_archive_service import iter_target_log_lines, load_monitor_snapshot
-from src.engine.monitor_snapshot_runtime import guard_stdin_heavy_build
+from src.engine.monitor_snapshot_runtime import guard_stdin_heavy_build, should_guard_stdin_heavy_build
 from src.utils.constants import DATA_DIR, LOGS_DIR, POSTGRES_URL
 from src.utils.jsonl_io import existing_or_gzip_path, open_text_auto
 from src.engine.sniper_gatekeeper_replay import find_gatekeeper_snapshot_for_trade
@@ -2049,7 +2049,7 @@ def _load_buy_parent_handoff_projection(
     return result
 
 
-def _quantity_sell_receipt_observations(events: list[HoldingEvent]):
+def _quantity_sell_receipt_observations(events: list[HoldingEvent], *, record_id=None):
     """Collapse only unchanged, broker-clock-bound native receipt observations.
 
     Input bytes remain untouched. An order/execution collision without a complete
@@ -2072,16 +2072,63 @@ def _quantity_sell_receipt_observations(events: list[HoldingEvent]):
                 continue
             native = wrappers[0].fields
             native_fields = {k: v for k, v in native.items() if k.startswith("native_receipt_")}
-            record = str(native["id"])
-            if (native.get("native_receipt_identity_schema") != "broker_position_sell_receipt_v1"
-                    or native.get("native_receipt_position_key") != "record:" + record
+            # Structured pipeline rows carry the record outside fields; log
+            # readers retain their original in-field ID. A conflicting caller
+            # binding must never merge receipts across positions.
+            record = str(native.get("id") or record_id or "")
+            if not record or record_id is not None and record != str(record_id):
+                continue
+            schema = native.get("native_receipt_identity_schema")
+            identity_valid = (schema == "broker_position_sell_receipt_v1"
+                and native.get("native_receipt_position_key") == "record:" + record
+                and native.get("native_receipt_order_no") == key[1]
+                and native.get("native_receipt_execution_no") == key[2]
+                and native.get("native_receipt_buy_fill_identity") == native.get("holding_path_buy_fill_identity"))
+            observation_provenance_valid = str(native.get("broker_execution_provenance_complete")).lower() == "true"
+            lineage_gap = native.get("native_receipt_entry_lineage_status") == "source_gap"
+            if schema == "native_entry_sell_receipt_v1" or not observation_provenance_valid or lineage_gap:
+                # Revalidate the producer's terminal custody identity. An unknown
+                # execution venue remains unknown; it does not make unchanged
+                # observations of one acknowledged receipt multiple fills.
+                from src.engine.sniper_execution_receipts import _native_sell_receipt_identity
+                restored = {k: (True if v == "True" else False if v == "False" else v)
+                            for k, v in native.items() if not k.startswith("native_receipt_")}
+                # The pipeline logger renders integral lifecycle prices as
+                # e.g. "51300.0". Restore only that lossless typed context;
+                # official raw FIDs and the original payload remain untouched.
+                for name in ('main_lifecycle_exit_qty','main_lifecycle_exit_price'):
+                    value=restored.get(name)
+                    if isinstance(value,str) and re.fullmatch(r'[0-9]+(?:\.0+)?',value):
+                        restored[name]=int(value.partition('.')[0])
+                received_at = datetime.fromisoformat(str(native.get("native_receipt_observed_at")))
+                stock = {"id": record, "code": key[0]}
+                terminal_identity = _native_sell_receipt_identity(
+                    stock, key[0], record, "sell_completed", restored, received_at)
+                if schema == "native_entry_sell_receipt_v1":
+                    stock["last_watching_ai_attempt_decision_trace_id"] = native.get("native_receipt_entry_trace_id")
+                identity = _native_sell_receipt_identity(
+                    stock, key[0], record, "sell_completed", restored, received_at)
+                # Issued v1 UNKNOWN-venue wrappers predate these two metadata
+                # fields. Authenticate the original complete identity; neither
+                # omission may replace custody, the source gap, or raw clocks.
+                venue_metadata = {"native_receipt_operational_venue",
+                                  "native_receipt_venue_assignment_authority"}
+                if (schema == "broker_position_sell_receipt_v1"
+                        and set(identity) - set(native_fields) == venue_metadata
+                        and set(native_fields) <= set(identity)
+                        and native.get("native_receipt_execution_venue_status") == "unknown_preserved"
+                        and native.get("native_receipt_source_gap") == "actual_execution_venue_unresolved"
+                        and restored.get("actual_execution_venue") == "UNKNOWN"):
+                    identity = {k: v for k, v in identity.items() if k not in venue_metadata}
+                identity_valid = bool(identity and set(identity) == set(native_fields)
+                    and all(str(native_fields[k]) == str(v) for k, v in identity.items()))
+                observation_provenance_valid = observation_provenance_valid or (
+                    terminal_identity.get("native_receipt_source_gap") == "actual_execution_venue_unresolved")
+            if (not identity_valid
                     or str(native.get("native_receipt_record_id")) != record
                     or native.get("native_receipt_stock_code") != key[0]
-                    or native.get("native_receipt_order_no") != key[1]
-                    or native.get("native_receipt_execution_no") != key[2]
-                    or native.get("native_receipt_buy_fill_identity") != native.get("holding_path_buy_fill_identity")
-                    or not re.fullmatch(r"[0-9a-f]{64}", str(native.get("holding_path_buy_fill_identity") or ""))
-                    or str(native.get("broker_execution_provenance_complete")).lower() != "true"
+                    or not (lineage_gap or re.fullmatch(r"[0-9a-f]{64}", str(native.get("holding_path_buy_fill_identity") or "")))
+                    or not observation_provenance_valid
                     or native.get("broker_execution_time_source") != "official_fid_908"
                     or native.get("decision_authority") != "broker_sell_fill_observation_only"
                     or native.get("pipeline_lifecycle_population_scope") != "real_record_bound"
@@ -2909,9 +2956,13 @@ def _completed_trade_projection(
         "execution_receipt_exact_configured_cost" if configured_receipt else
         "source_gap_unknown"
     )
-    from src.trading.market.execution_venue import execution_venue_fields
+    from src.trading.market.execution_venue import execution_venue_fields, broker_route_fields
     assigned_venue = execution_venue_fields(terminal_fields,
         observed_at=terminal_fields.get("broker_execution_observed_at") or occurrence_time)
+    assigned_route = broker_route_fields(
+        terminal_fields.get("broker_route_requested") or terminal_fields.get("broker_route"),
+        observed_at=terminal_fields.get("broker_execution_observed_at") or occurrence_time,
+        recorded=terminal_fields)
     return {
         "id": trade.get("id"),
         "rec_date": trade.get("rec_date"),
@@ -2940,9 +2991,8 @@ def _completed_trade_projection(
         ),
         "broker_sor_flag": terminal_fields.get("broker_sor_flag"),
         "entry_execution_broker_route": terminal_fields.get("broker_route"),
-        "exit_execution_broker_route": terminal_fields.get(
-            "broker_route_requested"
-        ) or terminal_fields.get("broker_route"),
+        "exit_execution_broker_route": assigned_route["broker_route_requested"],
+        **assigned_route,
         "main_lifecycle_id": terminal_fields.get("main_lifecycle_id"),
         "attempt_id": terminal_fields.get("attempt_id")
         or terminal_fields.get("main_lifecycle_attempt_id"),
@@ -3339,7 +3389,19 @@ def _prior_entry_fill_events(
     events_by_id: dict[str, list[HoldingEvent]] = defaultdict(list)
     receipts: dict[str, dict] = {}
     for prior_date in sorted(prior_dates):
-        snapshot = load_monitor_snapshot("trade_review", prior_date)
+        from src.engine.log_archive_service import prior_entry_snapshot_rejection
+        rejected = prior_entry_snapshot_rejection(prior_date, data_root=DATA_DIR)
+        if rejected is not None:
+            receipts[prior_date] = {"status": rejected}
+            continue
+        from src.engine.log_archive_service import load_prior_entry_projection
+        try:
+            projection = load_prior_entry_projection(prior_date, data_root=DATA_DIR)
+        except (OSError, ValueError, TypeError, KeyError) as exc:
+            receipts[prior_date] = {"status": "source_gap_entry_snapshot_provenance", "reason": str(exc)}
+            continue
+        snapshot, projection_receipt = projection if projection is not None else (
+            load_monitor_snapshot("trade_review", prior_date), None)
         if not isinstance(snapshot, dict) or snapshot.get("date") != prior_date:
             receipts[prior_date] = {"status": "source_gap_entry_snapshot_missing"}
             continue
@@ -3357,12 +3419,9 @@ def _prior_entry_fill_events(
                 or _safe_int(metrics.get("open_scalp_position_projection_count"), -1) != len(rows)):
             receipts[prior_date] = {"status": "source_gap_entry_snapshot_census"}
             continue
-        receipts[prior_date] = {
-            "status": "sealed_entry_snapshot",
-            "logical_sha256": hashlib.sha256(json.dumps(
-                snapshot, ensure_ascii=False, sort_keys=True, separators=(",", ":")
-            ).encode("utf-8")).hexdigest(),
-        }
+        receipts[prior_date] = {"status": "sealed_entry_snapshot", **(projection_receipt or {
+            "logical_sha256": hashlib.sha256(json.dumps(snapshot, ensure_ascii=False,
+                sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()})}
         for row in rows:
             trade_id = str(row["id"])
             blocker_summary = row.get("avg_down_rebound_blocker_summary")
@@ -3616,7 +3675,7 @@ def completed_census_manifest(report: dict) -> dict:
     } for row in rows]
     source_sha = _completed_census_sha256(receipts) if receipts else None
     output_sha = _completed_census_sha256(rows)
-    return {
+    manifest = {
         "schema": "trade_review_completed_census_v1",
         "source_date": report.get("date"),
         "profile": meta.get("snapshot_profile") or "unobserved_report_build",
@@ -3651,6 +3710,38 @@ def completed_census_manifest(report: dict) -> dict:
         "rows": row_receipts,
     }
 
+    if "database_completed_sources" in meta:
+        sources = meta["database_completed_sources"]
+        manifest["database_completed_sources_sha256"] = _completed_census_sha256(sources)
+        manifest["database_completed_ids"] = sorted(str(row.get("id") or "")
+            for row in sources if isinstance(row, dict)) if isinstance(sources, list) else []
+    return manifest
+
+
+
+def completed_census_projection_ids(census: dict) -> list[str]:
+    """Read the full sealed population, preserving the native-terminal subset."""
+    if not isinstance(census, dict) or census.get("schema") != "trade_review_completed_census_v1":
+        raise ValueError("completed_census_population_invalid")
+    rows = census.get("rows")
+    raw = census.get("raw_terminal_ids")
+    database = census.get("database_completed_ids", [])
+    if (not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows)
+            or not isinstance(raw, list) or not isinstance(database, list)
+            or type(census.get("projected_count")) is not int
+            or len(rows) != census["projected_count"]
+            or type(census.get("raw_terminal_count")) is not int
+            or len(raw) != census["raw_terminal_count"]):
+        raise ValueError("completed_census_population_invalid")
+    ids = [str(row.get("id") or "") for row in rows]
+    for values in (ids, raw, database):
+        if (any(not isinstance(value, str) or not value for value in values)
+                or len(set(values)) != len(values)):
+            raise ValueError("completed_census_population_invalid")
+    if set(ids) != set(raw) | set(database):
+        raise ValueError("completed_census_population_invalid")
+    return sorted(ids)
+
 
 def verify_completed_census_manifest(report: dict, expected_date: str) -> str | None:
     """Return an explicit source gap; never accept a rewritten projection on an old seal."""
@@ -3666,11 +3757,48 @@ def verify_completed_census_manifest(report: dict, expected_date: str) -> str | 
         return "completed_census_manifest_missing"
     if manifest != completed_census_manifest(report):
         return "completed_census_generation_mismatch"
+    try:
+        completed_census_projection_ids(manifest)
+    except ValueError:
+        return "completed_census_id_mismatch"
     ids = [str(row.get("id") or "").strip() for row in rows]
     raw_ids = [str(item) for item in
                (report.get("meta") or {}).get("sell_completed_event_ids") or []]
+    expected_ids = set(raw_ids)
+    database_sources = (report.get("meta") or {}).get("database_completed_sources")
+    if "database_completed_sources" in (report.get("meta") or {}):
+        if not isinstance(database_sources, list):
+            return "completed_census_database_source_invalid"
+        database_by_id = {}
+        for source in database_sources:
+            if not isinstance(source, dict):
+                return "completed_census_database_source_invalid"
+            identity = source.get("id")
+            identity_text = str(identity or "")
+            digest = source.get("source_row_sha256")
+            if (isinstance(identity, bool) or not identity_text.isdecimal()
+                    or int(identity_text) <= 0 or identity_text in database_by_id
+                    or str(source.get("status") or "").upper() != "COMPLETED"
+                    or _parse_dt(source.get("sell_time")) is None
+                    or str(source.get("sell_time") or "")[:10] != expected_date
+                    or not isinstance(digest, str) or len(digest) != 64
+                    or any(char not in "0123456789abcdef" for char in digest)):
+                return "completed_census_database_source_invalid"
+            database_by_id[identity_text] = source
+        expected_ids.update(database_by_id)
+        for row, identity in zip(rows, ids):
+            source = database_by_id.get(identity)
+            if source is not None and row.get("database_completion_source_sha256") != source["source_row_sha256"]:
+                return "completed_census_database_row_binding_invalid"
+            if identity not in raw_ids and (
+                    source is None
+                    or row.get("completion_source_status") != "database_completed_native_terminal_unobserved"
+                    or row.get("strict_completion_status") != "excluded"
+                    or "source_gap_native_sell_completed_event_missing" not in (row.get("strict_completion_reasons") or [])):
+                return "completed_census_database_only_authority_invalid"
     if (not all(ids) or len(set(ids)) != len(ids)
-            or sorted(ids) != sorted(raw_ids)
+            or len(set(raw_ids)) != len(raw_ids)
+            or set(ids) != expected_ids
             or len(rows) != (report.get("metrics") or {}).get("canonical_completed_trades")):
         return "completed_census_id_mismatch"
     if any(row.get("completion_observed_date") != expected_date
@@ -3716,7 +3844,8 @@ def build_trade_review_report(
     guarded = guard_stdin_heavy_build(
         snapshot_kind="trade_review",
         target_date=target_date,
-        fallback_snapshot=load_monitor_snapshot("trade_review", target_date),
+        fallback_snapshot=(load_monitor_snapshot("trade_review", target_date)
+                           if should_guard_stdin_heavy_build(target_date) else None),
         request_details={
             "code": code,
             "since_time": since_time,
@@ -3818,6 +3947,19 @@ def build_trade_review_report(
         row for row in open_census_rows
         if _safe_int(row.get("id")) not in existing_ids
     )
+    # DB completion observations and native terminal events are different
+    # source populations. Preserve the original DB row witness without
+    # manufacturing a sell_completed event or granting economic eligibility.
+    database_completed_sources = [{
+        "id": row.get("id"), "status": row.get("status"),
+        "sell_time": str(row.get("sell_time") or ""),
+        "source_row_sha256": _completed_census_sha256(row),
+    } for row in trade_rows
+        if str(row.get("status") or "").upper() == "COMPLETED"
+        and str(row.get("sell_time") or "")[:10] == target_date]
+    database_completed_by_id = {
+        _safe_int(row["id"]): row for row in database_completed_sources
+    }
     buy_parent_handoff = _load_buy_parent_handoff_projection(
         target_date, structured_projection_events, trade_rows,
         trailing_source_status,
@@ -3879,6 +4021,12 @@ def build_trade_review_report(
         if position["status"] != "COMPLETED":
             continue
         record = position["record_id"]
+        produced = allocated.get(record)
+        if isinstance(produced, dict) and produced.get("status") in {"research_cost_invalid", "research_cost_pending"}:
+            # This is the fresh allocator's failure, not a receipt to validate.
+            # Keep its original cause and dependency dates for bounded recovery.
+            research_costs[record] = dict(produced)
+            continue
         research_costs[record] = validate_research_cost(allocated.get(record),
             record_id=record, symbol=position["symbol"],
             buy_legs=position["buy_legs"], sell_legs=position["sell_legs"],
@@ -3932,6 +4080,15 @@ def build_trade_review_report(
                     day: receipt for day, receipt in prior_entry_receipts.items()
                     if prior_date <= day < target_date
                 }
+            database_source = database_completed_by_id.get(_safe_int(trade.get("id")))
+            if database_source is not None:
+                projected["database_completion_source_sha256"] = database_source["source_row_sha256"]
+            if _safe_int(trade.get("id")) not in sell_completed_event_ids:
+                projected["completion_source_status"] = "database_completed_native_terminal_unobserved"
+                projected["strict_completion_status"] = "excluded"
+                projected["strict_completion_reasons"] = sorted(set(
+                    projected.get("strict_completion_reasons") or []) | {
+                    "source_gap_native_sell_completed_event_missing"})
             completed_projection.append(projected)
         open_projected = _open_scalp_position_projection(trade, matched)
         if open_projected is not None:
@@ -3949,7 +4106,8 @@ def build_trade_review_report(
             or "source_gap_signal_missing")
         for row in completed_projection
     )
-    if sell_completed_event_ids != projected_completed_ids:
+    declared_completed_ids = sell_completed_event_ids | set(database_completed_by_id)
+    if declared_completed_ids != projected_completed_ids:
         warnings.append(
             "sell_completed 이벤트와 완료 projection ID 불일치: "
             f"event_only={sorted(sell_completed_event_ids - projected_completed_ids)[:20]} "
@@ -4044,6 +4202,7 @@ def build_trade_review_report(
                 value.get("status") for value in research_costs.values())),
             "quantity_research_cost_persisted": write_research_costs,
             "sell_completed_event_ids": sorted(sell_completed_event_ids),
+            "database_completed_sources": database_completed_sources,
             "completion_event_id_count": len(completion_event_ids),
             "completion_event_unresolved_id_count": len(unresolved_completion_ids),
             "available_stocks": available_stocks,
@@ -4071,6 +4230,8 @@ def build_trade_review_report(
             "total_trades": len(visible_rows),
             "completed_trades": len(realized),
             "canonical_completed_trades": len(completed_projection),
+            "native_sell_completed_trade_count": len(sell_completed_event_ids),
+            "database_only_completed_trade_count": len(projected_completed_ids - sell_completed_event_ids),
             "exit_signal_binding_counts": dict(exit_signal_binding_counts),
             "open_scalp_position_projection_count": len(open_projection),
             "avg_down_rebound_position_count": len(avg_down_rebound_lineage_rows),

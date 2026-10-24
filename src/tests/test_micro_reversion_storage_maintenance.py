@@ -3363,6 +3363,14 @@ def test_exact_ai_storage_compresses_all_six_closed_roots_and_protects_current(
         )
         current_paths.append(current_path)
 
+    from src.engine.automation import main_trailing_source_store as index
+    from src.engine.automation.main_trailing_source_assembler import source_generation_matches
+    indexed = {}
+    for logical, _ in fixtures:
+        if logical.parent.name in index.STREAM_NAMESPACES:
+            assert index.build_step(tmp_path, logical, seconds=10)['complete']
+            indexed[logical] = index.generation(tmp_path, logical)
+
     result = maintain_report_artifact_storage(
         [],
         as_of_date=date.fromisoformat(current_date),
@@ -3383,6 +3391,9 @@ def test_exact_ai_storage_compresses_all_six_closed_roots_and_protects_current(
         assert not logical.exists()
         with gzip.open(logical.with_suffix(f"{logical.suffix}.gz"), "rb") as handle:
             assert handle.read() == raw
+        if logical in indexed:
+            assert source_generation_matches(tmp_path, closed_date, logical, indexed[logical])
+            assert index.generation(tmp_path, logical) == indexed[logical]
     for current_path in current_paths:
         assert current_path.exists()
         assert not current_path.with_suffix(f"{current_path.suffix}.gz").exists()

@@ -83,12 +83,15 @@ def snapshot(state,ready):
     return event,dict(branch_inputs=inputs)
 
 
-def configure(family, data_root, day):
+def configure(family, data_root, day, *, read_only=False):
     global _FAMILY, _GENERATION
     from src.engine.scalping.continuous_reversal_policy_v6 import validate_family
     validate_family(family)
     R.configure(family['native_parent_bundle']['continuous_reversal'])
-    R.restore_session_anchors(data_root, day)
+    if read_only:
+        R.restore_session_anchors(data_root, day, read_only=True)
+    else:
+        R.restore_session_anchors(data_root, day)
     with _LOCK:
         for key, state in list(_STATES.items()):
             cell = family['machine_cells'][key[-1]]['routes'][key[1]]

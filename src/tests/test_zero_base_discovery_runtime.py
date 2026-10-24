@@ -22,6 +22,9 @@ def _selected_fixture_requirements(monkeypatch):
     # separately by the native source/readiness contract tests.
     from src.engine.scalping import reversal_source_diagnostics as D
     monkeypatch.setattr(D, 'residence_requirements', lambda *a: {'minimum_seconds': 0})
+    from src.scanners import zero_base_discovery_runtime as R
+    monkeypatch.setattr(R, 'discovery_product_filter', lambda *a:
+        lambda code, name, market: dict(eligible=True, status='fixture_equity'))
 
 
 class Bus:
@@ -271,13 +274,19 @@ def test_runtime_durable_claim_machine_enter_and_late_result_rejection(tmp_path)
         event_bus=bus, session_date="2026-09-28", state_path=state,
         claim_receipt_emitter=lambda *args, **kwargs: claim_receipts.append((args, kwargs)),
     )
-    summary = runtime.scan_once("token", fetcher=_panel, now_epoch=T0 + 1)
+    panel = _panel("token")
+    panel["observations"][0]["volume"] = 12345
+    summary = runtime.scan_once("token", fetcher=lambda _token: panel, now_epoch=T0 + 1)
     assert summary["probe_requested_count"] == 1
     request = next(payload for event, payload in bus.events if event == PROBE_REQUEST_EVENT)
     assert state.exists()
     assert request["claim"]["source_kind"] == "activity"
     assert claim_receipts[0][0] == ("zero_base_probe_claim",)
     assert claim_receipts[0][1]["fields"]["zero_base_source_sha256"] == "a" * 64
+    assert claim_receipts[0][1]["fields"]["zero_base_discovery_volume"] == request["claim"]["discovery_volume"]
+    assert claim_receipts[0][1]["fields"]["zero_base_discovery_volume"] == 12345
+    assert claim_receipts[0][1]["fields"]["zero_base_source_kind"] == "activity"
+    assert claim_receipts[0][1]["fields"]["physical_probe_lease_id"] == request["claim"]["physical_probe_lease_id"]
 
     bus.publish(PROBE_RESULT_EVENT, {
         **request, "result": "assessed", "machine_action": "ENTER_NOW",
@@ -468,7 +477,13 @@ def test_scanner_emits_failed_probe_identity_and_artifact_cause(monkeypatch, tmp
         "machine_evaluation_status": "source_quality_blocked_before_assessment",
         "machine_preflight_artifact_status": "artifact_missing",
         "evaluation_attempt_id": "machine-source-invalid-exact",
+        "provider_called": False, "continuous_reversal_rejected_claim_receipt": {"sha256":"exact-proof"},
         "machine_capture_status": "captured", "machine_observation_sha256": "a" * 64,
+        "ws_source_trace": {"lease": {"collector_result_counts_by_type": {
+            "0D": {"enqueued": 10, "invalid_depth_snapshot": 2, "queue_full": 1}}}},
+        "machine_input_trace": {"entry_machine_input_as_of": 11,
+                                "entry_machine_input_preparation_ms": 0,
+                                "entry_machine_input_preparation_stages_ms": {"policy_resolve_ms": 1.5}},
     }
     emitted = []
     monkeypatch.setattr(scanner, "ZeroBaseDiscoveryRuntime", lambda **_kwargs: type(
@@ -488,7 +503,11 @@ def test_scanner_emits_failed_probe_identity_and_artifact_cause(monkeypatch, tmp
     assert payload["fields"]["evaluation_attempt_id"] == result["evaluation_attempt_id"]
     assert payload["fields"]["zero_base_machine_source_gap_kind"] == "runtime_preflight_artifact_not_ready"
     assert payload["fields"]["zero_base_machine_preflight_artifact_status"] == "artifact_missing"
+    assert payload["fields"]["zero_base_machine_input_trace"] == result["machine_input_trace"]
+    assert payload["fields"]["provider_called"] is False
+    assert payload["fields"]["continuous_reversal_rejected_claim_receipt"] == result["continuous_reversal_rejected_claim_receipt"]
     assert payload["fields"]["machine_observation_sha256"] == "a" * 64
+    assert payload["fields"]["zero_base_ws_source_trace"] == result["ws_source_trace"]
 
     result.update(result="source_unavailable", evaluation_attempt_id=None,
                   machine_evaluation_status=None, machine_preflight_artifact_status=None)
@@ -567,3 +586,19 @@ def test_scanner_publishes_scheduler_diagnostics_in_both_cycle_paths(monkeypatch
                 'probe_active_target_snapshot_status', 'probe_active_target_snapshot_generation',
                 'queue_restored_candidate_count']:
         assert payload['fields']['zero_base_'+key] == summary[key]
+
+
+def test_restored_queue_product_rejection_never_dispatches_or_consumes_capacity(tmp_path, monkeypatch):
+    from src.scanners import zero_base_discovery_runtime as R
+    bus=Bus(); runtime=ZeroBaseDiscoveryRuntime(event_bus=bus, session_date='2026-09-28',state_path=tmp_path/'q.json')
+    runtime.queue.observe(code='487130', route='krx_nxt_integrated', observed_epoch=T0,
+        source_sha256='a'*64, source_scope='observed_panel',received_epoch=T0,name='Unlisted Brand',market='KOSPI')
+    runtime._persist()
+    runtime.close()
+    restored=ZeroBaseDiscoveryRuntime(event_bus=bus,session_date='2026-09-28',state_path=tmp_path/'q.json')
+    monkeypatch.setattr(R,'discovery_product_filter',lambda *a: lambda *args:dict(eligible=False,status='verified_non_common_stock'))
+    before=len(bus.events)
+    result=restored.dispatch_due_probes(now_epoch=T0+2)
+    assert result['probe_requested_count']==0 and restored.queue.in_flight_count()==0
+    assert restored.queue._candidates[('487130','krx_nxt_integrated')].claim_count==0
+    assert not [e for e in bus.events[before:] if e[0]==PROBE_REQUEST_EVENT]

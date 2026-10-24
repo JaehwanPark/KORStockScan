@@ -4,11 +4,14 @@ from src.engine.scalping import reversal_operating_runtime as V5
 _ACTIVE = OLD
 
 
-def configure_bundle(bundle, *, data_root, day):
+def configure_bundle(bundle, *, data_root, day, read_only=False):
     global _ACTIVE
     if bundle.get('continuous_reversal',{}).get('schema') == 'continuous_reversal_policy_v5':
-        V5.configure(bundle['continuous_reversal'],data_root,day); _ACTIVE = V5
+        if read_only:V5.configure(bundle['continuous_reversal'],data_root,day,read_only=True)
+        else:V5.configure(bundle['continuous_reversal'],data_root,day)
+        _ACTIVE = V5
     else:
+        if read_only:raise ValueError('read_only_backend_schema_unsupported')
         OLD.configure_bundle(bundle,data_root=data_root,day=day); _ACTIVE = OLD
 
 

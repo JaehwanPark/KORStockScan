@@ -8,7 +8,6 @@ import json
 import ast
 import hashlib
 import os
-import tempfile
 import math
 from collections import defaultdict
 from itertools import chain
@@ -287,15 +286,9 @@ def _object(value):
 
 
 def _atomic_json(path, value):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, name = tempfile.mkstemp(dir=path.parent, prefix=path.name+'.')
-    try:
-        with os.fdopen(fd, 'w') as handle:
-            json.dump(value, handle, ensure_ascii=False, indent=2, allow_nan=False)
-            handle.write('\n');handle.flush();os.fsync(handle.fileno())
-        os.replace(name,path)
-    finally:
-        if os.path.exists(name):os.unlink(name)
+    from src.utils.jsonl_io import write_json_object_generation_safe
+    write_json_object_generation_safe(path,value,ensure_ascii=False,indent=None,
+        allow_nan=False,trailing_newline=True)
 
 
 def _incumbent(target_date):
@@ -413,6 +406,63 @@ def _sequential_terminal_proof_valid(actual):
         and isinstance(sha,str) and len(sha)==64
         and all(char in '0123456789abcdef' for char in sha)
         and all(proof.get(field)==actual.get(field) for field in fields))
+
+
+def _rejected_without_order(row, fills=()):
+    """A definite rejected reservation is not an accepted broker order.
+
+    The native verified journal forbids ORDER_BOUND/AMBIGUOUS -> REJECTED.
+    Keep the rejected attempt and its reason as evidence, without requiring a
+    nonexistent broker terminal or pretending transport was never attempted.
+    """
+    return (row.get('state') == 'INTENT_REJECTED'
+            and not str(row.get('broker_order_no') or '').strip()
+            and row.get('filled_qty',0) == 0 and row.get('fill_amount',0) == 0
+            and not fills)
+
+
+def _reprice_sources(target_date, inventory, joined):
+    """Classify accepted reprices under their proven original Main parent.
+
+    The native client identity explicitly names ENTRY_REPRICE_BUY and its
+    parent order. This never certifies terminal, costs or exposure as zero.
+    """
+    from collections import defaultdict,deque
+    import re
+    by_order=defaultdict(list)
+    for key,row in inventory.items():
+        identity=tuple(str(row.get(k) or '') for k in (
+            'order_date','account_key','owner_id','symbol','broker_order_no'))
+        by_order[identity].append(key)
+    children=defaultdict(list)
+    for key,row in inventory.items():
+        if row.get('order_date')!=target_date:continue
+        parts=str(row.get('client_intent_id') or '').split(':')
+        if (len(parts)!=6 or parts[0]!='main_scalping' or not parts[1].isdigit()
+                or parts[2]!=parts[1] or parts[3]!='ENTRY_REPRICE_BUY'
+                or not parts[4].isdigit() or not parts[4].strip('0')
+                or re.fullmatch('[0-9a-f]{32}',parts[5]) is None
+                or row.get('owner_id')!='main_scalping:'+parts[1]
+                or not str(row.get('broker_order_no') or '').isdigit()
+                or not str(row['broker_order_no']).strip('0') or not row.get('account_key')):
+            continue
+        parents=by_order.get((target_date,str(row['account_key']),row['owner_id'],
+                              str(row.get('symbol') or ''),parts[4]),[])
+        if len(parents)!=1 or parents[0]==key:continue
+        children[parents[0]].append((key,dict(intent_id=key,parent_intent_id=parents[0],
+            parent_broker_order_no=parts[4],record_id=parts[1],source_date=target_date,
+            symbol=row.get('symbol'),broker_order_no=row['broker_order_no'],
+            account_scope_sha256=_digest(['broker_account',row['account_key']]),
+            operation='ENTRY_REPRICE_BUY',economic_eligible=False,
+            terminal_or_cost_inferred=False)))
+    result={};queue=deque((key,key) for key in joined)
+    while queue:
+        parent,root=queue.popleft()
+        for key,proof in children.get(parent,[]):
+            if key in result or key in joined:continue
+            result[key]={**proof,'root_submission_intent_id':root}
+            queue.append((key,root))
+    return result
 
 
 def _parents(target_date, events, registry, *, details=None):
@@ -638,6 +688,8 @@ def _parents(target_date, events, registry, *, details=None):
         unclassified.add(('uncertain_sequential_submit',*key))
     uncertain_client_ids={context.get('owner_client_intent_id')
         for context in unresolved_uncertain.values()}
+    reprices=_reprice_sources(target_date,inventory,joined)
+    rejected = []
     for identity,actual in inventory.items():
         if actual.get('order_date')!=target_date or identity in joined:
             continue
@@ -645,6 +697,13 @@ def _parents(target_date, events, registry, *, details=None):
         if client and client in uncertain_client_ids:
             continue
         if ':AVG_DOWN:' in client or ':PYRAMID:' in client:continue
+        if identity in reprices:continue
+        if _rejected_without_order(actual, fills.get(identity, ())):
+            if any(str((event.get('fields') or {}).get('owner_registry_intent_id') or '') == identity
+                    and _safe_bool((event.get('fields') or {}).get('actual_order_submitted')) for event in events):
+                raise ValueError('rejected_intent_submission_source_conflict')
+            rejected.append(identity)
+            continue
         # Missing producer events, unknown actions and rejected/ambiguous owner
         # attempts remain in the census; a verified projection zero is not enough.
         no=str(actual.get('broker_order_no') or '')
@@ -660,6 +719,12 @@ def _parents(target_date, events, registry, *, details=None):
             str(fields.get('buy_account_key') or ''),no) if no else ('projection',_digest(event))
         if no and (str(event.get('record_id') or ''),no) in joined_sent:
             continue
+        reprice=reprices.get(str(fields.get('owner_registry_intent_id') or ''))
+        if (reprice is not None and no==reprice['broker_order_no']
+                and str(event.get('record_id') or '')==reprice['record_id']
+                and event.get('stock_code')==reprice['symbol']
+                and _digest(['broker_account',fields.get('buy_account_key')])==reprice['account_scope_sha256']):
+            continue
         unclassified.add(key)
     if details is not None:
         details.update(response_uncertain_attempt_count=len(uncertain_contexts),
@@ -671,6 +736,8 @@ def _parents(target_date, events, registry, *, details=None):
                 p.get('timeout_owner')=='entry_split_probe_residual_runtime' for p in parents.values()),
             economic_parent_count=sum(
                 p.get('economic_eligible') is True for p in parents.values()),
+            rejected_without_order_intent_ids=sorted(rejected),
+            excluded_reprice_order_sources=[reprices[key] for key in sorted(reprices)],
             unclassified_identities=sorted(_digest(list(key)) for key in unclassified))
     return list(parents.values()),len(unclassified)
 
@@ -706,14 +773,145 @@ def _reconciliation_dates(state):
     return days
 
 
-def _source_binding(projection, registry_contract):
+def _terminal_filled_cancel_inventory(registry):
+    """Only original, fully filled Main orders can explain a local cancel veto."""
+    from src.trading.order.owner_custody_registry import broker_account_key,OwnerRegistryError
+    try:account=broker_account_key(require_explicit=True)
+    except OwnerRegistryError:return {}
+    inventory={}
+    for row in registry:
+        if (row.get('account_key')!=account
+                or row.get('event')!='ORDER_TERMINAL' or row.get('state')!='ORDER_TERMINAL'
+                or row.get('side')!='BUY' or row.get('action')!='NEW'
+                or row.get('owner_type')!='main_scalping'
+                or type(row.get('quantity')) is not int or row['quantity']<=0
+                or type(row.get('filled_qty')) is not int or row['filled_qty']!=row['quantity']
+                or row.get('position_id')!=row.get('owner_id')):
+            continue
+        owner=str(row.get('owner_id') or '')
+        if not owner.startswith('main_scalping:'):continue
+        key=(row.get('order_date'),row.get('symbol'),owner.removeprefix('main_scalping:'),row.get('broker_order_no'))
+        inventory.setdefault(key,row)
+    return inventory
+
+
+def _cancel_event_clock(value):
+    stamp=datetime.fromisoformat(value)
+    return stamp.replace(tzinfo=KST) if stamp.tzinfo is None else stamp.astimezone(KST)
+
+
+def _partition_terminal_cancel_diagnostics(events, registry):
+    """Retain execution inputs; account for proven guard-only pairs by identity.
+
+    Full original rows remain in the sealed native execution partitions. Do
+    not carry a repeated frozen BUY seed into every later diagnostic attempt.
+    """
+    from src.engine.pipeline_event_summary import execution_projection_identity
+    inventory=_terminal_filled_cancel_inventory(registry)
+    kept=[];pending={};groups={}
+    for sequence,event in enumerate(events):
+        fields=event.get('fields') or {};stage=event.get('stage')
+        key=(event.get('emitted_date'),event.get('stock_code'),str(event.get('record_id') or ''),str(fields.get('orig_ord_no') or ''))
+        terminal=inventory.get(key)
+        if stage not in {'entry_order_cancel_requested','entry_order_cancel_failed'} or terminal is None:
+            kept.append((sequence,event));continue
+        try:
+            clock=_cancel_event_clock(event['emitted_at'])
+            eligible=(clock.date().isoformat()==key[0]
+                and _cancel_event_clock(terminal['observed_at_kst'])<clock
+                and event.get('execution_source_event_sha256')==execution_projection_identity(event))
+        except (KeyError,TypeError,ValueError):eligible=False
+        if not eligible:
+            kept.append((sequence,event));continue
+        if stage=='entry_order_cancel_requested':
+            if key in pending:kept.append(pending[key])
+            pending[key]=(sequence,event);continue
+        requested_record=pending.pop(key,None)
+        requested=requested_record[1] if requested_record is not None else None
+        failure_fields={k:v for k,v in fields.items() if k not in {'cancel_response','cancel_message'}}
+        if (requested is None or fields.get('cancel_response')!='failed'
+                or fields.get('cancel_message')!='owner_registry_cancel_original_not_open'
+                or requested.get('fields')!=failure_fields
+                or _cancel_event_clock(requested['emitted_at'])>clock):
+            if requested is not None:kept.append(requested_record)
+            kept.append((sequence,event));continue
+        for row in (requested,event):
+            group=groups.setdefault((*key,row['stage']),dict(source_date=key[0],stock_code=key[1],
+                record_id=key[2],order_no=key[3],stage=row['stage'],
+                disposition='terminal_filled_local_cancel_guard',
+                terminal_event_hash=terminal['event_hash'],terminal_intent_id=terminal['intent_id'],
+                first_event_at=row['emitted_at'],last_event_at=row['emitted_at'],
+                event_sha256s=[],execution_sha256s=[]))
+            group['last_event_at']=row['emitted_at']
+            group['event_sha256s'].append(_digest(row))
+            group['execution_sha256s'].append(row['execution_source_event_sha256'])
+    kept.extend(pending.values());diagnostics={}
+    for key,group in sorted(groups.items()):
+        for name in ('event_sha256s','execution_sha256s'):group[name].sort()
+        diagnostics.setdefault(key[0],[]).append(group)
+    return [row for _,row in sorted(kept,key=lambda item:item[0])],diagnostics
+
+
+def _validate_terminal_cancel_diagnostics(groups, day, *, registry=None):
+    import re
+    from collections import Counter
+    counts=Counter();identities=set();originals=set()
+    inventory=_terminal_filled_cancel_inventory(registry) if registry is not None else None
+    for group in groups:
+        key=(day,group['stock_code'],group['record_id'],group['order_no'])
+        stage=group['stage'];refs=group['event_sha256s'];hashes=group['execution_sha256s']
+        if (group['source_date']!=day or group.get('disposition')!='terminal_filled_local_cancel_guard'
+                or stage not in {'entry_order_cancel_requested','entry_order_cancel_failed'}
+                or not refs or len(refs)!=len(hashes) or len(set(refs))!=len(refs) or len(set(hashes))!=len(hashes)
+                or any(not re.fullmatch('[0-9a-f]{64}',str(sha)) for sha in [*refs,*hashes,group['terminal_event_hash']])
+                or originals.intersection(refs) or identities.intersection(hashes)
+                or _cancel_event_clock(group['first_event_at']).date().isoformat()!=day
+                or _cancel_event_clock(group['last_event_at']).date().isoformat()!=day
+                or _cancel_event_clock(group['first_event_at'])>_cancel_event_clock(group['last_event_at'])):
+            raise ValueError('cancel_wait_terminal_diagnostic_contract_invalid')
+        if inventory is not None:
+            terminal=inventory.get(key) or {}
+            if (terminal.get('event_hash')!=group['terminal_event_hash']
+                    or terminal.get('intent_id')!=group['terminal_intent_id']
+                    or _cancel_event_clock(terminal['observed_at_kst'])>=_cancel_event_clock(group['first_event_at'])):
+                raise ValueError('cancel_wait_terminal_diagnostic_source_changed')
+        counts[(*key,stage)]+=len(refs);originals.update(refs);identities.update(hashes)
+    for key in {key[:-1] for key in counts}:
+        if counts[(*key,'entry_order_cancel_requested')]!=counts[(*key,'entry_order_cancel_failed')]:
+            raise ValueError('cancel_wait_terminal_diagnostic_pair_incomplete')
+    return len(originals)
+
+
+def _diagnostic_projection_digest(payload):
+    return _digest({day:row['source_binding']['terminal_cancel_diagnostics']
+        for day,row in payload['economic_state']['submission_reconciliation']['by_date'].items()
+        if (row.get('source_binding') or {}).get('terminal_cancel_diagnostics')})
+
+
+def _verify_diagnostic_projection_receipt(payload, data_root, *, report_sha=None):
+    """Reuse the existing native publisher receipt, never a self-resealed report."""
+    path=Path(data_root)/'report/entry_cancel_wait_tuning'/f"entry_cancel_wait_tuning_{payload['date']}.reuse-contract.json"
+    receipt,_=_bounded_semantic_json(path)
+    if (receipt.get('report_proof_sha256')!=payload.get('proof_sha256')
+            or receipt.get('as_of')!=payload.get('generated_at')
+            or receipt.get('terminal_cancel_diagnostics_sha256')!=_diagnostic_projection_digest(payload)
+            or report_sha is not None and receipt.get('artifact_sha256')!=report_sha):
+        raise ValueError('cancel_wait_terminal_diagnostic_publication_changed')
+
+
+def _source_binding(projection, registry_contract, *, diagnostics=None):
     census = projection.get('producer_census') or {}
-    return dict(status=projection.get('status'),
+    result=dict(status=projection.get('status'),
                 projection_sha256=_digest(projection),
                 producer_manifest_sha256=census.get('manifest_sha256'),
                 retained_event_count=projection.get('retained_event_count'),
                 native_census_projection=census.get('native_census_projection'),
                 registry_tail_hash=registry_contract.get('tail_hash'))
+    if diagnostics:
+        _validate_terminal_cancel_diagnostics(diagnostics,diagnostics[0]['source_date'])
+        result['terminal_cancel_diagnostics']=diagnostics
+        result['retained_event_count']-=sum(len(g['event_sha256s']) for g in diagnostics)
+    return result
 
 
 def _logical_projection_sources(projection):
@@ -880,27 +1078,46 @@ def _previous_state(target_date):
             if not refresh_floor <= source_day <= day:
                 raise ValueError('cancel_wait_predecessor_source_date_outside_scope')
             try:
-                original,contract=entry._bounded_execution_projection(source_day,stages=CANCEL_WAIT_SUMMARY_STAGES | {'order_leg_sent'},
-                    families=('dynamic_entry_price_resolver','entry_price_execution_quality'))
                 retained=[e for e in state.get('source_events',[]) if e.get('emitted_date')==source_day]
-                expected={_digest(e) for e in retained}
                 prior_row=((state.get('submission_reconciliation') or {}).get('by_date') or {}).get(source_day) or {}
-                if not expected and prior_row.get('excluded_source_event_sha256s'):
-                    expected=set(prior_row['excluded_source_event_sha256s'])
-                if contract.get('status')!='ready' or {_digest(e) for e in original}!=expected:
-                    # A prior failed projection used to erase both events and
-                    # their excluded hashes. The original dated native receipt
-                    # can recover that loss; a known nonempty/verified-empty
-                    # predecessor disagreement must still fail closed.
-                    recovered[source_day] = _recover_lost_original(source_day, state,
-                        original, contract, registry, registry_contract, path, predecessor_sha, payload)
-                elif source_day in recovered:
-                    _validate_recovery_receipt(source_day, recovered[source_day], original,
-                        read_object=_bounded_semantic_json, report_dir=REPORT_DIR)
-                    if (_digest(_verified_original_census(contract, original)) != recovered[source_day]['logical_source_receipts_sha256']
-                        or contract['producer_census'].get('manifest_sha256') != recovered[source_day]['producer_manifest_sha256']):
-                        raise ValueError('cancel_wait_original_native_source_changed:' + source_day)
-                bindings[source_day] = _source_binding(contract, registry_contract)
+                prior_binding=prior_row.get('source_binding') or {}
+                prior_diagnostics=prior_binding.get('terminal_cancel_diagnostics') or []
+                if prior_diagnostics:
+                    # The cold producer already conserved the full native census.
+                    # Reuse that exact generation; never scan yesterday's large
+                    # diagnostic partitions again merely to rebuild the ledger.
+                    from src.engine.pipeline_event_summary import producer_summary_paths
+                    _verify_diagnostic_projection_receipt(payload,DATA_DIR,report_sha=predecessor_sha)
+                    manifest_path=producer_summary_paths(DATA_DIR/'pipeline_event_summaries',source_day)[1]
+                    manifest,_=_bounded_semantic_json(manifest_path)
+                    _validate_terminal_cancel_diagnostics(prior_diagnostics,source_day,registry=registry)
+                    if (prior_binding.get('producer_manifest_sha256')!=_digest(manifest)
+                            or not _sealed_census_matches(DATA_DIR,source_day,retained,manifest,prior_binding)):
+                        raise ValueError('cancel_wait_terminal_diagnostic_source_changed')
+                    original=retained;bindings[source_day]=prior_binding
+                else:
+                    original,contract=entry._bounded_execution_projection(source_day,stages=CANCEL_WAIT_SUMMARY_STAGES | {'order_leg_sent'},
+                        families=('dynamic_entry_price_resolver','entry_price_execution_quality'))
+                    expected={_digest(e) for e in retained}
+                    if not expected and prior_row.get('excluded_source_event_sha256s'):
+                        expected=set(prior_row['excluded_source_event_sha256s'])
+                    if contract.get('status')!='ready' or {_digest(e) for e in original}!=expected:
+                        # A prior failed projection used to erase both events and
+                        # their excluded hashes. The original dated native receipt
+                        # can recover that loss; a known nonempty/verified-empty
+                        # predecessor disagreement must still fail closed.
+                        recovered[source_day] = _recover_lost_original(source_day, state,
+                            original, contract, registry, registry_contract, path, predecessor_sha, payload)
+                    elif source_day in recovered:
+                        _validate_recovery_receipt(source_day, recovered[source_day], original,
+                            read_object=_bounded_semantic_json, report_dir=REPORT_DIR)
+                        if (_digest(_verified_original_census(contract, original)) != recovered[source_day]['logical_source_receipts_sha256']
+                            or contract['producer_census'].get('manifest_sha256') != recovered[source_day]['producer_manifest_sha256']):
+                            raise ValueError('cancel_wait_original_native_source_changed:' + source_day)
+                    original,diagnostics=(_partition_terminal_cancel_diagnostics(original,registry)
+                        if source_day not in recovered else (original,{}))
+                    bindings[source_day] = _source_binding(contract, registry_contract,
+                        diagnostics=diagnostics.get(source_day))
                 reconstructed,unknown=_parents(source_day,original,registry)
                 if unknown:
                     rebuilt_counts.pop(source_day, None)
@@ -918,7 +1135,8 @@ def _previous_state(target_date):
                 rebuilt_events.extend(original)
             except (OSError, ValueError, TypeError, KeyError, SyntaxError) as exc:
                 retained=[e for e in state.get('source_events',[]) if e.get('emitted_date')==source_day]
-                refs=sorted({_digest(e) for e in retained})
+                refs=sorted({_digest(e) for e in retained}
+                    | {sha for group in ((state.get('submission_reconciliation') or {}).get('by_date',{}).get(source_day,{}).get('source_binding') or {}).get('terminal_cancel_diagnostics',[]) for sha in group['event_sha256s']})
                 if not refs:
                     refs=(((state.get('submission_reconciliation') or {}).get('by_date') or {}).get(source_day) or {}).get('excluded_source_event_sha256s') or []
                 quarantined[source_day]=dict(reason=str(exc), excluded_source_event_sha256s=refs,
@@ -963,6 +1181,7 @@ def _unresolved_prior_custody(target_date, registry, parents, outcomes, *, detai
         if event.get('owner_type')=='main_scalping' and event.get('side')=='BUY' and event.get('action')=='NEW':
             inventory.setdefault(event.get('intent_id'),{}).update(event)
     unresolved = [key for key,row in inventory.items() if '2026-06-05' <= str(row.get('order_date','')) < target_date
+        and not _rejected_without_order(row)
         and (not _sequential_terminal_proof_valid(row)
              or (row.get('filled_qty',0)>0 and parent_by_intent.get(key) not in completed))]
     for parent in parents:
@@ -1018,7 +1237,8 @@ def _hydrate_missing_history(target_date, predecessor, registry, source):
             original, contract = entry._bounded_execution_projection(day,
                 stages=CANCEL_WAIT_SUMMARY_STAGES | {'order_leg_sent'},
                 families=('dynamic_entry_price_resolver', 'entry_price_execution_quality'))
-            bindings[day] = _source_binding(contract, source['registry'])
+            original,diagnostics=_partition_terminal_cancel_diagnostics(original,registry)
+            bindings[day] = _source_binding(contract, source['registry'],diagnostics=diagnostics.get(day))
             if contract.get('status') != 'ready':
                 continue
             reconstructed, unknown = _parents(day, original, registry)
@@ -1031,7 +1251,7 @@ def _hydrate_missing_history(target_date, predecessor, registry, source):
 
 
 def _reconcile_history(target_date, events, registry, parents, outcomes, source,
-                       predecessor, current_details):
+                       predecessor, current_details, *, diagnostics=None):
     """Separate observed custody from the completeness of historical sources."""
     from src.engine.automation.source_quality_clean_baseline import policy_refresh_start_date
     from src.utils.market_day import is_krx_trading_day
@@ -1044,7 +1264,7 @@ def _reconcile_history(target_date, events, registry, parents, outcomes, source,
     bindings.update({day: row.get('source_binding', {}) for day, row in
                      (predecessor.get('submission_reconciliation') or {}).get('by_date', {}).items()
                      if day not in bindings})
-    bindings[target_date] = _source_binding(source['projection'], source['registry'])
+    bindings[target_date] = _source_binding(source['projection'], source['registry'],diagnostics=diagnostics)
     by_date = {}
     for day in sorted(days):
         if day > target_date or day < floor:
@@ -1072,6 +1292,10 @@ def _reconcile_history(target_date, events, registry, parents, outcomes, source,
             unclassified_submission_count=len(unknown), coverage_verified=verified,
             blocker=reason or ('historical_source_binding_missing' if not verified else
                               'actual_dispatch_or_parent_lineage_unclassified' if unknown else None))
+        if 'rejected_without_order_intent_ids' in details:
+            by_date[day]['rejected_without_order_intent_ids'] = details['rejected_without_order_intent_ids']
+        if 'excluded_reprice_order_sources' in details:
+            by_date[day]['excluded_reprice_order_sources'] = details['excluded_reprice_order_sources']
     required = sorted(day for day in by_date if day < target_date)
     missing = [day for day in required if not by_date[day]['coverage_verified']]
     unknown = sorted({key for day in required for key in by_date[day]['unclassified_identities']})
@@ -1258,6 +1482,7 @@ def build_report(target_date: str, *, artifact_as_of: str | None = None) -> dict
             excluded_from_economic_history=True,structural_gap_eta=None)
     _hydrate_missing_history(target_date, predecessor, registry, source)
     outcomes=list({_digest(r):r for r in predecessor.get('actual_outcomes',[])+outcomes}.values())
+    events,diagnostics=_partition_terminal_cancel_diagnostics(events,registry)
     events=list({_digest(r):r for r in chain(predecessor.get('source_events',[]),events)}.values())
     counts=dict(predecessor.get('source_counts') or {})
     parents=[p for p in predecessor.get('parents',[]) if p['source_date']!=target_date]
@@ -1318,7 +1543,7 @@ def build_report(target_date: str, *, artifact_as_of: str | None = None) -> dict
                             'cancel_pending' if cancel_pending else
                             'partial_open' if filled_qty>0 else 'open'))
     ledger, history = _reconcile_history(target_date, events, registry, parents,
-        outcomes, source, predecessor, parent_details)
+        outcomes, source, predecessor, parent_details,diagnostics=diagnostics.get(target_date))
     daily_zero = (counts.get(target_date) == 0 and not unclassified
                   and source['projection'].get('status') == 'ready'
                   and source['registry'].get('status') == 'verified'
@@ -1435,6 +1660,10 @@ def build_report(target_date: str, *, artifact_as_of: str | None = None) -> dict
         previous_thresholds=previous,recommended_thresholds=dict(previous),incumbent_source=incumbent_source,
         registered_count=len(parents),invalid_row_count=unclassified,diagnostic_proxy_row_count=None,
         submission_census=dict(submitted_parent_count=counts.get(target_date),unclassified_count=unclassified,
+            rejected_without_order_count=(len(parent_details['rejected_without_order_intent_ids'])
+                if 'rejected_without_order_intent_ids' in parent_details else None),
+            excluded_reprice_order_count=(len(parent_details['excluded_reprice_order_sources'])
+                if 'excluded_reprice_order_sources' in parent_details else None),
             economic_parent_count=parent_details.get('economic_parent_count'),
             excluded_sequential_timeout_owner_count=parent_details.get('sequential_source_only_parent_count'),
             excluded_residual_timeout_owner_count=parent_details.get('residual_source_only_parent_count'),
@@ -1525,7 +1754,7 @@ def _validate_recovery_receipt(day, receipt, events, *, read_object=None, report
     return path
 
 
-def _projected_census_matches(data_root, day, events, manifest, projection):
+def _projected_census_matches(data_root, day, events, manifest, projection, diagnostics=()):
     """Consume the producer's sealed inline census while its source is unchanged.
 
     This same-owner local receipt is not authentication against a writer that
@@ -1553,28 +1782,51 @@ def _projected_census_matches(data_root, day, events, manifest, projection):
             or not re.fullmatch('[0-9a-f]{64}',str(source.get('source_content_sha256') or ''))
             or not 1<=len(physical)<=2):
         raise ValueError('cancel_wait_census_projection_invalid')
-    expected_names=set()
+    expected_names=set(); physical_changed=False
     for item in physical:
         compression=item.get('compression')
         if compression not in {'plain','gzip'} or compression in expected_names:
             raise ValueError('cancel_wait_census_projection_alias_invalid')
         expected_names.add(compression)
         path=logical if compression=='plain' else Path(str(logical)+'.gz')
-        before=path.lstat()
-        identity=[before.st_dev,before.st_ino,before.st_size,before.st_mtime_ns,before.st_ctime_ns]
-        if (not stat.S_ISREG(before.st_mode) or item.get('file_identity')!=identity
-                or item.get('stored_bytes')!=before.st_size
-                or not re.fullmatch('[0-9a-f]{64}',str(item.get('stored_sha256') or ''))):
+        if not re.fullmatch('[0-9a-f]{64}',str(item.get('stored_sha256') or '')):
             raise ValueError('cancel_wait_census_projection_source_changed')
+        try:before=path.lstat()
+        except FileNotFoundError:
+            physical_changed=True;continue
+        identity=[before.st_dev,before.st_ino,before.st_size,before.st_mtime_ns,before.st_ctime_ns]
+        if not stat.S_ISREG(before.st_mode):
+            raise ValueError('cancel_wait_census_projection_source_changed')
+        if item.get('file_identity')!=identity or item.get('stored_bytes')!=before.st_size:
+            physical_changed=True
     current={name for name,p in (('plain',logical),('gzip',Path(str(logical)+'.gz')))
         if p.exists() or p.is_symlink()}
-    if current!=expected_names:raise ValueError('cancel_wait_census_projection_alias_changed')
+    if physical_changed or current!=expected_names:
+        # Only a plaintext-to-archive transition may rebind an inline census.
+        # Authenticate the complete logical bytes through the existing strict
+        # source owner; do not regenerate events or rewrite historical seals.
+        if expected_names!={'plain'} or 'gzip' not in current:
+            raise ValueError('cancel_wait_census_projection_source_changed')
+        from src.utils.jsonl_io import iter_jsonl_objects_strict
+        observed_source={}
+        for _ in iter_jsonl_objects_strict(logical, provenance=observed_source,
+                max_decoded_bytes=MAX_RECONCILIATION_METADATA_BYTES,
+                max_line_bytes=MAX_RECONCILIATION_METADATA_BYTES):pass
+        fields=('source_content_sha256','source_content_bytes','source_line_count',
+                'source_nonempty_line_count','source_json_object_row_count')
+        if (observed_source.get('source_snapshot_stable') is not True
+                or any(observed_source.get(k)!=source.get(k) for k in fields)):
+            raise ValueError('cancel_wait_census_projection_source_changed')
     expected=Counter(projection.get('expected_stage_counts') or {})
     hashes=projection.get('expected_stage_hash_sums') or {}
     if (any(stage not in stages or type(n) is not int or n<0 for stage,n in expected.items())
             or any(stage not in stages or not re.fullmatch('[0-9a-f]{64}',str(v)) for stage,v in hashes.items())):
         raise ValueError('cancel_wait_census_projection_counts_invalid')
     observed=Counter();observed_hash=Counter()
+    _validate_terminal_cancel_diagnostics(diagnostics,day)
+    for group in diagnostics:
+        stage=group['stage'];observed[stage]+=len(group['execution_sha256s'])
+        observed_hash[stage]=(observed_hash[stage]+sum(int(sha,16) for sha in group['execution_sha256s']))%IDENTITY_MODULUS
     for event in events:
         stage=event.get('stage');sha=event.get('execution_source_event_sha256')
         if stage not in stages or event.get('emitted_date')!=day or sha!=execution_projection_identity(event):
@@ -1589,8 +1841,11 @@ def _sealed_census_matches(data_root, day, events, manifest, binding=None):
     from src.engine.pipeline_event_summary import CANCEL_WAIT_SUMMARY_STAGES
     from src.engine.scalping.entry_split_order_plan import _execution_projection_census, _canonical_sha256
     projected=_projected_census_matches(data_root,day,events,manifest,
-        (binding or {}).get('native_census_projection'))
+        (binding or {}).get('native_census_projection'),
+        (binding or {}).get('terminal_cancel_diagnostics') or ())
     if projected is not None:return projected
+    if (binding or {}).get('terminal_cancel_diagnostics'):
+        return False
     stages = CANCEL_WAIT_SUMMARY_STAGES | {'order_leg_sent'}
     if any(e.get('stage') not in stages or e.get('emitted_date') != day for e in events):
         return False
@@ -1634,6 +1889,8 @@ def _candidate_evidence_valid(payload):
 def _reconciliation_metadata_generation(data_root, by_date, recovered_sources=None):
     from src.engine.pipeline_event_summary import producer_summary_paths
     paths = [Path(data_root)/'runtime/order_owner_registry.jsonl']
+    if any((row.get('source_binding') or {}).get('terminal_cancel_diagnostics') for row in by_date.values()):
+        paths.append(Path(data_root)/'report/entry_cancel_wait_tuning'/f'entry_cancel_wait_tuning_{max(by_date)}.reuse-contract.json')
     for day, row in sorted(by_date.items()):
         if row['coverage_verified']:
             logical, manifest = producer_summary_paths(Path(data_root)/'pipeline_event_summaries',day)
@@ -1719,8 +1976,26 @@ def validated_reconciliation_view(payload, policy=None, *, data_root=None, read_
             findings.append('cancel_wait_history_source_binding_missing')
         missing, unknown = [], set()
         for d, row in by_date.items():
+            _validate_terminal_cancel_diagnostics((row.get('source_binding') or {}).get('terminal_cancel_diagnostics') or [],d)
             keys = row['unclassified_identities']
+            rejected_ids=row.get('rejected_without_order_intent_ids')
+            if rejected_ids is not None and (not isinstance(rejected_ids,list)
+                    or any(not isinstance(key,str) or not key for key in rejected_ids)
+                    or len(set(rejected_ids))!=len(rejected_ids)):
+                findings.append('cancel_wait_rejected_intent_census_invalid')
             parents = [p for p in state['parents'] if p['source_date'] == d]
+            reprice_sources=row.get('excluded_reprice_order_sources')
+            if reprice_sources is not None:
+                joined={key for parent in parents for key in parent['children']}
+                if (not isinstance(reprice_sources,list) or any(not isinstance(item,dict)
+                        or not isinstance(item.get('intent_id'),str) or not item['intent_id']
+                        or not isinstance(item.get('root_submission_intent_id'),str)
+                        or item.get('source_date')!=d or item.get('operation')!='ENTRY_REPRICE_BUY'
+                        or item.get('economic_eligible') is not False or item.get('terminal_or_cost_inferred') is not False
+                        or item.get('root_submission_intent_id') not in joined
+                        for item in reprice_sources)
+                        or len({item.get('intent_id') for item in reprice_sources})!=len(reprice_sources)):
+                    findings.append('cancel_wait_reprice_scope_census_invalid')
             identities = sorted(p['parent_id'] for p in parents)
             count = row['classified_parent_count']
             source_count = state['source_counts'].get(d)
@@ -1780,6 +2055,18 @@ def validated_reconciliation_view(payload, policy=None, *, data_root=None, read_
             or history['zero_is_verified'] != (coverage and not unresolved)):
             findings.append('cancel_wait_false_historical_zero')
         current = by_date[day]
+        rejected=current.get('rejected_without_order_intent_ids')
+        if 'rejected_without_order_count' in census and (
+                (rejected is None and census['rejected_without_order_count'] is not None)
+                or rejected is not None and (type(census['rejected_without_order_count']) is not int
+                    or census['rejected_without_order_count'] != len(rejected))):
+            findings.append('cancel_wait_rejected_intent_census_invalid')
+        reprices=current.get('excluded_reprice_order_sources')
+        if 'excluded_reprice_order_count' in census and (
+                (reprices is None and census['excluded_reprice_order_count'] is not None)
+                or reprices is not None and (type(census['excluded_reprice_order_count']) is not int
+                    or census['excluded_reprice_order_count']!=len(reprices))):
+            findings.append('cancel_wait_reprice_scope_census_invalid')
         count = state['source_counts'].get(day)
         daily_coverage = current['coverage_verified'] and not current['unclassified_identities']
         zero = daily_coverage and count == 0
@@ -1846,6 +2133,8 @@ def validated_reconciliation_view(payload, policy=None, *, data_root=None, read_
                 findings.append('cancel_wait_economic_population_or_current_custody_invalid')
         cache_key = None
         if data_root is not None:
+            if any((row.get('source_binding') or {}).get('terminal_cancel_diagnostics') for row in by_date.values()):
+                _verify_diagnostic_projection_receipt(payload,data_root)
             generation = _reconciliation_metadata_generation(data_root,by_date,recovered_sources)
             projected_sources=set()
             for d,row in by_date.items():
@@ -1885,7 +2174,11 @@ def validated_reconciliation_view(payload, policy=None, *, data_root=None, read_
                     raise ValueError('execution_producer_census_size_invalid')
                 logical, _ = producer_summary_paths(Path(data_root)/'pipeline_event_summaries', d)
                 aliases = sum(p.exists() or p.is_symlink() for p in (logical, Path(str(logical)+'.gz')))
-                if binding.get('native_census_projection') is None:
+                projection=binding.get('native_census_projection')
+                archived_plain = (projection is not None
+                    and {r.get('compression') for r in (projection.get('source') or {}).get('physical_representations',[])}=={'plain'}
+                    and Path(str(logical)+'.gz').exists())
+                if projection is None or archived_plain:
                     decoded_budget += declared * max(1, aliases)
                 if decoded_budget > MAX_RECONCILIATION_METADATA_BYTES:
                     return {**result,'status':'source_invalid' if findings else 'unobservable',
@@ -1916,6 +2209,28 @@ def validated_reconciliation_view(payload, policy=None, *, data_root=None, read_
             report_tail=payload['source_contract']['registry'].get('tail_hash')
             hashes=[e.get('event_hash') for e in registry]
             ancestor=registry[:hashes.index(report_tail)+1] if report_tail in hashes else []
+            states=OrderOwnerRegistry._state(ancestor)
+            inventory={key:row for key,row in states.items() if row.get('owner_type')=='main_scalping'
+                and row.get('side')=='BUY' and row.get('action')=='NEW'}
+            for source_day, record in by_date.items():
+                _validate_terminal_cancel_diagnostics(
+                    (record.get('source_binding') or {}).get('terminal_cancel_diagnostics') or [],source_day,registry=ancestor)
+                if 'excluded_reprice_order_sources' in record:
+                    joined={key for parent in state['parents'] if parent['source_date']==source_day
+                            for key in parent['children']}
+                    expected_repr=_reprice_sources(source_day,inventory,joined)
+                    if record['excluded_reprice_order_sources'] != [expected_repr[key] for key in sorted(expected_repr)]:
+                        findings.append('cancel_wait_reprice_scope_census_invalid')
+                if 'rejected_without_order_intent_ids' not in record:
+                    continue
+                expected_rejected=sorted(key for key,row in states.items()
+                    if row.get('owner_type')=='main_scalping' and row.get('side')=='BUY'
+                    and row.get('action')=='NEW' and row.get('order_date')==source_day
+                    and ':AVG_DOWN:' not in str(row.get('client_intent_id') or '')
+                    and ':PYRAMID:' not in str(row.get('client_intent_id') or '')
+                    and _rejected_without_order(row))
+                if record['rejected_without_order_intent_ids'] != expected_rejected:
+                    findings.append('cancel_wait_rejected_intent_census_invalid')
             if isinstance(split_population,dict) and split_population.get('custody_checkpoint') is not None:
                 from src.engine.scalping import main_custody_checkpoint as custody_source
                 verified=custody_source.view(split_population['custody_checkpoint'],ancestor,by_date,day=day,
@@ -2111,10 +2426,18 @@ def write_report(target_date: str, *, effective_date=None, publication_date=None
     json_path.parent.mkdir(parents=True, exist_ok=True)
     _atomic_json(json_path,payload)
     if target_date >= EXECUTABLE_EVIDENCE_DATE:
+        _atomic_json(json_path.with_suffix('.reuse-contract.json'),dict(
+            artifact_sha256=hashlib.sha256(json_path.read_bytes()).hexdigest(),
+            report_proof_sha256=payload['proof_sha256'],
+            terminal_cancel_diagnostics_sha256=_diagnostic_projection_digest(payload),
+            preflight_fingerprint=payload['preflight_fingerprint'],as_of=payload['generated_at']))
+    from src.engine.monitoring.policy_generation_validation import (
+        NATIVE_REPORT_LIMIT, publish_native_report_projection)
+    if json_path.stat().st_size>NATIVE_REPORT_LIMIT:
+        publish_native_report_projection(DATA_DIR,'entry_cancel_wait',target_date)
+    if target_date >= EXECUTABLE_EVIDENCE_DATE:
         from src.utils.market_day import next_krx_trading_date as _next_trading_date
         policy,path=prepare_policy(payload,effective_date or _next_trading_date(date.fromisoformat(publication_date or target_date)).isoformat(),publication_date=publication_date)
-        _atomic_json(json_path.with_suffix('.reuse-contract.json'),dict(artifact_sha256=hashlib.sha256(json_path.read_bytes()).hexdigest(),
-            preflight_fingerprint=payload['preflight_fingerprint'],as_of=payload['generated_at']))
     lines = [
         f"# Entry Cancel Wait Tuning {target_date}",
         "",

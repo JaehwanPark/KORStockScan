@@ -456,8 +456,9 @@ def test_earlier_preparation_removes_late_cron_slots(tmp_path):
     )[2]
 
 
+@pytest.mark.parametrize("requested", [None, DAY, "2026-10-09", "2026-09-20"])
 def test_night_reservations_survive_failures_and_do_not_reset_at_midnight(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, requested
 ):
     class Clock(datetime):
         current = datetime.fromisoformat("2026-10-08T23:40:00+09:00")
@@ -484,7 +485,20 @@ def test_night_reservations_survive_failures_and_do_not_reset_at_midnight(
         )
     )
     A.atomic(A.namespace(tmp_path) / "installation.json", cfg)
-    assert A.scheduled(tmp_path)["status"] == "failed_contract"
+    if requested not in {None, DAY}:
+        with pytest.raises(ValueError, match="repair_source_date_outside_retained_night_scope"):
+            A.scheduled(tmp_path, source_date=requested)
+        assert not list((A.namespace(tmp_path) / "attempts").glob("*.json"))
+        return
+    calls = []
+    def supervised(command, **kwargs):
+        calls.append(command)
+        return dict(exit_code=1, reason=None, wall_seconds=0.01)
+    monkeypatch.setattr(A, "supervise", supervised)
+    assert A.scheduled(tmp_path, source_date=requested)["status"] == "failed_contract"
+    assert calls[0][calls[0].index("--worker-date") + 1] == DAY
+    ticket = A.read_json(next((A.namespace(tmp_path) / "attempts").glob("*.json")))
+    assert ticket["source_date"] == DAY and ticket["configuration_sha256"] == cfg["artifact_content_sha256"]
     Clock.current = datetime.fromisoformat("2026-10-09T00:40:00+09:00")
     assert A.scheduled(tmp_path)["night_id"] == "2026-10-08"
     state = A.read_json(A.namespace(tmp_path) / "nights/2026-10-08.json")
@@ -539,8 +553,9 @@ def test_deferred_worker_exit_zero_is_not_completed(tmp_path, monkeypatch):
         ("owner", "supervisor_preflight_window_or_resource_changed"),
     ],
 )
+@pytest.mark.parametrize("requested", [None, DAY])
 def test_source_selection_limits_defer_without_starting_child(
-    tmp_path, monkeypatch, limit, reason
+    tmp_path, monkeypatch, limit, reason, requested
 ):
     class Clock(datetime):
         current = datetime.fromisoformat("2026-10-08T22:40:00+09:00")
@@ -581,12 +596,17 @@ def test_source_selection_limits_defer_without_starting_child(
         return True
 
     monkeypatch.setattr(A, "cursor_current", source_changed)
+    if requested:
+        def discovered(*a, **kw):
+            source_changed()
+            return dict(source_dates=[DAY])
+        monkeypatch.setattr(A, "research_source_scope", discovered)
     monkeypatch.setattr(
         A,
         "supervise",
         lambda *a, **k: pytest.fail("child started after preflight limit"),
     )
-    result = A.scheduled(tmp_path)
+    result = A.scheduled(tmp_path, source_date=requested)
     assert result["status"] == "deferred_resource_or_window"
     assert result["reason"] == reason
     assert result["worker_started"] is False
@@ -872,6 +892,71 @@ def test_selected_optional_code_requires_all_reviewed_modules(tmp_path, monkeypa
     )
     with pytest.raises(ValueError, match="not_reviewed"):
         A.selected_optional_code(Path(__file__).resolve().parents[2])
+
+
+@pytest.mark.parametrize(
+    "damage",
+    [None, "source", "wrapper", "dependency", "kernel", "normalized", "reader"],
+)
+def test_optional_installer_checks_executing_release_not_mutable_workspace(
+    tmp_path, monkeypatch, damage
+):
+    from src.engine.infrastructure import runtime_release_router as router
+
+    executing = Path(A.__file__).resolve().parents[3]
+    selected, workspace = tmp_path / "selected", tmp_path / "workspace"
+    names = (
+        "src/engine/automation/main_market_weakness_research.py",
+        "src/engine/scalping/market_weakness_research.py",
+        "src/engine/automation/main_market_weakness_research_notify.py",
+        "src/engine/risk/market_weakness_state.py",
+        "src/engine/risk/market_weakness_threshold_policy.py",
+        "src/engine/market_panic_breadth_collector.py",
+        "src/engine/scalping/micro_reversion/symbol_master.py",
+        "src/engine/scalping/continuous_reversal.py",
+        "src/engine/scalping/continuous_reversal_source.py",
+        "src/engine/lifecycle/research_json_stream.py",
+        "deploy/run_main_market_weakness_research_postclose.sh",
+    )
+    dependencies = tuple(
+        "src/engine/scalping/" + name + ".py"
+        for name in (
+            "reversal_auxiliary_intraday",
+            "reversal_auxiliary_registry",
+            "reversal_auxiliary_wire",
+            "reversal_auxiliary_compatibility",
+            "reversal_auxiliary_transition",
+            "reversal_auxiliary_production_input",
+            "reversal_auxiliary_risk_role_experiment",
+            "reversal_operating_auxiliary",
+            "reversal_extended_union",
+            "continuous_reversal_policy_v5",
+        )
+    )
+    for name in names + dependencies:
+        path = selected / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes((executing / name).read_bytes())
+        old = workspace / name
+        old.parent.mkdir(parents=True, exist_ok=True)
+        old.write_bytes((executing / name).read_bytes())
+    (workspace / names[0]).write_text("older workspace code")
+    changed = {
+        "source": names[0],
+        "wrapper": names[-1],
+        "dependency": names[3],
+        "kernel": names[-4],
+        "normalized": names[-3],
+        "reader": names[-2],
+    }
+    if damage:
+        (selected / changed[damage]).write_text("unreviewed code")
+    monkeypatch.setattr(router, "selected_release", lambda root: (selected, {}))
+    if damage:
+        with pytest.raises(ValueError, match="not_reviewed"):
+            A.selected_optional_code(workspace)
+    else:
+        assert A.selected_optional_code(workspace) == str(selected)
 
 
 def test_wrapper_routes_to_selected_immutable_root_without_main_start(tmp_path):

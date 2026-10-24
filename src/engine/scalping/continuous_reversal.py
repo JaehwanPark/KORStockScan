@@ -427,10 +427,11 @@ def current_snapshot(symbol, venue, session, *, now, item=None):
 
 
 class Bars:
-    def __init__(self,records):
+    def __init__(self,records,*,alternatives=(),revision=None):
         self.rows=sorted(records,key=lambda b:b['t']);self.times=[b['t'] for b in self.rows]
         self.high=Tree([b['h'] for b in self.rows]);self.low=Tree([b['l'] for b in self.rows])
         self.breaks=[i for i,b in enumerate(self.rows) if b.get('invalid') or (i and b['t']-self.rows[i-1]['t']!=60)]
+        self.alternatives=tuple(alternatives);self.revision=revision
 
     def label_one(self,at,price,horizon,shift):
         end=at+horizon
@@ -459,5 +460,16 @@ class Bars:
         # Even when shared bars give an exact minute start, use the stricter
         # common clock comparison for a mixed legacy REST/shared path.
         other=self.label_one(at,price,horizon,-60)
-        if result['status']!=other['status']:return dict(status='UNRESOLVED',reason='completed_bar_clock_disagreement')
-        return result
+        if result['status']!=other['status']:result=dict(status='UNRESOLVED',reason='completed_bar_clock_disagreement')
+        if self.revision:result=dict(result,completed_bar_revision=self.revision)
+        # Keep REST-adjusted revisions independent of raw WS and of each other.
+        # Never stitch a completed path across different source bases.
+        labels=[result]+[b.label(at,price,horizon) for b in self.alternatives]
+        resolved=[r for r in labels if r['status']!='UNRESOLVED']
+        if len({r['status'] for r in resolved})>1:
+            return dict(status='UNRESOLVED',reason='completed_bar_source_disagreement')
+        ambiguous={'completed_bar_clock_disagreement','completed_bar_both_barriers',
+                   'completed_bar_boundary_touch','completed_bar_source_ambiguity'}
+        if resolved and any(r.get('reason') in ambiguous for r in labels):
+            return dict(status='UNRESOLVED',reason='completed_bar_source_ambiguity')
+        return resolved[0] if resolved else result

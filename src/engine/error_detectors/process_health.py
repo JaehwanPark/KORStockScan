@@ -631,8 +631,10 @@ def _recent_unowned_manual_control_holding_blocks(
     The runtime can preserve an automatic manual-control flag in the in-memory
     holding record after its file row has disappeared.  The recurring holding
     pipeline receipt is therefore the authoritative liveness signal; current
-    explicit operator exclusions and current persisted hard-stop handoffs are
-    expected policy states. Other automatic or stale exclusions remain errors.
+    explicit operator exclusions, current persisted hard-stop handoffs and the
+    native open-loss guard are expected policy states. Unknown automatic or
+    stale in-memory exclusions remain errors. The open-window duration governs
+    admission; its native average-price release is not a timed expiry.
     This detector is read-only and never releases an exclusion or submits an
     order.
     """
@@ -647,6 +649,8 @@ def _recent_unowned_manual_control_holding_blocks(
         "active_blocks": [],
         "expected_hard_stop_handoffs": [],
         "expected_hard_stop_handoff_count": 0,
+        "expected_open_loss_guards": [],
+        "expected_open_loss_guard_count": 0,
     }
     try:
         size = path.stat().st_size
@@ -717,6 +721,7 @@ def _recent_unowned_manual_control_holding_blocks(
 
     active_blocks: list[dict] = []
     expected_handoffs: list[dict] = []
+    expected_open_loss: list[dict] = []
     for row in latest_by_holding.values():
         if row["stage"] == "manual_control_legacy_scale_in_qty_handoff_retired":
             continue
@@ -735,6 +740,13 @@ def _recent_unowned_manual_control_holding_blocks(
             row["classification"] = "expected_hard_stop_manual_handoff"
             expected_handoffs.append(row)
             continue
+        if (
+            auto_source == "auto_open_loss"
+            and main_decision.reason == "operator_manual_control_excluded_symbol"
+        ):
+            row["classification"] = "expected_open_loss_policy_guard"
+            expected_open_loss.append(row)
+            continue
         row["classification"] = (
             "active_file_auto_exclusion"
             if auto_source
@@ -744,6 +756,9 @@ def _recent_unowned_manual_control_holding_blocks(
 
     active_blocks.sort(key=lambda row: (row["stock_code"], row["record_id"]))
     expected_handoffs.sort(key=lambda row: (row["stock_code"], row["record_id"]))
+    expected_open_loss.sort(key=lambda row: (row["stock_code"], row["record_id"]))
+    details["expected_open_loss_guards"] = expected_open_loss
+    details["expected_open_loss_guard_count"] = len(expected_open_loss)
     details["expected_hard_stop_handoffs"] = expected_handoffs
     details["expected_hard_stop_handoff_count"] = len(expected_handoffs)
     details["malformed_tail_rows"] = malformed_rows
@@ -756,6 +771,8 @@ def _recent_unowned_manual_control_holding_blocks(
     details["active_blocks"] = active_blocks
     if active_blocks:
         details["status"] = "active_unowned_manual_control_holding_block"
+    elif expected_open_loss:
+        details["status"] = "expected_open_loss_policy_guard"
     elif expected_handoffs:
         details["status"] = "expected_hard_stop_manual_handoff"
     return details

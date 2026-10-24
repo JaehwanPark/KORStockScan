@@ -108,10 +108,13 @@ def validate_sources(bundle, data_root, *, code_root=None):
             input=json.dumps(bundle),text=True,check=True,capture_output=True,timeout=120,cwd=origin,
             env={**os.environ,'PYTHONPATH':str(origin)})
         return bundle
-    for m in contract_modules():
-        path = Path(m.__file__)
-        if N._source_hash(str(path),N._signature(path)) != f['contract_file_sha256'].get(path.name):
-            raise ValueError('v4_contract_code_changed:'+path.name)
+    code_paths = {Path(m.__file__).name: str(Path(m.__file__)) for m in contract_modules()}
+    actual_code = {name: N._source_hash(path, N._signature(path)) for name, path in code_paths.items()}
+    changed = [name for name, actual in actual_code.items() if actual != f['contract_file_sha256'].get(name)]
+    if changed:
+        from src.engine.infrastructure.startup_validation_code_context import verify_validation_main_code
+        if not verify_validation_main_code(bundle, code_paths, actual_code):
+            raise ValueError('v4_contract_code_changed:' + changed[0])
     for name in ('machine','auxiliary'):
         path = N.root(Path(data_root))/'sources'/f"reversal-{f[name+'_report_sha256']}.json"
         if N._source_hash(str(path),N._signature(path)) != f['report_file_sha256'][name]:

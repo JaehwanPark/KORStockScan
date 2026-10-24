@@ -615,3 +615,44 @@ def test_standalone_daemon_keeps_reporting_an_unresolved_incident(monkeypatch):
     with pytest.raises(KeyboardInterrupt): module._daemon_loop(60, True)
     assert len(reports) == 4 and all(r['severity'] == 'fail' for r in reports)
     assert errors == ['[ERROR_DETECTION] cron_completion: terminal failure']
+
+
+def test_sqlite_failure_preserves_database_phase_and_extended_code_without_downgrade(tmp_path):
+    import sqlite3
+    from src.engine.automation import main_trailing_source_store as store
+    target = tmp_path/'missing.sqlite'
+    class Broken(BaseDetector):
+        id = 'artifact_freshness'
+        category = 'artifact'
+        def check(self):
+            store._open_database(target, readonly=True, writer=False)
+    engine = ErrorDetectionEngine.__new__(ErrorDetectionEngine)
+    engine.initialization_failures = []
+    engine.detectors = [Broken(dry_run=True)]
+    engine.postclose_source_date = None
+    result = engine._run_all()[0]
+    assert result.severity == 'fail'
+    assert result.details['database'] == str(target)
+    assert result.details['database_phase'] == 'connect'
+    assert result.details['sqlite_errorcode'] == sqlite3.SQLITE_CANTOPEN
+    assert result.details['sqlite_errorname'] == 'SQLITE_CANTOPEN'
+    assert result.details['error_type'] == 'OperationalError'
+
+
+@pytest.mark.parametrize('context', [None, 'invalid', {'error': 'hidden', 'sqlite_errorcode': -1}])
+def test_sqlite_diagnostic_context_cannot_hide_or_replace_original_failure(context):
+    import sqlite3
+    class Broken(BaseDetector):
+        id = 'artifact_freshness'
+        category = 'artifact'
+        def check(self):
+            error = sqlite3.OperationalError('original database failure')
+            error.sqlite_context = context
+            raise error
+    engine = ErrorDetectionEngine.__new__(ErrorDetectionEngine)
+    engine.initialization_failures = [];engine.detectors = [Broken(dry_run=True)]
+    engine.postclose_source_date = None
+    result = engine._run_all()[0]
+    assert result.severity == 'fail'
+    assert result.details['error'] == 'original database failure'
+    assert result.details['sqlite_errorcode'] is None

@@ -22,10 +22,13 @@ REPORT_SCHEMA = "pre_submit_delay_tuning_v2"
 POLICY_SCHEMA = "pre_submit_delay_policy_v2"
 MANIFEST_SCHEMA = "pre_submit_delay_committed_generation_v2"
 LEGACY_ALGORITHM = "qualified_anchor_shared_chronological_purged_split_v2"
-ALGORITHM = "qualified_anchor_candidate_paired_chronological_split_v3"
+PAIRED_ALGORITHM = "qualified_anchor_candidate_paired_chronological_split_v3"
+ALGORITHM = "qualified_anchor_short_and_long_paired_chronological_split_v4"
+ALGORITHMS = (LEGACY_ALGORITHM, PAIRED_ALGORITHM, ALGORITHM)
 LEGACY_MAPPING_VERSION = "registered_machine_primary_or_sorted_union_v1"
 MAPPING_VERSION = "native_machine_definition_bound_situation_v2"
 HORIZONS = (0, 30, 60, 120, 180)
+SHORT_AND_LONG_HORIZONS = (0, 1, 3, 5, 30, 60, 120, 180)
 MARKETS = ('PREMARKET', 'REGULAR', 'INTEGRATED_AFTERMARKET')
 MAX_BYTES = 4 * 1024 * 1024
 MAX_OPPORTUNITIES = 20000
@@ -33,6 +36,7 @@ MAX_CELLS = 4096
 CONTRACT_PATHS = (
     'src/engine/scalping/pre_submit_delay_initial_policy.py',
     'src/engine/scalping/pre_submit_delay_tuning.py',
+    'src/engine/infrastructure/main_policy_loading.py',
     'src/engine/scalping/pre_submit_delay_observation.py',
     'src/engine/scalping/reversal_registered_catalog.py',
     'src/engine/sniper_state_handlers.py', 'src/engine/kiwoom_sniper_v2.py',
@@ -71,10 +75,12 @@ def projection_contract():
     from .reversal_extended_catalog import DEFINITIONS
     from src.engine.automation.pre_submit_delay_partitioned_research import project as partitioned_project
     from src.engine.automation import pre_submit_delay_situation_projection as recovery
+    from .reversal_auxiliary_registry import timing_compatibility_identity, response_contract_shape
     functions = (project_rows, partitioned_project, recovery.prepare, recovery.enrich,
                  number, digest, session, situation, situation_fields, _situation_definition_ref, _legacy_situation, owner._source_rows,
                  owner._number, owner._digest, owner.decision_source_sha256,
-                 owner.quote_source_sha256, owner._quote_source_issue)
+                 owner.quote_source_sha256, owner._quote_source_issue,
+                 timing_compatibility_identity, response_contract_shape)
     return digest({'functions':{f.__module__+'.'+f.__name__:inspect.getsource(f) for f in functions},
                    'decision_keys':owner._DECISION_SOURCE_KEYS, 'quote_keys':owner._QUOTE_SOURCE_KEYS,
                    'minimal_fields':sorted(owner._V2_SOURCE_FIELDS),
@@ -297,13 +303,14 @@ def project_rows(rows):
             continue
         parent = (str(fields.get("entry_mechanistic_policy_sha256") or "legacy"),
                   str(fields.get("entry_ai_soft_policy_sha256") or "legacy"))
+        captured_parent = parent
         # A machine observation belongs to one native evaluation. Proven retry
         # aliases share that original observation; distinct native observations
         # are never merged merely because the symbol or primary branch matches.
         native = fields.get('original_evaluation_attempt_id') or fields.get('evaluation_attempt_id') or fields.get('request_id')
         native_bound = isinstance(native, str) and 0 < len(native) <= 512 and native.strip() == native
         if fields.get('entry_auxiliary_policy_identity_version') not in (None,'','None','null'):
-            from .reversal_auxiliary_registry import validate_identity
+            from .reversal_auxiliary_registry import validate_identity, timing_compatibility_identity
             try:
                 proof = fields.get('entry_auxiliary_policy_identity')
                 if isinstance(proof,str):proof=json.loads(proof)
@@ -311,6 +318,10 @@ def project_rows(rows):
                 if (proof['schema'] != fields['entry_auxiliary_policy_identity_version']
                         or proof['identity_sha256'] != parent[1]):
                     raise ValueError('auxiliary_identity_parent_mismatch')
+                # Request-local wire citation aliases are not policy changes.
+                # Preserve captured hashes and derive only the verified timing
+                # equivalence key; prompt/risk/model/code remain exact.
+                parent = (parent[0], timing_compatibility_identity(proof))
             except (ValueError, TypeError):
                 native_bound = False
                 reasons['auxiliary_identity_unverified'] += 1
@@ -330,8 +341,8 @@ def project_rows(rows):
         pairs = {int(horizon): (float(zero["ask_price"]) - float(quote["ask_price"]))
                  / float(zero["ask_price"]) * 10000 for horizon, quote in valid.items()
                  if horizon in HORIZONS[1:] and zero}
-        # Short horizons remain diagnostic. They never enter the executable
-        # policy grid, and their baseline cannot be a late legacy P0 sample.
+        # Keep short observations separate so frozen v2/v3 selectors ignore
+        # them. V4 admits them only with the strict short-clock P0 baseline.
         short_zero = (zero if zero and number(zero.get('actual_offset_sec')) is not None
                       and 0 <= number(zero.get('actual_offset_sec')) <= SHORT_OBSERVATION_TOLERANCE_SEC
                       else None)
@@ -348,6 +359,7 @@ def project_rows(rows):
         kind = situation(situation_source['fields']) if situation_source else situation(fields)
         opportunity = {"identity": canonical, "alias": list(identity), "anchor_kind": anchor,
                        "session": market, "parent_compatibility": list(parent),
+                       "captured_parent_compatibility": list(captured_parent),
                        "native_evaluation_bound":native_bound,
                        "committed_at": stamp, "observation_end_at": stamp + 183,
                        "p0_valid": zero is not None, "pairs": pairs,
@@ -441,9 +453,38 @@ def _selection_legacy(train, validation):
             "validation_ids_sha256": digest([r["identity"] for r in validation if best in r["pairs"]])}
 
 
-def _selection(train, validation):
+def candidate_horizons(algorithm):
+    if algorithm not in ALGORITHMS:
+        raise ValueError('initial_delay_algorithm_invalid')
+    return SHORT_AND_LONG_HORIZONS if algorithm == ALGORITHM else HORIZONS
+
+
+def selection_evidence(cell):
+    """Classify comparative evidence independently of the operational delay."""
+    if cell.get("runtime_apply_allowed") is not False:
+        if cell.get("selection_basis") == "paired_quote_initial" and (number(cell.get("delay_sec")) or 0) > 0:
+            return "positive_delay_supported"
+        if cell.get("selection_basis") == "paired_quote_immediate" and cell.get("delay_sec") == 0:
+            return "immediate_supported_on_observed_pairs"
+    return "indeterminate"
+
+
+def selection_pairs(row, algorithm):
+    """Only v4 may select already-qualified short observations; v2/v3 are frozen."""
+    pairs = {int(k): v for k, v in row['pairs'].items()}
+    if algorithm == ALGORITHM:
+        short = row.get('research_short_pairs') or {}
+        if (not isinstance(short, dict) or
+            (short and (row.get('research_short_p0_valid') is not True or row.get('p0_valid') is not True))
+            or any(str(k) not in {'1', '3', '5'} or number(v) is None for k,v in short.items())):
+            raise ValueError('initial_delay_short_pair_contract_invalid')
+        pairs.update({int(k): v for k,v in short.items()})
+    return pairs
+
+
+def _selection(train, validation, *, horizons=HORIZONS):
     """Each horizon competes against its own same-opportunity P0 pairs."""
-    candidates = [d for d in HORIZONS[1:] if any(d in r['pairs'] for r in train)]
+    candidates = [d for d in horizons[1:] if any(d in r['pairs'] for r in train)]
     stats = {d:_stats([r['pairs'][d] for r in train if d in r['pairs']], len(train)) for d in candidates}
     empty = dict(delay_sec=None, selection_basis='unsupported', runtime_apply_allowed=False,
         train=_stats([], len(train)), validation=_stats([], len(validation)),
@@ -476,7 +517,7 @@ def lineage_eligible(row, effective_date):
 def build_initial(rows, *, source_date, publication_date, effective_date, source_sha256, code_contract_sha256,
                   _projected=None, source_receipt=None, _algorithm=None, _projection_contract=None, _mapping_version=None):
     algorithm = _algorithm or ALGORITHM
-    if algorithm not in (ALGORITHM, LEGACY_ALGORITHM):
+    if algorithm not in ALGORITHMS:
         raise ValueError('initial_delay_algorithm_invalid')
     if not date.fromisoformat(source_date) < date.fromisoformat(effective_date) or not (
         date.fromisoformat(source_date) <= date.fromisoformat(publication_date) < date.fromisoformat(effective_date)
@@ -510,8 +551,11 @@ def build_initial(rows, *, source_date, publication_date, effective_date, source
                 raise ValueError("initial_delay_parent_compatibility_conflict")
             learning = [r for r in train if kind == "ALL" or r["situation"] == kind]
             holdout = [r for r in validation if kind == "ALL" or r["situation"] == kind]
-            selection = (_selection_legacy if algorithm == LEGACY_ALGORITHM else _selection)(learning, holdout)
-            if algorithm == ALGORITHM and not ordered:
+            selection = (_selection_legacy(learning, holdout) if algorithm == LEGACY_ALGORITHM else
+                _selection([{**r, 'pairs':selection_pairs(r,algorithm)} for r in learning],
+                           [{**r, 'pairs':selection_pairs(r,algorithm)} for r in holdout],
+                           horizons=candidate_horizons(algorithm)))
+            if algorithm != LEGACY_ALGORITHM and not ordered:
                 selection = {**selection,'delay_sec':0,'selection_basis':'unverified_lineage_immediate_default',
                              'runtime_apply_allowed':False}
             if algorithm == LEGACY_ALGORITHM and effective_date >= '2026-10-10' and (any(len(p)!=64 or any(c not in '0123456789abcdef' for c in p) for p in parents)
@@ -528,7 +572,7 @@ def build_initial(rows, *, source_date, publication_date, effective_date, source
                           "evidence_grade": "estimated_provisional"}
             if len(cells) > MAX_CELLS:
                 raise ValueError("initial_delay_cell_budget_exceeded")
-    price_pairs = sum(len(r["pairs"]) for r in opportunities if r["anchor_kind"] == "price_ready")
+    price_pairs = sum(len(selection_pairs(r,algorithm)) for r in opportunities if r["anchor_kind"] == "price_ready")
     blocked = not price_pairs or not source_sha256
     report = {"schema": REPORT_SCHEMA, "analysis_axis": "pre_submit_delay", "source_date": source_date,
               "publication_date": publication_date, "effective_date": effective_date,
@@ -588,7 +632,7 @@ def validate(policy, report, *, target_date=None):
         or policy.get("source_date") != report.get("source_date")
         or policy.get("effective_from") != report.get("effective_date")
         or policy.get("supported_anchor_kind") != "price_ready"
-        or policy.get("algorithm") not in (ALGORITHM,LEGACY_ALGORITHM)
+        or policy.get("algorithm") not in ALGORITHMS
         or policy.get('algorithm') != report.get('algorithm') or policy.get("mapping_version") not in (MAPPING_VERSION, LEGACY_MAPPING_VERSION)
         or policy.get("runtime_apply_allowed") is not True or report.get("price_ready_pair_n", 0) < 1):
         raise ValueError("initial_delay_contract_invalid")
@@ -631,7 +675,7 @@ def validate(policy, report, *, target_date=None):
         if key != cell_key(cell["anchor_kind"], cell["session"], cell["situation"], cell["execution_context"], parents=cell["parent_compatibility"]):
             raise ValueError("initial_delay_cell_key_invalid")
         delay = cell.get("delay_sec")
-        if delay is not None and (isinstance(delay, bool) or delay not in HORIZONS):
+        if delay is not None and (isinstance(delay, bool) or delay not in candidate_horizons(policy['algorithm'])):
             raise ValueError("initial_delay_cell_value_invalid")
         if delay and (cell.get("selection_basis") != "paired_quote_initial" or any(
             cell[split].get("n", 0) < 1 or (cell[split].get("mean_bp") or 0) <= 0 for split in ("train", "validation")
@@ -896,6 +940,8 @@ class PreparedPolicy:
         if cell is None or cell["delay_sec"] is None:
             key, cell = fallback, self.cells.get(fallback)
         if cell is None or cell["delay_sec"] is None or tuple(parents) != cell["parent_compatibility"]:
-            return {"delay_sec": 0, "status": "unsupported_existing_behavior", "policy_sha256": self.policy_sha256}
+            return {"delay_sec": 0, "status": "unsupported_existing_behavior", "policy_sha256": self.policy_sha256,
+                    "evidence_verdict": "indeterminate"}
         return {"delay_sec": cell["delay_sec"], "status": "loaded", "policy_sha256": self.policy_sha256,
-                "selected_cell_key": key, "selection_basis": cell["selection_basis"], "schema": POLICY_SCHEMA}
+                "selected_cell_key": key, "selection_basis": cell["selection_basis"], "schema": POLICY_SCHEMA,
+                "evidence_verdict": selection_evidence(cell)}

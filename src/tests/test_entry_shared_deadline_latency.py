@@ -21,6 +21,129 @@ from src.engine.ai_engine_openai import (
 )
 
 
+@pytest.mark.parametrize('fault', [None, 'revoked', 'expired', 'pointer'])
+def test_submit_boundary_uses_immutable_view_and_keeps_all_independent_guards(monkeypatch, fault):
+    from src.engine.scalping import reversal_auxiliary_intraday as auxiliary
+    from src.engine.scalping import mechanistic_entry_runtime_policy as native
+    from src.engine.scalping import reversal_evaluation_context as context
+    calls = []
+    bundle = native._freeze({'bundle_sha256':'a'*64, 'nested':{'values':[1]}})
+    @contextmanager
+    def view(**kw):
+        assert native._SIGNATURE_PASS.get() is not None
+        calls.append('fresh_native_load')
+        try:
+            yield bundle
+        finally:
+            calls.append('pointer_exit_check')
+            if fault == 'pointer':
+                raise ValueError('machine_policy_generation_changed_during_evaluation')
+    def check(root, policy, active, *, now):
+        assert active is bundle and 100. <= now < 101.
+        with pytest.raises(TypeError):
+            active['nested']['values'].append(2)
+        calls.append('fresh_auxiliary_and_original_deadline')
+        if fault in {'revoked','expired'}:
+            raise ValueError(fault)
+    monkeypatch.setattr(native, 'verified_evaluation', view)
+    monkeypatch.setattr(auxiliary, 'validate_decision', check)
+    fields = {'entry_mechanistic_policy_decision': {'auxiliary_registry_sha256':'b'*64}}
+    if fault:
+        with pytest.raises(ValueError):
+            context.validate_submit(Path('fixture'), fields, now=100.)
+    else:
+        context.validate_submit(Path('fixture'), fields, now=100.)
+    assert calls == ['fresh_native_load','fresh_auxiliary_and_original_deadline','pointer_exit_check']
+    assert native._SIGNATURE_PASS.get() is None
+
+
+@pytest.mark.parametrize('matches', [True, False])
+def test_generation_only_physical_boundary_keeps_native_check(monkeypatch, matches):
+    from src.engine.scalping import mechanistic_entry_runtime_policy as N
+    from src.engine.scalping import reversal_evaluation_context as E
+    from src.engine.scalping import reversal_auxiliary_intraday as I
+    calls = []
+    @contextmanager
+    def view(**kw):
+        calls.append('load')
+        yield {'bundle_sha256': 'a'*64}
+    def generation(*args, **kwargs):
+        calls.append('generation')
+        return {'allowed': matches}
+    monkeypatch.setattr(N, 'verified_evaluation', view)
+    monkeypatch.setattr(N, 'validate_attempt_generation', generation)
+    monkeypatch.setattr(I, 'validate_decision', lambda *a, **kw: pytest.fail('no auxiliary registry'))
+    with R.entry_timing_frame() as timings:
+        if matches:
+            E.validate_submit('fixture', {'machine_bundle_sha256': 'a'*64}, now=100., check_generation=True)
+        else:
+            with pytest.raises(ValueError, match='initial_send_policy_generation_changed'):
+                E.validate_submit('fixture', {'machine_bundle_sha256': 'a'*64}, now=100., check_generation=True)
+    assert calls == ['load', 'generation']
+    assert 'entry_submit_native_load' in timings and 'entry_submit_generation' in timings
+
+
+@pytest.mark.parametrize('failure', [None, 'generation', 'revoked', 'pointer'])
+def test_physical_boundary_shares_view_without_skipping_generation_or_revocation(monkeypatch, failure):
+    from src.engine.scalping import reversal_auxiliary_intraday as I
+    from src.engine.scalping import mechanistic_entry_runtime_policy as N
+    from src.engine.scalping import reversal_evaluation_context as E
+    calls=[]
+    bundle=N._freeze({'bundle_sha256':'a'*64})
+    @contextmanager
+    def view(**kw):
+        calls.append('load')
+        # Use the native context variable and the real generation validator.
+        token=N._VERIFIED_EVALUATION.set((str(Path('fixture').absolute()),'1970-01-01',bundle,None))
+        try:
+            yield bundle
+            calls.append('exit')
+            if failure=='pointer':raise ValueError('machine_policy_generation_changed_during_evaluation')
+        finally:N._VERIFIED_EVALUATION.reset(token)
+    def load(**kw):
+        assert N._VERIFIED_EVALUATION.get()[2] is bundle
+        calls.append('generation')
+        return bundle
+    def aux(*args,**kw):
+        calls.append('auxiliary')
+        if failure=='revoked':raise ValueError('auxiliary_decision_generation_revoked')
+    monkeypatch.setattr(N,'verified_evaluation',view)
+    monkeypatch.setattr(N,'load_effective',load)
+    monkeypatch.setattr(I,'validate_decision',aux)
+    fields={'machine_bundle_sha256':('b' if failure=='generation' else 'a')*64,
+        'entry_mechanistic_policy_decision':{'auxiliary_registry_sha256':'c'*64}}
+    if failure:
+        with pytest.raises(ValueError):E.validate_submit('fixture',fields,now=100.,check_generation=True)
+    else:E.validate_submit('fixture',fields,now=100.,check_generation=True)
+    assert calls.count('load')==1 and calls.count('auxiliary')==1
+    assert calls.count('generation')==(0 if failure=='revoked' else 1)
+    assert N._VERIFIED_EVALUATION.get() is None and N._SIGNATURE_PASS.get() is None
+
+
+def test_submit_clock_advances_through_slow_load_and_keeps_original_error(monkeypatch):
+    from src.engine.scalping import reversal_auxiliary_intraday as I
+    from src.engine.scalping import mechanistic_entry_runtime_policy as N
+    from src.engine.scalping import reversal_evaluation_context as E
+    clock=[10.]
+    monkeypatch.setattr(E.time,'perf_counter',lambda:clock[0])
+    @contextmanager
+    def view(**kw):
+        clock[0]+=.3
+        yield N._freeze({'bundle_sha256':'a'*64})
+    def auxiliary(root,policy,active,*,now):
+        assert now==pytest.approx(105.2)
+        raise ValueError('auxiliary_decision_generation_changed')
+    monkeypatch.setattr(N,'verified_evaluation',view)
+    monkeypatch.setattr(I,'validate_decision',auxiliary)
+    fields={'entry_mechanistic_policy_decision':{'auxiliary_registry_sha256':'b'*64,'event':{'epoch':100.}}}
+    with pytest.raises(ValueError,match='auxiliary_decision_generation_changed') as caught:
+        E.validate_submit('fixture',fields,now=104.9)
+    facts=caught.value.entry_submit_revalidation
+    assert facts['entered_epoch']==104.9 and facts['checked_epoch']==pytest.approx(105.2)
+    assert facts['original_signal_epoch']==100. and facts['native_load_ms']==pytest.approx(300.)
+    assert N._SIGNATURE_PASS.get() is None
+
+
 @pytest.mark.parametrize('version', ['v5', 'v6'])
 @pytest.mark.parametrize('failure', [None, 'model', 'claim', 'changed_refs', 'auxiliary', 'definition_missing', 'exit'])
 def test_final_native_boundary_keeps_all_guards_and_closes_before_provider(monkeypatch, version, failure):
@@ -431,6 +554,48 @@ def test_failed_ancestor_recheck_cannot_retain_configuration_receipt(monkeypatch
     assert E._CONFIGURED is None and E._CONSUMED is None
 
 
+@pytest.mark.parametrize('second_failure',[None,'machine_policy_consumer_source_changed',
+    'machine_policy_consumer_dependency_changed','source_hash_invalid'])
+def test_startup_publication_race_retries_only_after_discarding_the_entire_first_pass(monkeypatch,second_failure):
+    from src.engine.scalping import reversal_evaluation_context as E
+    calls=[];active=object()
+    @contextmanager
+    def fresh_pass():
+        calls.append('enter');yield;calls.append('exit')
+    def prepare(**kw):
+        assert E._CONFIGURED is E._CONSUMED is None
+        calls.append('full_native_prepare')
+        E._CONFIGURED=E._CONSUMED='first pass must never survive'
+        if calls.count('full_native_prepare')==1:
+            raise ValueError('machine_policy_consumer_source_changed')
+        if second_failure:raise ValueError(second_failure)
+        return active
+    monkeypatch.setattr(E.N,'signature_pass',fresh_pass)
+    monkeypatch.setattr(E,'_CONFIGURED',None);monkeypatch.setattr(E,'_CONSUMED',None)
+    monkeypatch.setattr(E,'_prepare_verified',prepare)
+    if second_failure:
+        with pytest.raises(ValueError,match=second_failure):E.prepare(data_root='fixture',day='2026-10-19')
+        assert E._CONFIGURED is E._CONSUMED is None
+    else:assert E.prepare(data_root='fixture',day='2026-10-19') is active
+    assert calls.count('enter')==calls.count('full_native_prepare')==2
+
+
+@pytest.mark.parametrize('fault,nested',[('source_hash_invalid',False),
+    ('machine_policy_generation_changed_during_evaluation',False),
+    ('machine_policy_consumer_source_changed',True)])
+def test_invalid_source_or_an_existing_evaluation_never_gets_a_startup_retry(monkeypatch,fault,nested):
+    from src.engine.scalping import reversal_evaluation_context as E
+    calls=[]
+    def fail(**kw):
+        calls.append(kw);raise ValueError(fault)
+    monkeypatch.setattr(E,'_prepare_verified',fail)
+    token=E.N._VERIFIED_EVALUATION.set(('existing view',) if nested else None)
+    try:
+        with pytest.raises(ValueError,match=fault):E.prepare(data_root='fixture',day='2026-10-19')
+    finally:E.N._VERIFIED_EVALUATION.reset(token)
+    assert len(calls)==1 and E._CONFIGURED is E._CONSUMED is None
+
+
 def test_native_predecessor_proof_change_invalidates_the_consumption_dependencies(tmp_path):
     from src.engine.scalping import reversal_evaluation_context as E
     day, commit = '2026-10-13', 'a' * 40
@@ -555,3 +720,93 @@ def test_executor_queue_clock_excludes_local_warmup_bookkeeping(monkeypatch):
         engine._http_deadline_executor.shutdown(wait=True)
     settled = R._HTTP_SETTLEMENTS[-1]['stage_monotonic']
     assert clocks['warmup_finished'] <= settled['executor_enqueued'] <= settled['executor_started']
+
+
+def test_policy_diagnostics_keep_nested_failure_and_bounded_slow_samples(monkeypatch):
+    monkeypatch.setattr(R, '_POLICY_VALIDATIONS', deque(maxlen=128))
+    monkeypatch.setattr(R, '_POLICY_SLOW_VALIDATIONS', deque(maxlen=32))
+    with R.policy_validation('policy_prepare') as parent:
+        with R.policy_validation('policy_load') as child:
+            R.record_policy_digest_read(257)
+        assert child['parent_call_id'] == parent['call_id']
+    assert parent['source_digest_bytes'] == 257
+    for _ in range(140):
+        with pytest.raises(ValueError, match='native_failure'):
+            with R.policy_validation('policy_consumer'):
+                raise ValueError('native_failure')
+    data = R.snapshot()['policy_validation']
+    assert len(data['recent']) == 128 and len(data['slow_or_failed']) == 32
+    assert all(row['status'] == 'error' and row['reason'] == 'native_failure' for row in data['recent'])
+    assert all(row['thread_cpu_seconds'] >= 0 and row['non_cpu_wall_seconds'] >= 0 for row in data['recent'])
+    assert R._POLICY_CALL.get() is None
+
+
+def test_loader_diagnostics_distinguish_hit_and_exact_dependency_invalidation(tmp_path, monkeypatch):
+    from src.engine.scalping import mechanistic_entry_runtime_policy as N
+    monkeypatch.setattr(R, '_POLICY_VALIDATIONS', deque(maxlen=128))
+    monkeypatch.setattr(N, '_CURRENT_CACHE', {})
+    monkeypatch.setattr(N, '_CURRENT_FLIGHTS', {})
+    path = tmp_path/'native-source.json'; path.write_text('{"version":1}')
+    def native(root, day):
+        N._read(path)
+        return {'bundle_sha256': 'a'*64}
+    monkeypatch.setattr(N, '_load_current_uncached', native)
+    first = N._load_current(tmp_path, '2026-10-23', _immutable=True)
+    assert N._load_current(tmp_path, '2026-10-23', _immutable=True) is first
+    path.write_text('{"version":200}')
+    assert N._load_current(tmp_path, '2026-10-23', _immutable=True) is not first
+    rows = R.snapshot()['policy_validation']['recent']
+    loads = [r for r in rows if r['stage']=='policy_load']
+    assert [r['miss_reason'] for r in loads] == ['cold', None, 'dependency_changed']
+    assert any(r.get('changed_dependency') == str(path) for r in rows)
+    assert all(r['dependency_count']==1 for r in rows if r['stage']=='policy_dependencies')
+
+
+def test_consumer_diagnostics_distinguish_reuse_and_extra_dependency(tmp_path, monkeypatch):
+    from src.engine.scalping import reversal_evaluation_context as E
+    from src.engine.scalping import reversal_current_backend as D
+    from src.engine.scalping import reversal_auxiliary_intraday as I
+    from src.engine.automation import intraday_release_handoff as H
+    from src.engine.infrastructure import runtime_release_router as router
+    monkeypatch.setattr(R, '_POLICY_VALIDATIONS', deque(maxlen=128))
+    bundle = {'bundle_sha256':'b'*64, 'continuous_reversal':{
+        'schema':'continuous_reversal_policy_v6', 'family_sha256':'f', 'release_commit':'c'}}
+    @contextmanager
+    def verified(**kwargs): yield bundle
+    monkeypatch.setattr(E.N, 'verified_evaluation', verified)
+    monkeypatch.setattr(router, 'selected_release', lambda root: (tmp_path, 'c'))
+    monkeypatch.setattr(H, '_identity', lambda pid: dict(pid=pid,start_ticks='1',cwd=str(tmp_path/'src')))
+    monkeypatch.setattr(D, 'backend', lambda: SimpleNamespace(_GENERATION='f'))
+    monkeypatch.setattr(E, '_CONFIGURED', None); monkeypatch.setattr(E, '_CONSUMED', None)
+    monkeypatch.setattr(E, 'configure_policy_content', lambda *a,**kw: None)
+    paths = [tmp_path/f'consumer-{i}' for i in range(3)]
+    monkeypatch.setattr(E, '_extra_paths', lambda *a: paths)
+    calls = []
+    monkeypatch.setattr(I, 'record_pid_consumption', lambda *a: calls.append(True))
+    E.prepare(data_root=tmp_path, day='2026-10-23')
+    E.prepare(data_root=tmp_path, day='2026-10-23')
+    paths[0].write_text('changed')
+    E.prepare(data_root=tmp_path, day='2026-10-23')
+    rows = [r for r in R.snapshot()['policy_validation']['recent'] if r['stage']=='policy_consumer']
+    assert [r['miss_reason'] for r in rows] == ['cold',None,'extra_dependency_changed']
+    assert all(r['lock_wait_seconds'] >= 0 for r in rows)
+    assert len(calls)==2
+
+
+def test_digest_read_bytes_and_concurrent_policy_spans_are_call_local(tmp_path, monkeypatch):
+    from src.engine.scalping import mechanistic_entry_runtime_policy as N
+    monkeypatch.setattr(R, '_POLICY_VALIDATIONS', deque(maxlen=128))
+    monkeypatch.setattr(N, '_HASH_CACHE', OrderedDict())
+    monkeypatch.setattr(N, '_HASH_FLIGHTS', {})
+    monkeypatch.setattr(N, '_HASH_BYTES', 0)
+    paths = [tmp_path/str(i) for i in range(2)]
+    for i, path in enumerate(paths): path.write_bytes(bytes([i])*(31+i))
+    def read(path):
+        with R.policy_validation('policy_load') as facts:
+            N._cached_source_hash(str(path), N._signature(path))
+            return dict(facts)
+    with ThreadPoolExecutor(max_workers=2) as pool: rows = list(pool.map(read, paths))
+    assert sorted(r['source_digest_bytes'] for r in rows) == [31,32]
+    assert all(r['source_digest_reads']==1 and r['parent_call_id'] is None for r in rows)
+    assert len({r['call_id'] for r in rows}) == 2
+    assert R._POLICY_CALL.get() is None

@@ -211,6 +211,9 @@ class PhysicalEntrySendContext:
             native_receipt = getattr(exc, "reversal_source_receipt", None)
             if isinstance(native_receipt, dict):
                 receipt["native_source_receipt"] = native_receipt
+            submit_revalidation = getattr(exc, "entry_submit_revalidation", None)
+            if isinstance(submit_revalidation, dict):
+                receipt["entry_submit_revalidation"] = submit_revalidation
             reject("entry_context_revalidation_failed:" + type(exc).__name__)
         receipt.update(allowed=True, reason="same_initial_intent_current_quote",
                        decision_binding_sha256=hashlib.sha256(self.decision_binding.encode()).hexdigest(),

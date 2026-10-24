@@ -11,6 +11,77 @@ import pytest
 from src.utils import pipeline_event_logger as logger_mod
 
 
+@pytest.mark.parametrize(
+    "value, missing",
+    [
+        (None, True),
+        ("", True),
+        (" - ", True),
+        ("NULL", True),
+        (float("nan"), True),
+        ("not_evaluated", True),
+        ("not_applicable_cap", True),
+        (0, False),
+        ("0", False),
+        (False, False),
+        ("inf", False),
+        ("unknown", False),
+    ],
+)
+def test_zero_context_missing_preserves_zero_and_nonmissing_tokens(value, missing):
+    assert logger_mod.zero_context_value_missing(value) is missing
+
+
+@pytest.mark.parametrize(
+    "states, primary, defaulted",
+    [
+        ({}, "not_applicable_zero", 0),
+        (
+            {"qty": "guard_intended_zero", "cap": "not_applicable_zero"},
+            "guard_intended_zero",
+            0,
+        ),
+        (
+            {
+                "qty": "actual_zero",
+                "quote": "stale_defaulted_zero",
+                "ratio": "missing_defaulted_zero",
+            },
+            "stale_defaulted_zero",
+            2,
+        ),
+        (
+            {"ratio": "missing_defaulted_zero", "quote": "stale_defaulted_zero"},
+            "missing_defaulted_zero",
+            2,
+        ),
+    ],
+)
+def test_zero_context_fields_preserve_order_counts_and_input(
+    states, primary, defaulted
+):
+    before = list(states.items())
+    fields = logger_mod.zero_context_observation_fields(
+        domain="", blocker=None, states=states
+    )
+    assert list(states.items()) == before
+    assert fields["zero_context_primary_state"] == primary
+    assert fields["zero_context_defaulted_zero_field_count"] == defaulted
+    assert fields["zero_context_observed"] is bool(states)
+    assert fields["zero_context_domain"] == fields["zero_context_blocker"] == "unknown"
+    if states:
+        assert list(fields)[-len(states) :] == [
+            f"zero_context_{key}_state" for key in states
+        ]
+    else:
+        assert len(fields) == 6
+    assert fields["zero_context_forbidden_uses"] == (
+        "threshold_mutation,provider_route_change,order_price_relaxation,"
+        "quantity_or_cap_change,broker_guard_bypass,stale_quote_bypass,"
+        "hard_safety_guard_bypass,real_execution_quality_approval"
+    )
+
+
 def _reset_logger_state(monkeypatch):
     logger_mod._flush_producer_summary_at_exit()
     monkeypatch.setattr(logger_mod, "_PRODUCER_COMPACTOR", None)
@@ -516,6 +587,11 @@ def test_pipeline_event_writer_pins_parent_directory_across_path_swap(
 
 def test_append_revalidates_existing_parent_without_repeated_mkdir(monkeypatch, tmp_path):
     from pathlib import Path
+    from src.engine.automation.main_trailing_source_store import _database
+    # Main prepares its index before collection. This regression exercises
+    # the same warm append boundary while preserving native raw-parent checks.
+    prepared=tmp_path/'pipeline_events/pipeline_events_2026-10-10.jsonl'
+    with _database(tmp_path,prepared,writer=True):pass
     original = Path.mkdir
     created = []
 
@@ -1486,6 +1562,51 @@ def test_execution_producer_family_projection_has_reconciled_census(monkeypatch,
     monkeypatch.setattr(logger_mod,'_PRODUCER_COMPACTOR',None)
 
 
+def test_restart_drain_closes_loaded_observers_before_summary(monkeypatch):
+    import sys
+    calls = []
+    monkeypatch.setitem(sys.modules, 'src.engine.kiwoom_sniper_v2', SimpleNamespace(
+        close_observation_sources=lambda: calls.append('observations') or True))
+    monkeypatch.setattr(logger_mod, '_PRODUCER_COMPACTOR', SimpleNamespace(
+        enable_termination_drain=lambda: calls.append('synchronous'),
+        flush=lambda: calls.append('summary')))
+    monkeypatch.setattr(logger_mod, '_RETIRING_COMPACTORS', [])
+    monkeypatch.setattr(logger_mod, '_TERMINATION_DRAIN_ACTIVE', False)
+    logger_mod.drain_pipeline_event_summary_before_termination()
+    assert calls == ['observations', 'synchronous', 'summary']
+
+
+def test_summary_drain_does_not_import_an_unstarted_engine(monkeypatch):
+    import sys
+    monkeypatch.delitem(sys.modules, 'src.engine.kiwoom_sniper_v2', raising=False)
+    calls = []
+    monkeypatch.setattr(logger_mod, '_PRODUCER_COMPACTOR', SimpleNamespace(
+        enable_termination_drain=lambda: None, flush=lambda: calls.append('summary')))
+    monkeypatch.setattr(logger_mod, '_RETIRING_COMPACTORS', [])
+    monkeypatch.setattr(logger_mod, '_TERMINATION_DRAIN_ACTIVE', False)
+    logger_mod.drain_pipeline_event_summary_before_termination()
+    assert calls == ['summary']
+    assert 'src.engine.kiwoom_sniper_v2' not in sys.modules
+
+
+@pytest.mark.parametrize('fault', ['missing', 'raise'])
+def test_restart_observation_failure_remains_visible_and_summary_still_drains(monkeypatch, fault):
+    import sys
+    calls = []
+    def fail():
+        raise OSError('fixture')
+    monkeypatch.setitem(sys.modules, 'src.engine.kiwoom_sniper_v2', SimpleNamespace(
+        **({'close_observation_sources': fail} if fault == 'raise' else {})))
+    monkeypatch.setattr(logger_mod, 'log_error', lambda value: calls.append(value))
+    monkeypatch.setattr(logger_mod, '_PRODUCER_COMPACTOR', SimpleNamespace(
+        enable_termination_drain=lambda: None, flush=lambda: calls.append('summary')))
+    monkeypatch.setattr(logger_mod, '_RETIRING_COMPACTORS', [])
+    monkeypatch.setattr(logger_mod, '_TERMINATION_DRAIN_ACTIVE', False)
+    logger_mod.drain_pipeline_event_summary_before_termination()
+    assert len(calls) == 2 and 'SOURCE_OBSERVATION_SHUTDOWN' in calls[0]
+    assert calls[-1] == 'summary'
+
+
 def test_graceful_sigterm_drain_preserves_admitted_rows(tmp_path):
     """Controlled child only; no trading process, signal handler or orders."""
     import subprocess
@@ -1494,35 +1615,54 @@ def test_graceful_sigterm_drain_preserves_admitted_rows(tmp_path):
     for drained in (False, True):
         directory = tmp_path / str(drained)
         script = f'''
-import os, signal
+import ast, os, signal, sys
+sys.addaudithook(lambda event,args: (_ for _ in ()).throw(RuntimeError('child_network_forbidden'))
+    if event in ('socket.connect','socket.getaddrinfo','socket.sendto') else None)
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from types import SimpleNamespace
 from src.utils import pipeline_event_logger as logger
+from src.engine.scalping import pre_submit_delay_observation as observer
 logger.DATA_DIR = Path({str(directory)!r})
 os.environ["PIPELINE_EVENT_HIGH_VOLUME_COMPACTION_MODE"] = "shadow"
 os.environ["PIPELINE_EVENT_COMPACTION_FLUSH_SEC"] = "3600"
 logger.emit_pipeline_event("ENTRY_PIPELINE", "TEST", "005930", "scalping_scanner_fast_precheck", record_id=1)
+queue = logger.BoundedObservationQueue(ThreadPoolExecutor(max_workers=1))
+observer.configure_sink(queue.submit)
+for identity in ('first', 'second'):
+    observer.register('005930', dict(id=identity, committed_at_epoch=1, remaining_sec=[120,180],
+        decision_source_sha256='a'*64), commit=dict(delay_intent_id=identity, decision_source_sha256='a'*64))
+# Execute the actual cleanup function without importing Main's DB/WS startup.
+tree = ast.parse(Path('src/engine/kiwoom_sniper_v2.py').read_text())
+native = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name=='close_observation_sources')
+context = dict(_SCANNER_OBSERVATION_QUEUE=queue, log_error=print)
+exec(compile(ast.Module(body=[native],type_ignores=[]),'native-cleanup','exec'),context)
+sys.modules['src.engine.kiwoom_sniper_v2'] = SimpleNamespace(close_observation_sources=context['close_observation_sources'])
 if {drained!r}:
     logger.drain_pipeline_event_summary_before_termination()
 os.kill(os.getpid(), signal.SIGTERM)
 '''
         result = subprocess.run([sys.executable, "-c", script], cwd=Path(__file__).parents[2], capture_output=True, timeout=15)
         assert result.returncode == -15
-        assert sum(len(p.read_text().splitlines()) for p in directory.glob("pipeline_events/*.jsonl")) == 1
+        raw = [json.loads(line) for p in directory.glob("pipeline_events/*.jsonl")
+               for line in p.read_text().splitlines()]
+        if drained:
+            assert len(raw) == 5, result.stdout + result.stderr
+        else:
+            assert 1 <= len(raw) <= 3  # Enqueue alone cannot promise raw append.
+        terminals = [row for row in raw if row['stage']=='pre_submit_delay_intent_terminal']
+        assert len(terminals) == (2 if drained else 0)
+        for row in terminals:
+            assert row['fields']['observation_only']=='True'
+            assert row['fields']['actual_order_submitted']=='False'
+            assert row['fields']['broker_order_forbidden']=='True'
         paths = list(directory.glob("pipeline_event_summaries/pipeline_event_producer_summary_*.jsonl"))
         assert bool(paths) is drained
         if drained:
-            assert sum(json.loads(line)["event_count"] for p in paths for line in p.read_text().splitlines()) == 1
-    # All existing graceful self-termination calls must first reach the owner drain.
-    import ast
-    for relative in ("src/bot_main.py", "src/engine/kiwoom_sniper_v2.py"):
-        tree = ast.parse((Path(__file__).parents[2] / relative).read_text())
-        for parent in ast.walk(tree):
-            for _, children in ast.iter_fields(parent):
-                if not isinstance(children, list):
-                    continue
-                for index, child in enumerate(children):
-                    if isinstance(child, ast.Expr) and isinstance(child.value, ast.Call) and ast.unparse(child.value).startswith("os.kill(os.getpid(), signal.SIGTERM"):
-                        assert index > 0 and "drain_pipeline_event_summary_before_termination()" in ast.unparse(children[index - 1])
+            assert sum(json.loads(line)["event_count"] for p in paths for line in p.read_text().splitlines()) == 5
+    # Self-SIGTERM was removed: Main joins the engine's real collector finally
+    # before the existing summary drain. End-to-end branches live in the restart
+    # race suite; this test keeps only its original summary-loss demonstration.
 
 
 def test_restart_drain_keeps_late_scanner_rows_bound_to_first_stage(monkeypatch, tmp_path):
@@ -1588,9 +1728,11 @@ def test_restart_drain_keeps_late_scanner_rows_bound_to_first_stage(monkeypatch,
         "ENTRY_PIPELINE", "fixture", "122350", "scalping_scanner_fast_precheck",
         record_id=47860, fields=fields,
     )
-    assert "pre_submit_delay:raw_generation_changed" in handoff.stage_receipt_issues(
-        report_dir, day, "pre_submit_delay", code_hash="fixture-code"
-    )
+    issues = handoff.stage_receipt_issues(report_dir, day, "pre_submit_delay", code_hash="fixture-code")
+    # Native v2 detects the changed partition inside its lineage validator;
+    # legacy ledgers expose the same rejection through raw generation checks.
+    assert set(issues) & {"pre_submit_delay:raw_generation_changed",
+                          "pre_submit_delay:family_source_ledger_missing_or_invalid"}
     logger_mod._flush_producer_summary_at_exit()
 
 
@@ -1695,3 +1837,47 @@ def test_append_outcomes_conserve_completed_and_bound_owner_diagnostics():
     assert stats['completed'] == stats['append_confirmed'] + stats['intentionally_not_written'] + stats['append_unobservable'] == 3
     assert stats['queued'] == stats['completed'] + stats['append_failed'] + stats['pending_items'] == 4
     assert stats['failed'] == 1 and len(stats['outcomes_by_owner']) == 4
+
+
+def test_trailing_queue_freezes_inputs_reserves_capacity_and_reports_writer_failure(monkeypatch):
+    from src.engine.scalping.universal_trailing_replay import decode_quote
+    from src.tests.test_main_all_scope_trailing import quote
+    class Executor:
+        def __init__(self): self.jobs=[]
+        def submit(self, callback): self.jobs.append(callback)
+        def drain(self):
+            while self.jobs: self.jobs.pop(0)()
+    executor = Executor()
+    queue = logger_mod.BoundedObservationQueue(executor, max_items=32, max_bytes=128*1024)
+    monkeypatch.setattr(logger_mod, '_TRAILING_OBSERVATION_SINK', queue.submit)
+    saved=[]
+    def emit(*args, **kwargs):
+        saved.append(kwargs)
+        return dict(structured_append_succeeded=len(saved) != 299)
+    monkeypatch.setattr(logger_mod,'emit_pipeline_event',emit)
+    raw = quote(1,'2026-10-08T09:00:01')
+    for start in range(0,320,4):
+        for seq in range(start+1,start+5):
+            fields=dict(universal_trailing_quote=raw, event_sequence=seq, evaluation_at_epoch=raw['known_at'])
+            result=logger_mod.enqueue_trailing_observation('Test','123456',7,fields)
+            assert result == dict(status='queued',structured_append_succeeded=False)
+            fields['event_sequence'] = -1
+        assert logger_mod.enqueue_trailing_observation('Test','123456',7,fields)['status']=='unavailable'
+        # Exhausting trailing's reservation never consumes Main-stop's slot.
+        assert queue.submit(lambda:dict(structured_append_succeeded=True),observation_category='main_stop')['status']=='queued'
+        assert not saved or len(saved)==start
+        executor.drain()
+    assert [r['fields']['event_sequence'] for r in saved]==list(range(1,321))
+    assert all(decode_quote(r['fields']['universal_trailing_quote'])==raw for r in saved)
+    text_fields=logger_mod._project_fields_for_text('scalp_trailing_input_transition', saved[-1]['fields'])
+    assert 'universal_trailing_quote' not in text_fields
+    assert text_fields['universal_trailing_quote_source_sha256']==raw['source_sha256']
+    assert logger_mod._project_fields_for_compact_stream('scalp_trailing_input_transition', saved[-1]['fields'])==saved[-1]['fields']
+    assert all(r['observed_at_epoch']==raw['known_at'] for r in saved)
+    assert queue.close(timeout=0)
+    stats=queue.snapshot()
+    assert stats['append_failed']==1 and stats['pending_items']==stats['pending_bytes']==0
+    assert stats['peak_items']==5 and stats['peak_bytes']<queue.max_bytes
+    assert logger_mod.enqueue_trailing_observation('Test','123456',7,fields)['status']=='unavailable'
+    monkeypatch.setattr(logger_mod,'_TRAILING_OBSERVATION_SINK',None)
+    assert logger_mod.enqueue_trailing_observation('Test','123456',7,fields)['reason']=='trailing_observation_sink_missing'

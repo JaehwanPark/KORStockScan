@@ -218,11 +218,11 @@ def _select_legacy(db, base, args):
         'validation_ids_sha256':_ids_digest(db,validation+f' AND p{best} IS NOT NULL',args)}
 
 
-def _select(db, base, args):
+def _select(db, base, args, *, horizons=initial.HORIZONS):
     train, validation = base+" AND split='train'", base+" AND split='validation'"
     train_n = db.execute('SELECT count(*) FROM population WHERE '+train,args).fetchone()[0]
     validation_n = db.execute('SELECT count(*) FROM population WHERE '+validation,args).fetchone()[0]
-    candidates = [d for d in initial.HORIZONS[1:] if db.execute(
+    candidates = [d for d in horizons[1:] if db.execute(
         f'SELECT 1 FROM population WHERE {train} AND p{d} IS NOT NULL LIMIT 1',args).fetchone()]
     metrics = {d:_stats(db,train,args,d,train_n) for d in candidates}
     empty = dict(delay_sec=None,selection_basis='unsupported',runtime_apply_allowed=False,
@@ -245,10 +245,11 @@ def _select(db, base, args):
         'validation_ids_sha256':_ids_digest(db,validation+f' AND p{best} IS NOT NULL',args)}
 
 
-def _populate(db, projected, *, effective_date, algorithm):
+def _populate(db, projected, *, effective_date, algorithm, machine_parents=None):
+    horizons = initial.candidate_horizons(algorithm)[1:]
     db.execute('CREATE TABLE population (id TEXT PRIMARY KEY, body TEXT, gid TEXT, anchor TEXT, '
         'market TEXT, parents TEXT, kind TEXT, at REAL, end REAL, native INTEGER, p0 INTEGER, '
-        'p30 REAL,p60 REAL,p120 REAL,p180 REAL,split TEXT,eligible INTEGER) WITHOUT ROWID')
+        + ','.join(f'p{d} REAL' for d in horizons) + ',split TEXT,eligible INTEGER) WITHOUT ROWID')
     for row in projected:
         parents = row.get('parent_compatibility')
         pairs = row.get('pairs')
@@ -265,13 +266,16 @@ def _populate(db, projected, *, effective_date, algorithm):
                 or any(str(k) not in {'30','60','120','180'} or initial.number(v) is None for k,v in pairs.items())
                 or not isinstance(row.get('situation'),str) or len(row['situation'])>2048):
             raise ValueError('initial_delay_projection_invalid')
-        group = [row['anchor_kind'],row['session'],row['parent_compatibility']]
-        pairs = row['pairs']
-        db.execute('INSERT INTO population VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+        # Keep original opportunity/receipt identities and qualification bytes.
+        # Only the selection cohort uses a proven identical issued parent.
+        parents = [(machine_parents or {}).get(parents[0], parents[0]), parents[1]]
+        group = [row['anchor_kind'],row['session'],parents]
+        pairs = initial.selection_pairs(row, algorithm)
+        db.execute('INSERT INTO population VALUES (' + ','.join('?' for _ in range(13+len(horizons))) + ')',
             (row['identity'],storage.encoded(row).decode(),initial.digest(group),row['anchor_kind'],
-             row['session'],storage.encoded(row['parent_compatibility']).decode(),row['situation'],
+             row['session'],storage.encoded(parents).decode(),row['situation'],
              row['committed_at'],row['observation_end_at'],int(row['native_evaluation_bound']),int(row['p0_valid']),
-             *(pairs.get(str(d),pairs.get(d)) for d in initial.HORIZONS[1:]), 'unqualified',
+             *(pairs.get(d) for d in horizons), 'unqualified',
              int(row['p0_valid'] and (algorithm==initial.LEGACY_ALGORITHM or initial.lineage_eligible(row,effective_date)))))
     db.execute('CREATE INDEX population_time ON population(gid,at,id)')
     db.execute('CREATE INDEX population_cells ON population(gid,kind,split)')
@@ -309,8 +313,9 @@ def _cell_rows(db, effective, algorithm):
         for kind in kinds:
             base,args = 'gid=? AND p0=1',(group,)
             if kind != 'ALL': base += ' AND kind=?'; args += (kind,)
-            selected = (_select_legacy if algorithm==initial.LEGACY_ALGORITHM else _select)(db,base,args)
-            if algorithm==initial.ALGORITHM and not db.execute(
+            selected = (_select_legacy(db,base,args) if algorithm==initial.LEGACY_ALGORITHM else
+                        _select(db,base,args,horizons=initial.candidate_horizons(algorithm)))
+            if algorithm!=initial.LEGACY_ALGORITHM and not db.execute(
                     'SELECT 1 FROM population WHERE gid=? AND eligible=1 LIMIT 1',(group,)).fetchone():
                 selected = {**selected,'delay_sec':0,'selection_basis':'unverified_lineage_immediate_default',
                             'runtime_apply_allowed':False}
@@ -328,16 +333,19 @@ def _cell_rows(db, effective, algorithm):
 
 
 def build(projected, census, *, output_root, source_date, publication_date, effective_date,
-          source_sha256, code_contract_sha256, source_receipt, _algorithm=None, _projection_contract=None, _mapping_version=None):
+          source_sha256, code_contract_sha256, source_receipt, _algorithm=None, _projection_contract=None, _mapping_version=None,
+          machine_compatibility=None):
     algorithm = _algorithm or initial.ALGORITHM
-    if algorithm not in (initial.ALGORITHM,initial.LEGACY_ALGORITHM):
+    if algorithm not in initial.ALGORITHMS:
         raise ValueError('initial_delay_algorithm_invalid')
     from datetime import date
     if not date.fromisoformat(source_date) <= date.fromisoformat(publication_date) < date.fromisoformat(effective_date):
         raise ValueError('initial_delay_dates_invalid')
     root = Path(output_root)
+    from .pre_submit_delay_situation_projection import machine_parent_mapping
+    machine_parents = machine_parent_mapping(machine_compatibility, target_date=effective_date)
     with storage.index(root) as db:
-        _populate(db,projected,effective_date=effective_date,algorithm=algorithm)
+        _populate(db,projected,effective_date=effective_date,algorithm=algorithm,machine_parents=machine_parents)
         observed = {'qualified_pass_n':0,'p0_valid_n':0,'native_evaluation_unverified_n':0,
                     'parent_compatibility_unverified_n':0}
         for body, in db.execute('SELECT body FROM population'):
@@ -351,7 +359,8 @@ def build(projected, census, *, output_root, source_date, publication_date, effe
         projection_ref = storage.write_tree(root,(json.loads(b) for b, in db.execute('SELECT body FROM population ORDER BY id')))
         partitions_ref = storage.write_tree(root,_group_rows(db,root))
         cells_ref = storage.write_tree(root,_cell_rows(db,effective_date,algorithm))
-        price_pairs = db.execute('SELECT sum((p30 IS NOT NULL)+(p60 IS NOT NULL)+(p120 IS NOT NULL)+(p180 IS NOT NULL)) '
+        price_pairs = db.execute('SELECT sum(' + '+'.join(f'(p{d} IS NOT NULL)'
+            for d in initial.candidate_horizons(algorithm)[1:]) + ') '
             "FROM population WHERE anchor='price_ready'").fetchone()[0] or 0
     positive_n = sum(int(row['value']['anchor_kind']=='price_ready' and (row['value']['delay_sec'] or 0)>0)
                      for row in storage.iter_tree(root,cells_ref))
@@ -367,9 +376,13 @@ def build(projected, census, *, output_root, source_date, publication_date, effe
         paired_net_ev_delta_pct=None,realized_pnl_krw=None,metric_role='initial_entry_price_timing_estimate',
         decision_authority='next_preopen_initial_pre_submit_timing_policy',
         primary_decision_metric='mean_paired_price_improvement_bp'),root)
+    if machine_compatibility is not None:
+        report['machine_parent_compatibility'] = machine_compatibility
     policy = EvidenceDocument({k:report[k] for k in ('storage_schema','source_date','publication_date','source_sha256',
         'code_contract_sha256','algorithm','mapping_version','cells_ref','default_delay_sec',
         'metric_role','decision_authority','primary_decision_metric')},root)
+    if machine_compatibility is not None:
+        policy['machine_parent_compatibility'] = machine_compatibility
     policy.update(schema=initial.POLICY_SCHEMA,policy_kind='initial_paired_quote_timing',effective_from=effective_date,
         expires_on=effective_date,supported_anchor_kind='price_ready',selection_status=report['status'],
         runtime_apply_allowed=not blocked,report_sha256=initial.digest(report))
@@ -386,7 +399,7 @@ def validate(policy, report, *, target_date=None):
             or policy.get('runtime_apply_allowed') is not True or report.get('price_ready_pair_n',0)<1
             or policy.get('cells_ref')!=report.get('cells_ref') or policy.get('default_delay_sec')!=0
             or report.get('schema')!=initial.REPORT_SCHEMA or policy.get('schema')!=initial.POLICY_SCHEMA
-            or policy.get('algorithm') not in (initial.ALGORITHM,initial.LEGACY_ALGORITHM)
+            or policy.get('algorithm') not in initial.ALGORITHMS
             or policy.get('algorithm')!=report.get('algorithm')):
         raise ValueError('initial_delay_sharded_contract_invalid')
     root = getattr(report,'evidence_root',None)
@@ -398,6 +411,13 @@ def validate(policy, report, *, target_date=None):
             raise ValueError('initial_delay_generation_invalid')
     if target_date and not policy['effective_from']<=target_date<=policy['expires_on']:
         raise ValueError('initial_delay_date_invalid')
+    if policy.get('machine_parent_compatibility') != report.get('machine_parent_compatibility'):
+        raise ValueError('delay_machine_compatibility_binding_invalid')
+    from .pre_submit_delay_situation_projection import machine_parent_mapping
+    machine_parent_mapping(report.get('machine_parent_compatibility'), target_date=report['effective_date'])
+    from src.engine.infrastructure.startup_validation_code_context import validate_preparation_delay_selection
+    if validate_preparation_delay_selection(policy,report,target_date=target_date):
+        return
     # Rebuild from the frozen *whole* population. Shard-local winners or split
     # labels never authorize a policy. Verifier scratch is removed on exit.
     import tempfile
@@ -408,7 +428,8 @@ def validate(policy, report, *, target_date=None):
             source_sha256=report['source_sha256'],code_contract_sha256=report['code_contract_sha256'],
             source_receipt=report.get('source_receipt'),_algorithm=report['algorithm'],
             _projection_contract=initial.frozen_projection_contract(report),
-            _mapping_version=report.get('mapping_version'))
+            _mapping_version=report.get('mapping_version'),
+            machine_compatibility=report.get('machine_parent_compatibility'))
         # Physical layout belongs to its own verified generation. Selection and
         # split must match by canonical semantic digests, independently of it.
         for key in ('qualified_projection_ref','partitions_ref','cells_ref'):
@@ -447,6 +468,8 @@ def run(root, output, day, *, publication_date, effective_date, require_ledger, 
         contract, cached=None):
     import tempfile
     root,output=Path(root).resolve(),Path(output).resolve()
+    from .pre_submit_delay_situation_projection import prepare_machine_compatibility
+    machine_compatibility = prepare_machine_compatibility(root, effective_date)
     output.mkdir(parents=True,exist_ok=True)
     from src.engine.lifecycle.research_disk_budget import use
     # Canonical input == output is the normal dispatcher path. Only this
@@ -460,10 +483,11 @@ def run(root, output, day, *, publication_date, effective_date, require_ledger, 
             saved,projection=cached
             report,policy=build(projection,saved['census'],output_root=scratch,source_date=day,
                 publication_date=publication_date,effective_date=effective_date,source_sha256=saved['source_sha256'],
-                code_contract_sha256=contract,source_receipt=saved['source_receipt'])
+                code_contract_sha256=contract,source_receipt=saved['source_receipt'],
+                machine_compatibility=machine_compatibility)
             decode_passes=0
             def verify():
-                initial.verify_source(root,saved)
+                initial.verify_source(root,report)
                 if initial.code_contract()!=contract: raise ValueError('delay_code_changed_during_research')
             finish(output,day,report,policy,verify,dry_run)
         else:
@@ -501,7 +525,8 @@ def run(root, output, day, *, publication_date, effective_date, require_ledger, 
                         native_situation_projection=situation_receipt)
                     report,policy=build((row for _,row,_ in storage.records(db)),census,
                         output_root=scratch,source_date=day,publication_date=publication_date,effective_date=effective_date,
-                        source_sha256=snapshot.source['sha256'],code_contract_sha256=contract,source_receipt=receipt)
+                        source_sha256=snapshot.source['sha256'],code_contract_sha256=contract,source_receipt=receipt,
+                        machine_compatibility=machine_compatibility)
                     report['source_scan_census']={k:snapshot.source[k] for k in ('raw_event_count','isolated_records',
                         'conflicted_records','scan_jobs','bytes_read')}
                     # The scan census is diagnostic and part of the report seal.
@@ -519,12 +544,16 @@ def run(root, output, day, *, publication_date, effective_date, require_ledger, 
 
 
 def finish(output, day, report, policy, verify, dry_run):
-    verify()
+    def verify_selection_sources():
+        verify()
+        from .pre_submit_delay_situation_projection import machine_parent_mapping
+        machine_parent_mapping(report.get('machine_parent_compatibility'), target_date=report['effective_date'])
+    verify_selection_sources()
     if dry_run: return
     if policy['runtime_apply_allowed']:
         pointer=Path(output)/'threshold_cycle/pre_submit_delay_policy'/f'committed_{day}.json'
         incumbent=initial.committed_paths(output,day,validate_selection=False)[3]['manifest_sha256'] if pointer.exists() else None
-        initial.publish(output,report,policy,expected_incumbent=incumbent,source_verifier=verify)
+        initial.publish(output,report,policy,expected_incumbent=incumbent,source_verifier=verify_selection_sources)
     else:
         # A blocked root still retains its full census without activating it.
         base=Path(output)/'report/pre_submit_delay_tuning'/f'blocked-{day}-{initial.digest(report)}'

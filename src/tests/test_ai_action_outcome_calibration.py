@@ -2938,10 +2938,12 @@ def test_report_common_refinement_uses_natural_population_and_current_parent(mon
     assert result["incumbent_machine_policy_sha256"] == calibration._canonical_sha256(parent)
 
 
+@pytest.mark.parametrize('native_reversal',[False,True])
 def test_machine_only_report_does_not_scan_unrelated_pipeline_history(
-    monkeypatch, tmp_path
+    monkeypatch, tmp_path,native_reversal
 ):
     from src.engine.scalping import mechanistic_entry_runtime_policy as runtime_policy
+    from src.engine.scalping import continuous_reversal_policy_v6 as native
 
     rows, receipt = _natural_refinement_fixture()
     # These rows have exact date-scoped machine attempt IDs but no scanner
@@ -2953,7 +2955,7 @@ def test_machine_only_report_does_not_scan_unrelated_pipeline_history(
     monkeypatch.setattr(
         runtime_policy,
         "load_effective",
-        lambda **kw: {"machine_policy": parent},
+        lambda **kw: {"machine_policy": parent,**({'continuous_reversal':{'schema':native.SCHEMA}} if native_reversal else {})},
     )
     monkeypatch.setattr(
         calibration,
@@ -2977,6 +2979,13 @@ def test_machine_only_report_does_not_scan_unrelated_pipeline_history(
             AssertionError("machine-only must not scan pipeline history")
         ),
     )
+    from src.engine.scalping import main_submit_drought_research as legacy
+    calls=[]
+    def compare(*args):
+        assert not native_reversal,'native captures cannot enter the legacy recipe comparator'
+        calls.append(True)
+        return {'status':'legacy_recipe_comparison'}
+    monkeypatch.setattr(legacy,'refresh_daily_projection',compare)
 
     report = calibration.build_main_mechanistic_report(
         target_date="2026-09-15", data_root=tmp_path
@@ -2984,6 +2993,8 @@ def test_machine_only_report_does_not_scan_unrelated_pipeline_history(
 
     assert report["report_scope"] == "main_mechanistic_entry"
     assert report["noncompact_sections_refreshed"] is True
+    assert bool(calls) is (not native_reversal)
+    assert ('submission_drought_price_comparison' in report) is (not native_reversal)
     assert report["machine_full_evaluation"]["full_population_count"] == len(rows)
     machine_selection = report["strategy_refinements_by_scope"]["KRX|KRX_REGULAR"]
     assert machine_selection["population_count"] == len(rows)
@@ -4316,8 +4327,9 @@ def test_same_prompt_isolated_krx_and_nxt_are_separate_candidates(
     } == {("KRX", "KRX_REGULAR"), ("NXT", "NXT_AFTERMARKET")}
 
 
+@pytest.mark.parametrize("source_date,count", [("2026-09-07",1),("2026-10-21",2)])
 def test_dual_aftermarket_uses_route_key_and_remains_observe_only(
-    tmp_path: Path,
+    tmp_path: Path, source_date, count,
 ) -> None:
     assert calibration._cohort_route_scope("KRX", "KRX_REGULAR", "") == (
         "KRX:KRX_REGULAR"
@@ -4371,7 +4383,7 @@ def test_dual_aftermarket_uses_route_key_and_remains_observe_only(
     ]
     payload = _valid_detailed_payload(
         {
-            "target_date": "2026-09-07",
+            "target_date": source_date,
             "requests": [{"candidate": {"prompt_version": "dual_v1"}}],
             "paired_comparisons": rows,
         }
@@ -4398,22 +4410,22 @@ def test_dual_aftermarket_uses_route_key_and_remains_observe_only(
         tmp_path
         / "report"
         / calibration.PAIRED_SUBDIR
-        / "ai_prompt_detailed_paired_replay_2026-09-07_dual.json"
+        / f"ai_prompt_detailed_paired_replay_{source_date}_dual.json"
     )
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload), encoding="utf-8")
 
-    report = build_report(target_date="2026-09-07", data_root=tmp_path)
+    report = build_report(target_date=source_date, data_root=tmp_path)
 
     candidate = report["candidate_summaries"][0]
     assert candidate["cohort_key_version"] == "v2"
     assert candidate["market_data_route"] == "KRX_NXT_INTEGRATED"
     assert candidate["authority_state"] == "OBSERVE_ONLY"
-    assert candidate["exact_trace_count"] == 1
+    assert candidate["exact_trace_count"] == count
     assert candidate["review_ready_for_prompt_candidate"] is False
     assert candidate["review_classification"] == "dual_aftermarket_observe_only"
     assert report["source_reports"][0]["row_exclusion_reason_counts"] == {
-        "dual_actual_execution_venue_unknown": 1,
+        **({"dual_actual_execution_venue_unknown": 1} if count == 1 else {}),
         "dual_exposure_cost_missing_or_invalid": 1,
     }
     assert report["review_ready_candidates"] == []

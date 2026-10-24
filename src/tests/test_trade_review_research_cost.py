@@ -138,6 +138,20 @@ def test_unresolved_research_cost_enqueues_prior_dates_only_with_write(monkeypat
     assert calls["resolve"] == []
 
 
+def test_allocator_failure_keeps_original_cause_instead_of_validating_it_as_a_receipt(monkeypatch, tmp_path):
+    from src.engine.lifecycle import broker_cost_allocation as allocation
+    calls = setup_report(monkeypatch, tmp_path, allocation_status="research_cost_invalid")
+    def forbidden(*args, **kwargs):
+        pytest.fail("an allocator source gap is not an allocated receipt")
+    monkeypatch.setattr(allocation, "validate_research_cost", forbidden)
+    result = review.build_trade_review_report("2026-10-08", write_research_costs=True)
+    row = result["sections"]["completed_trade_projection"][0]
+    assert row["quantity_research_cost"]["reason"] == "broker_cost_source_missing"
+    assert row["quantity_research_cost"]["allocated_net_pnl_krw"] is None
+    assert row["realized_pnl_krw"] is None
+    assert calls["enqueue"][0][-1] == ["broker_cost_source_missing"]
+
+
 def test_filtered_report_cannot_persist_partial_research_population():
     with pytest.raises(ValueError, match="unfiltered_population"):
         review.build_trade_review_report("2026-10-08", code="123456", write_research_costs=True)
@@ -161,6 +175,62 @@ def test_cached_stdin_guard_cannot_silently_skip_requested_cost_producer(monkeyp
     assert review.build_trade_review_report("2026-10-08") is frozen
     with pytest.raises(ValueError, match="requires_native_report_build"):
         review.build_trade_review_report("2026-10-08", write_research_costs=True)
+
+
+def test_native_report_does_not_decode_an_unused_cached_snapshot(monkeypatch, tmp_path):
+    setup_report(monkeypatch, tmp_path)
+    monkeypatch.setattr(review, "should_guard_stdin_heavy_build", lambda _: False)
+    def forbidden(*args):
+        pytest.fail("native report must not decode its discarded fallback")
+    monkeypatch.setattr(review, "load_monitor_snapshot", forbidden)
+    report = review.build_trade_review_report("2026-10-08")
+    assert report["date"] == "2026-10-08"
+
+
+@pytest.mark.parametrize("compressed", [False, True])
+@pytest.mark.parametrize("reason", ["census", "warning", "missing"])
+def test_known_invalid_carry_header_never_loads_large_snapshot(monkeypatch, tmp_path, compressed, reason):
+    import gzip
+    import json
+    directory = tmp_path / 'report/monitor_snapshots'; directory.mkdir(parents=True)
+    path = directory / 'trade_review_2026-10-16.json'
+    if compressed:
+        path = path.with_suffix('.json.gz')
+    header = dict(date='2026-10-15' if reason == 'missing' else '2026-10-16',
+        meta={'warnings': ['source warning'] if reason == 'warning' else []},
+        metrics={'open_scalp_position_projection_status': 'source_gap_historical_open_census_not_reconstructible'})
+    opener = gzip.open if compressed else open
+    with opener(path, 'wt', encoding='utf-8') as handle:
+        handle.write(json.dumps(header)[:-1] + ', "irrelevant": "')
+        for _ in range(80): handle.write('x' * 65536)
+        handle.write('"}')
+    monkeypatch.setattr(review, 'DATA_DIR', tmp_path)
+    def forbidden(*args):
+        pytest.fail('known invalid source must be rejected before full decoding')
+    monkeypatch.setattr(review, 'load_monitor_snapshot', forbidden)
+    events, receipts = review._prior_entry_fill_events(
+        [{'id': 1, 'status': 'COMPLETED', 'rec_date': '2026-10-16'}], '2026-10-17')
+    assert events == {}
+    assert receipts == {'2026-10-16': {'status': 'source_gap_entry_snapshot_' + reason}}
+
+
+def test_carry_header_is_not_row_or_identity_approval(monkeypatch, tmp_path):
+    import json
+    directory = tmp_path / 'report/monitor_snapshots'; directory.mkdir(parents=True)
+    snapshot = dict(date='2026-10-16', meta={'warnings': []},
+        metrics={'open_scalp_position_projection_status': 'current_db_census',
+                 'open_scalp_position_projection_count': 1},
+        sections={'open_scalp_position_projection': []})
+    (directory/'trade_review_2026-10-16.json').write_text(json.dumps(snapshot))
+    monkeypatch.setattr(review, 'DATA_DIR', tmp_path)
+    loaded = []
+    def load(*args): loaded.append(args); return snapshot
+    monkeypatch.setattr(review, 'load_monitor_snapshot', load)
+    events, receipts = review._prior_entry_fill_events(
+        [{'id': 1, 'status': 'COMPLETED', 'rec_date': '2026-10-16'}], '2026-10-17')
+    assert len(loaded) == 1
+    assert events == {}
+    assert receipts['2026-10-16']['status'] == 'source_gap_entry_snapshot_census'
 
 
 def test_corrupt_exact_receipt_cannot_be_masked_by_whole_position_fallback(monkeypatch, tmp_path):
@@ -248,6 +318,108 @@ def test_native_sell_reobservation_retains_original_broker_clock_and_evidence():
     assert len(audit["native_identity_sha256"]) == len(audit["source_event_digests_sha256"]) == 64
     position = review._quantity_research_position(trade, events, ledger, [])
     assert position["completed_at"] == "2026-10-08T10:01:01+09:00"
+    assert events == before
+
+
+def unknown_venue_reobserved_sell_fixture():
+    trade, events = reobserved_sell_fixture()
+    common = dict(order_no="12", execution_no="3", sell_qty=1,
+        broker_execution_provenance_complete=False, broker_actual_execution_venue="UNKNOWN",
+        broker_actual_execution_venue_source="official_exchange_fields_ambiguous_or_missing",
+        actual_execution_venue="UNKNOWN", exit_effective_venue="UNKNOWN",
+        actual_execution_venue_source="official_exchange_fields_ambiguous_or_missing",
+        broker_route="SOR", broker_route_requested="SOR",
+        main_lifecycle_broker_raw_envelope_schema="kiwoom_websocket_order_execution_00_values_v1",
+        main_lifecycle_broker_raw_source_type="00", broker_execution_receive_time_source="websocket_packet_ingress",
+        exit_execution_received_at="2026-10-08T10:01:01.500000+09:00",
+        exit_market_session_time_source="websocket_packet_ingress", session_contract_version="market_session_contract_v2",
+        exit_rule="scalp_trailing_take_profit", holding_path_terminal_signal_binding="same_position_buy_generation",
+        holding_path_position_key="record:1", holding_path_signal_id="signal-1",
+        holding_path_policy_bundle_sha256="b"*64, main_lifecycle_broker_reconciled=True,
+        main_lifecycle_reconciled_final_exit=True, sell_execution_receipt_quantity_contract_complete=True,
+        sell_execution_receipt_unit_fill_consistent=True, exit_receipt_submission_custody_committed=True,
+        exit_receipt_submission_custody_source_gap=False, remaining_sell_qty=0)
+    events[-2] = replace(events[-2], fields={**events[-2].fields, **common})
+    events[-1] = replace(events[-1], fields={**events[-1].fields, **common,
+        "native_receipt_order_no":"12", "native_receipt_execution_no":"3",
+        "native_receipt_execution_venue_status":"unknown_preserved",
+        "native_receipt_broker_provenance_complete":False,
+        "native_receipt_source_gap":"actual_execution_venue_unresolved"})
+    return trade, events
+
+
+@pytest.mark.parametrize("entry_trace", [False, True])
+@pytest.mark.parametrize("string_fields", [False, True])
+def test_acknowledged_unknown_venue_reobservation_is_one_fill_without_promoting_venue(string_fields, entry_trace):
+    trade, events = unknown_venue_reobserved_sell_fixture()
+    if entry_trace:
+        fields = {k: v for k, v in events[-1].fields.items() if not k.startswith("native_receipt_")}
+        fields.update(native_receipt_identity_schema="native_entry_sell_receipt_v1",
+            native_receipt_entry_trace_id="analyze_target:123456:1792038802347:4a778b1f",
+            native_receipt_record_id="1", native_receipt_stock_code="123456",
+            native_receipt_observed_at="2026-10-08T10:01:01.500000+09:00")
+        events[-1] = replace(events[-1], fields=fields)
+    if string_fields:
+        events = [replace(e, fields={k: str(v) if isinstance(v, bool) else v for k, v in e.fields.items()}) for e in events]
+    before = deepcopy(events)
+    ledger = review._completed_execution_ledger(trade, events)
+    assert "source_gap_duplicate_sell_execution" not in ledger["strict_completion_reasons"]
+    assert ledger["sell_filled_qty"] == 2
+    assert ledger["sell_fill_legs"][-1]["at"] == "2026-10-08 10:01:01"
+    normalized, audit = review._quantity_sell_receipt_observations(events)
+    assert audit[0]["reobserved_count"] == 1
+    assert normalized[-1].fields["actual_execution_venue"] == "UNKNOWN"
+    assert str(normalized[-1].fields["broker_execution_provenance_complete"]) == "False"
+    row = review._completed_trade_projection(trade, events, {})
+    assert row["realized_pnl_krw"] is row["broker_actual_fees_taxes_krw"] is None
+    assert events == before
+
+
+@pytest.mark.parametrize("fault", ["missing_identity", "source_gap", "custody", "route", "clock", "terminal", "conflict"])
+def test_unknown_venue_reobservations_require_native_terminal_proof(fault):
+    trade, events = unknown_venue_reobserved_sell_fixture()
+    fields = dict(events[-1].fields)
+    mutations = {"source_gap": ("native_receipt_source_gap", "different_gap"),
+        "custody": ("exit_receipt_submission_custody_committed", False),
+        "route": ("broker_route_requested", "KRX"),
+        "clock": ("native_receipt_observed_at", "2026-10-08T10:02:01+09:00"),
+        "terminal": ("remaining_sell_qty", 1), "conflict": ("main_lifecycle_exit_price", 9999)}
+    if fault == "missing_identity": fields.pop("native_receipt_execution_venue_status")
+    else:
+        k, v = mutations[fault]; fields[k] = v
+    events[-1] = replace(events[-1], fields=fields)
+    ledger = review._completed_execution_ledger(trade, events)
+    assert "source_gap_duplicate_sell_execution" in ledger["strict_completion_reasons"]
+    assert ledger["sell_receipt_reobservation_audit"] == []
+
+
+@pytest.mark.parametrize("fault", [None, "partial_venue", "partial_authority", "venue", "authority", "extra"])
+def test_unknown_venue_metadata_extensions_are_atomic_and_exact(fault):
+    from datetime import datetime
+    from src.engine.sniper_execution_receipts import _native_sell_receipt_identity
+
+    trade, events = unknown_venue_reobserved_sell_fixture()
+    fields = {k: v for k, v in events[-1].fields.items() if not k.startswith("native_receipt_")}
+    identity = _native_sell_receipt_identity(
+        {"id": 1, "code": "123456"}, "123456", "1", "sell_completed", fields,
+        datetime.fromisoformat(fields["exit_execution_received_at"]))
+    assert "native_receipt_operational_venue" in identity
+    assert "native_receipt_venue_assignment_authority" in identity
+    if fault == "partial_venue":
+        identity.pop("native_receipt_venue_assignment_authority")
+    elif fault == "partial_authority":
+        identity.pop("native_receipt_operational_venue")
+    elif fault == "venue":
+        identity["native_receipt_operational_venue"] = "KRX"
+    elif fault == "authority":
+        identity["native_receipt_venue_assignment_authority"] = "unverified_authority"
+    elif fault == "extra":
+        identity["native_receipt_unrecognized_metadata"] = "unknown"
+    events[-1] = replace(events[-1], fields={**fields, **identity})
+    before = deepcopy(events)
+    ledger = review._completed_execution_ledger(trade, events)
+    assert ("source_gap_duplicate_sell_execution" in ledger["strict_completion_reasons"]) is (fault is not None)
+    assert bool(ledger["sell_receipt_reobservation_audit"]) is (fault is None)
     assert events == before
 
 
@@ -407,3 +579,104 @@ def test_native_handoff_accepts_reserve_bind_exact_full_fill_and_keeps_conflicti
     result=review._buy_parent_handoff_projection("2026-10-08",[sent],conflict,fills,[trade])
     assert result["counts"]["valid"]==0
     assert result["rows"][0]["state"]=="quarantined"
+
+
+def _large_prior_snapshot(tmp_path, *, compressed=False, fault=None):
+    import gzip
+    import hashlib
+    import json
+    from pathlib import Path
+    day='2026-10-15'
+    directory=tmp_path/'report/monitor_snapshots';directory.mkdir(parents=True)
+    logical=directory/f'trade_review_{day}.json'
+    event=dict(stage='position_rebased_after_fill',timestamp=day+' 09:00:00',
+               fields=dict(id='7',order_no='11',execution_no='1',fill_qty=2,fill_price=100))
+    if fault=='field_order':event=dict(fields=event['fields'],stage=event['stage'],timestamp=event['timestamp'])
+    row=dict(id=7,code='005930',name='test',avg_down_rebound_blocker_summary=[],
+             timeline=[dict(stage='irrelevant_source',timestamp=day+' 09:00:00',fields={'unused':'x'*100000}),event])
+    snapshot=dict(date=day,meta={'warnings':[]},metrics=dict(
+        open_scalp_position_projection_status='current_db_census',
+        open_scalp_position_projection_count=1),sections=dict(
+        unused_body='x'*(9*1024*1024),nested={'artificial_root': 1},
+        open_scalp_position_projection=[row]))
+    # Place a nested key two spaces before the streaming overlap. Without a
+    # boundary sentinel its remaining indentation looks like a root key.
+    probe=json.dumps(snapshot,ensure_ascii=False,indent=2).encode('utf-8')
+    key_at=probe.index(b'      "artificial_root"')
+    delta=((1024*1024-256-4)-key_at)%(1024*1024)
+    snapshot['sections']['unused_body']+='x'*delta
+    if fault=='duplicate_id':
+        snapshot['sections']['open_scalp_position_projection'].append(deepcopy(row))
+        snapshot['metrics']['open_scalp_position_projection_count']=2
+    body=json.dumps(snapshot,ensure_ascii=False,indent=2).encode('utf-8')
+    physical=Path(str(logical)+'.gz') if compressed else logical
+    physical.write_bytes(gzip.compress(body) if compressed else body)
+    manifest=directory/'manifests'/f'monitor_snapshot_manifest_{day}_postclose_exit.json'
+    manifest.parent.mkdir()
+    manifest.write_text(json.dumps(dict(target_date=day,profile='postclose_exit',
+        snapshot_paths={'trade_review':str(logical)},snapshot_sha256={'trade_review':
+            '0'*64 if fault=='hash' else hashlib.sha256(body).hexdigest()})))
+    if fault=='manifest_missing':manifest.unlink()
+    return snapshot,physical,manifest
+
+
+@pytest.mark.parametrize('compressed',[False,True])
+def test_large_prior_native_projection_preserves_fill_without_full_snapshot(tmp_path,monkeypatch,compressed):
+    snapshot,path,manifest=_large_prior_snapshot(tmp_path,compressed=compressed)
+    monkeypatch.setattr(review,'DATA_DIR',tmp_path)
+    monkeypatch.setattr(review,'load_monitor_snapshot',lambda *a:pytest.fail('full large snapshot decode'))
+    events,receipts=review._prior_entry_fill_events(
+        [dict(id=7,rec_date='2026-10-15',status='COMPLETED')],'2026-10-16')
+    assert len(events['7'])==1 and events['7'][0].fields['execution_no']=='1'
+    receipt=receipts['2026-10-15']
+    assert receipt['status']=='sealed_entry_snapshot'
+    assert receipt['schema']=='prior_entry_fill_projection_v1'
+    assert receipt['source_path']==str(path) and receipt['manifest_path']==str(manifest)
+    assert len(receipt['source_decoded_sha256'])==64 and len(receipt['projection_sha256'])==64
+    assert 'logical_sha256' not in receipt
+
+
+@pytest.mark.parametrize('fault',['hash','manifest_missing','field_order','duplicate_id'])
+def test_large_prior_projection_never_promotes_invalid_provenance_or_census(tmp_path,monkeypatch,fault):
+    _large_prior_snapshot(tmp_path,fault=fault)
+    monkeypatch.setattr(review,'DATA_DIR',tmp_path)
+    monkeypatch.setattr(review,'load_monitor_snapshot',lambda *a:pytest.fail('invalid source cannot trigger full decode'))
+    events,receipts=review._prior_entry_fill_events(
+        [dict(id=7,rec_date='2026-10-15',status='COMPLETED')],'2026-10-16')
+    assert not events
+    assert receipts['2026-10-15']['status']!='sealed_entry_snapshot'
+
+
+@pytest.mark.parametrize('source_format', ['typed','log_strings','structured','foreign_record'])
+def test_reobserved_broker_receipt_without_buy_lineage_collapses_without_restoring_economics(source_format):
+    from datetime import datetime
+    from src.engine.sniper_execution_receipts import _native_sell_receipt_identity
+    _, events = unknown_venue_reobserved_sell_fixture()
+    original = events[-2]
+    fields = {k:v for k,v in original.fields.items() if not k.startswith('holding_path_')}
+    fields.update(holding_path_terminal_signal_binding='source_gap_generation_mismatch',
+        order_no='0000012',execution_no='3',main_lifecycle_exit_qty=1,main_lifecycle_exit_price=10100.0,
+        sell_qty=1,cumulative_sell_qty=1,
+        **{'9203':'0000012','9001':'123456','900':'1','902':'0','903':'10100','905':'-매도',
+           '907':'1','908':'100101','909':'3','910':'10100','911':'1','913':'체결',
+           '914':'10100','915':'1','2134':'0','2135':'SOR','2136':'Y'})
+    at=datetime.fromisoformat(fields['exit_execution_received_at'])
+    identity=_native_sell_receipt_identity({'id':1,'code':'123456'},'123456',1,'sell_completed',fields,at)
+    assert identity and identity['native_receipt_entry_lineage_status']=='source_gap'
+    original=replace(original,fields=fields)
+    repeated=replace(original,timestamp='2026-10-08 10:20:00',fields={**fields,**identity})
+    if source_format in {'log_strings','structured'}:
+        def logged(event):
+            return replace(event,fields={k:str(v) for k,v in event.fields.items()
+                if source_format!='structured' or k!='id'})
+        original,repeated=logged(original),logged(repeated)
+    rows=[original,repeated];before=deepcopy(rows)
+    normalized,audit=review._quantity_sell_receipt_observations(rows,
+        record_id='1' if source_format=='structured' else '2' if source_format=='foreign_record' else None)
+    if source_format=='foreign_record':
+        assert normalized==rows and audit==[]
+        return
+    assert len(normalized)==1 and audit[0]['reobserved_count']==1
+    assert 'holding_path_buy_fill_identity' not in normalized[0].fields
+    assert normalized[0].fields['broker_actual_execution_venue']=='UNKNOWN'
+    assert rows==before

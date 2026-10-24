@@ -305,7 +305,7 @@ def invalidate_observation_interval(item):
 
 
 def observe_snapshot(symbol, venue, session, *, now, item, family_sha256,
-                     live_clock=False):
+                     live_clock=False, original_root=None):
     """Read the next eligible native snapshot without consuming any ready/claim.
 
     Uses the pinned producer's snapshot and FIRST filter on copies. Selector
@@ -319,7 +319,11 @@ def observe_snapshot(symbol, venue, session, *, now, item, family_sha256,
         if carried is not None:
             locks.enter_context(carried._LOCK)
         stamp = time.time() if live_clock else now
-        return _observe_snapshot_locked(B, symbol, venue, session, stamp, item, family_sha256)
+        snapshot, receipt = _observe_snapshot_locked(B, symbol, venue, session, stamp, item, family_sha256)
+        if original_root is not None:
+            from src.engine.monitoring.runtime_performance import native_ready_lifecycle
+            receipt['original_signal_lifecycle'] = native_ready_lifecycle(original_root, family_sha256)
+        return snapshot, receipt
 
 
 def _observe_snapshot_locked(B, symbol, venue, session, now, item, family_sha256):
@@ -349,6 +353,7 @@ def _observe_snapshot_locked(B, symbol, venue, session, now, item, family_sha256
                 receipt.update(selected_scope=key[-1], scope_execution_hash=state.generation,
                     selected_branch_truth=truth, native_epoch=last[1], native_sequence=last[2],
                     native_last_received_epoch=last[0], native_source_current=fresh,
+                    native_quote_current=bool(fresh and K.good_quote(last)),
                     observed_seconds=max(0, last[0]-state.legacy.segment_start),
                     reason='no_matching_pattern' if truth and all(v=='FALSE' for v in truth.values())
                            else 'required_window_incomplete')

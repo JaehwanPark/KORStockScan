@@ -7,9 +7,12 @@ artifacts.
 
 from __future__ import annotations
 
+from src.engine.monitoring import sentinel_event_scope as event_scope
+
 import argparse
 from bisect import bisect_left
 import fcntl
+import os
 import hashlib
 import json
 from collections import Counter, defaultdict
@@ -50,12 +53,6 @@ FORBIDDEN_AUTOMATIONS = [
     "ai_cache_ttl_mutation",
     "bot_restart",
 ]
-EXPLICIT_TRADABLE_VENUES = {
-    "KRX",
-    "NXT",
-    "KRX_NXT_INTEGRATED",
-    "PREMARKET_KRX_LIKE",
-}
 VENUE_SCOPE_FIELD_KEYS = (
     "decision_market_scope",
     "market_data_route",
@@ -357,140 +354,14 @@ def _exact_attempt_key(event: PipelineEvent) -> str | None:
     return f"id:{record_id}"
 
 
-def _canonical_venue(value: Any) -> str | None:
-    text = _safe_str(value).upper()
-    if text in {"KRX_NXT_INTEGRATED", "KRX_NXT", "KRX+NXT", "SOR"}:
-        return "KRX_NXT_INTEGRATED"
-    if text in {"NXT_ONLY", "NXT"}:
-        return "NXT"
-    if text in {"KRX_ONLY", "KRX"}:
-        return "KRX"
-    if text in EXPLICIT_TRADABLE_VENUES:
-        return text
-    if text in {"_NX", "NXT_PREMARKET", "NXT_AFTERMARKET", "NXT_REGULAR"}:
-        return "NXT"
-    if text in {"KRX_REGULAR", "KRX"}:
-        return "KRX"
-    return None
-
-
-def _canonical_session(value: Any) -> str | None:
-    text = _safe_str(value).upper()
-    if not text:
-        return None
-    if text in {
-        "KRX_NXT_AFTERMARKET",
-        "KRX_NXT_AFTERMARKET_CLOSE_ONLY",
-        "KRX_NXT_AFTERMARKET_TERMINAL_EXIT",
-        "NXT_AFTERMARKET_SOLO",
-        "SESSION_TRANSITION",
-        "CLOSED",
-    }:
-        return text
-    if "PREMARKET_KRX_LIKE" in text or "KRX_LIKE_PREMARKET" in text:
-        return "PREMARKET_KRX_LIKE"
-    if "NXT" in text and "PRE" in text:
-        return "NXT_PREMARKET"
-    if "NXT" in text and ("AFTER" in text or "POST" in text):
-        return "NXT_AFTERMARKET"
-    if "NXT" in text:
-        return "NXT_REGULAR"
-    if "KRX" in text:
-        return "KRX_REGULAR"
-    return None
-
-
-def _session_for_venue(venue: str, emitted_at: datetime) -> str:
-    if venue == "PREMARKET_KRX_LIKE":
-        return "PREMARKET_KRX_LIKE"
-    if venue == "KRX":
-        return "KRX_REGULAR"
-    if venue == "KRX_NXT_INTEGRATED":
-        if emitted_at.date() < date(2026, 9, 14):
-            return "UNKNOWN"
-        if time(16, 0) <= emitted_at.time() < time(19, 40):
-            return "KRX_NXT_AFTERMARKET"
-        if time(19, 40) <= emitted_at.time() < time(19, 45):
-            return "KRX_NXT_AFTERMARKET_CLOSE_ONLY"
-        if time(19, 45) <= emitted_at.time() < time(20, 0):
-            return "KRX_NXT_AFTERMARKET_TERMINAL_EXIT"
-        return "UNKNOWN"
-    if emitted_at.time() < time(9, 0):
-        return "NXT_PREMARKET"
-    if emitted_at.time() > time(15, 30):
-        return "NXT_AFTERMARKET"
-    return "NXT_REGULAR"
-
-
-def _explicit_event_scope(event: PipelineEvent) -> tuple[str, str, str] | None:
-    venue = next(
-        (
-            venue
-            for key in VENUE_SCOPE_FIELD_KEYS[:-1]
-            if (venue := _canonical_venue(event.fields.get(key))) is not None
-        ),
-        None,
-    )
-    fallback_venue = _canonical_venue(event.fields.get(VENUE_SCOPE_FIELD_KEYS[-1]))
-    session = next(
-        (
-            session
-            for key in SESSION_SCOPE_FIELD_KEYS[:-1]
-            if (session := _canonical_session(event.fields.get(key))) is not None
-        ),
-        None,
-    )
-    fallback_session = _canonical_session(
-        event.fields.get(SESSION_SCOPE_FIELD_KEYS[-1])
-    )
-    venue = venue or fallback_venue
-    session = session or fallback_session
-    if venue is None and session is not None:
-        if session.startswith("KRX_NXT_AFTERMARKET"):
-            venue = "KRX_NXT_INTEGRATED"
-        else:
-            venue = (
-                "PREMARKET_KRX_LIKE"
-                if session == "PREMARKET_KRX_LIKE"
-                else ("NXT" if session.startswith("NXT_") else "KRX")
-            )
-    if venue is None:
-        return None
-    if session is None:
-        session = _session_for_venue(venue, event.emitted_at)
-    elif (
-        venue == "NXT"
-        and session == "NXT_REGULAR"
-        and (
-            event.emitted_at.time() < time(9, 0)
-            or event.emitted_at.time() > time(15, 30)
-        )
-    ):
-        session = _session_for_venue(venue, event.emitted_at)
-    if (
-        (venue == "NXT" and not session.startswith("NXT_"))
-        or (venue == "KRX" and session != "KRX_REGULAR")
-        or (
-            venue == "KRX_NXT_INTEGRATED"
-            and not session.startswith("KRX_NXT_AFTERMARKET")
-        )
-        or (venue == "PREMARKET_KRX_LIKE" and session != "PREMARKET_KRX_LIKE")
-    ):
-        return "CONFLICT", "CONFLICT", "conflict"
-    return venue, session, "pass"
-
-
-def _actual_execution_venue(event: PipelineEvent) -> str:
-    value = _safe_str(event.fields.get("actual_execution_venue")).upper()
-    return value if value in {"KRX", "NXT"} else "UNKNOWN"
-
-
 def _partition_events_by_venue_session(
     events: list[PipelineEvent],
 ) -> tuple[dict[str, list[PipelineEvent]], dict[str, int]]:
     explicit_by_attempt: dict[str, dict[datetime, set[tuple[str, str]]]] = defaultdict(
         lambda: defaultdict(set))
-    explicit_scopes = [_explicit_event_scope(event) for event in events]
+    explicit_scopes = [event_scope.explicit_event_scope(
+            event.fields, event.emitted_at, venue_keys=VENUE_SCOPE_FIELD_KEYS,
+            session_keys=SESSION_SCOPE_FIELD_KEYS) for event in events]
     for event, scope in zip(events, explicit_scopes):
         exact_key = _exact_attempt_key(event)
         if scope and scope[2] == "pass" and exact_key:
@@ -1213,45 +1084,55 @@ def _followup_route(classification: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _profit_exit_bootstrap_binding(target_date: str, as_of: datetime) -> tuple[dict | None, dict[int, dict]]:
+def _profit_exit_bootstrap_binding(target_date: str, as_of: datetime, *, historical=False) -> tuple[dict | None, dict[int, dict]]:
     """Consume a bounded, exact-date verified receipt; do not inspect or alter a PID."""
     from src.engine.scalping.trailing_mechanical_policy import baseline_receipt
     from src.engine.automation.runtime_policy_bootstrap import _digest_json
     root = DATA_DIR / "runtime/policy_bootstrap"
+    def current_binding():
+        try:
+            paths = [root / f"runtime_policy_bootstrap{suffix}_{target_date}.json"
+                     for suffix in ("", "_verify")]
+            if any(path.is_symlink() or not path.is_file() or path.stat().st_size > 8 * 1024 * 1024
+                   for path in paths):
+                return None, {}
+            manifest, verification = [json.loads(path.read_text()) for path in paths]
+            receipt = manifest["scalp_trailing_mechanical_policy_receipt"]
+            verified_at = datetime.fromisoformat(verification["verified_at"])
+            if verified_at.tzinfo is None:
+                return None, {}
+            if (manifest.get("target_date") != target_date or verification.get("target_date") != target_date
+                    or manifest.get("manifest_sha256") != _digest_json({
+                        k: v for k, v in manifest.items() if k != "manifest_sha256"})
+                    or verification.get("manifest_sha256") != manifest["manifest_sha256"]
+                    or verification.get("passed") is not True
+                    or verified_at.timestamp() > as_of.replace(tzinfo=ZoneInfo("Asia/Seoul")).timestamp()
+                    or receipt != baseline_receipt(manifest["env_overrides"], source=receipt["source"])):
+                return None, {}
+            # The native PID archive binds the typed policy from this exact
+            # manifest environment. Compare the same receipt shape for the current
+            # PID, or its valid archive would look like a conflicting vector.
+            from src.engine.scalping.trailing_situation_policy import ENV_KEY, PreparedTrailingPolicy
+            typed_raw = manifest["env_overrides"].get(ENV_KEY)
+            typed_policy = json.loads(typed_raw) if typed_raw is not None else None
+            if typed_policy is not None:
+                PreparedTrailingPolicy.prepare(typed_policy, target_date=target_date,
+                    parent_sha256=receipt["market_values_sha256"])
+            receipt = {**receipt, "situation_policy": typed_policy}
+            pid = verification.get("pid")
+            consumed = (pid if isinstance(pid, int) and not isinstance(pid, bool) and pid > 0
+                        and verification.get("pid_passed") is True
+                        and verification.get("pid_env_available") is True else None)
+            return receipt, ({consumed: receipt} if consumed is not None else {})
+        except (OSError, ValueError, TypeError, KeyError):
+            return None, {}
+
+    receipt, consumed_pids = current_binding()
+    if receipt is None and not historical:
+        return None, {}
+    if historical and target_date >= datetime.now(ZoneInfo("Asia/Seoul")).date().isoformat():
+        return None, {}
     try:
-        paths = [root / f"runtime_policy_bootstrap{suffix}_{target_date}.json"
-                 for suffix in ("", "_verify")]
-        if any(path.is_symlink() or not path.is_file() or path.stat().st_size > 8 * 1024 * 1024
-               for path in paths):
-            return None, {}
-        manifest, verification = [json.loads(path.read_text()) for path in paths]
-        receipt = manifest["scalp_trailing_mechanical_policy_receipt"]
-        verified_at = datetime.fromisoformat(verification["verified_at"])
-        if verified_at.tzinfo is None:
-            return None, {}
-        if (manifest.get("target_date") != target_date or verification.get("target_date") != target_date
-                or manifest.get("manifest_sha256") != _digest_json({
-                    k: v for k, v in manifest.items() if k != "manifest_sha256"})
-                or verification.get("manifest_sha256") != manifest["manifest_sha256"]
-                or verification.get("passed") is not True
-                or verified_at.timestamp() > as_of.replace(tzinfo=ZoneInfo("Asia/Seoul")).timestamp()
-                or receipt != baseline_receipt(manifest["env_overrides"], source=receipt["source"])):
-            return None, {}
-        # The native PID archive binds the typed policy from this exact
-        # manifest environment. Compare the same receipt shape for the current
-        # PID, or its valid archive would look like a conflicting vector.
-        from src.engine.scalping.trailing_situation_policy import ENV_KEY, PreparedTrailingPolicy
-        typed_raw = manifest["env_overrides"].get(ENV_KEY)
-        typed_policy = json.loads(typed_raw) if typed_raw is not None else None
-        if typed_policy is not None:
-            PreparedTrailingPolicy.prepare(typed_policy, target_date=target_date,
-                parent_sha256=receipt["market_values_sha256"])
-        receipt = {**receipt, "situation_policy": typed_policy}
-        pid = verification.get("pid")
-        consumed = (pid if isinstance(pid, int) and not isinstance(pid, bool) and pid > 0
-                    and verification.get("pid_passed") is True
-                    and verification.get("pid_env_available") is True else None)
-        consumed_pids = {consumed: receipt} if consumed is not None else {}
         conflicted_pids = set()
         archives = []
         for path in (root / "verified_holding_profit_pid" / target_date).glob("*.json"):
@@ -1283,6 +1164,10 @@ def _profit_exit_bootstrap_binding(target_date: str, as_of: datetime) -> tuple[d
                     consumed_pids[prior["pid"]] = prior["mechanical_policy_receipt"]
             except (OSError, ValueError, KeyError, TypeError):
                 continue
+        if receipt is None and consumed_pids:
+            unique = {_digest_json(value) for value in consumed_pids.values()}
+            if len(unique) == 1:
+                receipt = next(iter(consumed_pids.values()))
         return receipt, consumed_pids
     except (OSError, ValueError, TypeError, KeyError):
         return None, {}
@@ -1295,7 +1180,10 @@ def build_holding_exit_sentinel_report(
     windows_min: tuple[int, ...] = DEFAULT_WINDOWS,
     dry_run: bool = False,
     use_cache: bool = False,
+    historical_policy: bool = False,
 ) -> dict[str, Any]:
+    if historical_policy and target_date >= datetime.now(ZoneInfo("Asia/Seoul")).date().isoformat():
+        raise ValueError("holding_historical_policy_requires_closed_date")
     events = load_pipeline_events(target_date, use_cache=use_cache)
     if as_of is None:
         if dry_run and events:
@@ -1340,8 +1228,11 @@ def build_holding_exit_sentinel_report(
     vote_policy_status = "baseline_policy_not_published"
     if holding_vote_policy_path(DATA_DIR, target_date).exists():
         try:
-            vote_policy_bundle = load_holding_vote_bundle(DATA_DIR, target_date)
-            verify_holding_vote_source_handoff(DATA_DIR, vote_policy_bundle)
+            # Archived policy lineage has its own native validator. It cannot
+            # claim current-day deployment or enter a runtime policy cache.
+            policy_options = {"require_current_code": False} if historical_policy else {}
+            vote_policy_bundle = load_holding_vote_bundle(DATA_DIR, target_date, **policy_options)
+            verify_holding_vote_source_handoff(DATA_DIR, vote_policy_bundle, **policy_options)
             vote_policies = {
                 (path, market): vote_policy_bundle["cells"][f"{path}|{market}"]["policy"]
                 for path, market in PATH_POLICY_BY_MARKET
@@ -1350,7 +1241,8 @@ def build_holding_exit_sentinel_report(
             vote_policy_status = ("validated_successor_verified" if vote_policy_bundle.get("selection_mode")=="validated_successor" else "verified_incumbent_carried" if vote_policy_bundle.get("schema")=="holding_path_vote_selected_policy_v2" else "estimated_provisional_verified")
         except (OSError, ValueError, TypeError, KeyError):
             vote_policy_status = "policy_binding_gap"
-    mechanical_receipt, consumed_pids = _profit_exit_bootstrap_binding(target_date, as_of)
+    mechanical_receipt, consumed_pids = _profit_exit_bootstrap_binding(
+        target_date, as_of, **({"historical": True} if historical_policy else {}))
     profit_semantics = audit_profit_exit_flow(
         events, target_date=target_date,
         load_votes=lambda position_key: load_path_events_file(
@@ -1414,7 +1306,7 @@ def build_holding_exit_sentinel_report(
             "actual_execution_venue_counts": dict(
                 sorted(
                     Counter(
-                        _actual_execution_venue(event) for event in source_events
+                        event_scope.actual_execution_venue(event.fields) for event in source_events
                     ).items()
                 )
             ),
@@ -1572,6 +1464,61 @@ def build_markdown(report: dict[str, Any]) -> str:
     lines.extend(["", "## 권고 액션", ""])
     lines.extend(f"- {item}" for item in report["recommended_actions"])
     return "\n".join(lines) + "\n"
+
+
+def publish_historical_buy_resolution(target_date, accepted_position_ids, *, now=None):
+    """Re-audit original inputs and preserve a separate native disposition.
+
+    No original report, policy or source bytes are replaced. This explicit
+    migration uses the existing Sentinel loader/auditor, not a new collector.
+    """
+    directory = _report_dir()
+    directory.mkdir(parents=True, exist_ok=True)
+    lock_path = directory/'.historical_resolution.lock'
+    with os.fdopen(os.open(lock_path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600), 'a+b') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        if (lock_path.stat().st_dev, lock_path.stat().st_ino) != (os.fstat(lock.fileno()).st_dev, os.fstat(lock.fileno()).st_ino):
+            raise ValueError('holding_historical_lock_changed')
+        from src.engine.scalping import holding_profit_exit_semantics as semantics
+        from src.engine.scalping.entry_split_monitor_projection import _read, _digest, _write_atomic
+        now = now or datetime.now(ZoneInfo('Asia/Seoul'))
+        path = _report_dir()/f'holding_exit_sentinel_{target_date}.json'
+        original, reference = _read(path, 8*1024*1024)
+        prior = semantics.read_historical_resolution(original, report_path=path,
+            report_sha256=reference['sha256'], data_root=DATA_DIR, now=now)
+        if prior is not None:
+            if prior['accepted_position_ids'] != sorted(map(str, accepted_position_ids)):
+                raise ValueError('holding_historical_gap_population_unproven')
+            return prior
+        before_code = semantics.historical_resolution_code()
+        before_sources = semantics.historical_resolution_sources(original, DATA_DIR)
+        # Reuse the original knowledge cutoff; later observations cannot fill an
+        # absent decision-time field in the frozen report.
+        rebuilt = build_holding_exit_sentinel_report(target_date,
+            as_of=datetime.fromisoformat(original['as_of']), use_cache=True,
+            dry_run=bool(original['dry_run']), historical_policy=True)
+        if (rebuilt['source_generation'] != original['source_generation']
+                or rebuilt['profit_exit_semantics'] != original['profit_exit_semantics']):
+            raise ValueError('holding_historical_native_reaudit_changed')
+        resolution = semantics.historical_buy_gap_resolution(original, data_root=DATA_DIR,
+            accepted_position_ids=accepted_position_ids, now=now)
+        value = dict(schema='holding_historical_resolution_receipt_v1',
+            report_sha256=reference['sha256'], code=before_code,
+            sources=semantics.historical_resolution_sources(original, DATA_DIR),
+            accepted_position_ids=sorted(map(str, accepted_position_ids)), resolution=resolution)
+        value['receipt_sha256'] = _digest(value)
+        if (_read(path, 8*1024*1024)[1] != reference
+                or before_code != semantics.historical_resolution_code()):
+            raise ValueError('holding_historical_resolution_source_changed')
+        # The native cache may append while catching up to the original raw input.
+        # Other sources must retain the exact pre-audit generation.
+        if any(value['sources'].get(name) != source for name, source in before_sources.items()
+               if '/sentinel_event_cache/' not in name):
+            raise ValueError('holding_historical_resolution_source_changed')
+        destination = path.parent/'historical_resolutions'/(reference['sha256']+'-'+_digest(before_code)+'-'+_digest(value['sources'])+'.json')
+        _write_atomic(destination, value, 262144, immutable=True)
+        return semantics.read_historical_resolution(original, report_path=path,
+            report_sha256=reference['sha256'], data_root=DATA_DIR, now=now)
 
 
 def save_report_artifacts(report: dict[str, Any]) -> dict[str, str]:

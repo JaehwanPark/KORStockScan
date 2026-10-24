@@ -23,6 +23,7 @@ import re
 import hashlib
 import queue
 import uuid
+from contextlib import nullcontext
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
@@ -127,8 +128,7 @@ from src.engine.scalping.holding_decision_context import (  # noqa: E402
     holding_decision_context_model_payload,
 )
 from src.utils.logger import log_error, log_info
-from src.utils.constants import TRADING_RULES
-from src.engine.macro_briefing_complete import build_scanner_data_input
+from src.utils.constants import TRADING_RULES, TradingConfig
 from src.engine.ai_prompt_contracts import (
     AUXILIARY_ENTRY_RISK_PROMPT_VERSIONS,
     BALANCED_ENTRY_PROMPT_VERSIONS,
@@ -149,11 +149,9 @@ from src.engine.ai_prompt_contracts import (
     normalize_condition_entry_from_scalping_result,
     normalize_condition_exit_from_scalping_result,
     SWING_SYSTEM_PROMPT,
-    ENHANCED_MARKET_ANALYSIS_PROMPT,
     REALTIME_ANALYSIS_PROMPT_SCALP,
     REALTIME_ANALYSIS_PROMPT_SWING,
     REALTIME_ANALYSIS_PROMPT_DUAL,
-    SCALPING_OVERNIGHT_DECISION_PROMPT,
     DECISION_QUALITY_DETAILED_PROMPT_VERSION,
     DECISION_QUALITY_V2_PROMPT_VERSION,
     DECISION_QUALITY_V2_7_PROBE_PROMPT_VERSION,
@@ -180,9 +178,11 @@ from src.engine.ai_prompt_contracts import (
 
 
 def _final_entry_machine_inputs(ws_data, recent_ticks, candle_context, *, refresher,
-                                deadline_epoch=None):
+                                deadline_epoch=None, entry_budget=None):
     """Freeze local inputs after slow preparation; never renew an attempt deadline."""
-    from src.engine.scalping.entry_candle_context import revalidate_entry_candle_snapshot
+    from src.engine.scalping.entry_candle_context import (
+        revalidate_entry_candle_snapshot, wait_for_completed_entry_candle,
+    )
 
     started = time.perf_counter()
     fields = {}
@@ -193,6 +193,11 @@ def _final_entry_machine_inputs(ws_data, recent_ticks, candle_context, *, refres
             not math.isfinite(float(deadline_epoch)) or time.time() >= deadline_epoch
         ):
             raise ValueError("entry_machine_input_deadline_expired")
+        if entry_budget is None and deadline_epoch is not None:
+            from src.engine.scalping.entry_deadline import EntryDeadline
+            entry_budget = EntryDeadline.create(caller_epoch=deadline_epoch)
+        if entry_budget is not None:
+            entry_budget.require()
         if deadline_epoch is not None:
             fields['entry_machine_input_budget_at_freeze_ms'] = round((deadline_epoch - time.time()) * 1000, 3)
         copy_started = time.perf_counter()
@@ -201,6 +206,8 @@ def _final_entry_machine_inputs(ws_data, recent_ticks, candle_context, *, refres
         phase = "after_input_copy"
         if deadline_epoch is not None and time.time() >= deadline_epoch:
             raise ValueError("entry_machine_input_deadline_expired")
+        if entry_budget is not None:
+            entry_budget.require()
         phase = "local_refresh"
         refresh_started = time.perf_counter()
         try:
@@ -228,6 +235,21 @@ def _final_entry_machine_inputs(ws_data, recent_ticks, candle_context, *, refres
             context = revalidate_entry_candle_snapshot(context, ws, now_ts=as_of, _owned_inputs=True)
         finally:
             fields["entry_machine_input_canonical_revalidation_ms"] = round((time.perf_counter() - revalidate_started) * 1000, 3)
+        phase = "completed_candle_publication"
+        ready = wait_for_completed_entry_candle(context, ws, budget=entry_budget, fields=fields)
+        if ready is not context:
+            # Publication never refreshes the executable quote or grants a claim.
+            # Reuse the same local refresher, then revalidate the entire new view.
+            phase = "publication_input_refresh"
+            ws, ticks, context, refresh_fields = refresher(ws, ticks, ready)
+            ws, ticks, context = copy.deepcopy((ws, ticks, context))
+            if refresh_fields.get("entry_ai_final_snapshot_revalidation_error"):
+                raise ValueError(refresh_fields["entry_ai_final_snapshot_revalidation_error"])
+            if (ws_data or {}).get("market_data_transport_epoch") != (ws or {}).get("market_data_transport_epoch"):
+                raise ValueError("entry_machine_transport_epoch_changed")
+            entry_budget.require()
+            as_of = time.time()
+            context = revalidate_entry_candle_snapshot(context, ws, now_ts=as_of, _owned_inputs=True)
         phase = "quote_consistency"
         from src.trading.market.quote_consistency import ws_quote_receive_age_ms, ws_quote_source_receipt
         bbo = (context.get("ai_market_snapshot_v1") or {}).get("sources", {}).get("bbo", {})
@@ -256,6 +278,8 @@ def _final_entry_machine_inputs(ws_data, recent_ticks, candle_context, *, refres
                     raise ValueError("entry_machine_quote_value_conflict")
         if deadline_epoch is not None and time.time() >= deadline_epoch:
             raise ValueError("entry_machine_input_deadline_expired")
+        if entry_budget is not None:
+            entry_budget.require()
     except Exception as exc:
         error = str(exc) or type(exc).__name__
         fields["entry_machine_input_failure_phase"] = phase
@@ -1144,20 +1168,6 @@ class GPTSniperEngine:
         self.key_cycle = cycle(self.api_keys)
         self._rotate_client()
 
-        # OpenAI runtime uses the existing fast/deep/report tier structure.
-        self.model_tier1_fast = getattr(TRADING_RULES, "GPT_FAST_MODEL", "gpt-5-nano")
-        self.model_tier2_balanced = getattr(
-            TRADING_RULES, "GPT_REPORT_MODEL", self.model_tier1_fast
-        )
-        self.model_tier3_deep = getattr(
-            TRADING_RULES, "GPT_DEEP_MODEL", self.model_tier2_balanced
-        )
-        self.current_model_name = self.model_tier1_fast
-        # 기존 호출부 호환을 위한 alias
-        self.fast_model_name = self.model_tier1_fast
-        self.report_model_name = self.model_tier2_balanced
-        self.deep_model_name = self.model_tier3_deep
-
         self.lock = threading.Lock()
         self.api_call_lock = threading.Lock()
         self.last_call_time = 0.0
@@ -1212,10 +1222,7 @@ class GPTSniperEngine:
         )
 
         if announce_startup:
-            print(
-                f"🧠 [OpenAI 엔진] {len(self.api_keys)}개 키 로테이션 가동! "
-                f"(T1: {self.model_tier1_fast} / T2: {self.model_tier2_balanced} / T3: {self.model_tier3_deep})"
-            )
+            self._announce_model_configuration()
 
     # ==========================================
     # 클라이언트/키 관리
@@ -1278,37 +1285,47 @@ class GPTSniperEngine:
                 logging.getLogger(__name__).warning(
                     'AI warmup shutdown failed: %s', type(exc).__name__)
 
-    def set_model_names(
-        self, *, fast_model=None, deep_model=None, report_model=None, announce=True
-    ):
-        if fast_model:
-            self.model_tier1_fast = str(fast_model)
-            self.fast_model_name = self.model_tier1_fast
-        if report_model:
-            self.model_tier2_balanced = str(report_model)
-            self.report_model_name = self.model_tier2_balanced
-        if deep_model:
-            self.model_tier3_deep = str(deep_model)
-            self.deep_model_name = self.model_tier3_deep
-        self.current_model_name = self.model_tier1_fast
-        if announce:
-            print(
-                f"🧠 [OpenAI 엔진] {len(self.api_keys)}개 키 로테이션 가동! "
-                f"(T1: {self.model_tier1_fast} / T2: {self.model_tier2_balanced} / T3: {self.model_tier3_deep})"
-            )
 
-    def _get_tier1_model(self):
-        return getattr(
-            self,
-            "model_tier1_fast",
-            getattr(self, "current_model_name", "gpt-5-nano"),
-        )
+    @staticmethod
+    def _get_compact_auxiliary_model():
+        # Fixed request contract; generic entry overrides cannot change it.
+        return "gpt-5.4-nano"
 
-    def _get_tier2_model(self):
-        return getattr(self, "model_tier2_balanced", self._get_tier1_model())
+    @staticmethod
+    def _get_role_model(setting):
+        """Resolve one role from its configuration, never another request's state."""
+        return str(getattr(TRADING_RULES, setting, None)
+                   or getattr(TradingConfig, setting)).strip()
 
-    def _get_tier3_model(self):
-        return getattr(self, "model_tier3_deep", self._get_tier2_model())
+    MODEL_ROLE_SETTINGS = (
+        "OPENAI_SCALPING_ENTRY_MODEL", "OPENAI_HOLDING_SCORE_MODEL",
+        "OPENAI_HOLDING_EXIT_VOTE_MODEL", "OPENAI_HOLDING_FLOW_MODEL",
+        "OPENAI_REALTIME_REPORT_MODEL", "OPENAI_SWING_ANALYSIS_MODEL",
+        "OPENAI_SCALPING_SHARED_MODEL", "OPENAI_WATCHING_SHADOW_MODEL",
+        "OPENAI_GATEKEEPER_SHADOW_MODEL",
+    )
+
+    def model_configuration(self):
+        # This same projection is used by startup and new frozen replay captures.
+        return {**{setting: self._get_role_model(setting) for setting in self.MODEL_ROLE_SETTINGS},
+                "compact_auxiliary": self._get_compact_auxiliary_model()}
+
+    def _announce_model_configuration(self):
+        roles = [("진입 보조평가", self._get_compact_auxiliary_model())]
+        for label, setting in (
+            ("일반 진입 평가(watching)", "OPENAI_SCALPING_ENTRY_MODEL"),
+            ("보유 점수평가", "OPENAI_HOLDING_SCORE_MODEL"),
+            ("청산 투표", "OPENAI_HOLDING_EXIT_VOTE_MODEL"),
+            ("보유 수급평가(OpenAI)", "OPENAI_HOLDING_FLOW_MODEL"),
+            ("실시간 보고서(요청 시)", "OPENAI_REALTIME_REPORT_MODEL"),
+            ("스윙 시세평가", "OPENAI_SWING_ANALYSIS_MODEL"),
+            ("시세·보유 공용 분석(shared)", "OPENAI_SCALPING_SHARED_MODEL"),
+            ("watching 비교평가(shadow)", "OPENAI_WATCHING_SHADOW_MODEL"),
+            ("gatekeeper 페르소나(shadow)", "OPENAI_GATEKEEPER_SHADOW_MODEL"),
+        ):
+            roles.append((label, self._get_role_model(setting)))
+        print("OpenAI 모델 설정\n" + "\n".join(
+            f"  {label}: {model}" for label, model in roles))
 
     def _record_ws_metric(self, metric_name, value=1):
         if not hasattr(self, "_ws_metrics_lock"):
@@ -1391,22 +1408,6 @@ class GPTSniperEngine:
                     or 7000
                 ),
             )
-        if endpoint == "scanner_report":
-            return max(
-                1,
-                int(
-                    getattr(TRADING_RULES, "OPENAI_SCANNER_REPORT_TIMEOUT_MS", 15000)
-                    or 15000
-                ),
-            )
-        if endpoint == "overnight":
-            return max(
-                1,
-                int(
-                    getattr(TRADING_RULES, "OPENAI_OVERNIGHT_TIMEOUT_MS", 12000)
-                    or 12000
-                ),
-            )
         if not require_json:
             return max(
                 1,
@@ -1425,16 +1426,6 @@ class GPTSniperEngine:
             1, int(getattr(TRADING_RULES, "OPENAI_RESPONSES_WS_TIMEOUT_MS", 700) or 700)
         )
 
-    def _is_sim_observation_overnight_context(self, realtime_ctx):
-        if not isinstance(realtime_ctx, dict):
-            return False
-        if str(realtime_ctx.get("decision_authority") or "") == "sim_observation_only":
-            return True
-        if str(realtime_ctx.get("simulation_book") or "") == "scalp_ai_buy_all":
-            return True
-        return realtime_ctx.get("actual_order_submitted") is False and bool(
-            realtime_ctx.get("broker_order_forbidden")
-        )
 
     def _should_use_openai_schema_registry(self, *, require_json, schema_name):
         if require_json and schema_name == ENTRY_RISK_ADJUDICATION_SCHEMA:
@@ -1529,6 +1520,9 @@ class GPTSniperEngine:
         metadata_extra=None,
         timeout_ms_override=None,
     ):
+        if not isinstance(model_name, str) or not model_name.strip():
+            raise ValueError("explicit_role_model_required")
+        model_name = model_name.strip()
         request_id = self._build_openai_request_id(
             endpoint_name=endpoint_name, symbol=symbol or "-"
         )
@@ -1561,7 +1555,7 @@ class GPTSniperEngine:
             user_input=user_input,
             require_json=bool(require_json),
             context_name=str(context_name or "Unknown"),
-            model_name=str(model_name or self.current_model_name),
+            model_name=str(model_name),
             temperature=temperature,
             max_output_tokens=max_output_tokens,
             reasoning_effort=reasoning_effort,
@@ -5473,10 +5467,13 @@ class GPTSniperEngine:
             selected_prompt_version in MACHINE_AUXILIARY_COMPACT_ENTRY_PROMPT_VERSIONS
         )
         target_model = (
-            "gpt-5.4-nano"
+            self._get_compact_auxiliary_model()
             if compact_auxiliary_call
-            else (model_override if model_override else self.current_model_name)
+            else model_override
         )
+        if not isinstance(target_model, str) or not target_model.strip():
+            raise ValueError("explicit_role_model_required")
+        target_model = target_model.strip()
         target_temp = self._resolve_openai_temperature(
             require_json=bool(require_json),
             temperature_override=temperature_override,
@@ -7894,6 +7891,7 @@ class GPTSniperEngine:
                 "stock_name": stock_name,
                 "stock_code": stock_code,
                 "analysis_mode": analysis_mode,
+                "model": self._get_role_model("OPENAI_REALTIME_REPORT_MODEL"),
                 "realtime_ctx": self._compact_gatekeeper_ctx_for_cache(realtime_ctx),
             }
         )
@@ -8003,7 +8001,7 @@ class GPTSniperEngine:
                     request["user_input"],
                     require_json=False,
                     context_name=request["context_name"],
-                    model_override=self._get_tier2_model(),
+                    model_override=self._get_role_model("OPENAI_REALTIME_REPORT_MODEL"),
                     endpoint_name="realtime_report",
                     symbol=stock_code,
                     metadata_extra={
@@ -8547,6 +8545,7 @@ class GPTSniperEngine:
         metadata_extra=None,
         candle_context=None,
     ):
+        role_model = self._get_role_model("OPENAI_REALTIME_REPORT_MODEL")
         started = time.perf_counter()
         fallback_price = int((price_ctx or {}).get("resolved_order_price", 0) or 0)
         try:
@@ -8851,7 +8850,7 @@ class GPTSniperEngine:
                 user_input,
                 require_json=True,
                 context_name=f"ENTRY_PRICE:{stock_name}:{stock_code}",
-                model_override=self._get_tier2_model(),
+                model_override=role_model,
                 schema_name=schema_name,
                 endpoint_name="entry_price",
                 symbol=stock_code,
@@ -8977,7 +8976,7 @@ class GPTSniperEngine:
                     }
                 )
                 self._copy_ai_transport_trace_metadata(normalized, result)
-                normalized["ai_model"] = self._get_tier2_model()
+                normalized["ai_model"] = role_model
                 self._mark_successful_ai_call(update_last_call_time=False)
                 return self._annotate_analysis_result(
                     normalized,
@@ -9021,7 +9020,7 @@ class GPTSniperEngine:
                 # and replay cohorts.
                 normalized["ai_decision_outcome_eligible"] = False
             self._copy_ai_transport_trace_metadata(normalized, result)
-            normalized["ai_model"] = self._get_tier2_model()
+            normalized["ai_model"] = role_model
             self._mark_successful_ai_call(update_last_call_time=False)
             return self._annotate_analysis_result(
                 normalized,
@@ -9580,7 +9579,7 @@ class GPTSniperEngine:
             preparation_ms = round((time.perf_counter() - analysis_started) * 1000, 3)
             ws_data, recent_ticks, candle_context, machine_input_fields = _final_entry_machine_inputs(
                 ws_data, recent_ticks, candle_context, refresher=entry_input_refresher,
-                deadline_epoch=entry_input_deadline_epoch,
+                deadline_epoch=entry_input_deadline_epoch, entry_budget=entry_budget,
             )
             machine_input_fields["entry_machine_input_preparation_ms"] = preparation_ms
             preparation_stages["other_preparation_ms"] = max(0.0, preparation_ms - sum(preparation_stages.values()))
@@ -9858,6 +9857,7 @@ class GPTSniperEngine:
 
         machine_first_context = None
         machine_hot_payload = None
+        machine_exact = None
         machine_feature_packet = None
         machine_tick_window = []
         machine_capture = {}
@@ -10054,7 +10054,9 @@ class GPTSniperEngine:
                                 from src.engine.scalping.entry_machine_source_recovery import validated_observer_snapshot
                                 observation = {}
                                 snapshot = validated_observer_snapshot(entry_source_recovery_observation,
-                                    now=snapshot_now, receipt_out=observation)
+                                    now=snapshot_now, receipt_out=observation,
+                                    evaluation_attempt_id=machine_exact['evaluation_attempt_id'],
+                                    machine_bundle_sha256=entry_setup_live_policy['machine_bundle_sha256'])
                             else:
                                 snapshot, observation = observe_snapshot(symbol, _explicit_item_venue(item),
                                     machine_exact['session_bucket'], now=snapshot_now, item=item,
@@ -10076,12 +10078,12 @@ class GPTSniperEngine:
                                     deadline_epoch=entry_budget.epoch, deadline_perf=entry_budget.perf,
                                     observer_pid=os.getpid(), observer_start_ticks=_PROCESS_START_TICKS)
                         else:
+                            machine_exact['evaluation_role'] = 'main_live'
                             claim=reversal_signal_claim or claim_snapshot(symbol,_explicit_item_venue(item),machine_exact['session_bucket'],
                                 now=snapshot_now,item=item,family_sha256=reversal_family['family_sha256'],live_clock=True)
                             snapshot=validate_claim_with_receipt(claim,reversal_family['family_sha256'],now=snapshot_now,
                                 evaluation_attempt_id=machine_exact['evaluation_attempt_id'],
                                 machine_bundle_sha256=entry_setup_live_policy['machine_bundle_sha256'],live_clock=True) if claim else None
-                            machine_exact['evaluation_role'] = 'main_live'
                             if claim and claim.get('observer_snapshot_sha256'):
                                 machine_exact['parent_observation_snapshot_sha256'] = claim['observer_snapshot_sha256']
                                 machine_exact['observation_subset_changed'] = claim.get('observation_subset_changed', False)
@@ -10242,11 +10244,23 @@ class GPTSniperEngine:
                     }
                 if machine_assessment["action"] in {"ENTER_NOW", "BLOCK", "RECHECK"} and callable(entry_economics_observer):
                     try:
-                        economic_source_fields = timed_entry_call('entry_economics', entry_economics_observer,
-                            exact_payload=machine_exact, assessment=machine_assessment,
-                            capture=machine_capture, bundle_sha256=entry_setup_live_policy["machine_bundle_sha256"],
-                            **({"observation_ws_data": ws_data} if callable(entry_input_refresher) else {}),
-                        ) or {}
+                        from src.utils import kiwoom_utils
+                        parent_budget = kiwoom_utils._ENTRY_SOURCE_BUDGET.get()
+                        observer_budget = entry_budget or parent_budget
+                        if entry_budget is not None and parent_budget is not None:
+                            observer_budget = EntryDeadline(
+                                min(entry_budget.epoch, parent_budget.epoch),
+                                min(entry_budget.perf, parent_budget.perf),
+                            )
+                        # Direct and async evaluations share the original deadline.
+                        # A missing deadline retains cache-only account observation.
+                        with (kiwoom_utils.entry_source_budget(observer_budget)
+                              if observer_budget is not None else nullcontext()):
+                            economic_source_fields = timed_entry_call('entry_economics', entry_economics_observer,
+                                exact_payload=machine_exact, assessment=machine_assessment,
+                                capture=machine_capture, bundle_sha256=entry_setup_live_policy["machine_bundle_sha256"],
+                                **({"observation_ws_data": ws_data} if callable(entry_input_refresher) else {}),
+                            ) or {}
                     except Exception as exc:
                         # Instrumentation can never alter machine/AI/order authority.
                         economic_source_fields = {"entry_economic_source_status": "source_gap",
@@ -10361,6 +10375,46 @@ class GPTSniperEngine:
                         source_gap_kind = "feature_tick_selection_gap"
                     else:
                         source_gap_kind = "trusted_tape_source_insufficient"
+                rejected_fields = {}
+                if not machine_only and not machine_capture and isinstance(machine_exact, dict):
+                    # Native validation can reject before an adjudication exists.
+                    # Capture that exact source-invalid attempt through the same
+                    # producer as preflight; never invent ENTER_NOW or a provider
+                    # request, or replace an already captured machine decision.
+                    from src.engine.scalping.ai_decision_trace import capture_machine_observation
+                    from src.engine.scalping.ai_market_snapshot import classify_ai_input_blocker
+                    rejected_fields = capture_machine_observation(
+                        exact_payload={**machine_exact, 'evaluation_role': 'main_live'},
+                        setup_evidence={
+                            'source_quality_status': 'blocked',
+                            'source_quality_blockers': [str(exc) or 'unclassified'],
+                            'machine_contract_error': str(exc),
+                            'continuous_reversal_rejected_claim_receipt': getattr(
+                                exc, 'reversal_source_receipt', None),
+                        },
+                        assessment={'schema': 'mechanistic_entry_source_invalid_v1',
+                            'action': 'source_invalid', 'reason': str(exc)},
+                        bundle_sha256=entry_setup_live_policy['machine_bundle_sha256'],
+                        metadata={**(dict(metadata_extra or {}) if isinstance(metadata_extra, dict) else {}),
+                            **machine_input_fields,
+                            'ai_component_sha256': entry_setup_live_policy.get('auxiliary_policy_sha256')},
+                    )
+                    rejected_fields.update(
+                        machine_source_invalid_receipt=True,
+                        entry_mechanistic_action='source_invalid',
+                        entry_mechanistic_policy_decision='source_invalid',
+                        entry_mechanistic_policy_version=(
+                            entry_setup_live_policy.get('mechanistic_threshold_policy') or {}).get('version'),
+                        machine_decision_before_provider=True,
+                        entry_source_invalid_schema='machine_source_invalid_decomposition_v1',
+                        entry_source_invalid_stage='machine_pre_adjudication',
+                        entry_source_invalid_primary_blocker=str(exc) or 'unclassified',
+                        entry_source_invalid_primary_category=classify_ai_input_blocker(str(exc)),
+                        entry_source_invalid_primary_basis='producer_pre_adjudication_exception',
+                        entry_ai_screen_status='not_requested_machine_source_invalid',
+                        entry_ai_screen_required=False,
+                        entry_ai_screen_pass=False,
+                    )
                 return self._annotate_analysis_result(
                     _merge_runtime_fields(
                         {
@@ -10375,6 +10429,7 @@ class GPTSniperEngine:
                             "machine_feature_tick_window": machine_tick_window,
                             "continuous_reversal_rejected_claim_receipt": getattr(
                                 exc, "reversal_source_receipt", None),
+                            **rejected_fields,
                         }
                     ),
                     prompt_type=prompt_type,
@@ -10389,6 +10444,14 @@ class GPTSniperEngine:
                     input_contract_fields=input_contract_fields,
                 )
 
+        target_model = (
+            self._get_role_model("OPENAI_SWING_ANALYSIS_MODEL")
+            if strategy in {"KOSPI_ML", "KOSDAQ_ML"}
+            else self._get_compact_auxiliary_model()
+            if prompt_version in MACHINE_AUXILIARY_COMPACT_ENTRY_PROMPT_VERSIONS
+            else self._get_role_model("OPENAI_SCALPING_ENTRY_MODEL"
+                if is_scalping_entry_call else "OPENAI_SCALPING_SHARED_MODEL")
+        )
         cache_key = self._build_analysis_cache_key_with_profile(
             target_name=target_name,
             strategy=cache_strategy,
@@ -10399,6 +10462,7 @@ class GPTSniperEngine:
             cache_profile=cache_profile,
             candle_context=candle_context,
         )
+        cache_key = self._build_cache_digest({"input_key": cache_key, "model": target_model})
         cached_result = (
             None
             if machine_first_context is not None
@@ -10567,7 +10631,6 @@ class GPTSniperEngine:
                     formatted_data = self._format_swing_market_data(
                         ws_data, recent_candles, program_net_qty
                     )
-                target_model = self._get_tier2_model()
                 feature_audit_fields = {}
                 input_contract_fields = self._resolve_ai_input_contract_fields(
                     formatted_data,
@@ -10833,22 +10896,6 @@ class GPTSniperEngine:
                             metadata_extra=metadata_extra,
                         )
                     )
-                target_model = (
-                    "gpt-5.4-nano"
-                    if prompt_version in MACHINE_AUXILIARY_COMPACT_ENTRY_PROMPT_VERSIONS
-                    else (
-                        str(
-                            getattr(
-                                TRADING_RULES,
-                                "OPENAI_SCALPING_ENTRY_MODEL",
-                                self._get_tier1_model(),
-                            )
-                            or self._get_tier1_model()
-                        ).strip()
-                        if is_scalping_entry_call
-                        else self._get_tier1_model()
-                    )
-                )
                 feature_audit_fields = build_scalping_feature_audit_fields(
                     feature_packet
                 )
@@ -11463,12 +11510,23 @@ class GPTSniperEngine:
                 and isinstance(e, OpenAIHTTPWallClockDeadlineError)
                 and e.future_cancelled)
             if unsent_entry_timeout or (isinstance(e, ValueError) and str(e).startswith('entry_machine_input_deadline_')):
-                return {"action":"WAIT", "score":50, "reason":str(e),
-                        "provider_called":bool(provider_attempted),
-                        "ai_result_source":"entry_deadline_expired",
-                        "entry_local_stage_clocks":dict(local_stage_clocks),
-                        "actual_order_submitted":False, "broker_order_forbidden":True,
-                        **machine_capture, **stage_fields}
+                deadline_result = {"action":"WAIT", "score":50, "reason":str(e),
+                    "provider_called":bool(provider_attempted),
+                    "entry_ai_screen_status":"not_evaluated_local", "entry_ai_screen_pass":False,
+                    "openai_local_failure_reason":str(e),
+                    "entry_local_stage_clocks":dict(local_stage_clocks),
+                    "actual_order_submitted":False, "broker_order_forbidden":True,
+                    **machine_capture, **stage_fields}
+                # Only this cancelled adapter has prepared request metadata.
+                # Pre-adapter guards must not take a previous call's identity.
+                if unsent_entry_timeout:
+                    deadline_result = self._merge_last_transport_meta(deadline_result)
+                return self._annotate_analysis_result(_merge_runtime_fields(deadline_result),
+                    prompt_type=prompt_type, prompt_version=prompt_version,
+                    response_ms=int((time.perf_counter()-analysis_started)*1000),
+                    parse_ok=False, parse_fail=False, fallback_score_50=False,
+                    cache_hit=False, cache_mode='miss', result_source='entry_deadline_expired',
+                    input_contract_fields=input_contract_fields)
             owned_entry_timeout = (entry_circuit_ticket is not None and provider_attempted
                 and not raw_auxiliary_response_fields
                 and getattr(e,'provider_common_error',None) is None
@@ -11696,41 +11754,6 @@ class GPTSniperEngine:
                 self._entry_circuit().abandon(entry_circuit_ticket)
                 self._observe_entry_circuit()
             self.lock.release()
-
-    # ==========================================
-    # 퍼블릭 메서드: analyze_scanner_results (시장 브리핑)
-    # ==========================================
-
-    def analyze_scanner_results(
-        self, total_count, survived_count, stats_text, macro_text=""
-    ):
-        """텔레그램 아침 브리핑 (Macro + Scanner 통합) - OpenAI Tier3 사용"""
-        with self.lock:
-            data_input = build_scanner_data_input(
-                total_count=total_count,
-                survived_count=survived_count,
-                stats_text=stats_text,
-                macro_text=macro_text,
-            )
-
-            now_utc = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-            enriched_input = f"""현재 UTC 시각: {now_utc}
-
-    {data_input}"""
-
-            try:
-                return self._call_openai_safe(
-                    ENHANCED_MARKET_ANALYSIS_PROMPT,
-                    enriched_input,
-                    require_json=False,
-                    context_name="시장 브리핑",
-                    model_override=self._get_tier3_model(),
-                    endpoint_name="scanner_report",
-                    symbol="-",
-                )
-            except Exception as e:
-                log_error(f"🚨 [시장 브리핑] OpenAI 에러: {e}")
-                return f"⚠️ AI 시장 진단 생성 중 에러 발생: {e}"
 
     # ==========================================
     # 퍼블릭 메서드: 실시간 리포트/게이트키퍼
@@ -11961,27 +11984,6 @@ class GPTSniperEngine:
     # 퍼블릭 메서드: 오버나이트 의사결정
     # ==========================================
 
-    def _format_scalping_overnight_context(self, realtime_ctx):
-        ctx = realtime_ctx or {}
-        lines = [
-            f"- 포지션상태: {ctx.get('position_status', 'UNKNOWN')}",
-            f"- 평균단가: {int(ctx.get('avg_price', 0) or 0):,}원",
-            f"- 현재가: {int(ctx.get('curr_price', 0) or 0):,}원 (손익 {float(ctx.get('pnl_pct', 0.0) or 0.0):+.2f}%)",
-            f"- 보유분수: {float(ctx.get('held_minutes', 0.0) or 0.0):.1f}분",
-            f"- 현재 전략라벨: {ctx.get('strat_label', 'SCALPING')}",
-            f"- VWAP: {int(ctx.get('vwap_price', 0) or 0):,}원 / 상태: {ctx.get('vwap_status', '')}",
-            f"- 체결강도 현재/3분전/5분전: {float(ctx.get('v_pw_now', 0.0) or 0.0):.1f} / {float(ctx.get('v_pw_3m', 0.0) or 0.0):.1f} / {float(ctx.get('v_pw_5m', 0.0) or 0.0):.1f}",
-            f"- 프로그램 순매수 현재/증감: {int(ctx.get('prog_net_qty', 0) or 0):,}주 / {int(ctx.get('prog_delta_qty', 0) or 0):+,}주",
-            f"- 외인/기관 순매수: {int(ctx.get('foreign_net', 0) or 0):,}주 / {int(ctx.get('inst_net', 0) or 0):,}주",
-            f"- 고가돌파 상태: {ctx.get('high_breakout_status', '')}",
-            f"- 일봉 구조: {ctx.get('daily_setup_desc', '')}",
-            f"- 5/20/60일선 상태: {ctx.get('ma5_status', '')}, {ctx.get('ma20_status', '')}, {ctx.get('ma60_status', '')}",
-            f"- 전일 고점/저점: {int(ctx.get('prev_high', 0) or 0):,} / {int(ctx.get('prev_low', 0) or 0):,}",
-            f"- 최근 20일 신고가 근접도: {float(ctx.get('near_20d_high_pct', 0.0) or 0.0):+.2f}%",
-            f"- 퀀트 종합점수/결론: {float(ctx.get('score', 0.0) or 0.0):.1f} / {ctx.get('conclusion', '')}",
-            f"- 주문상태 참고: {ctx.get('order_status_note', '')}",
-        ]
-        return "\n".join(lines)
 
     def _safe_float(self, value, default=0.0):
         try:
@@ -13016,6 +13018,7 @@ class GPTSniperEngine:
         holding_context=None,
         forensic_context_candidate=None,
     ):
+        role_model = self._get_role_model("OPENAI_HOLDING_SCORE_MODEL")
         started = time.perf_counter()
         snapshot_context = self._holding_snapshot_context(
             holding_context,
@@ -13199,14 +13202,7 @@ class GPTSniperEngine:
                 user_input,
                 require_json=True,
                 context_name=f"HOLDING_SCORE:{stock_name}",
-                model_override=str(
-                    getattr(
-                        TRADING_RULES,
-                        "OPENAI_HOLDING_SCORE_MODEL",
-                        "gpt-5.4-nano",
-                    )
-                    or "gpt-5.4-nano"
-                ),
+                model_override=role_model,
                 schema_name=selected_holding_schema,
                 endpoint_name="holding_score",
                 symbol=stock_code,
@@ -13335,14 +13331,7 @@ class GPTSniperEngine:
             self._copy_ai_transport_trace_metadata(normalized, meta_source)
             normalized.update(
                 {
-                    "ai_model": str(
-                        getattr(
-                            TRADING_RULES,
-                            "OPENAI_HOLDING_SCORE_MODEL",
-                            "gpt-5.4-nano",
-                        )
-                        or "gpt-5.4-nano"
-                    ),
+                    "ai_model": role_model,
                     "holding_score_input_schema": "holding_score_v2",
                     "holding_score_data_quality": normalized["data_quality"],
                     "holding_score_confidence": normalized["confidence"],
@@ -13772,6 +13761,7 @@ Do not cut by a single score cutoff. First classify the flow as closest to absor
         holding_context=None,
         forensic_context_candidate=None,
     ):
+        role_model = self._get_role_model("OPENAI_HOLDING_FLOW_MODEL")
         started = time.perf_counter()
         snapshot_context = self._holding_snapshot_context(
             holding_context,
@@ -14031,14 +14021,7 @@ Do not cut by a single score cutoff. First classify the flow as closest to absor
                 user_input,
                 require_json=True,
                 context_name=f"HOLDING_FLOW:{stock_name}:{decision_kind}",
-                model_override=str(
-                    getattr(
-                        TRADING_RULES,
-                        "OPENAI_HOLDING_FLOW_MODEL",
-                        "gpt-5.4-mini",
-                    )
-                    or "gpt-5.4-mini"
-                ),
+                model_override=role_model,
                 schema_name="holding_exit_flow_v1",
                 endpoint_name="holding_flow",
                 symbol=stock_code,
@@ -14085,14 +14068,7 @@ Do not cut by a single score cutoff. First classify the flow as closest to absor
             normalized = merge_lifecycle_ai_context_fields(
                 normalized, lifecycle_ai_runtime
             )
-            normalized["ai_model"] = str(
-                getattr(
-                    TRADING_RULES,
-                    "OPENAI_HOLDING_FLOW_MODEL",
-                    "gpt-5.4-mini",
-                )
-                or "gpt-5.4-mini"
-            )
+            normalized["ai_model"] = role_model
             normalized["holding_context_provider_expected"] = (
                 "bedrock_nova_lite_v2_primary_openai_failback"
             )
@@ -14151,237 +14127,6 @@ Do not cut by a single score cutoff. First classify the flow as closest to absor
         finally:
             self.lock.release()
 
-    def evaluate_scalping_overnight_decision(
-        self, stock_name, stock_code, realtime_ctx, holding_context=None
-    ):
-        """장마감 전 SCALPING 포지션의 오버나이트/당일청산 의사결정을 JSON으로 반환합니다."""
-        started = time.perf_counter()
-        prompt_type = "scalping_overnight"
-        prompt_version = "overnight_v1"
-        trace_context_fields = self._holding_trace_context_fields(
-            stock_code=stock_code,
-            ws_data=realtime_ctx,
-            position_ctx=realtime_ctx,
-            holding_context=holding_context,
-        )
-        input_contract_fields = {
-            "ai_input_schema": "overnight_text_v1",
-            "ai_input_contract_mode": "plain_text",
-            "ai_input_build_fallback": "not_built",
-            **trace_context_fields,
-        }
-        holding_preflight = ai_input_preflight(holding_context)
-        if runtime_preflight_required() and (
-            not bool(holding_preflight.get("allowed", False))
-            or not bool(holding_preflight.get("position_reconciled", False))
-        ):
-            return self._annotate_analysis_result(
-                {
-                    "action": "SELL_TODAY",
-                    "confidence": 0,
-                    "reason": "ai_input_preflight_blocked_sell_today",
-                    "risk_note": "broker_or_venue_snapshot_unreconciled",
-                    "holding_context_provider_expected": "openai_tier2",
-                    "provider_called": False,
-                    "raw": {},
-                    **holding_decision_context_log_fields(holding_context),
-                },
-                prompt_type=prompt_type,
-                prompt_version=prompt_version,
-                response_ms=int((time.perf_counter() - started) * 1000),
-                parse_ok=False,
-                parse_fail=False,
-                fallback_score_50=False,
-                cache_hit=False,
-                cache_mode="miss",
-                result_source="input_preflight_blocked",
-                input_contract_fields=input_contract_fields,
-            )
-        if not self.lock.acquire(blocking=False):
-            return self._annotate_analysis_result(
-                {
-                    "action": "SELL_TODAY",
-                    "confidence": 0,
-                    "reason": "ai_lock_contention",
-                    "risk_note": "lock_contention",
-                    "holding_context_provider_expected": "openai_tier2",
-                    "provider_called": False,
-                    "raw": {},
-                    **holding_decision_context_log_fields(holding_context),
-                },
-                prompt_type=prompt_type,
-                prompt_version=prompt_version,
-                response_ms=int((time.perf_counter() - started) * 1000),
-                parse_ok=False,
-                parse_fail=False,
-                fallback_score_50=False,
-                cache_hit=False,
-                cache_mode="miss",
-                result_source="lock_contention",
-                input_contract_fields=input_contract_fields,
-            )
-        try:
-            if self.ai_disabled:
-                return self._annotate_analysis_result(
-                    {
-                        "action": "SELL_TODAY",
-                        "confidence": 0,
-                        "reason": "engine_disabled_sell_today_fallback",
-                        "risk_note": "engine_disabled",
-                        "holding_context_provider_expected": "openai_tier2",
-                        "provider_called": False,
-                        "raw": {},
-                        **holding_decision_context_log_fields(holding_context),
-                    },
-                    prompt_type=prompt_type,
-                    prompt_version=prompt_version,
-                    response_ms=int((time.perf_counter() - started) * 1000),
-                    parse_ok=False,
-                    parse_fail=False,
-                    fallback_score_50=False,
-                    cache_hit=False,
-                    cache_mode="miss",
-                    result_source="engine_disabled",
-                    input_contract_fields=input_contract_fields,
-                )
-            user_input = (
-                f"[SCALPING_OVERNIGHT_DECISION_REQUEST]\n"
-                f"stock_name: {stock_name}\nstock_code: {stock_code}\n\n"
-                f"[DECISION_INPUT]\n{self._format_scalping_overnight_context(realtime_ctx)}"
-                "\n\n[HOLDING_DECISION_CONTEXT]\n"
-                + json.dumps(
-                    holding_decision_context_model_payload(holding_context),
-                    ensure_ascii=True,
-                    separators=(",", ":"),
-                    default=str,
-                )
-            )
-            input_contract_fields = self._resolve_ai_input_contract_fields(
-                user_input,
-                default_schema="overnight_text_v1",
-                default_mode="plain_text",
-            )
-            input_contract_fields.update(trace_context_fields)
-            if holding_decision_context_model_payload(holding_context):
-                input_contract_fields.update(
-                    {
-                        "ai_input_canonical_candle_owner": ("holding_decision_context"),
-                        "ai_input_duplicate_candle_views_omitted": True,
-                    }
-                )
-            result = self._call_openai_safe(
-                SCALPING_OVERNIGHT_DECISION_PROMPT,
-                user_input,
-                require_json=True,
-                context_name=f"SCALP_OVERNIGHT:{stock_name}",
-                model_override=self._get_tier2_model(),
-                schema_name="overnight_v1",
-                endpoint_name="overnight",
-                symbol=stock_code,
-                metadata_extra={
-                    "sim_record_id": (
-                        realtime_ctx.get("sim_record_id")
-                        if isinstance(realtime_ctx, dict)
-                        else None
-                    ),
-                    "sim_parent_record_id": (
-                        realtime_ctx.get("sim_parent_record_id")
-                        if isinstance(realtime_ctx, dict)
-                        else None
-                    ),
-                    "source_event_stage": "scalp_sim_overnight_decision",
-                },
-            )
-            result = self._merge_last_transport_meta(result)
-            action = str(result.get("action", "SELL_TODAY") or "SELL_TODAY").upper()
-            if action not in {"SELL_TODAY", "HOLD_OVERNIGHT"}:
-                action = "SELL_TODAY"
-            holding_payload = holding_decision_context_model_payload(holding_context)
-            holding_quality = (
-                holding_payload.get("source_quality")
-                if isinstance(holding_payload.get("source_quality"), dict)
-                else {}
-            )
-            holding_context_blocked = bool(
-                holding_payload.get("enabled")
-                and not holding_quality.get("hold_defer_allowed", False)
-            )
-            if action == "HOLD_OVERNIGHT" and holding_context_blocked:
-                action = "SELL_TODAY"
-            try:
-                confidence = int(float(result.get("confidence", 0) or 0))
-            except Exception:
-                confidence = 0
-            payload = {
-                "action": action,
-                "confidence": max(0, min(100, confidence)),
-                "reason": str(result.get("reason", "") or "reason_unavailable"),
-                "risk_note": str(result.get("risk_note", "") or "risk_unavailable"),
-                "ai_model": self._get_tier2_model(),
-                "holding_context_provider_expected": "openai_tier2",
-                "holding_context_action_clamped": holding_context_blocked,
-                "raw": result,
-                **holding_decision_context_log_fields(holding_context),
-            }
-            self._copy_ai_transport_trace_metadata(payload, result)
-            self._mark_successful_ai_call(update_last_call_time=False)
-            return self._annotate_analysis_result(
-                payload,
-                prompt_type=prompt_type,
-                prompt_version=prompt_version,
-                response_ms=int((time.perf_counter() - started) * 1000),
-                parse_ok=True,
-                parse_fail=False,
-                fallback_score_50=False,
-                cache_hit=False,
-                cache_mode="miss",
-                result_source="live",
-                input_contract_fields=input_contract_fields,
-            )
-        except Exception as e:
-            sim_observation_only = self._is_sim_observation_overnight_context(
-                realtime_ctx
-            )
-            if sim_observation_only:
-                failure_count = self.consecutive_failures + 1
-            else:
-                failure_count = self._record_failure_and_maybe_disable(
-                    context_name=f"SCALP_OVERNIGHT:{stock_name}:{stock_code}"
-                )
-            log_error(
-                f"🚨 [SCALPING 오버나이트 판정] OpenAI 에러 ({stock_name}, 연속 실패 {failure_count}회): {e}"
-            )
-            failure_transport_meta = self._consume_last_transport_meta()
-            if failure_transport_meta:
-                input_contract_fields.update(failure_transport_meta)
-            input_contract_fields.update(trace_context_fields)
-            return self._annotate_analysis_result(
-                {
-                    "action": "SELL_TODAY",
-                    "confidence": 0,
-                    "reason": "ai_failure_sell_today_fallback",
-                    "risk_note": "ai_response_error_or_insufficient_context",
-                    "ai_exception_type": type(e).__name__,
-                    "ai_exception_message": str(e),
-                    "sim_observation_failure_isolated": sim_observation_only,
-                    "holding_context_provider_expected": "openai_tier2",
-                    "provider_called": True,
-                    "raw": {},
-                    **holding_decision_context_log_fields(holding_context),
-                },
-                prompt_type=prompt_type,
-                prompt_version=prompt_version,
-                response_ms=int((time.perf_counter() - started) * 1000),
-                parse_ok=False,
-                parse_fail=True,
-                fallback_score_50=False,
-                cache_hit=False,
-                cache_mode="miss",
-                result_source="exception",
-                input_contract_fields=input_contract_fields,
-            )
-        finally:
-            self.lock.release()
 
     # ==========================================
     # 퍼블릭 메서드: 조건검색식 진입/청산 판단
@@ -14510,7 +14255,7 @@ Do not cut by a single score cutoff. First classify the flow as closest to absor
 
 
 class OpenAIDualPersonaShadowEngine(GPTSniperEngine):
-    """Shadow-only dual persona engine for gatekeeper / overnight calibration."""
+    """Shadow-only persona engine for the surviving gatekeeper consumer."""
 
     HARD_RISK_FLAGS = {
         "VWAP_BELOW",
@@ -14522,7 +14267,7 @@ class OpenAIDualPersonaShadowEngine(GPTSniperEngine):
     }
 
     def __init__(self, api_keys):
-        super().__init__(api_keys)
+        super().__init__(api_keys, announce_startup=False)
         worker_count = max(
             1, int(getattr(TRADING_RULES, "OPENAI_DUAL_PERSONA_WORKERS", 2) or 2)
         )
@@ -14636,7 +14381,7 @@ class OpenAIDualPersonaShadowEngine(GPTSniperEngine):
             json.dumps(payload, ensure_ascii=False, indent=2, default=str),
             require_json=True,
             context_name=context_name,
-            model_override=self.fast_model_name,
+            model_override=self._get_role_model("OPENAI_GATEKEEPER_SHADOW_MODEL"),
             temperature_override=0.05,
             endpoint_name=f"dual_persona_{decision_type}",
             symbol=(
@@ -14809,10 +14554,6 @@ class OpenAIDualPersonaShadowEngine(GPTSniperEngine):
             return bool(
                 getattr(TRADING_RULES, "OPENAI_DUAL_PERSONA_APPLY_GATEKEEPER", True)
             )
-        if decision_type == "overnight":
-            return bool(
-                getattr(TRADING_RULES, "OPENAI_DUAL_PERSONA_APPLY_OVERNIGHT", True)
-            )
         return False
 
     def _evaluate_shadow(
@@ -14929,25 +14670,6 @@ class OpenAIDualPersonaShadowEngine(GPTSniperEngine):
             callback=callback,
         )
 
-    def submit_overnight_shadow(
-        self,
-        *,
-        stock_name,
-        stock_code,
-        strategy,
-        realtime_ctx,
-        gemini_result,
-        callback=None,
-    ):
-        return self._submit_shadow(
-            "overnight",
-            stock_name,
-            stock_code,
-            strategy,
-            realtime_ctx,
-            gemini_result,
-            callback=callback,
-        )
 
     def _normalize_shared_prompt_result(self, result):
         if not isinstance(result, dict):
@@ -14977,6 +14699,7 @@ class OpenAIDualPersonaShadowEngine(GPTSniperEngine):
         gemini_result,
         candle_context=None,
     ):
+        role_model = self._get_role_model("OPENAI_WATCHING_SHADOW_MODEL")
         started_at = time.perf_counter()
         try:
             if candle_context is not None:
@@ -14995,7 +14718,7 @@ class OpenAIDualPersonaShadowEngine(GPTSniperEngine):
                 formatted,
                 require_json=True,
                 context_name=f"WATCHING-SHARED:{stock_name}",
-                model_override=self.fast_model_name,
+                model_override=role_model,
                 temperature_override=0.1,
                 schema_name="entry_v1",
                 endpoint_name="watching_shared_shadow",
@@ -15016,7 +14739,7 @@ class OpenAIDualPersonaShadowEngine(GPTSniperEngine):
                 "gpt_reason": normalized.get("reason", ""),
                 "action_diverged": gemini_action != normalized.get("action", "WAIT"),
                 "score_gap": int(normalized.get("score", 50)) - gemini_score,
-                "gpt_model": self.fast_model_name,
+                "gpt_model": role_model,
                 "shadow_extra_ms": int((time.perf_counter() - started_at) * 1000),
             }
         except Exception as e:
@@ -15024,7 +14747,7 @@ class OpenAIDualPersonaShadowEngine(GPTSniperEngine):
                 "mode": "shadow",
                 "strategy": "SCALPING",
                 "error": str(e),
-                "gpt_model": self.fast_model_name,
+                "gpt_model": role_model,
                 "shadow_extra_ms": int((time.perf_counter() - started_at) * 1000),
             }
 

@@ -10,6 +10,31 @@ import pytest
 from src.engine.automation import ordered_intraday_deploy as D
 
 
+def _candidate_p5_fixture(d, commit=None):
+    selected=json.loads(d.selection.read_bytes())
+    directory=d.workspace/'data/report/main_startup_validation'/d.day/('d'*32)
+    directory.mkdir(parents=True, exist_ok=True)
+    path=directory/'final.json'
+    value=dict(schema='main_policy_load_exit_validation_v1', run_id=directory.name,
+        status='passed', findings=[], target_date=d.day,
+        execution_release_root=str(d.candidate), execution_release_commit=commit or d.commit,
+        selected_release_root=selected['release_root'], selected_release_commit=selected['git_commit'],
+        child_terminated=True, child_exit_code=0, failure_phase=None,
+        load_check_passed=True, protected_sources_unchanged=True,
+        runtime_effect=False, allowed_runtime_apply=False, actual_pid_consumed=False)
+    path.write_bytes(D._json_bytes(value))
+    d.candidate_p5_path=path
+    d.candidate_p5_sha256=D.H._sha(path)
+    if hasattr(d, 'commit'): d.pin_candidate_p5()
+    return path
+
+
+@pytest.fixture(autouse=True)
+def _summary_preflight_contract(monkeypatch):
+    from src.engine.monitoring import sentinel_summary_contract as summary
+    monkeypatch.setattr(summary, 'check_pending_migration', lambda *_:dict(status='current_contract'))
+
+
 @pytest.fixture
 def stopped_recovery(tmp_path, monkeypatch):
     day = '2026-10-12'
@@ -63,8 +88,34 @@ def stopped_recovery(tmp_path, monkeypatch):
     monkeypatch.setattr(D.H,'_native_predecessor',native)
     for name in ('delay','stop','holding_vote'):
         monkeypatch.setattr(D.H,'verify_candidate_'+name+'_code',lambda *a:dict(status='pass'))
+    monkeypatch.setattr(D,'verify_candidate_active_policy',lambda *a:dict(status='pass',
+        receipt_path=str(policy),receipt_sha256=D.H._sha(policy),
+        pointer_path=str(policy),pointer_sha256=D.H._sha(policy)))
+    monkeypatch.setattr(D, 'verify_candidate_report_currentness', lambda *a:dict(status='pass'), raising=False)
     d=D.StoppedDeploymentRecovery(tmp_path,candidate,day,D.CONFIRM)
+    _candidate_p5_fixture(d, new_commit)
     return d, status_path, policy
+
+
+def test_stopped_recovery_requires_active_policy_before_hold_transfer(stopped_recovery, monkeypatch):
+    d,status,policy=stopped_recovery
+    before=d.selection.read_bytes(),d.hold.read_bytes(),status.read_bytes()
+    def reject(*args):raise ValueError('active source changed')
+    monkeypatch.setattr(D,'verify_candidate_active_policy',reject)
+    with pytest.raises(ValueError,match='active source changed'):d.preflight()
+    assert before==(d.selection.read_bytes(),d.hold.read_bytes(),status.read_bytes())
+
+
+def test_stopped_recovery_freezes_prepared_origin_and_uses_native_inheritance(stopped_recovery, monkeypatch, tmp_path):
+    d,status,policy=stopped_recovery
+    source=tmp_path/'prepared-origin.json';source.write_text('immutable origin')
+    check=dict(status='pass',prepared_code_origin=dict(sources={str(source):D.H._sha(source)}))
+    monkeypatch.setattr(D,'verify_candidate_delay_code',lambda *a:check)
+    d.preflight()
+    assert d.prepared_delay_check==check and d.frozen[str(source)]==D.H._sha(source)
+    assert str(d.selection) not in d.frozen
+    source.write_text('different generation')
+    with pytest.raises(ValueError,match='generation_changed'):d.acquire_hold()
 
 
 @pytest.mark.parametrize('damage',[None,'phase','error','date','hold','selection','original','native',
@@ -117,14 +168,18 @@ def _assert_detector_lock_held(workspace):
             fcntl.flock(other, fcntl.LOCK_EX | fcntl.LOCK_NB)
 
 
-@pytest.mark.parametrize('damage', [None, 'proof_pid', 'proof_basis', 'consumed', 'handoff', 'policy', 'preopen', 'manifest'])
-def test_stopped_intraday_recovery_requires_original_consumption_and_every_frozen_byte(tmp_path, monkeypatch, damage):
+@pytest.mark.parametrize('chain',[False,True,'two','three'])
+@pytest.mark.parametrize('damage', [None, 'proof_pid', 'proof_basis', 'consumed', 'handoff', 'policy', 'preopen', 'manifest','parent_hash','parent_path','parent_proof','depth'])
+def test_stopped_intraday_recovery_requires_original_consumption_and_every_frozen_byte(tmp_path, monkeypatch, damage,chain):
+    if not chain and damage in ('parent_hash','parent_path','parent_proof','depth'):return
     day, commit = '2026-10-16', 'a'*40
     old = tmp_path/'old';identity=dict(pid=2147483601,start_ticks='123',cwd=str(old/'src'))
     policy=tmp_path/'policy.json';policy.write_text('original')
     preopen=tmp_path/'preopen.json';preopen.write_text('original preopen')
     manifest=tmp_path/'manifest.json';manifest.write_text(json.dumps({'manifest_sha256':'b'*64}))
-    proof_path=tmp_path/'preflight-intraday_release_handoff.log'
+    origin=tmp_path/('b'*40)/'status.json' if chain else tmp_path/'status.json'
+    origin.parent.mkdir(parents=True,exist_ok=True)
+    proof_path=origin.with_name('preflight-intraday_release_handoff.log')
     proof=dict(schema='intraday_pid_consumption_verification_v1',status='pass',findings=[],
         basis='intraday_policy_preserving_handoff',actual_pid_consumed=True,target_date=day,
         selected_release_commit=commit,release_root=str(old),pid_identity=identity,manifest_sha256='b'*64)
@@ -144,15 +199,42 @@ def test_stopped_intraday_recovery_requires_original_consumption_and_every_froze
     elif damage=='preopen':preopen.write_text('changed')
     elif damage=='manifest':manifest.write_text(json.dumps({'manifest_sha256':'c'*64}))
     proof_path.write_bytes(D._json_bytes(proof));consumed_path.write_bytes(D._json_bytes(consumed))
+    failed_path=origin
+    depth=0
+    if chain:
+        origin.write_bytes(D._json_bytes(dict(predecessor_identity=identity,previous_commit=commit,candidate_commit='b'*40)))
+        parent=dict(failed_transition_path=str(origin),failed_selected_commit='b'*40,
+            failed_transition_sha256=D.H._sha(origin),intraday_predecessor_proof_sha256=D.H._sha(proof_path),
+            transfer_status='transferred_exact_owned_hold')
+        if damage=='parent_hash':parent['failed_transition_sha256']='0'*64
+        if damage=='parent_path':parent['failed_transition_path']=str(tmp_path/'foreign.json')
+        if damage=='parent_proof':parent['intraday_predecessor_proof_sha256']='0'*64
+        if damage=='depth':depth=3
+        failed_path=tmp_path/('c'*40)/'status.json';failed_path.parent.mkdir()
+        failed_path.write_bytes(D._json_bytes(dict(failed_hold_adoption=parent,predecessor_identity=identity,
+            previous_commit=commit,candidate_commit='c'*40)))
+        if chain in ('two','three'):
+            parent=dict(failed_transition_path=str(failed_path),failed_selected_commit='c'*40,
+                failed_transition_sha256=D.H._sha(failed_path),intraday_predecessor_proof_sha256=D.H._sha(proof_path),
+                transfer_status='transferred_exact_owned_hold')
+            failed_path=tmp_path/('d'*40)/'status.json';failed_path.parent.mkdir()
+            failed_path.write_bytes(D._json_bytes(dict(failed_hold_adoption=parent,predecessor_identity=identity,
+                previous_commit=commit,candidate_commit='d'*40)))
+            if chain=='three':
+                parent=dict(failed_transition_path=str(failed_path),failed_selected_commit='d'*40,
+                    failed_transition_sha256=D.H._sha(failed_path),intraday_predecessor_proof_sha256=D.H._sha(proof_path),
+                    transfer_status='transferred_exact_owned_hold')
+                failed_path=tmp_path/('e'*40)/'status.json';failed_path.parent.mkdir()
+                failed_path.write_bytes(D._json_bytes(dict(failed_hold_adoption=parent)))
     monkeypatch.setattr(D.H,'_paths',lambda *a:(handoff_path,consumed_path))
     monkeypatch.setattr(D.H,'_preopen_path',lambda *a:preopen)
     monkeypatch.setattr(D.H.bootstrap,'manifest_path',lambda *a:manifest)
     before={p:p.read_bytes() for p in (proof_path,handoff_path,consumed_path,policy,preopen,manifest)}
     if damage:
-        with pytest.raises(ValueError,match='stopped_intraday_predecessor_invalid'):
-            D._stopped_intraday_predecessor(day,old,commit,identity,tmp_path/'status.json')
+        with pytest.raises(ValueError,match='stopped_(intraday_predecessor|predecessor)_'):
+            D._stopped_intraday_predecessor(day,old,commit,identity,failed_path,_depth=depth)
     else:
-        result=D._stopped_intraday_predecessor(day,old,commit,identity,tmp_path/'status.json')
+        result=D._stopped_intraday_predecessor(day,old,commit,identity,failed_path,_depth=depth)
         assert result['frozen_files'][str(consumed_path)]==D.H._sha(consumed_path)
         assert result['frozen_files'][str(proof_path)]==D.H._sha(proof_path)
     assert all(p.read_bytes()==raw for p,raw in before.items())
@@ -173,9 +255,10 @@ def test_stopped_recovery_from_intraday_does_not_fabricate_native_receipt(stoppe
 
 @pytest.mark.parametrize('failure', [None, 'preflight', 'publish', 'attest'])
 def test_cli_holds_detector_lock_through_attestation_and_failure(tmp_path, monkeypatch, failure):
+    (tmp_path/'data').mkdir(exist_ok=True)
     calls = []
     class Driver:
-        workspace = tmp_path
+        workspace=tmp_path;day='2026-10-12'
         def __getattr__(self, name):
             def step(*args):
                 _assert_detector_lock_held(tmp_path)
@@ -184,9 +267,10 @@ def test_cli_holds_detector_lock_through_attestation_and_failure(tmp_path, monke
                     raise ValueError(name)
                 return {'status': 'pass'}
             return step
-    monkeypatch.setattr(D, 'Deployment', lambda *args: Driver())
+    monkeypatch.setattr(D, 'Deployment', lambda *args, **kw: Driver())
     rc = D.main(['--workspace', str(tmp_path), '--release-root', str(tmp_path),
-                 '--target-date', '2026-10-12', '--confirm', D.CONFIRM])
+                 '--target-date', '2026-10-12', '--candidate-p5-path', str(tmp_path/'final.json'),
+                 '--candidate-p5-sha256', 'a'*64, '--confirm', D.CONFIRM])
     assert rc == (1 if failure else 0)
     assert calls[-1] == ('fail' if failure else 'attest')
     with D.detector_transition_lock(tmp_path, timeout=0):
@@ -203,7 +287,8 @@ def test_busy_detector_times_out_before_deployment_preflight(tmp_path, monkeypat
         ticks = iter([0, 61])
         monkeypatch.setattr(D.time, 'monotonic', lambda: next(ticks))
         assert D.main(['--workspace', str(tmp_path), '--release-root', str(tmp_path),
-                       '--target-date', '2026-10-12', '--confirm', D.CONFIRM]) == 1
+                       '--target-date', '2026-10-12', '--candidate-p5-path', str(tmp_path/'final.json'),
+                 '--candidate-p5-sha256', 'a'*64, '--confirm', D.CONFIRM]) == 1
         assert lock_path.stat().st_ino == inode
         _assert_detector_lock_held(tmp_path)
         assert not (tmp_path / 'data/runtime/operator_startup_hold.json').exists()
@@ -260,10 +345,11 @@ def test_wrapper_stale_reader_and_invalid_selection_never_publish(tmp_path, guar
 
 @pytest.mark.parametrize('failure', [None, 'preflight', 'acquire_hold', 'drain', 'publish', 'prepare', 'start', 'attest'])
 def test_transition_does_not_advance_past_failed_phase(tmp_path, failure):
+    (tmp_path/'data').mkdir()
     calls = []
     steps = ['preflight', 'acquire_hold', 'drain', 'publish', 'prepare', 'start', 'attest']
     class Driver:
-        workspace = tmp_path
+        workspace=tmp_path;day='2026-10-12'
         def __getattr__(self, name):
             def step(*args):
                 with pytest.raises(ValueError, match='scheduled_execution_active'):
@@ -282,8 +368,72 @@ def test_transition_does_not_advance_past_failed_phase(tmp_path, failure):
         assert calls == steps
 
 
+def test_active_scheduled_owner_blocks_before_deployment_preflight(tmp_path):
+    calls = []
+    class Driver:
+        workspace = tmp_path
+        def preflight(self): calls.append('preflight')
+        def fail(self, exc): calls.append(str(exc))
+    with D.R.scheduled_execution_lease(tmp_path):
+        with pytest.raises(ValueError, match='scheduled_execution_active'):
+            D.execute(Driver())
+    assert calls == []
+    assert not (tmp_path / 'data/runtime/operator_startup_hold.json').exists()
+
+
+@pytest.mark.parametrize('failure', [None, 'drain', 'attest'])
+def test_source_epoch_keeps_native_readers_across_the_actual_transition(tmp_path, monkeypatch, failure):
+    import sqlite3
+    from src.engine.automation import main_trailing_source_store as store
+    data=tmp_path/'data';data.mkdir()
+    target=store._index_path(data,'holding_path_votes','2026-10-20')
+    target.parent.mkdir(parents=True)
+    native=store._open_database(target,readonly=False,writer=True)
+    native.close()
+    opened=[];original=store._open_database
+    def observe(*args,**kwargs):
+        db=original(*args,**kwargs)
+        assert kwargs['readonly'] is True and not db.in_transaction
+        opened.append(db);return db
+    monkeypatch.setattr(store,'_open_database',observe)
+    class Driver:
+        workspace=tmp_path;day='2026-10-20'
+        def preflight(self):assert not opened
+        def __getattr__(self,name):
+            def step(*args):
+                if name=='fail':return
+                assert len(opened)==1 and not opened[0].in_transaction
+                assert opened[0].execute('PRAGMA user_version').fetchone()[0]==1
+                if name==failure:raise ValueError(name)
+                return dict(status='pass')
+            return step
+    if failure:
+        with pytest.raises(ValueError,match=failure):D.execute(Driver())
+    else:assert D.execute(Driver())==dict(status='pass')
+    assert len(opened)==1
+    with pytest.raises(sqlite3.ProgrammingError,match='closed'):opened[0].execute('SELECT 1')
+    assert sorted(p.name for p in target.parent.glob('*.sqlite'))==['holding_path_votes.sqlite']
+
+
+def test_source_epoch_failure_cannot_acquire_hold_or_drain(tmp_path):
+    data=tmp_path/'data';data.mkdir()
+    target=data/'report/main_trailing_source_index/holding_path_votes.sqlite'
+    target.parent.mkdir(parents=True);target.write_bytes(b'not sqlite');target.chmod(0o600)
+    called=[]
+    class Driver:
+        workspace=tmp_path;day='2026-10-20'
+        def preflight(self):called.append('preflight')
+        def fail(self,exc):called.append('fail')
+        def __getattr__(self,name):return lambda *a:called.append(name)
+    with pytest.raises(__import__('sqlite3').DatabaseError):D.execute(Driver())
+    assert called==['preflight','fail']
+
+
 @pytest.fixture
-def driver(tmp_path):
+def driver(tmp_path, monkeypatch):
+    monkeypatch.setattr(D, "verify_candidate_report_currentness", lambda *a:dict(status="pass"), raising=False)
+    monkeypatch.setattr(D, "pin_collector_shutdown", lambda *a: dict(pid=123, start_ticks="123"))
+    monkeypatch.setattr(D, "verify_collector_shutdown", lambda *a: dict(status="verified"))
     d = object.__new__(D.Deployment)
     d.workspace = tmp_path
     runtime = tmp_path / 'data/runtime'; runtime.mkdir(parents=True)
@@ -299,10 +449,35 @@ def driver(tmp_path):
     d.directory = runtime / 'transition'; d.directory.mkdir()
     d.state = {}; d.phase = 'preflight'; d.hold_bytes = None
     d.validation_session = '1' * 32
+    d.collector_shutdown_pin = dict(pid=123, start_ticks='123')
     d.checklist = tmp_path / 'checklist.md'; d.checklist.write_text('original')
     d.document_before = b'original'; d.document_after = b'reviewed candidate'
     d.frozen = {str(d.checklist): D._digest(d.document_before)}
+    _candidate_p5_fixture(d)
     return d
+
+
+@pytest.mark.parametrize('damage', [None, 'proof', 'main', 'supervisor', 'flag', 'hold', 'source'])
+def test_closed_predecessor_drain_rechecks_native_closure_without_stop_mutation(driver, monkeypatch, damage):
+    d=driver
+    proof=dict(schema='intraday_closed_consumption_observation_v1', pid_identity=d.identity)
+    d.closed_predecessor=dict(closed_observation=proof)
+    d.hold_bytes=b'owned'; d.hold.write_bytes(d.hold_bytes)
+    monkeypatch.setattr(D.H,'closed_consumption_observation',lambda *a: {} if damage=='proof' else proof)
+    monkeypatch.setattr(D,'_main_pids',lambda: [456] if damage=='main' else [])
+    monkeypatch.setattr(D,'_session_absent',lambda: damage!='supervisor')
+    if damage=='flag': d.flag.write_text('another owner')
+    if damage=='hold': d.hold.write_text('another owner')
+    if damage=='source': d.checklist.write_text('changed')
+    before={p:p.read_bytes() for p in (d.selection,d.hold,d.checklist)}
+    if damage:
+        with pytest.raises(ValueError): d.drain()
+        assert not (d.directory/'status.json').exists()
+    else:
+        d.drain()
+        assert d.state['drain_basis']=='native_postclose_stopped_consumption_verified'
+        assert d.phase=='drained' and not d.flag.exists()
+    assert {p:p.read_bytes() for p in before}==before
 
 
 @pytest.mark.parametrize('damage', [None, 'missing', 'malformed', 'symlink', 'future', 'failed', 'date', 'oversize', 'schema', 'run_id', 'duplicate', 'nonfinite', 'overflow', 'as_of_date', 'fifo'])
@@ -795,11 +970,16 @@ def _mock_adoption_preflight(d, monkeypatch, reject=None):
         return dict(status='pass',receipt_path=str(prior_handoff),receipt_sha256=D.H._sha(prior_handoff),
                     pointer_path=str(d.selection),pointer_sha256=D.H._sha(d.selection))
     monkeypatch.setattr(D, 'verify_candidate_active_policy', active)
+    def reports(*args):
+        calls.append('reports')
+        if reject == 'reports': raise ValueError('candidate_validation_rejected')
+        return {'status':'pass'}
+    monkeypatch.setattr(D, 'verify_candidate_report_currentness', reports, raising=False)
     d._preflight_native_verified = False
     return calls
 
 
-@pytest.mark.parametrize("rejected", ["intraday_release_handoff", "runtime_policy_bootstrap", "delay", "stop", "holding", "active_policy"])
+@pytest.mark.parametrize("rejected", ["intraday_release_handoff", "runtime_policy_bootstrap", "delay", "stop", "holding", "active_policy", "reports"])
 def test_adoption_native_preflight_failure_never_replaces_old_hold(driver, monkeypatch, rejected):
     d = driver; _, _, failed_path, prior_path = _failed_hold_fixture(d, monkeypatch)
     original = {path: path.read_bytes() for path in (d.hold, failed_path, prior_path, d.selection, d.checklist)}
@@ -815,7 +995,7 @@ def test_adoption_preflight_native_checks_precede_capture_and_acquire(driver, mo
     hold_before = d.hold.read_bytes()
     calls = _mock_adoption_preflight(d, monkeypatch)
     d.preflight()
-    assert calls == ["src.engine.automation.intraday_release_handoff", "src.engine.automation.runtime_policy_bootstrap", "delay", "stop", "holding", "active_policy"]
+    assert calls == ["src.engine.automation.intraday_release_handoff", "src.engine.automation.runtime_policy_bootstrap", "delay", "stop", "holding", "active_policy", "reports"]
     assert d._preflight_native_verified is True
     assert d.hold.read_bytes() == hold_before
     d.acquire_hold()
@@ -936,6 +1116,72 @@ def test_publish_preserves_concurrent_work_checklist(driver,monkeypatch):
     assert d.checklist.read_bytes()==before
     assert d.state['checklist_sha256']==D._digest(before)
     assert d.selection.read_bytes()==d.published
+
+
+def test_publish_replaces_inherited_candidate_p5(driver, monkeypatch):
+    d=driver
+    d.old.update(candidate_p5_path='/old/candidate/final.json', candidate_p5_sha256='f'*64)
+    d.before=D._json_bytes(d.old);d.selection.write_bytes(d.before)
+    original=d.selection.read_bytes()
+    d.acquire_hold();d.phase='drained'
+    monkeypatch.setattr(D, '_main_pids', lambda: [])
+    d.publish()
+    published=json.loads(d.selection.read_bytes())
+    assert published['candidate_p5_path']==str(d.candidate_p5_path)
+    assert published['candidate_p5_sha256']==d.candidate_p5_sha256
+    assert d.before==original
+    proof=json.loads(d.candidate_p5_path.read_bytes())
+    assert proof['execution_release_commit']==published['git_commit']
+    # Pre-drain P5 correctly identifies the incumbent as then-selected.
+    assert proof['selected_release_commit']==d.previous_commit!=d.commit
+
+
+@pytest.mark.parametrize('fault', ['commit','root','date','selected_commit','selected_root',
+    'sha','missing','failed','findings','terminated','load','sources','runtime','apply','pid',
+    'symlink','fifo','duplicate','run_id','exit','failure_phase'])
+def test_candidate_p5_rejects_unbound_or_invalid_proof_before_hold(driver, fault):
+    d=driver;path=d.candidate_p5_path;value=json.loads(path.read_bytes())
+    fields={'commit':'execution_release_commit','root':'execution_release_root','date':'target_date',
+        'selected_commit':'selected_release_commit','selected_root':'selected_release_root',
+        'failed':'status','findings':'findings','terminated':'child_terminated',
+        'load':'load_check_passed','sources':'protected_sources_unchanged',
+        'runtime':'runtime_effect','apply':'allowed_runtime_apply','pid':'actual_pid_consumed','run_id':'run_id',
+        'exit':'child_exit_code','failure_phase':'failure_phase'}
+    if fault in fields:
+        value[fields[fault]] = (['failure'] if fault=='findings' else
+            False if fault in {'terminated','load','sources'} else
+            True if fault in {'runtime','apply','pid'} else 'foreign')
+        path.write_bytes(D._json_bytes(value));d.candidate_p5_sha256=D.H._sha(path)
+    elif fault=='sha':d.candidate_p5_sha256='0'*64
+    elif fault=='missing':path.unlink()
+    elif fault=='symlink':
+        saved=path.with_suffix('.old');path.rename(saved);path.symlink_to(saved)
+    elif fault=='fifo':path.unlink();os.mkfifo(path)
+    elif fault=='duplicate':
+        path.write_bytes(b'{"status":"passed","status":"passed"}');d.candidate_p5_sha256=D.H._sha(path)
+    before=d.selection.read_bytes()
+    with pytest.raises((ValueError,OSError)):
+        d.pin_candidate_p5()
+    assert d.selection.read_bytes()==before and not d.hold.exists()
+
+
+@pytest.mark.parametrize('changed', ['p5','same_bytes_new_inode','selector','during_publication'])
+def test_p5_or_selector_change_stops_publication(driver, monkeypatch, changed):
+    d=driver;d.acquire_hold();d.phase='drained'
+    monkeypatch.setattr(D,'_main_pids',lambda:[])
+    original=d.selection.read_bytes()
+    if changed=='p5':d.candidate_p5_path.write_text('{}')
+    elif changed=='same_bytes_new_inode':
+        saved=d.candidate_p5_path.with_suffix('.old');d.candidate_p5_path.rename(saved)
+        d.candidate_p5_path.write_bytes(saved.read_bytes())
+    elif changed=='selector':d.selection.write_text('{}')
+    else:
+        monkeypatch.setattr(D,'inherit_prepared_delay_code',lambda *a:d.candidate_p5_path.write_text('{}'))
+    expected=d.selection.read_bytes()
+    with pytest.raises((ValueError,OSError)):d.publish()
+    assert d.selection.read_bytes()==expected
+    assert d.hold.read_bytes()==d.hold_bytes
+    if changed!='selector':assert expected==original
 
 
 @pytest.mark.parametrize('module',['src.engine.automation.intraday_release_handoff',
@@ -1064,3 +1310,583 @@ def test_active_scheduled_owner_blocks_before_deployment_preflight(tmp_path):
             D.execute(Driver())
     assert calls == []
     assert not (tmp_path / 'data/runtime/operator_startup_hold.json').exists()
+
+
+@pytest.mark.parametrize('fault',[None,'other_failure','unverified_origin','changed_manifest','changed_candidate'])
+def test_prepared_delay_origin_preflight_remains_read_only(tmp_path,monkeypatch,fault):
+    from src.engine.automation import prepared_policy_code_handoff as P
+    from src.engine.scalping import pre_submit_delay_initial_policy as delay
+    data=tmp_path/'data';data.mkdir();manifest=tmp_path/'manifest.json'
+    manifest.write_text(json.dumps(dict(pre_submit_delay_handoff=dict(policy_sha256='policy',code_contract_sha256='original'))))
+    monkeypatch.setattr(D.H.bootstrap,'manifest_path',lambda _:manifest)
+    monkeypatch.setattr(D.H,'DATA_DIR',data)
+    def original(*a):raise ValueError('other_failure' if fault=='other_failure' else 'entry_consumer_original_code_contract_invalid')
+    monkeypatch.setattr(D.H,'verify_candidate_delay_code',original)
+    monkeypatch.setattr(D.R,'selected_release',lambda _:(tmp_path/'previous','previous'))
+    monkeypatch.setattr(delay,'CONTRACT_PATHS',('source.py',))
+    calls=[]
+    def resolve(*a,**kw):
+        calls.append(kw)
+        return dict(basis='wrong' if fault=='unverified_origin' else 'verified_selected_prepared_code_handoff',
+                    origin_commit='origin',sources={})
+    monkeypatch.setattr(P,'resolve_prepared_code_origin',resolve)
+    def delta(*args):
+        assert args==(tmp_path/'candidate','candidate','origin',{'source.py':'source.py'},'original')
+        if fault=='changed_manifest':manifest.write_text('{}')
+        if fault=='changed_candidate':raise ValueError('candidate_dirty')
+        return ['source.py']
+    monkeypatch.setattr(D.H,'_verify_entry_code_delta',delta)
+    monkeypatch.setattr(P,'issue',lambda *a,**kw:pytest.fail('preflight must not publish'))
+    if fault:
+        with pytest.raises(ValueError):D.verify_candidate_delay_code('day',tmp_path/'candidate','candidate')
+    else:
+        result=D.verify_candidate_delay_code('day',tmp_path/'candidate','candidate')
+        assert result['status']=='pass' and result['actual_pid_consumed'] is False
+        assert result['prepared_code_origin']['origin_commit']=='origin'
+        assert calls[0]['selected_commit']=='previous' and calls[0]['policy_sha']=='policy'
+
+
+@pytest.mark.parametrize('changed',[False,True])
+def test_prepared_delay_inheritance_preserves_native_issuer_and_source_cas(tmp_path,monkeypatch,changed):
+    from src.engine.automation import prepared_policy_code_handoff as P
+    source=tmp_path/'source';source.write_text('original')
+    original=tmp_path/'prepared';original.write_text(json.dumps(dict(verification_path='original-verification')))
+    previous=tmp_path/'previous';previous.write_text(json.dumps(dict(prepared_receipt=str(original),
+        original_prepared_receipt='original-prepared',policy_sha256='policy',original_code_sha256='code',paths={'key':'source.py'})))
+    check=dict(prepared_code_origin=dict(sources={str(source):D.H._sha(source)},code_handoff_receipt_path=str(previous)))
+    calls=[];monkeypatch.setattr(P,'issue',lambda *a,**kw:calls.append((a,kw)) or {'verified':True})
+    if changed:
+        source.write_text('changed')
+        with pytest.raises(ValueError,match='source_changed'):D.inherit_prepared_delay_code(tmp_path,'day',tmp_path/'candidate',check)
+        assert calls==[]
+    else:
+        assert D.inherit_prepared_delay_code(tmp_path,'day',tmp_path/'candidate',check)=={'verified':True}
+        assert calls[0][1]['previous_handoff']==previous
+        assert calls[0][1]['origin_verification']=='original-verification'
+        assert calls[0][1]['confirm']==P.AUTHORITY
+
+
+@pytest.mark.parametrize('fail',[False,True])
+def test_prepared_inheritance_happens_after_drain_before_selection(driver,monkeypatch,fail):
+    d=driver;d.acquire_hold();d.phase='drained'
+    monkeypatch.setattr(D,'_main_pids',lambda:[])
+    before=d.selection.read_bytes();d.prepared_delay_check={'prepared_code_origin':{'test':'bound'}}
+    calls=[]
+    def inherit(workspace,day,candidate,check):
+        assert d.phase=='drained' and d.hold.read_bytes()==d.hold_bytes
+        assert d.selection.read_bytes()==before and check==d.prepared_delay_check
+        calls.append(True)
+        if fail:raise ValueError('native_issuer_refused')
+    monkeypatch.setattr(D,'inherit_prepared_delay_code',inherit)
+    if fail:
+        with pytest.raises(ValueError,match='native_issuer_refused'):d.publish()
+        assert d.selection.read_bytes()==before and d.phase=='drained'
+    else:
+        d.publish();assert d.phase=='selected' and d.selection.read_bytes()!=before
+    assert calls==[True]
+
+
+@pytest.mark.parametrize('phase,error,valid', [
+    ('starting','deployment_pid_attestation_timeout',True),
+    ('starting','deployment_validation_failed:src.engine.automation.intraday_release_handoff',False),
+    ('selected','deployment_pid_attestation_timeout',False)])
+def test_stopped_startup_timeout_recovery_keeps_exact_phase_and_error(stopped_recovery,phase,error,valid):
+    d,path,_=stopped_recovery
+    value=D.H._read(path);value.update(failed_phase=phase,error=error);path.write_bytes(D._json_bytes(value))
+    before=path.read_bytes(),d.hold.read_bytes()
+    if valid:
+        d.preflight()
+        assert d.state['failed_hold_adoption']['source_failure']==error
+    else:
+        with pytest.raises(ValueError,match='stopped_recovery_source_invalid'):d.preflight()
+    assert before==(path.read_bytes(),d.hold.read_bytes())
+
+
+@pytest.mark.parametrize('fault', [None, 'code', 'source', 'quantity_incomplete', 'quantity_missing', 'missing_after_date'])
+def test_report_preflight_reuses_native_currentness_and_preserves_economic_gaps(tmp_path, monkeypatch, fault):
+    from src.engine.monitoring import main_trailing_currentness as trailing
+    from src.engine.error_detectors import artifact_freshness as artifacts
+    day, source = '2026-10-20', '2026-10-19'
+    monkeypatch.setattr(D.H, 'preserve_checklist', lambda target: {'source_date':source})
+    monkeypatch.setattr(D.H, '_read', lambda path: {'original':'holding'})
+    monkeypatch.setattr(trailing, 'observe', lambda data, held, target_date:
+        {'status':'code_changed' if fault=='code' else 'generation_current'})
+    quantity=dict(status='source_gap', findings=['initial_quantity_economic_source_gap'],
+        bounded_contract_validated=fault!='source', observation_complete=fault!='quantity_incomplete',
+        postclose_stage_status='not_observed' if fault=='quantity_missing' else 'source_gap')
+    if fault=='missing_after_date':quantity['findings']=['initial_quantity_stage_missing_after_date']
+    seen=[]
+    def observe(root, date):
+        seen.append((root,date))
+        return quantity
+    monkeypatch.setattr(artifacts, '_initial_quantity_semantics', observe)
+    if fault:
+        with pytest.raises(ValueError, match='deployment_.*report_not_current'):
+            D.verify_candidate_report_currentness(tmp_path,tmp_path/'candidate',day)
+    else:
+        result=D.verify_candidate_report_currentness(tmp_path,tmp_path/'candidate',day)
+        assert result['status']=='pass' and result['source_date']==source
+        assert result['quantity']['findings']==['initial_quantity_economic_source_gap']
+        assert result['runtime_effect'] is False and result['policy_effect']=='unchanged'
+    assert seen==([] if fault=='code' else [(tmp_path/'candidate',source)])
+
+
+@pytest.mark.parametrize('failure', [False, True, 'handoff'])
+def test_prepare_binds_native_source_window_before_start(monkeypatch, tmp_path, failure):
+    from src.engine.monitoring import sentinel_source_window as window
+    from src.engine.automation import prepared_policy_code_handoff as code
+    driver = object.__new__(D.Deployment)
+    driver.workspace = tmp_path
+    driver.candidate = tmp_path/'candidate'
+    driver.previous = tmp_path/'previous'
+    driver.day = '2026-10-21'
+    driver.identity = {'pid':123}
+    calls = []
+    driver.assert_hold = lambda: calls.append('hold')
+    driver.run_json = lambda root, module, *args: calls.append(module)
+    driver.checkpoint = lambda phase, **kw: calls.append((phase, kw))
+    proof = {'schema':'sentinel_source_window_preparation_v1','runtime_effect':False}
+    def prepare(data):
+        assert data == tmp_path/'data' and calls[-1].endswith('auxiliary_reader_readiness')
+        calls.append('source_window')
+        if failure is True: raise ValueError('source_window_cache_unverified')
+        return proof
+    monkeypatch.setattr(window, 'prepare', prepare)
+    from src.engine import buy_funnel_sentinel as buy
+    (tmp_path/'tmp').mkdir()
+    def summary(day):
+        assert day == driver.day and calls[-1] == 'source_window'
+        calls.append('native_summary')
+        return [], {'status':'ok'}
+    monkeypatch.setattr(buy, 'load_pipeline_event_summaries', summary)
+    handoffs = [{'family': 'main_stop', 'actual_pid_consumed': False}]
+    def issue(data, day, *, release_root):
+        assert data == tmp_path/'data' and day == driver.day
+        assert release_root == driver.candidate and calls[-1] == 'native_summary'
+        calls.append('prepared_code_handoffs')
+        if failure == 'handoff': raise ValueError('prepared_code_source_changed')
+        return handoffs
+    monkeypatch.setattr(code, 'issue_selected', issue, raising=False)
+    if failure is True:
+        with pytest.raises(ValueError, match='source_window_cache_unverified'): driver.prepare()
+        assert calls[-1] == 'source_window'
+    elif failure == 'handoff':
+        with pytest.raises(ValueError, match='prepared_code_source_changed'): driver.prepare()
+        assert calls[-1] == 'prepared_code_handoffs'
+    else:
+        driver.prepare()
+        assert calls[-1] == ('prepared', {'sentinel_source_window':proof,
+                                        'sentinel_summary':{'status':'ok'},
+                                        'native_prepared_code_handoffs': handoffs})
+
+
+@pytest.mark.parametrize('damage', [None, 'pid', 'start', 'old_generation', 'stale'])
+def test_collector_pin_rejects_unproven_incumbent_without_stop_request(tmp_path, damage):
+    identity = dict(pid=123, start_ticks='456')
+    snapshot = dict(process_pid=123, process_start_ticks='456', collector_lifecycle='running',
+                    sequence_epoch=9, enqueued_count=1, source_contract='main_market_source_v1')
+    payload = dict(collector_snapshot=snapshot, valid_until_epoch=D.time.time()+30)
+    if damage == 'pid': snapshot['process_pid'] = 124
+    if damage == 'start': snapshot['process_start_ticks'] = '999'
+    if damage == 'old_generation': snapshot.pop('process_pid');snapshot.pop('process_start_ticks')
+    if damage == 'stale': payload['valid_until_epoch'] = 0
+    path = tmp_path/'data/runtime/scalp_micro_reversion_forward_collector/latest.json'
+    path.parent.mkdir(parents=True);path.write_text(json.dumps(payload))
+    if damage:
+        with pytest.raises(ValueError, match='actor_unproven'):D.pin_collector_shutdown(tmp_path, identity)
+    else:
+        assert D.pin_collector_shutdown(tmp_path, identity)['sequence_epoch'] == 9
+    assert not (tmp_path/'restart.flag').exists()
+
+
+@pytest.mark.parametrize('damage', [None, 'missing', 'foreign', 'unclosed', 'prior_epoch', 'loss'])
+def test_ordered_drain_consumes_exact_native_closed_epoch(tmp_path, damage):
+    from src.tests.test_micro_reversion_forward_collector import _closed_main_rejection_source
+    _, payload, receipt = _closed_main_rejection_source(tmp_path)
+    c = payload['collector_snapshot']
+    latest = receipt.parent.parent/'latest.json'
+    pin = dict(path=str(latest), pid=c['process_pid'], start_ticks=c['process_start_ticks'],
+               sequence_epoch=c['sequence_epoch'], enqueued_count=1)
+    if damage == 'missing': receipt.unlink()
+    elif damage == 'foreign': pin['start_ticks'] = 'foreign'
+    elif damage == 'prior_epoch': pin['sequence_epoch'] = 1
+    elif damage:
+        if damage == 'unclosed': c['collector_lifecycle'] = 'running'
+        if damage == 'loss': c['writer_dropped_envelope_count'] = 1
+        latest.write_text(json.dumps(payload))
+        closed = json.loads(receipt.read_bytes());closed['collector_snapshot'] = c
+        receipt.write_text(json.dumps(closed))
+    if damage:
+        with pytest.raises((ValueError, FileNotFoundError)):D.verify_collector_shutdown(pin)
+    else:
+        assert D.verify_collector_shutdown(pin)['status'] == 'verified'
+
+
+@pytest.fixture
+def market_closed_collector(tmp_path, monkeypatch):
+    from datetime import datetime
+    from src.tests.test_micro_reversion_forward_collector import _closed_main_rejection_source
+    _, payload, receipt = _closed_main_rejection_source(tmp_path, count=0)
+    snapshot = payload['collector_snapshot']
+    # Native legacy receipt: actor comes from the existing WS producer, not
+    # from adding missing fields to an operational closed receipt.
+    snapshot.pop('process_pid'); snapshot.pop('process_start_ticks')
+    identity = dict(pid=123, start_ticks='456', cwd=str(tmp_path/'old/src'))
+    selection = dict(release_root=str(tmp_path/'old'), git_commit='a'*40, actual_pid_consumed=True,
+        actual_pid_receipt=dict(pid=123, start_ticks='456', process_cwd=identity['cwd'],
+                               recorded_at_kst='2026-08-08T10:00:00+09:00'))
+    frame = dict(generated_at_epoch=datetime.fromisoformat('2026-08-08T19:59:59+09:00').timestamp(),
+        shared_transport_producer=dict(schema='shared_ws_transport_producer_v1',
+            process=dict(pid=123, start_ticks=456,
+                boot_id=Path('/proc/sys/kernel/random/boot_id').read_text().strip()),
+            source_root=selection['release_root'], source_commit=selection['git_commit'],
+            completed_bar_integrity=dict(observer_epoch=snapshot['sequence_epoch'])))
+    heartbeat = dict(main_loop=dict(pid=123), ai_circuit=dict(pid=123, process_start_ticks='456'),
+        threads=dict(sniper_engine=dict(alive=False, terminal_reason='market_close',
+            last_beat='2026-08-08T20:00:00+09:00', unresolved_scalping_count=0, unresolved_scalping_codes='')))
+    values = {receipt: payload, receipt.parent.parent/'latest.json': payload,
+        tmp_path/'data/runtime/runtime_release_selection.json': selection,
+        tmp_path/'data/runtime/kiwoom_ws_snapshot/latest.json': frame,
+        tmp_path/'tmp/error_detector_heartbeat.json': heartbeat}
+    def persist():
+        for path, value in values.items():
+            path.parent.mkdir(parents=True, exist_ok=True); path.write_text(json.dumps(value))
+    persist()
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):return datetime.fromisoformat('2026-08-08T20:01:00+09:00').astimezone(tz)
+    monkeypatch.setattr(D, 'datetime', Clock)
+    return identity, payload, receipt, selection, frame, heartbeat, persist
+
+
+@pytest.mark.parametrize('damage', [None, 'running', 'pid', 'start', 'boot', 'commit', 'root',
+    'epoch', 'future_frame', 'future_close', 'previous_day', 'terminal_reason', 'unresolved',
+    'alive', 'heartbeat_actor', 'conflicting_collector_actor', 'loss', 'missing_closed',
+    'closed_symlink', 'closed_changed', 'missing_frame', 'unaccounted_rejections'])
+def test_legacy_first_transition_requires_native_closure_before_any_stop(tmp_path, market_closed_collector, damage):
+    identity, payload, receipt, selection, frame, heartbeat, persist = market_closed_collector
+    c = payload['collector_snapshot']; producer = frame['shared_transport_producer']
+    terminal = heartbeat['threads']['sniper_engine']
+    if damage == 'running': c['collector_lifecycle'] = 'running'
+    if damage == 'pid': producer['process']['pid'] = 124
+    if damage == 'start': producer['process']['start_ticks'] = 457
+    if damage == 'boot': producer['process']['boot_id'] = 'another-boot'
+    if damage == 'commit': producer['source_commit'] = 'b'*40
+    if damage == 'root': producer['source_root'] = str(tmp_path/'other')
+    if damage == 'epoch': producer['completed_bar_integrity']['observer_epoch'] += 1
+    if damage == 'future_frame': frame['generated_at_epoch'] += 600
+    if damage == 'future_close': payload['generated_at'] = '2026-08-08T20:02:00+09:00'
+    if damage == 'previous_day': selection['actual_pid_receipt']['recorded_at_kst'] = '2026-08-07T10:00:00+09:00'
+    if damage == 'terminal_reason': terminal['terminal_reason'] = 'crash'
+    if damage == 'unresolved': terminal['unresolved_scalping_count'] = 1
+    if damage == 'alive': terminal['alive'] = True
+    if damage == 'heartbeat_actor': heartbeat['ai_circuit']['process_start_ticks'] = '457'
+    if damage == 'conflicting_collector_actor': c['process_pid'] = 124
+    if damage == 'loss': c['writer_dropped_envelope_count'] = 1
+    if damage == 'unaccounted_rejections':
+        c['timestamp_rejection_sample_total'] = 65
+        payload['canary_guard']['raw_row_exclusion_required'] = True
+    persist()
+    if damage == 'missing_closed': receipt.unlink()
+    if damage == 'closed_symlink':
+        other = receipt.with_suffix('.original'); receipt.rename(other); receipt.symlink_to(other)
+    if damage == 'closed_changed':
+        changed = json.loads(receipt.read_bytes()); changed['collector_snapshot']['enqueued_count'] += 1
+        receipt.write_text(json.dumps(changed))
+    if damage == 'missing_frame': (tmp_path/'data/runtime/kiwoom_ws_snapshot/latest.json').unlink()
+    if damage:
+        with pytest.raises((ValueError, FileNotFoundError)):
+            D.pin_collector_shutdown(tmp_path, identity)
+    else:
+        pin = D.pin_collector_shutdown(tmp_path, identity)
+        assert pin['basis'] == 'native_market_close'
+        assert D.verify_collector_shutdown(pin)['status'] == 'verified'
+        # This is actor binding only; never rewrite the legacy producer bytes.
+        assert 'process_pid' not in json.loads(receipt.read_bytes())['collector_snapshot']
+    assert not (tmp_path/'restart.flag').exists()
+    assert not (tmp_path/'data/runtime/operator_startup_hold.json').exists()
+
+
+@pytest.mark.parametrize('changed', ['frame', 'latest', 'closed'])
+def test_first_transition_rechecks_closed_proof_after_process_exit(tmp_path, market_closed_collector, changed):
+    identity, payload, receipt, selection, frame, heartbeat, persist = market_closed_collector
+    pin = D.pin_collector_shutdown(tmp_path, identity)
+    path = {'frame': tmp_path/'data/runtime/kiwoom_ws_snapshot/latest.json',
+            'latest': receipt.parent.parent/'latest.json', 'closed': receipt}[changed]
+    value = json.loads(path.read_bytes())
+    if changed == 'closed': value['collector_snapshot']['writer_dropped_envelope_count'] = 1
+    else: value['changed_generation'] = True
+    path.write_text(json.dumps(value))
+    with pytest.raises(ValueError): D.verify_collector_shutdown(pin)
+
+
+@pytest.mark.parametrize('damage', [None, 'stale_frame', 'missing_frame', 'pid', 'start',
+    'source_contract', 'heartbeat', 'unresolved', 'missing_closed', 'changed_after_pin'])
+def test_owned_closed_collector_uses_native_actor_without_legacy_ws_frame(tmp_path, market_closed_collector, damage):
+    identity, payload, receipt, selection, frame, heartbeat, persist = market_closed_collector
+    snapshot = payload['collector_snapshot']
+    snapshot.update(process_pid=identity['pid'], process_start_ticks=identity['start_ticks'])
+    if damage in ('stale_frame', 'missing_frame'):
+        frame['shared_transport_producer']['process']['pid'] = 999
+        frame['generated_at_epoch'] = 1
+    if damage == 'pid': snapshot['process_pid'] += 1
+    if damage == 'start': snapshot['process_start_ticks'] = '457'
+    if damage == 'source_contract': snapshot['source_contract'] = 'unverified'
+    if damage == 'heartbeat': heartbeat['ai_circuit']['pid'] = 999
+    if damage == 'unresolved': heartbeat['threads']['sniper_engine']['unresolved_scalping_count'] = 1
+    persist()
+    if damage == 'missing_frame': (tmp_path/'data/runtime/kiwoom_ws_snapshot/latest.json').unlink()
+    if damage == 'missing_closed': receipt.unlink()
+    if damage in ('pid', 'start', 'source_contract', 'heartbeat', 'unresolved', 'missing_closed'):
+        with pytest.raises((ValueError, FileNotFoundError)): D.pin_collector_shutdown(tmp_path, identity)
+    else:
+        before = receipt.read_bytes()
+        pin = D.pin_collector_shutdown(tmp_path, identity)
+        assert D.verify_collector_shutdown(pin)['status'] == 'verified'
+        if damage == 'changed_after_pin':
+            receipt.write_bytes(before + b' ')
+            with pytest.raises(ValueError): D.verify_collector_shutdown(pin)
+        else: assert receipt.read_bytes() == before
+    assert not (tmp_path/'restart.flag').exists()
+    assert not (tmp_path/'data/runtime/operator_startup_hold.json').exists()
+
+
+@pytest.mark.parametrize('failure',[None,'prepare'])
+def test_execute_reserves_sentinel_before_drain_releases_before_start(tmp_path,failure):
+    (tmp_path/'data').mkdir()
+    calls=[]
+    class Driver:
+        workspace=tmp_path;day='2026-10-12'
+        def __getattr__(self,name):
+            def step(*args):
+                calls.append(name)
+                if name in ('drain','publish','prepare','start','attest'):
+                    with (tmp_path/'tmp/run_buy_funnel_sentinel.lock').open('a') as lock:
+                        if name in ('drain','publish','prepare'):
+                            with pytest.raises(BlockingIOError):fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+                        else:fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+                if name==failure:raise ValueError(name)
+                return {'status':'pass'}
+            return step
+    if failure:
+        with pytest.raises(ValueError,match=failure):D.execute(Driver())
+        assert 'start' not in calls
+    else:assert D.execute(Driver())=={'status':'pass'}
+    with (tmp_path/'tmp/run_buy_funnel_sentinel.lock').open('a') as lock:
+        fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+
+
+@pytest.mark.parametrize('prepared',[False,True,'published_comparison'])
+@pytest.mark.parametrize('damage',[None,'missing','status','date','pid','changed_after_preflight','window','summary'])
+def test_stopped_lock_recovery_requires_all_native_preparations(stopped_recovery,damage,prepared):
+    d,path,_=stopped_recovery;value=D.H._read(path)
+    value['error']='[Errno 11] Resource temporarily unavailable'
+    if prepared:
+        value.update(failed_phase='prepared',error=('deployment_selection_changed' if prepared=='published_comparison' else 'tuple indices must be integers or slices, not str'),
+            sentinel_source_window=dict(schema='sentinel_source_window_preparation_v1',target_date=d.day,runtime_effect=False),
+            sentinel_summary=dict(status='ok',runtime_effect=False))
+    if damage in ('window','summary'):
+        if not prepared:return
+        value['sentinel_source_window' if damage=='window' else 'sentinel_summary']['runtime_effect']=True
+    path.write_bytes(D._json_bytes(value))
+    logs=[]
+    for module in ('intraday_release_handoff','runtime_policy_bootstrap','auxiliary_reader_readiness'):
+        p=path.with_name('selected-'+module+'.log');logs.append(p)
+        p.write_bytes(D._json_bytes(dict(status='pass',target_date=d.day,actual_pid_consumed=False,findings=[])))
+    last=logs[-1]
+    if damage=='missing':last.unlink()
+    elif damage in ('status','date','pid'):
+        body=D.H._read(last);body[{'status':'status','date':'target_date','pid':'actual_pid_consumed'}[damage]]={
+            'status':'fail','date':'2020-01-01','pid':True}[damage];last.write_bytes(D._json_bytes(body))
+    original=path.read_bytes(),d.hold.read_bytes()
+    if damage in ('missing','status','date','pid','window','summary'):
+        with pytest.raises((OSError,ValueError)):d.preflight()
+    else:
+        d.preflight();assert all(d.frozen[str(p)]==D.H._sha(p) for p in logs)
+        if damage=='changed_after_preflight':
+            last.write_bytes(last.read_bytes()+b' ')
+            with pytest.raises(ValueError,match='generation_changed'):d.acquire_hold()
+    assert original==(path.read_bytes(),d.hold.read_bytes())
+
+
+@pytest.mark.parametrize('damage',[None,'whitespace','conflict','date','root','commit','status','finding','missing','changed_after_preflight'])
+@pytest.mark.parametrize('short_reference', [False, True])
+def test_stopped_prestart_failure_is_bound_to_original_native_p5(stopped_recovery,damage,short_reference):
+    d,path,_=stopped_recovery;failed=D.H._read(path)
+    intake=dict(status='pass',findings=[],target_date=d.day,selected_release_commit=failed['candidate_commit'],
+        verification_code_commit=failed['candidate_commit'],verification_code_root=failed['candidate_root'])
+    result=dict(schema='main_policy_load_exit_validation_v1',run_id='1'*32,status='failed',failure_phase='intake',
+        target_date=d.day,findings=['ValueError:startup_main_code_pair_unreviewed:src/engine/scalping/reversal_code_handoff.py'],
+        runtime_effect=False,actual_pid_consumed=False,allowed_runtime_apply=False,native_preparation_checks=dict(intake=intake))
+    if short_reference:
+        result['findings'] = ['ValueError:prepared_code_intraday_custody_invalid']
+    failed.update(failed_phase='prepared',error=repr(result),
+        sentinel_source_window=dict(schema='sentinel_source_window_preparation_v1',target_date=d.day,runtime_effect=False),
+        sentinel_summary=dict(status='ok',runtime_effect=False))
+    native=d.workspace/'data/report/main_startup_validation'/d.day/result['run_id']/'final.json';native.parent.mkdir(parents=True)
+    native.write_bytes(D._json_bytes(result))
+    if damage in ('date','root','commit','status','finding'):
+        if damage=='date':result['target_date']='2000-01-01'
+        elif damage=='root':intake['verification_code_root']='foreign'
+        elif damage=='commit':intake['verification_code_commit']='d'*40
+        elif damage=='status':result['status']='passed'
+        else:result['findings']=['unknown']
+        failed['error']=repr(result);native.write_bytes(D._json_bytes(result))
+    elif damage=='whitespace':native.write_bytes(native.read_bytes()+b' ') # same semantics remains exact native bytes frozen
+    if damage=='conflict':
+        native.write_bytes(D._json_bytes(dict(result,status='passed')))
+    if short_reference:
+        failed['error'] = 'selected_p5_failed:' + str(native)
+    path.write_bytes(D._json_bytes(failed))
+    for module in ('intraday_release_handoff','runtime_policy_bootstrap','auxiliary_reader_readiness'):
+        path.with_name('selected-'+module+'.log').write_bytes(D._json_bytes(dict(status='pass',target_date=d.day,actual_pid_consumed=False,findings=[])))
+    if damage=='missing':native.unlink()
+    original=path.read_bytes(),d.hold.read_bytes()
+    if damage in ('conflict','date','root','commit','status','finding','missing'):
+        with pytest.raises((OSError,ValueError)):d.preflight()
+    else:
+        d.preflight();assert d.frozen[str(native)]==D.H._sha(native)
+        if damage=='changed_after_preflight':
+            native.write_bytes(native.read_bytes()+b' ')
+            with pytest.raises(ValueError,match='generation_changed'):d.acquire_hold()
+    assert original==(path.read_bytes(),d.hold.read_bytes())
+
+
+@pytest.mark.parametrize('reject',[False,True])
+def test_execute_owns_start_after_prepared_validation(tmp_path,monkeypatch,reject):
+    from contextlib import nullcontext
+    calls=[]
+    monkeypatch.setattr(D,'_source_database_epoch',lambda *a:nullcontext())
+    monkeypatch.setattr(D,'sentinel_preparation_lock',lambda *a:nullcontext())
+    class Driver:
+        workspace=tmp_path;day='2026-10-22'
+        def __getattr__(self,name):
+            def step(*args):
+                calls.append(name)
+                if name=='attest':return {'status':'pass'}
+            return step
+    def validate(driver):
+        assert calls==['preflight','acquire_hold','drain','publish','prepare']
+        calls.append('validate_prepared')
+        if reject:raise ValueError('native P5 failed')
+    if reject:
+        with pytest.raises(ValueError,match='native P5 failed'):D.execute(Driver(),validate_prepared=validate)
+        assert calls[-1]=='fail' and 'start' not in calls
+    else:
+        assert D.execute(Driver(),validate_prepared=validate)=={'status':'pass'}
+        assert calls[-3:]==['validate_prepared','start','attest']
+
+
+@pytest.mark.parametrize('reason', ['callback_predecessor_unverified', 'append_budget_exceeded'])
+def test_summary_migration_rejection_prevents_hold_and_drain(driver, monkeypatch, reason):
+    from src.engine.monitoring import sentinel_summary_contract as summary
+    d = driver
+    _failed_hold_fixture(d, monkeypatch)
+    native_calls = _mock_adoption_preflight(d, monkeypatch)
+    def native(root, module, *args, **kwargs):
+        native_calls.append(module)
+        return dict(status='pass', basis='intraday_policy_preserving_handoff')
+    d.run_json = native
+    d.adopt_failed_hold = False
+    d.hold.unlink()
+    checklist = d.workspace/'docs/checklists'/(d.day+'-stage2-todo-checklist.md')
+    before = d.selection.read_bytes(), checklist.read_bytes()
+    calls = []
+    def reject(*_):
+        calls.append('summary_preflight')
+        raise RuntimeError('summary_contract_migration_'+reason)
+    monkeypatch.setattr(summary, 'check_pending_migration', reject)
+    for name in ('acquire_hold', 'drain', 'publish', 'prepare', 'start'):
+        monkeypatch.setattr(d, name, lambda *_, name=name: calls.append(name))
+    monkeypatch.setattr(d, 'fail', lambda error: calls.append('failed'))
+    with pytest.raises(RuntimeError, match=reason):
+        D.execute(d)
+    assert calls == ['summary_preflight', 'failed']
+    assert before == (d.selection.read_bytes(), checklist.read_bytes())
+    assert not d.hold.exists() and not d.flag.exists()
+
+
+@pytest.mark.parametrize('damage',[None,'pid','start','missing_actor','source_contract',
+    'reason','guard','guard_config','missing_closed','loss','closed_changed',
+    'heartbeat_actor','future_close','previous_day','unconsumed','other_stop','epochs','source_date','changed_after_pin'])
+def test_verified_observer_canary_close_is_not_a_market_close_requirement(tmp_path,market_closed_collector,damage):
+    from src.engine.scalping.micro_reversion import canary_monitor as C
+    identity,payload,receipt,selection,frame,heartbeat,persist=market_closed_collector
+    config=Path(selection['release_root'])/'configs'/C.DEFAULT_GUARD_PATH.name
+    config.parent.mkdir(parents=True);config.write_bytes(C.DEFAULT_GUARD_PATH.read_bytes())
+    snapshot=payload['collector_snapshot'];reason='producer_callback_latency_p99_exceeded:5.000000>2.000000'
+    snapshot.update(process_pid=identity['pid'],process_start_ticks=identity['start_ticks'],
+        producer_0b_callback_count=1000,producer_callback_latency_p95_ms=0.1,
+        producer_callback_latency_p99_ms=5.0,canary_auto_stop_reason=reason)
+    guard=C.load_canary_guard(config)
+    payload.update(guard_config_sha256=guard.config_sha256,baseline_id=guard.baseline_id,
+        canary_guard=json.loads(json.dumps(C.evaluate_canary_snapshot(snapshot,guard))))
+    heartbeat['threads']['sniper_engine'].update(alive=True,last_beat='2026-08-08T20:00:59+09:00')
+    if damage=='pid':snapshot['process_pid']+=1
+    elif damage=='start':snapshot['process_start_ticks']='999'
+    elif damage=='missing_actor':snapshot.pop('process_pid')
+    elif damage=='source_contract':snapshot['source_contract']='unknown'
+    elif damage=='reason':snapshot['canary_auto_stop_reason']='unknown_stop'
+    elif damage=='guard':payload['canary_guard']['stop_required']=False
+    elif damage=='guard_config':config.write_bytes(config.read_bytes()+b'\n# changed\n')
+    elif damage=='loss':snapshot['writer_dropped_envelope_count']=1
+    elif damage=='heartbeat_actor':heartbeat['ai_circuit']['pid']=999
+    elif damage=='future_close':payload['generated_at']='2026-08-08T20:02:00+09:00'
+    elif damage=='previous_day':selection['actual_pid_receipt']['recorded_at_kst']='2026-08-07T10:00:00+09:00'
+    elif damage=='unconsumed':selection['actual_pid_consumed']=False
+    elif damage=='epochs':snapshot['reconciled_sequence_epochs'].append('unknown')
+    elif damage=='source_date':payload['source_date']='2026-08-09'
+    elif damage=='other_stop':
+        snapshot['canary_auto_stop_reason']='nonzero_stop_metric:writer_error_count=1'
+        payload['canary_guard']=json.loads(json.dumps(C.evaluate_canary_snapshot(snapshot,guard)))
+    persist()
+    if damage=='missing_closed':receipt.unlink()
+    elif damage=='closed_changed':
+        changed=json.loads(receipt.read_bytes());changed['collector_snapshot']['enqueued_count']+=1;receipt.write_text(json.dumps(changed))
+    if damage not in (None,'changed_after_pin'):
+        with pytest.raises((ValueError,FileNotFoundError)):D.pin_collector_shutdown(tmp_path,identity)
+    else:
+        pin=D.pin_collector_shutdown(tmp_path,identity)
+        assert pin['basis']=='native_observer_canary_stop'
+        assert D.verify_collector_shutdown(pin)['status']=='verified'
+        from src.engine.scalping.micro_reversion.observer_source_quality import main_raw_epoch_validation
+        assert main_raw_epoch_validation(payload,source_date='2026-08-08')['eligible'] is False
+        without_guard=dict(pin);without_guard.pop('guard_config_source')
+        with pytest.raises(ValueError):D.verify_collector_shutdown(without_guard)
+        changed=json.loads(receipt.read_bytes());changed['canary_guard']['stop_required']=False
+        receipt.write_text(json.dumps(changed))
+        with pytest.raises(ValueError):D.verify_collector_shutdown(pin)
+        persist()
+        if damage=='changed_after_pin':
+            config.write_bytes(config.read_bytes()+b'\n# later change\n')
+            with pytest.raises(ValueError):D.verify_collector_shutdown(pin)
+    assert not (tmp_path/'restart.flag').exists()
+    assert not (tmp_path/'data/runtime/operator_startup_hold.json').exists()
+
+
+@pytest.mark.parametrize('fault',[None,'actor','hash','main','supervisor','changed'])
+def test_interrupted_collector_preserves_original_and_never_claims_terminal(tmp_path,monkeypatch,fault):
+    identity=dict(pid=2147483601,start_ticks='42',cwd=str(tmp_path/'release/src'))
+    path=tmp_path/'data/runtime/scalp_micro_reversion_forward_collector/latest.json'
+    path.parent.mkdir(parents=True)
+    payload=dict(collector_snapshot=dict(collector_lifecycle='running',sequence_epoch=123))
+    path.write_bytes(D._json_bytes(payload))
+    proof=dict(basis='interrupted_consumed_process',pid_identity=identity,collector_path=str(path),
+        collector_sha256=D._digest(path.read_bytes()),collector_epoch=123)
+    if fault=='actor':proof['pid_identity']={**identity,'pid':2}
+    if fault=='hash':proof['collector_sha256']='0'*64
+    monkeypatch.setattr(D.H,'closed_consumption_observation',lambda:proof)
+    monkeypatch.setattr(D,'_main_pids',lambda:[3] if fault=='main' else [])
+    monkeypatch.setattr(D,'_session_absent',lambda:fault!='supervisor')
+    if fault in ('actor','hash','main','supervisor'):
+        with pytest.raises(ValueError):D.pin_collector_shutdown(tmp_path,identity)
+        return
+    pin=D.pin_collector_shutdown(tmp_path,identity)
+    assert pin['original_collector_receipt']==payload and pin['terminal_verified'] is False
+    if fault=='changed':
+        path.write_text('{}')
+        with pytest.raises(ValueError):D.verify_collector_shutdown(pin)
+    else:
+        checked=D.verify_collector_shutdown(pin)
+        assert checked['status']=='preserved_unverified' and checked['receipts']==[]
+        assert checked['terminal_verified'] is False

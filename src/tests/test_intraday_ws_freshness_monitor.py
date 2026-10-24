@@ -3391,6 +3391,44 @@ def test_build_report_rejects_cross_day_live_dashboard_snapshot_fallback(
     assert report["snapshot_summary"]["row_count"] == 0
 
 
+@pytest.mark.parametrize("field,value,expected", [
+    ("ai_provider", "none", True), ("provider_actual", " NONE ", True),
+    ("ai_provider_actual", "none", True), ("model_provider", "none", True),
+    ("provider", "openai", False), ("ai_provider_actual", None, False),
+    ("async_provider_called", None, False), ("async_provider_called", False, False),
+    ("async_provider_called", "none", False), ("provider_response_id", None, False),
+    ("provider_response_id", "none", False),
+])
+def test_provider_incident_requires_an_explicit_provider_identity(field,value,expected):
+    row={field:value}
+    assert mod._row_provider_none(row) is expected
+    assert row=={field:value}
+
+
+def test_provider_fix_rebuilds_original_v19_state_then_reuses_current_state(tmp_path):
+    pipeline=tmp_path/"pipeline.jsonl";threshold=tmp_path/"threshold.jsonl";state=tmp_path/"state.json"
+    _write_jsonl(pipeline,[
+        _event("entry_async_disposition",{"async_provider_called":None}),
+        _event("ai_confirmed",{"ai_provider":"none"}),
+    ])
+    _write_jsonl(threshold,[])
+    args=dict(pipeline_path=pipeline,threshold_path=threshold,incremental_state_path=state)
+    mod.build_report("2026-07-13",**args)
+    old=json.loads(state.read_text());old["schema_version"]="intraday_ws_freshness_incremental_v19"
+    old["counts"]["provider_none"]=2
+    old["stage_counts"]["provider_none"]={"entry_async_disposition":1,"ai_confirmed":1}
+    state.write_text(json.dumps(old))
+    rebuilt=mod.build_report("2026-07-13",**args)
+    assert rebuilt["input_processing"]["incremental_state_reason"]=="schema_changed"
+    assert rebuilt["pipeline_event_count"]==2
+    assert rebuilt["pipeline_counts"]["provider_none"]==1
+    assert rebuilt["by_stage"]["provider_none"]==[{"stage":"ai_confirmed","count":1}]
+    reused=mod.build_report("2026-07-13",**args)
+    assert reused["input_processing"]["incremental_state_reason"]=="state_reused"
+    assert reused["input_processing"]["appended_event_count"]==0
+    assert reused["pipeline_counts"]["provider_none"]==1
+
+
 def test_build_report_surfaces_provider_none_as_separate_incident(tmp_path):
     pipeline_path = tmp_path / "pipeline_events_2026-07-13.jsonl"
     threshold_path = tmp_path / "threshold_events_2026-07-13.jsonl"

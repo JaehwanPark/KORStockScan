@@ -199,6 +199,63 @@ def test_missing_reversal_execution_is_not_report_hash_corruption(tmp_path, comp
     assert alerts[0]['generation'] == hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+@pytest.mark.parametrize('schema_version', [1, 2])
+@pytest.mark.parametrize('machine_completed', [False, True])
+@pytest.mark.parametrize('damage', [None, 'failed_parent', 'expired', 'old_date', 'failed_stage', 'no_process', 'terminal_log', 'missing_run', 'invalid_commit'])
+def test_unstarted_reversal_stage_wait_requires_native_bounded_parent(tmp_path, monkeypatch, damage, schema_version, machine_completed):
+    from src.engine.scalping import continuous_reversal_postclose as reports
+    from src.engine.scalping import continuous_reversal_operating_postclose as operating
+    from src.engine.error_detectors import artifact_freshness as detector
+    day = '2026-10-20'
+    path = tmp_path/'data/report/continuous_reversal'/day/'machine.json'
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps(reports.seal(dict(schema=operating.SCHEMA, source_date=day, status='completed'))))
+    parent = tmp_path/'data/report/threshold_cycle_postclose_status'/f'threshold_cycle_postclose_{day}.status.json'
+    parent.parent.mkdir(parents=True)
+    payload = dict(schema_version=schema_version, report_type='threshold_cycle_postclose_status',
+        runtime_effect=False, status='failed' if damage=='failed_parent' else 'running',
+        target_date='2026-10-19' if damage=='old_date' else day, reason='started', exit_code=0,
+        started_at='2026-10-20T20:10:02+09:00')
+    if schema_version == 2:
+        payload.update(run_id='a'*32, code_commit='b'*40, regeneration_scope='normal')
+        if damage == 'missing_run': payload.pop('run_id')
+        if damage == 'invalid_commit': payload['code_commit']='unverified'
+    parent.write_text(json.dumps(payload))
+    def stage(*args, **kwargs):
+        if machine_completed and args[2]=='main_machine_policy': return dict(status='succeeded')
+        return dict(status='failed' if damage=='failed_stage' else 'not_assessed')
+    monkeypatch.setattr(detector, '_semantic_stage_binding', stage)
+    monkeypatch.setattr(detector.CronCompletionDetector, '_read_once_markers', lambda *a:
+        '[START]\n[FAIL]' if damage=='terminal_log' else '[START]')
+    monkeypatch.setattr(detector.ArtifactFreshnessDetector, '_has_matching_live_process',
+        lambda *a, **k: damage!='no_process')
+    now=datetime(2026,10,20,23,20,tzinfo=ZoneInfo('Asia/Seoul')) if damage=='expired' else datetime(2026,10,20,21,20,tzinfo=ZoneInfo('Asia/Seoul'))
+    result=detector._continuous_reversal_result_semantics(tmp_path,day,'machine',now=now)
+    if damage is None or (schema_version==1 and damage in {'missing_run','invalid_commit'}):
+        assert result['status']=='unobservable' and result['findings']==[]
+        assert result['reason']=='native_postclose_stage_not_started'
+    else:
+        missing = 'main_auxiliary_policy' if machine_completed else 'main_machine_policy'
+        assert result['findings']==['continuous_reversal_execution_not_completed:'+missing]
+
+
+@pytest.mark.parametrize('stage,scope,family_owner', [
+    ('main_machine_policy','report','DirectFamilySourceRepairMainMechanisticEntry'),
+    ('legacy_machine_report','report','DirectFamilySourceRepairMainMechanisticEntry'),
+    ('main_auxiliary_policy','report','DirectFamilySourceRepairCompactAuxiliary'),
+    ('policy_generation','holding_vote','MainStopLossRetirementRuntimeTuning1010')])
+@pytest.mark.parametrize('owners', [set(), {'DirectFamilyPreopenPolicyHandoff'}, {'family','DirectFamilyPreopenPolicyHandoff'}])
+def test_reversal_alert_preserves_family_owner_or_uses_current_handoff(stage, scope, family_owner, owners):
+    from src.engine.error_detectors.artifact_freshness import _project_semantic_owner
+    active = (owners-{'family'}) | ({family_owner} if 'family' in owners else set())
+    alert=dict(stage=stage, scope=scope, owner=stage, target_date='2026-10-22')
+    _project_semantic_owner(alert, active, '2026-10-21')
+    expected = family_owner if family_owner in active else ('DirectFamilyPreopenPolicyHandoff'
+        if 'DirectFamilyPreopenPolicyHandoff' in active else 'UNRESOLVED_CURRENT_OWNER:'+family_owner)
+    assert alert['owner']==expected
+    assert alert['historical_owner']==stage
+
+
 def test_auxiliary_v4_frozen_same_day_contract_and_cost_isolation():
     from src.engine.scalping import compact_auxiliary_paired_replay as paired
     day, scope = "2026-10-02", "KRX|KRX_REGULAR"
@@ -382,15 +439,33 @@ def test_current_morning_source_does_not_relabel_previous_prepared_failure(tmp_p
     assert result['findings']==[] and result['prepared']['reason']=='source_not_before_target'
 
 
-@pytest.mark.parametrize('damage', [None, 'handoff', 'other_generation'])
-def test_postclose_observer_uses_consumed_snapshot_and_rechecks_other_sources(tmp_path, monkeypatch, damage):
+@pytest.mark.parametrize('profile,damage', [('legacy', None), ('legacy', 'handoff'),
+    ('legacy', 'other_generation'), ('sealed', None), ('sealed', 'other_generation'),
+    ('sealed', 'missing'), ('sealed', 'tamper'), ('sealed', 'symlink'),
+    ('sealed', 'oversize'), ('sealed', 'binding')])
+def test_postclose_observer_uses_consumed_snapshot_and_rechecks_other_sources(tmp_path, monkeypatch, profile, damage):
     from src.engine.automation import intraday_release_handoff as handoff
     from src.engine.automation import postclose_done_controller as controller
     import src.engine.error_detectors.artifact_freshness as detector
     day = '2026-10-06'
     path = tmp_path/f'data/report/postclose_done_controller/postclose_done_controller_{day}.json'
     path.parent.mkdir(parents=True); path.write_text(json.dumps(dict(date=day, status='done')))
-    snapshot = tmp_path/'historical-checklist.md'; snapshot.write_text('original generation')
+    import hashlib
+    expected = hashlib.sha256(b'original generation').hexdigest()
+    snapshot = (tmp_path/'historical-checklist.md' if profile == 'legacy' else
+        tmp_path/'data/runtime/policy_bootstrap/historical_checklists'/(expected+'.md'))
+    snapshot.parent.mkdir(parents=True, exist_ok=True)
+    snapshot.write_bytes(b'original generation')
+    strict = tmp_path/'data/report/threshold_cycle_postclose_verification'/f'threshold_cycle_postclose_verification_{day}.json'
+    strict.parent.mkdir(parents=True)
+    strict.write_text(json.dumps(dict(date=day, generation_binding=dict(source_date=day,
+        checklist_sha256='f'*64 if damage == 'binding' else expected))))
+    if damage == 'missing': snapshot.unlink()
+    elif damage == 'tamper': snapshot.write_text('tampered')
+    elif damage == 'oversize': snapshot.write_bytes(b'x'*(2*1024*1024+1))
+    elif damage == 'symlink':
+        original = tmp_path/'outside.md'; original.write_bytes(snapshot.read_bytes())
+        snapshot.unlink(); snapshot.symlink_to(original)
     monkeypatch.setattr(detector, '_semantic_stage_binding', lambda *a, **kw: {'status': 'off'})
     calls = []
     def verify(path, source_date, **kwargs):
@@ -403,13 +478,17 @@ def test_postclose_observer_uses_consumed_snapshot_and_rechecks_other_sources(tm
     monkeypatch.setattr(controller, 'done_terminal_receipt_issues', verify)
     def historical(project, source_date, **kwargs):
         assert project == tmp_path and source_date == day
-        if damage == 'handoff': raise ValueError('intraday_observer_current_pid_not_bound')
+        if damage == 'handoff' or profile == 'sealed':
+            raise ValueError('native_preopen_has_no_intraday_handoff')
         return dict(path=str(snapshot), basis='consumed_intraday_preserved_historical_generation', runtime_effect=False)
     monkeypatch.setattr(handoff, 'historical_checklist_for_observer', historical)
     result = _postclose_handoff_semantics(tmp_path, day, datetime(2026, 10, 7, 13, tzinfo=ZoneInfo('Asia/Seoul')))
     if damage is None:
         assert result['status'] == 'done' and result['findings'] == []
         assert len(calls) == 2 and result['historical_generation_validation']['runtime_effect'] is False
+        assert result['historical_generation_validation']['basis'] == (
+            'preserved_strict_bound_checklist' if profile == 'sealed' else
+            'consumed_intraday_preserved_historical_generation')
     else:
         assert result['findings'] == ['postclose_handoff_generation_invalid']
         if damage == 'other_generation':
@@ -1276,8 +1355,11 @@ def test_quantity_observer_bounds_committed_stage_before_hashing(tmp_path, monke
     pointer = original.parent / 'committed_stage.json'
     pointer.write_text(json.dumps(dict(schema='initial_quantity_stage_reference_v2',
         source_date='2026-09-28', stage_path=str(stage), stage_sha256=hashlib.sha256(stage.read_bytes()).hexdigest())))
-    monkeypatch.setattr(producer, 'committed_refresh_stage_path',
-                        lambda *a: pytest.fail('health invoked unbounded committed-stage resolver'))
+    resolve = producer.committed_refresh_stage_path
+    def bounded(*args, **kwargs):
+        assert callable(kwargs.get('read'))
+        return resolve(*args, **kwargs)
+    monkeypatch.setattr(producer, 'committed_refresh_stage_path', bounded)
     result = _initial_quantity_semantics(tmp_path, '2026-09-28')
     assert result['status'] == ('source_invalid' if oversize else 'valid_empty')
 
@@ -1290,6 +1372,34 @@ def test_quantity_invalid_committed_reference_cannot_claim_valid_contract(tmp_pa
     assert result['status'] == 'source_invalid'
     assert result['bounded_contract_validated'] is False
     assert result['observation_complete'] is False
+
+
+@pytest.mark.parametrize('damage', ['none', 'reference', 'parent', 'hash', 'code', 'stage'])
+def test_quantity_observer_consumes_only_exact_prepared_generation(tmp_path, monkeypatch, damage):
+    from src.engine.scalping import initial_quantity_policy as producer
+    from src.engine.scalping import initial_quantity_monitor_projection as projection
+    _quantity_semantic_fixture(tmp_path, monkeypatch, complete_stage=True)
+    original = _quantity_semantic_stage(tmp_path)
+    stage = original.parent/'generations/prepared/stage.json'
+    stage.parent.mkdir(parents=True)
+    stage.write_bytes(original.read_bytes())
+    committed = original.parent/'committed_stage.json'
+    committed.write_text(json.dumps(dict(schema='initial_quantity_stage_reference_v2', source_date='2026-09-28',
+        stage_path=str(stage), stage_sha256=hashlib.sha256(stage.read_bytes()).hexdigest())))
+    code = projection._code()
+    pointer = committed.with_name('committed_stage.' + producer._digest(code) + '.json')
+    reference = dict(schema='initial_quantity_stage_reference_v2', source_date='2026-09-28',
+        stage_path=str(stage), stage_sha256=hashlib.sha256(stage.read_bytes()).hexdigest(),
+        reader_code=code, committed_parent_sha256=hashlib.sha256(committed.read_bytes()).hexdigest())
+    if damage == 'reference': reference = {}
+    if damage == 'hash': reference.pop('stage_sha256')
+    if damage == 'code': reference['reader_code'] = {'other': '0'*64}
+    if damage == 'parent': committed.write_bytes(committed.read_bytes() + b' ')
+    if damage == 'stage': stage.write_bytes(b'x'*(1024*1024+1))
+    pointer.write_text(json.dumps(reference))
+    result = _initial_quantity_semantics(tmp_path, '2026-09-28')
+    assert result['status'] == ('valid_empty' if damage == 'none' else 'source_invalid')
+    assert result['observation_complete'] is (damage == 'none')
 
 
 def test_quantity_observer_reuses_one_decode_per_unchanged_source(tmp_path, monkeypatch):
@@ -1347,13 +1457,14 @@ def test_semantic_object_rejects_replacement_fifo_before_read(tmp_path, monkeypa
             path.rename(path.with_suffix('.original'))
             os.mkfifo(path); replaced.append(True)
         return original_open(name, flags, *args, **kwargs)
-    monkeypatch.setattr(detector.os, 'open', opening)
+    monkeypatch.setattr(detector.observer_io.os, 'open', opening)
     with pytest.raises(ValueError, match='observer_regular_file_required'):
         detector._semantic_object(path, limit=1024)
     assert replaced == [True]
 
 
-def test_weekend_default_sweep_observes_completed_source_quantity(tmp_path, monkeypatch):
+@pytest.mark.parametrize('retired_snapshot', [None, '{}', '{broken'])
+def test_weekend_default_sweep_observes_completed_source_quantity(tmp_path, monkeypatch, retired_snapshot):
     from src.engine.error_detectors import artifact_freshness as mod
     from src.engine.monitoring import policy_generation_contract as generations
     class Clock(datetime):
@@ -1368,7 +1479,7 @@ def test_weekend_default_sweep_observes_completed_source_quantity(tmp_path, monk
     monkeypatch.setattr(mod, '_completed_semantic_source', lambda *_: dict(
         status='receipt_selected', findings=[], source_date='2026-10-16', target_date='2026-10-19'))
     for name in ['_machine_result_semantics', '_auxiliary_result_semantics', '_main_stop_semantics',
-                 '_samsung_forward_semantics', '_postclose_handoff_semantics', '_optional_weakness_semantics']:
+                 '_postclose_handoff_semantics', '_optional_weakness_semantics']:
         monkeypatch.setattr(mod, name, lambda *a, **kw: dict(status='not_assessed', findings=[]))
     monkeypatch.setattr(mod, '_current_semantic_owners', lambda *_: {'InitialQuantityProducerConsumerRepair1010'})
     monkeypatch.setattr(generations, 'observations', lambda *a, **kw: [])
@@ -1378,7 +1489,17 @@ def test_weekend_default_sweep_observes_completed_source_quantity(tmp_path, monk
         seen.append(day)
         return dict(status='source_gap', source_date=day, findings=['initial_quantity_economic_source_gap'])
     monkeypatch.setattr(mod, '_initial_quantity_semantics', quantity)
+    retired = tmp_path/'data/report/samsung_tick_transition_forward_validation/2026-10-16/latest.json'
+    if retired_snapshot is not None:
+        retired.parent.mkdir(parents=True);retired.write_text(retired_snapshot)
+    original_read=mod._semantic_object
+    def read(path, **kwargs):
+        assert 'samsung_tick_transition_forward_validation' not in str(path)
+        return original_read(path, **kwargs)
+    monkeypatch.setattr(mod,'_semantic_object',read)
     result = mod.ArtifactFreshnessDetector(dry_run=True).check()
+    assert 'samsung_frozen_validation_semantics' not in result.details
+    if retired_snapshot is not None:assert retired.read_text()==retired_snapshot
     assert seen == ['2026-10-16']
     assert result.details['initial_quantity_semantics']['status'] == 'source_gap'
     alert = next(a for a in result.details['semantic_alerts'] if a['stage']=='initial_quantity')
@@ -3748,7 +3869,7 @@ def _isolate_submission_artifact_check(mod, root, now, monkeypatch):
     monkeypatch.setattr(mod, 'is_krx_trading_day', lambda *args: True)
     monkeypatch.setattr(mod, 'load_installed_crontab', lambda: '')
     for name in ('_entry_cancel_wait_result_semantics', '_holding_profit_exit_semantics', '_machine_result_semantics',
-                 '_auxiliary_result_semantics', '_postclose_handoff_semantics', '_main_stop_semantics', '_samsung_forward_semantics',
+                 '_auxiliary_result_semantics', '_postclose_handoff_semantics', '_main_stop_semantics',
                  '_initial_quantity_semantics'):
         monkeypatch.setattr(mod, name, lambda *args, **kwargs: dict(status='not_assessed',findings=[]))
     monkeypatch.setattr(mod, '_completed_semantic_source', lambda *args: dict(status='not_assessed',findings=[],target_date=None))
@@ -3866,14 +3987,21 @@ def _quiet_current_observer_fixture(tmp_path, monkeypatch, *, payload_factory=No
     return mod,root,now,path,report,sp,selection,seal
 
 
-def test_exact_quiet_window_warns_without_pass_recovery_or_erasing_source_gaps(tmp_path,monkeypatch):
+def test_exact_quiet_window_exception_preserves_partial_and_source_gaps(tmp_path,monkeypatch):
     from src.engine.error_detector import iter_daemon_alert_events
     from src.engine.error_detectors.base import DetectionResult
-    mod,root,now,path,report,*_ = _quiet_current_observer_fixture(tmp_path,monkeypatch)
+    mod,root,now,path,report,_,_,seal = _quiet_current_observer_fixture(tmp_path,monkeypatch)
     before=path.read_bytes()
     result=mod.ArtifactFreshnessDetector(dry_run=True).check()
-    assert result.severity=='warning' and 'observation pending' in result.summary
-    assert result.details['submission_bottleneck_monitor_status']=='pending_no_applicable_observations'
+    assert result.severity=='pass'
+    assert result.details['submission_bottleneck_monitor_status']=='pass_verified_observation_wait'
+    exception=result.details['submission_bottleneck_monitor_observation_exception']
+    assert exception['reason']=='bounded_no_applicable_observations'
+    assert exception['report_sha256']==hashlib.sha256(before).hexdigest()
+    assert exception['run_id']==report['run_id']
+    assert exception['removal_trigger']=='report_generation_actor_or_health_condition_changed'
+    assert exception['owner']=='MainEntrySourceTerminalRepair1022'
+    assert exception['current_observation_verified'] is False
     assert result.details['submission_bottleneck_monitor_observation_health_projection_match'] is True
     assert result.details['submission_bottleneck_monitor_current_observation_verified'] is False
     assert result.details['submission_bottleneck_monitor_semantic_status']=='partial'
@@ -3886,11 +4014,255 @@ def test_exact_quiet_window_warns_without_pass_recovery_or_erasing_source_gaps(t
     assert path.read_bytes()==before and report['status']=='unobservable'
     assert report['entry_execution_tuning_semantics']['entry_split']['status']=='source_gap'
     assert report['entry_execution_tuning_semantics']['entry_split']['primary_operating_ev_pct'] is None
+
     state={}
     prior=DetectionResult(detector_id='artifact_freshness',category='artifact',severity='fail',summary='prior genuine failure')
     assert len(list(iter_daemon_alert_events([prior],state,target_date='2026-10-14')))==1
     assert list(iter_daemon_alert_events([result],state,target_date='2026-10-14'))==[]
     assert 'artifact_freshness' in state
+    report['source_gap_semantics']['issues']={'new_current_loss':1};seal()
+    failed=mod.ArtifactFreshnessDetector(dry_run=True).check()
+    assert failed.severity=='fail'
+    assert 'submission_bottleneck_monitor_observation_exception' not in failed.details
+    assert [kind for kind,_ in iter_daemon_alert_events([failed],state,target_date='2026-10-14')]==['alert']
+
+
+def _market_closed_quiet_observer_fixture(tmp_path, monkeypatch, *, report_time='19:59:00'):
+    from src.tests.test_submission_bottleneck_monitor import _observation_health_fixture
+    from src.trading.market import session_contract
+    def payload():
+        original = _observation_health_fixture()
+        delta = datetime.fromisoformat('2026-10-14T'+report_time+'+09:00') - datetime.fromisoformat(original['as_of'])
+        def shift(value):
+            if isinstance(value, dict): return {k: shift(v) for k, v in value.items()}
+            if isinstance(value, list): return [shift(v) for v in value]
+            if isinstance(value, str) and 'T' in value:
+                try: return (datetime.fromisoformat(value) + delta).isoformat()
+                except ValueError: pass
+            return value
+        report = shift(original)
+        context = session_contract.resolve_market_session(datetime.fromisoformat(report['as_of']))
+        report['source_gap_semantics']['fixed_watch_waits'].update(
+            native_session_regime=context.session_regime, native_entry_allowed_by_clock=context.entry_allowed_by_clock)
+        return report
+    fixture = _quiet_current_observer_fixture(tmp_path, monkeypatch, payload_factory=payload)
+    mod, root, _, path, report, _, selection, _ = fixture
+    monkeypatch.setattr(mod, '_postclose_main_absent', lambda: False)
+    now = datetime.fromisoformat('2026-10-14T20:10:27+09:00')
+    heartbeat = root/'tmp/error_detector_heartbeat.json'
+    heartbeat.parent.mkdir(parents=True, exist_ok=True)
+    heartbeat.write_text(json.dumps(dict(main_loop=dict(pid=selection['actual_pid_receipt']['pid'], last_beat=now.isoformat()),
+        threads=dict(sniper_engine=dict(alive=False, last_beat='2026-10-14T20:00:00+09:00',
+            terminal_reason='market_close', unresolved_scalping_count=0, unresolved_scalping_codes='')))))
+    _isolate_submission_artifact_check(mod, root, now, monkeypatch)
+    return fixture, heartbeat, now
+
+
+@pytest.mark.parametrize('damage', ['none', 'missing_terminal', 'alive', 'reason', 'unresolved', 'missing_custody',
+    'terminal_date', 'terminal_future', 'terminal_before_close', 'heartbeat_pid', 'heartbeat_stale',
+    'old_report', 'old_body_fresh_file', 'future_completion', 'changed_generation', 'failed_execution',
+    'source_gap', 'projection', 'live_identity'])
+def test_closed_market_keeps_only_exact_quiet_observation_as_unverified_warning(tmp_path, monkeypatch, damage):
+    fixture, heartbeat, now = _market_closed_quiet_observer_fixture(tmp_path, monkeypatch)
+    mod, root, _, path, report, selector, selection, seal = fixture
+    state = json.loads(heartbeat.read_text()); terminal = state['threads']['sniper_engine']
+    if damage == 'alive': terminal['alive'] = True
+    elif damage == 'reason': terminal['terminal_reason'] = 'market_close_unresolved_scalping_positions'
+    elif damage == 'unresolved': terminal['unresolved_scalping_count'] = 1
+    elif damage == 'missing_custody': terminal.pop('unresolved_scalping_count')
+    elif damage == 'terminal_date': terminal['last_beat'] = '2026-10-13T20:00:00+09:00'
+    elif damage == 'terminal_future': terminal['last_beat'] = '2026-10-14T20:11:00+09:00'
+    elif damage == 'terminal_before_close': terminal['last_beat'] = '2026-10-14T19:59:30+09:00'
+    elif damage == 'heartbeat_pid': state['main_loop']['pid'] += 1
+    elif damage == 'heartbeat_stale': state['main_loop']['last_beat'] = '2026-10-14T19:00:00+09:00'
+    elif damage == 'old_report': os.utime(path, (now.replace(hour=19, minute=49).timestamp(),)*2)
+    elif damage == 'old_body_fresh_file':
+        report['as_of'] = '2026-10-14T19:49:00+09:00'; seal()
+        os.utime(path, (now.timestamp()-10,)*2)
+    elif damage == 'future_completion':
+        from src.engine.monitoring import submission_bottleneck_monitor as monitor
+        report['observer_generation']['completed_at'] = '2026-10-14T20:11:00+09:00'
+        report['observer_generation']['sha256'] = monitor._observer_seal(report['observer_generation'])
+        path.write_text(json.dumps(report))
+    elif damage == 'changed_generation': selector.write_text(json.dumps({**selection, 'actual_pid_consumed':False}))
+    elif damage == 'failed_execution': report['execution_status'] = 'failed'; seal()
+    elif damage == 'source_gap': report['source_gap_semantics']['issues'] = {'new_current_loss':1}; seal()
+    elif damage == 'projection': report['observation_health']['reason'] = 'forged'; path.write_text(json.dumps(report))
+    elif damage == 'live_identity': monkeypatch.setattr(mod, '_observer_live_identity', lambda pid: dict(pid=pid, start_ticks='999'))
+    heartbeat.write_text(json.dumps(state))
+    if damage == 'missing_terminal': heartbeat.unlink()
+    before = path.read_bytes()
+    outcome = mod.ArtifactFreshnessDetector(dry_run=True).check()
+    assert path.read_bytes() == before
+    assert outcome.details.get('submission_bottleneck_monitor_current_observation_verified') is not True
+    if damage != 'none':
+        assert outcome.severity == 'fail'
+        return
+    assert outcome.severity == 'warning'
+    assert outcome.details['submission_bottleneck_monitor_status'] == 'closed_window_observation_only'
+    dimensions = outcome.details['submission_bottleneck_monitor_observation_dimensions']
+    assert dimensions['freshness']['status'] == 'stale'
+    assert dimensions['closed_window']['status'] == 'native_market_close_observed'
+    assert dimensions['closed_window']['current_observation_verified'] is False
+    assert outcome.details['submission_bottleneck_monitor_observation_health']['full_coverage_proven'] is False
+    assert report['entry_execution_tuning_semantics']['entry_split']['primary_operating_ev_pct'] is None
+    from src.engine.error_detector import iter_daemon_alert_events
+    from src.engine.error_detectors.base import DetectionResult
+    state={}
+    prior=DetectionResult(detector_id='artifact_freshness',category='artifact',severity='fail',summary='prior genuine failure')
+    assert len(list(iter_daemon_alert_events([prior],state,target_date='2026-10-14')))==1
+    assert list(iter_daemon_alert_events([outcome],state,target_date='2026-10-14'))==[]
+    assert 'artifact_freshness' in state
+
+
+def test_closed_observation_rechecks_native_terminal_after_actor_verification(tmp_path, monkeypatch):
+    fixture, heartbeat, now = _market_closed_quiet_observer_fixture(tmp_path, monkeypatch)
+    mod, _, _, _, _, _, selection, _ = fixture
+    def identity(pid):
+        state = json.loads(heartbeat.read_text())
+        state['threads']['sniper_engine']['alive'] = True
+        heartbeat.write_text(json.dumps(state))
+        return dict(pid=pid, start_ticks='123', cwd=selection['actual_pid_receipt']['process_cwd'])
+    monkeypatch.setattr(mod, '_observer_live_identity', identity)
+    result = mod.ArtifactFreshnessDetector(dry_run=True).check()
+    assert result.severity == 'fail'
+    attempts = result.details['submission_bottleneck_monitor_publication_recheck']['attempts']
+    assert attempts[0]['stable'] is False
+    assert result.details['submission_bottleneck_monitor_status'] == 'fail'
+
+
+@pytest.mark.parametrize('damage', [None, 'recent_event', 'new_loss', 'actor', 'missing_terminal',
+    'snapshot_stale', 'projection', 'current_machine', 'native_birth', 'generation',
+    'missing_cohort', 'event_clock', 'input_schema'])
+def test_closed_market_retains_only_verified_noncurrent_scanner_population(tmp_path, monkeypatch, damage):
+    from copy import deepcopy
+    from src.engine.monitoring import submission_bottleneck_monitor as monitor
+    from src.tests.test_submission_bottleneck_monitor import _health_birth_fixture
+    fixture, heartbeat, _ = _market_closed_quiet_observer_fixture(tmp_path, monkeypatch)
+    mod, root, _, path, report, _, selection, _ = fixture
+    at = datetime.fromisoformat(report['as_of'])
+    actor = [str(selection['actual_pid_receipt']['pid']), selection['actual_pid_receipt']['start_ticks']]
+    birth, _ = _health_birth_fixture(at, actor)
+    birth['process_cwd'] = selection['actual_pid_receipt']['process_cwd']
+    native_birth = deepcopy(birth)
+    if damage == 'native_birth': native_birth['boot_epoch'] += 1
+    monkeypatch.setattr(monitor, '_attest_health_actor_birth', lambda *args: deepcopy(native_birth))
+    report['observer_generation']['actor_birth_proof'] = birth
+    report['machine_semantics']['tail_truncated'] = True
+    for name in ('source_gap_semantics', 'machine_semantics'):
+        original = report[name]
+        token = monitor._HEALTH_BIRTH.set(birth)
+        try: original['current_health_cohort'] = monitor._health_cohort(deepcopy(original), actor, at)
+        finally: monitor._HEALTH_BIRTH.reset(token)
+    report['blocker'] = 'missing_stale_or_noncurrent_sentinel_evidence'
+    inp = report['input_provenance']
+    inp.update(row_count=2, latest_event_at=(at-timedelta(seconds=900)).isoformat(),
+        latest_event_age_seconds=900.0, latest_event_status='observed_recent_event', loaded_recent_event_count=2)
+    if damage == 'recent_event':
+        inp.update(latest_event_at=(at-timedelta(seconds=60)).isoformat(), latest_event_age_seconds=60.0)
+    elif damage == 'new_loss':
+        report['source_gap_semantics']['current_health_cohort']['view']['issues'] = {'new_current_loss': 1}
+    elif damage == 'actor':
+        report['machine_semantics']['current_health_cohort']['actor'] = ['999', '999']
+    elif damage == 'snapshot_stale':
+        inp.update(snapshot_as_of=(at-timedelta(seconds=421)).isoformat(), snapshot_age_seconds=421.0)
+    elif damage == 'current_machine':
+        report['machine_semantics']['current_health_cohort']['view']['observation_count'] = 1
+    elif damage == 'generation': report['observer_generation']['git_commit'] = 'f'*40
+    elif damage == 'missing_cohort': report['source_gap_semantics'].pop('current_health_cohort')
+    elif damage == 'event_clock': inp['latest_event_age_seconds'] += 1
+    elif damage == 'input_schema': inp['schema'] = 'unknown'
+    report['observer_generation']['sha256'] = monitor._observer_seal(report['observer_generation'])
+    report['observation_health'] = monitor.observation_health_projection(report)
+    if damage == 'projection': report['observation_health']['unmet_conditions'] = []
+    path.write_text(json.dumps(report))
+    completed = datetime.fromisoformat(report['observer_generation']['completed_at']).timestamp()
+    os.utime(path, (completed, completed))
+    if damage == 'missing_terminal': heartbeat.unlink()
+    before = path.read_bytes()
+    result = mod.ArtifactFreshnessDetector(dry_run=True).check()
+    assert path.read_bytes() == before
+    assert result.details.get('submission_bottleneck_monitor_current_observation_verified') is not True
+    if damage is not None:
+        assert result.severity == 'fail'
+    else:
+        assert result.severity == 'warning', (result.summary, report['observation_health'])
+        assert result.details['submission_bottleneck_monitor_status'] == 'closed_window_observation_only'
+        assert report['observation_health']['unmet_conditions'] == ['current_input_provenance_invalid']
+        assert report['entry_execution_tuning_semantics']['entry_split']['primary_operating_ev_pct'] is None
+
+
+def test_live_heartbeat_progress_does_not_invalidate_observer_publication(tmp_path, monkeypatch):
+    mod, root, _, path, _, _, _, _ = _quiet_current_observer_fixture(tmp_path, monkeypatch)
+    heartbeat = root/'tmp/error_detector_heartbeat.json'
+    heartbeat.parent.mkdir(parents=True, exist_ok=True)
+    def put(second):
+        heartbeat.write_text(json.dumps(dict(main_loop=dict(pid=42, last_beat=f'15:36:{second}'),
+            threads=dict(sniper_engine=dict(alive=True, last_beat=f'15:36:{second}')))))
+    put(10)
+    before = mod._submission_observer_input_identity(path, root)
+    put(11)
+    assert mod._submission_observer_input_identity(path, root) == before
+
+
+@pytest.mark.parametrize('report_time', ['19:59:00','20:00:10'])
+@pytest.mark.parametrize('fault', [None, 'missing_stop', 'wrong_actor', 'new_loss'])
+def test_exact_closed_consumption_retains_empty_observation_after_main_isolation(tmp_path, monkeypatch, report_time, fault):
+    from src.engine.automation import intraday_release_handoff as handoff
+    fixture, heartbeat, _ = _market_closed_quiet_observer_fixture(tmp_path, monkeypatch, report_time=report_time)
+    mod, root, _, path, report, _, selection, seal = fixture
+    now=datetime.fromisoformat('2026-10-14T21:10:00+09:00')
+    state=json.loads(heartbeat.read_text());state['main_loop']['last_beat']='2026-10-14T20:57:32+09:00'
+    heartbeat.write_text(json.dumps(state))
+    receipt=selection['actual_pid_receipt']
+    proof=dict(schema='intraday_closed_consumption_observation_v1',
+        pid_identity=dict(pid=receipt['pid'],start_ticks='wrong' if fault=='wrong_actor' else receipt['start_ticks'],cwd=receipt['process_cwd']))
+    def closed(*a,**k):
+        if fault=='missing_stop':raise ValueError('native stop missing')
+        return proof
+    def absent(pid):raise FileNotFoundError('normal postclose isolation')
+    monkeypatch.setattr(handoff,'closed_consumption_observation',closed)
+    monkeypatch.setattr(mod,'_postclose_main_absent',lambda:True)
+    monkeypatch.setattr(mod,'_observer_live_identity',absent)
+    if fault=='new_loss':report['source_gap_semantics']['issues']={'new_loss':1};seal()
+    _isolate_submission_artifact_check(mod,root,now,monkeypatch)
+    result=mod.ArtifactFreshnessDetector(dry_run=True).check()
+    assert result.details.get('submission_bottleneck_monitor_current_observation_verified') is not True
+    if fault:
+        assert result.severity=='fail'
+    else:
+        assert result.severity=='warning'
+        assert result.details['submission_bottleneck_monitor_status']=='closed_window_observation_only'
+        assert result.details['submission_bottleneck_monitor_observation_dimensions']['closed_window']['main_state']=='closed_consumption_verified'
+
+@pytest.mark.parametrize('damage',[None,'missing_current','stale_current','wrong_pid','nontrading'])
+def test_closed_source_final_detector_uses_current_pid_observer_without_historical_fallback(tmp_path,monkeypatch,damage):
+    mod,root,now,path,report,sp,selection,seal=_quiet_current_observer_fixture(tmp_path,monkeypatch)
+    historical=path.with_name('submission_bottleneck_monitor_2026-10-13.json')
+    historical.write_text('{old pre-start report is not current evidence}')
+    if damage=='missing_current':path.unlink()
+    elif damage=='stale_current':os.utime(path,(now.timestamp()-4000,)*2)
+    elif damage=='wrong_pid':
+        selection['actual_pid_receipt']['pid']+=1;sp.write_text(json.dumps(selection))
+    elif damage=='nontrading':
+        monkeypatch.setattr(mod,'is_krx_trading_day',lambda day:day.isoformat()!='2026-10-14')
+    original=mod._observer_small_object;read_paths=[]
+    def read(candidate,**kwargs):
+        read_paths.append(Path(candidate));return original(candidate,**kwargs)
+    monkeypatch.setattr(mod,'_observer_small_object',read)
+    detector=mod.ArtifactFreshnessDetector(dry_run=True);detector.postclose_source_date='2026-10-13'
+    result=detector.check()
+    assert result.details['submission_bottleneck_monitor_historical_source_date']=='2026-10-13'
+    assert result.details['submission_bottleneck_monitor_live_observation_date']=='2026-10-14'
+    assert historical not in read_paths
+    assert historical.read_text()=='{old pre-start report is not current evidence}'
+    if damage=='nontrading':assert result.details['submission_bottleneck_monitor_status']=='skip_non_trading_day'
+    else:
+        assert result.severity==('pass' if damage is None else 'fail'),result.summary
+        if damage is None:
+            assert result.details['submission_bottleneck_monitor_status']=='pass_verified_observation_wait'
+            assert result.details['submission_bottleneck_monitor_current_observation_verified'] is False
+
 
 
 @pytest.mark.parametrize('wrong_actor', [False, True])
@@ -3910,18 +4282,18 @@ def test_current_health_cohort_uses_selected_actor_without_rewriting_old_pid_his
     report['machine_semantics']['reversal_provider_lineage']=old_lineage
     seal()
     outcome=mod.ArtifactFreshnessDetector(dry_run=True).check()
-    assert outcome.severity==('fail' if wrong_actor else 'warning')
+    assert outcome.severity==('fail' if wrong_actor else 'pass')
     assert report['machine_semantics']['reversal_provider_lineage']==old_lineage
     assert report['machine_semantics']['current_health_cohort']['view']==original_machine
     if wrong_actor:
         assert 'current_health_actor_not_selected_pid' in outcome.details['submission_bottleneck_monitor_observation_health']['unmet_conditions']
     else:
-        assert outcome.details['submission_bottleneck_monitor_status']=='pending_no_applicable_observations'
+        assert outcome.details['submission_bottleneck_monitor_status']=='pass_verified_observation_wait'
         assert outcome.details['submission_bottleneck_monitor_current_observation_verified'] is False
 
 
 @pytest.mark.parametrize('healthy',[False,True])
-def test_recorded_guard_and_healthy_fixed_nonentry_warn_without_fullpass_or_recovery(tmp_path,monkeypatch,healthy):
+def test_recorded_guard_and_healthy_fixed_nonentry_exception_without_fullpass_or_recovery(tmp_path,monkeypatch,healthy):
     from src.tests.test_submission_bottleneck_monitor import _recorded_guard_health_fixture
     from src.engine.error_detector import iter_daemon_alert_events
     from src.engine.error_detectors.base import DetectionResult
@@ -3929,9 +4301,9 @@ def test_recorded_guard_and_healthy_fixed_nonentry_warn_without_fullpass_or_reco
         payload_factory=lambda:_recorded_guard_health_fixture(healthy=healthy))
     before=path.read_bytes()
     outcome=mod.ArtifactFreshnessDetector(dry_run=True).check()
-    assert outcome.severity=='warning'
-    assert outcome.details['submission_bottleneck_monitor_status']=='pending_bounded_observation'
-    assert 'recorded_guard_or_cohort_pending' in outcome.summary
+    assert outcome.severity=='pass'
+    assert outcome.details['submission_bottleneck_monitor_status']=='pass_verified_observation_wait'
+    assert outcome.details['submission_bottleneck_monitor_observation_exception']['reason']=='recorded_guard_or_cohort_pending'
     assert outcome.details['submission_bottleneck_monitor_current_observation_verified'] is False
     assert outcome.details['submission_bottleneck_monitor_semantic_status']=='partial'
     assert report['status']=='unobservable' and path.read_bytes()==before
@@ -4071,7 +4443,7 @@ def test_pending_is_warning_and_cannot_clear_prior_daemon_failure(tmp_path, monk
     monkeypatch.setattr(mod, "is_krx_trading_day", lambda *args: True)
     monkeypatch.setattr(mod, "load_installed_crontab", lambda: "")
     for name in ("_entry_cancel_wait_result_semantics", "_holding_profit_exit_semantics", "_machine_result_semantics",
-                 "_auxiliary_result_semantics", "_postclose_handoff_semantics", "_main_stop_semantics", "_samsung_forward_semantics",
+                 "_auxiliary_result_semantics", "_postclose_handoff_semantics", "_main_stop_semantics",
                  "_initial_quantity_semantics"):
         monkeypatch.setattr(mod, name, lambda *args, **kwargs: {"status": "not_assessed", "findings": []})
     monkeypatch.setattr(mod, "_completed_semantic_source", lambda *args: {"status": "not_assessed", "findings": [], "target_date": None})
@@ -4143,9 +4515,10 @@ def test_closed_postclose_observer_preserves_gaps_without_current_generation_cla
     detector=mod.ArtifactFreshnessDetector(dry_run=True)
     detector.postclose_source_date='2026-10-14'
     result=detector.check()
-    assert result.severity=='warning'
-    assert result.details['submission_bottleneck_monitor_status']=='historical_observation_only'
-    assert result.details['submission_bottleneck_monitor_historical_evidence']==assessment
+    assert result.severity=='fail'
+    assert result.details['submission_bottleneck_monitor_live_observation_date']=='2026-10-15'
+    assert result.details['submission_bottleneck_monitor_status']=='fail'
+    assert 'submission_bottleneck_monitor_historical_evidence' not in result.details
 
 
 @pytest.mark.parametrize("which", ["report", "selector", "transition"])
@@ -4211,7 +4584,8 @@ def test_actual_artifact_check_and_status_reader_do_not_open_fifo(tmp_path, monk
 
 
 @pytest.mark.parametrize('tamper', [None, 'birth_lower_bound_epoch', 'boot_epoch'])
-def test_current_health_birth_requires_independent_kernel_attestation(tmp_path, monkeypatch, tamper):
+@pytest.mark.parametrize('closed', [False, True])
+def test_current_health_birth_requires_independent_kernel_attestation(tmp_path, monkeypatch, tamper, closed):
     import copy
     from src.engine.monitoring import submission_bottleneck_monitor as monitor
     mod, root, now, path, report, _, selection, seal = _quiet_current_observer_fixture(tmp_path, monkeypatch)
@@ -4239,6 +4613,21 @@ def test_current_health_birth_requires_independent_kernel_attestation(tmp_path, 
         calls.append((generation['selector_reported_pid_receipt'], observed))
         return copy.deepcopy(native)
     monkeypatch.setattr(monitor, '_attest_health_actor_birth', attest)
+    if closed:
+        from src.engine.automation import intraday_release_handoff as handoff
+        def absent(pid): raise FileNotFoundError('normal close')
+        monkeypatch.setattr(mod, '_observer_live_identity', absent)
+        monkeypatch.setattr(handoff, 'closed_consumption_observation', lambda day: dict(
+            pid_identity=dict(pid=receipt['pid'], start_ticks=receipt['start_ticks'], cwd=receipt['process_cwd'])))
+        original_bytes=monitor.observer_io.regular_bytes
+        def kernel(path, *, limit):
+            if path!=Path('/proc/stat'):
+                return original_bytes(path,limit=limit)
+            assert limit==256*1024
+            calls.append((receipt,at))
+            return ('btime '+str(boot)+'\n').encode()
+        monkeypatch.setattr(monitor.observer_io, 'regular_bytes', kernel)
+        monkeypatch.setattr(mod.os, 'sysconf', lambda key: hz)
     seal()
     report['observer_generation']['actor_birth_proof'] = declared
     for key in ('source_gap_semantics', 'machine_semantics'):
@@ -4249,7 +4638,7 @@ def test_current_health_birth_requires_independent_kernel_attestation(tmp_path, 
     path.write_text(json.dumps(report)); os.utime(path, (now.timestamp()-10,)*2)
     outcome = mod.ArtifactFreshnessDetector(dry_run=True).check()
     if tamper is None:
-        assert outcome.severity == 'warning'
+        assert outcome.severity == 'pass'
         assert calls == [(receipt, at)]
         assert outcome.details['submission_bottleneck_monitor_current_observation_verified'] is False
     else:
@@ -4262,7 +4651,8 @@ def test_current_health_birth_requires_independent_kernel_attestation(tmp_path, 
 
 
 @pytest.mark.parametrize('tamper', [None, 'source_issue', 'stale_input', 'wrong_actor'])
-def test_active_observer_consumer_warns_only_for_current_intact_bounded_report(tmp_path, monkeypatch, tamper):
+@pytest.mark.parametrize('trace_reader', ['raw', 'native_index'])
+def test_active_observer_consumer_warns_only_for_current_intact_bounded_report(tmp_path, monkeypatch, tamper, trace_reader):
     import copy
     from src.tests.test_submission_bottleneck_monitor import _bounded_outcome_health_fixture, _health_birth_fixture
     from src.engine.monitoring import submission_bottleneck_monitor as monitor
@@ -4270,6 +4660,20 @@ def test_active_observer_consumer_warns_only_for_current_intact_bounded_report(t
         report, *_ = _bounded_outcome_health_fixture(partial=False, outcome='unknown_pass')
         report.update(status='observing', blocker=None, scopes={'KRX|krx_regular|bundle': {}})
         report['input_provenance']['row_count'] = 1
+        if trace_reader == 'native_index':
+            from src.engine.automation import main_trailing_source_store as store
+            source = report['machine_semantics']['current_health_cohort']['view'][
+                'reversal_provider_lineage']['source_windows']['traces']
+            identity = source['source_identity']
+            generation = dict(schema=store.SCHEMA+':generation', namespace='ai_decision_trace',
+                path=f"ai_decision_trace_{report['date']}.jsonl", size=source['source_size'],
+                source_stat=[identity['device'], identity['inode'], source['source_size'], 1, 1],
+                catchup_end=0, raw_records=2, selected_records=2,
+                prefix_chain_sha256='0'*64, append_chain_sha256='a'*64, whole_file_sha256=False)
+            generation['sha256'] = hashlib.sha256(store.encode(generation)).hexdigest()
+            source.update(bytes_read=0, read_count=0, index_bytes_read=256, tail_truncated=False,
+                native_index_generation=generation, recent_count=2,
+                coverage_basis='native_index_projection_or_exact_raw_offset_size_sha256')
         return report
     mod, root, now, path, report, _, selection, seal = _quiet_current_observer_fixture(
         tmp_path, monkeypatch, payload_factory=payload)
@@ -4319,7 +4723,7 @@ def test_observer_reads_publication_after_slow_semantics_with_current_clock(tmp_
         return dict(status='not_assessed', findings=[])
     monkeypatch.setattr(mod, '_initial_quantity_semantics', slow_semantics)
     outcome = mod.ArtifactFreshnessDetector(dry_run=True).check()
-    assert outcome.severity == 'warning', outcome.summary
+    assert outcome.severity == 'pass', outcome.summary
     assert reads == [path]
     boundary = outcome.details['submission_bottleneck_monitor_publication_recheck']
     assert boundary['stable'] and len(boundary['attempts']) == 1
@@ -4328,7 +4732,8 @@ def test_observer_reads_publication_after_slow_semantics_with_current_clock(tmp_
 
 @pytest.mark.parametrize('replacement', ['valid', 'invalid_execution', 'invalid_projection', 'stale',
     'future', 'missing', 'symlink', 'oversize', 'wrong_selector', 'repeated_publication'])
-def test_observer_final_recheck_never_inherits_replaced_verdict(tmp_path, monkeypatch, replacement):
+@pytest.mark.parametrize('closed_source',[False,True])
+def test_observer_final_recheck_never_inherits_replaced_verdict(tmp_path, monkeypatch, replacement,closed_source):
     mod, root, now, path, report, selection_path, selection, seal = _quiet_current_observer_fixture(tmp_path, monkeypatch)
     report['execution_status'] = 'failed'
     seal()
@@ -4364,8 +4769,10 @@ def test_observer_final_recheck_never_inherits_replaced_verdict(tmp_path, monkey
                 selection_path.write_text(json.dumps({**selection, 'actual_pid_consumed': False}))
         return result
     monkeypatch.setattr(detector, '_validate_json_status', staticmethod(validate))
-    outcome = detector(dry_run=True).check()
-    assert outcome.severity == ('warning' if replacement == 'valid' else 'fail'), outcome.summary
+    instance=detector(dry_run=True)
+    if closed_source:instance.postclose_source_date='2026-10-13'
+    outcome = instance.check()
+    assert outcome.severity == ('pass' if replacement == 'valid' else 'fail'), outcome.summary
     boundary = outcome.details['submission_bottleneck_monitor_publication_recheck']
     assert len(boundary['attempts']) == 2
     assert boundary['attempts'][0]['stable'] is False
@@ -4401,7 +4808,7 @@ def test_observer_recheck_preserves_other_artifact_failures(tmp_path, monkeypatc
     assert result.severity == 'fail'
     assert result.details['other_required_status'] == 'fail'
     assert 'other_required: missing.json missing' in result.summary
-    assert result.details['submission_bottleneck_monitor_status'] == 'pending_no_applicable_observations'
+    assert result.details['submission_bottleneck_monitor_status'] == 'pass_verified_observation_wait'
 
 
 def test_observer_late_check_uses_elapsed_wall_clock(tmp_path, monkeypatch):
@@ -4512,8 +4919,8 @@ def test_optional_research_native_receipts_calendar_scope_and_generation(tmp_pat
         p=base/name;p.parent.mkdir(parents=True,exist_ok=True)
         p.write_text(json.dumps(reports.seal(dict(**value,runtime_effect=False,allowed_runtime_apply=False))))
     scope={'through_date':'2026-10-15','source_dates':['2026-10-15']}
-    put('installation.json',dict(enabled=True,notify_enabled=True))
-    put('night_summary.json',dict(latest_attempt=dict(source_date='2026-10-15',status='deferred',reason='regular_postclose_or_eod_active')))
+    put('installation.json',dict(enabled=True,notify_enabled=True,installation_code_sha256=native.code_hash()))
+    put('night_summary.json',dict(latest_attempt=dict(status='deferred',reason='regular_postclose_or_eod_active')))
     put('last_completed_computation.json',dict(source_date='2026-10-14',cumulative_generation='g'))
     put('cumulative/current.json',dict(generation='g',source_scope=scope,source_cursor_states=[],pending_source_dates=[],invalidated_source_dates=[]))
     monkeypatch.setattr(native,'verify_installed_calendar',lambda c:True)
@@ -4528,10 +4935,23 @@ def test_optional_research_native_receipts_calendar_scope_and_generation(tmp_pat
     result=detector._optional_weakness_semantics(tmp_path,now)
     assert result['findings']==['optional_research_calendar_unverified']
     assert result['native_validated'] is False
+    alert=detector._semantic_alert_candidates('main_market_weakness_research',result,result['source_date'])[0]
+    assert alert['source_date']=='2026-10-14'
+    assert alert['source_date_role']=='last_completed_work_source'
+    assert alert['research_through_date']=='2026-10-15'
+    assert alert['research_source_date_count']==1
+    assert alert['latest_attempt_source_date'] is None
+    assert alert['last_completed_source_date']=='2026-10-14'
+    put('installation.json',dict(enabled=True,notify_enabled=True,installation_code_sha256='old-code'))
+    result=detector._optional_weakness_semantics(tmp_path,now)
+    assert result['findings']==['optional_research_code_binding_unverified']
+    assert result['installed_calendar_valid'] is False
+    assert result['native_validated'] is False
 
 
-@pytest.mark.parametrize('damage',['none','active_main','unknown_main','eod_missing','eod_failed','eod_date','eod_db','eod_late','selection_scope','pid_consumed','pid_receipt','next_date','bad_next_date','terminal','archive'])
-def test_same_day_closed_observer_requires_exact_eod_and_no_live_main(tmp_path,monkeypatch,damage):
+@pytest.mark.parametrize('eod_clock',['aware_kst','naive_kst','aware_utc'])
+@pytest.mark.parametrize('damage',['none','active_main','unknown_main','eod_missing','eod_failed','eod_date','eod_db','eod_late','eod_clock_invalid','eod_clock_date','selection_clock_naive','selection_scope','pid_consumed','pid_receipt','next_date','bad_next_date','terminal','archive'])
+def test_same_day_closed_observer_requires_exact_eod_and_no_live_main(tmp_path,monkeypatch,damage,eod_clock):
     mod,root,now,path,report,_,_,selector,selection=_current_observer_fixture(tmp_path,monkeypatch)
     archived=root/'data/runtime/postclose_recovery/2026-10-14/recovery/selection-before.json'
     archived.parent.mkdir(parents=True);archived.write_bytes(selector.read_bytes())
@@ -4543,11 +4963,16 @@ def test_same_day_closed_observer_requires_exact_eod_and_no_live_main(tmp_path,m
     eod_path=root/'data/runtime/update_kospi_status/update_kospi_2026-10-14.json';eod_path.parent.mkdir(parents=True)
     eod=dict(target_date='2026-10-14',status='completed_with_warnings',finished_at='2026-10-14T20:56:06+09:00',
         db_state=dict(latest_quote_date='2026-10-14',rows_on_latest_date=2600))
+    eod['finished_at']={'aware_kst':'2026-10-14T20:56:06+09:00',
+        'naive_kst':'2026-10-14T20:56:06','aware_utc':'2026-10-14T11:56:06+00:00'}[eod_clock]
     monkeypatch.setattr(mod,'_postclose_main_absent',lambda:damage not in {'active_main','unknown_main'})
     if damage=='eod_failed':eod['status']='failed'
     elif damage=='eod_date':eod['target_date']='2026-10-13'
     elif damage=='eod_db':eod['db_state']['rows_on_latest_date']=0
     elif damage=='eod_late':eod['finished_at']='2026-10-14T22:00:00+09:00'
+    elif damage=='eod_clock_invalid':eod['finished_at']='not-a-clock'
+    elif damage=='eod_clock_date':eod['finished_at']='2026-10-13T20:56:06'
+    elif damage=='selection_clock_naive':current['selected_at_kst']='2026-10-14T21:00:00'
     elif damage=='selection_scope':current['approval_scope']='ordered_intraday'
     elif damage=='pid_consumed':current['actual_pid_consumed']=True
     elif damage=='pid_receipt':current['actual_pid_receipt']=selection['actual_pid_receipt']
@@ -4583,3 +5008,41 @@ def test_postclose_main_absence_timeout_is_unknown(monkeypatch):
         raise subprocess.TimeoutExpired(a,2)
     monkeypatch.setattr(subprocess,'run',timeout)
     assert mod._postclose_main_absent() is False
+
+
+def test_semantic_decode_reuse_is_invocation_bound_and_not_a_verdict(tmp_path, monkeypatch):
+    import json
+    from src.engine.error_detectors import artifact_freshness as owner
+    from src.engine.infrastructure.validation_digest_session import postclose_session
+    path = tmp_path / 'value.json'
+    path.write_text(json.dumps({'rows': [{'id': 1}]}))
+    native = owner._read_semantic_object
+    reads = []
+    def counted(*args, **kwargs):
+        reads.append(1)
+        return native(*args, **kwargs)
+    monkeypatch.setattr(owner, '_read_semantic_object', counted)
+    with postclose_session(tmp_path, '2026-10-19'):
+        first, sha = owner._semantic_object(path)
+        first['rows'][0]['id'] = 'mutated copy'
+        assert owner._semantic_object(path)[0]['rows'][0]['id'] == 1
+        assert len(reads) == 1
+        path.write_text(json.dumps({'rows': [{'id': 2}]}))
+        assert owner._semantic_object(path)[0]['rows'][0]['id'] == 2
+        assert len(reads) == 2
+        with pytest.raises(ValueError):
+            owner._semantic_object(path, limit=1)
+    owner._semantic_object(path)
+    assert len(reads) == 4
+
+
+def test_semantic_reuse_caps_even_tiny_entries(tmp_path, monkeypatch):
+    from src.engine.error_detectors import artifact_freshness as owner
+    from src.engine.infrastructure import validation_digest_session as session_owner
+    monkeypatch.setattr(session_owner, 'MAX_ENTRIES', 2)
+    with session_owner.postclose_session(tmp_path, '2026-10-19') as session:
+        for i in range(3):
+            path = tmp_path / f'{i}.json'
+            path.write_text('{}')
+            assert owner._semantic_object(path)[0] == {}
+        assert len(session.semantic_objects) <= 2

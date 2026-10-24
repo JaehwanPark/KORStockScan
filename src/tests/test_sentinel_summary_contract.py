@@ -50,6 +50,36 @@ def revise(manifest, **changes):
     manifest.write_text(json.dumps(source))
 
 
+@pytest.mark.parametrize('oversized', [False, True])
+def test_deployment_checks_migration_budget_without_mutating_checkpoint(tmp_path, oversized):
+    day='2026-10-13'
+    raw=tmp_path/'pipeline_events'/('pipeline_events_'+day+'.jsonl')
+    raw.parent.mkdir();raw.write_text(json.dumps(event(1))+'\n')
+    directory=tmp_path/'pipeline_event_summaries'
+    _,meta=P.update_and_load_pipeline_event_summaries(raw_path=raw,summary_dir=directory,
+        target_date=day,reason_labeler=B._blocker_label_from_stage_fields,
+        ignore_payload=B._is_ignored_event,include_samples=False)
+    manifest=Path(meta['manifest_path'])
+    parts=[]
+    for f in (B._blocker_label_from_stage_fields,B._is_ignored_event):
+        parts.extend((inspect.getsource(f),C.PRE_TERMINAL_BUY_OWNER))
+    revise(manifest,callback_contract=hashlib.sha256('\n'.join(parts).encode()).hexdigest())
+    original=manifest.read_bytes()
+    if oversized:
+        with raw.open('ab') as stream:stream.truncate(raw.stat().st_size+C.LIMIT+1)
+        with pytest.raises(RuntimeError,match='append_budget_exceeded'):
+            C.check_pending_migration(tmp_path,day)
+    else:
+        assert C.check_pending_migration(tmp_path,day)['status']=='migration_verified'
+        P.update_and_load_pipeline_event_summaries(raw_path=raw,summary_dir=directory,
+            target_date=day,reason_labeler=B._blocker_label_from_stage_fields,
+            ignore_payload=B._is_ignored_event,include_samples=False)
+        assert C.check_pending_migration(tmp_path,day)['status']=='current_contract'
+        return
+    assert manifest.read_bytes()==original
+    assert not (directory/'contract_migrations').exists()
+
+
 @pytest.mark.parametrize('parser_callback', [False, True])
 @pytest.mark.parametrize('append', [False, True])
 def test_migration_preserves_original_and_reads_only_new_suffix(tmp_path, monkeypatch, parser_callback, append):
@@ -76,6 +106,7 @@ def test_migration_preserves_original_and_reads_only_new_suffix(tmp_path, monkey
     assert sum(row['event_count'] for row in result)==(2 if append else 1)
     assert sum(reads)==raw.stat().st_size-start
     assert Path(receipt['original_manifest_archive']).read_bytes()==original
+
     assert receipt['original_manifest_sha256']==hashlib.sha256(original).hexdigest()
     assert receipt['original_checkpoint']==json.loads(original)['checkpoint_digest']
     assert receipt['from_parser']==C.PREVIOUS_PARSER and receipt['to_parser']==C.CURRENT_PARSER
@@ -85,6 +116,26 @@ def test_migration_preserves_original_and_reads_only_new_suffix(tmp_path, monkey
     _, again=P.update_and_load_pipeline_event_summaries(**options)
     assert again['contract_migration']==receipt
     assert Path(receipt['original_manifest_archive']).read_bytes()==original
+
+
+@pytest.mark.parametrize('predecessor_owner', [C.PRE_TERMINAL_BUY_OWNER, C.PRE_SCOPE_EXTRACTION_BUY_OWNER])
+def test_submit_terminal_successor_preserves_native_summary_callbacks_and_prefix(tmp_path, predecessor_owner):
+    import ast,subprocess
+    old=subprocess.check_output(['git','-C',str(Path(B.__file__).resolve().parents[2]),
+        'show','75e0fbbf7:src/engine/buy_funnel_sentinel.py'],text=True)
+    def definitions(source):
+        return {n.name:ast.dump(n,include_attributes=False) for n in ast.parse(source).body
+            if isinstance(n,ast.FunctionDef) and n.name in {
+                '_blocker_label_from_stage_fields','_is_ignored_event','_safe_str'}}
+    assert definitions(old)==definitions(Path(B.__file__).read_text())
+    raw,options,manifest,original,_=predecessor(tmp_path,parser_contract=C.CURRENT_PARSER,
+        buy_owner=predecessor_owner)
+    end=raw.stat().st_size
+    with raw.open('a') as out:out.write(json.dumps(event(2))+'\n')
+    rows,meta=P.update_and_load_pipeline_event_summaries(**options)
+    assert meta['start_raw_offset']==end and meta['rebuilt'] is False
+    assert sum(r['event_count'] for r in rows)==2
+    assert Path(meta['contract_migration']['original_manifest_archive']).read_bytes()==original
 
 
 @pytest.mark.parametrize('change,reason', [
@@ -478,12 +529,12 @@ def test_recheck_parser_change_is_only_new_producer_stage():
     name = 'src/engine/pipeline_event_summary.py'
     previous = subprocess.check_output(['git', '-C', str(root), 'show',
         'c5aeda844dfab36146d04e6305cb29508cd47d4f:'+name])
-    current = Path(P.__file__).read_bytes()
+    current = subprocess.check_output(['git','-C',str(root),'show','a7c0b0dc5:'+name])
     addition = b'    "pre_submit_delay_recheck_observed",\n'
     assert current.count(addition) == 1 and addition not in previous
     assert current.replace(addition, b'') == previous
     assert hashlib.sha256(previous).hexdigest() == C.PRE_RECHECK_PARSER
-    assert hashlib.sha256(current).hexdigest() == C.CURRENT_PARSER
+    assert hashlib.sha256(current).hexdigest() == C.PRE_READ_REUSE_PARSER
     old_producer = subprocess.check_output(['git', '-C', str(root), 'show',
         'c5aeda844dfab36146d04e6305cb29508cd47d4f:src/engine/sniper_state_handlers.py'])
     assert b'pre_submit_delay_recheck_observed' not in old_producer
@@ -547,3 +598,77 @@ def test_new_parser_cannot_inherit_unproduced_intermediate_owner_pair(tmp_path):
     with pytest.raises(RuntimeError, match='callback_predecessor_unverified'):
         P.update_and_load_pipeline_event_summaries(**options)
     assert manifest.read_bytes() == original
+
+
+@pytest.mark.parametrize('parser_callback',[False,True])
+def test_projection_reader_successor_migrates_existing_prefix_without_raw_rebuild(tmp_path,monkeypatch,parser_callback):
+    raw,options,manifest,original,rows=predecessor(tmp_path,parser_callback=parser_callback,
+        parser_contract=C.PRE_READ_REUSE_PARSER,buy_owner=C.PRE_LIQUIDITY_BUY_OWNER)
+    offset=raw.stat().st_size
+    with raw.open('a') as handle:handle.write(json.dumps(event(2))+'\n')
+    real_open=builtins.open
+    class SuffixOnly:
+        def __init__(self,f):self.f=f
+        def __getattr__(self,name):return getattr(self.f,name)
+        def __enter__(self):return self
+        def __exit__(self,*args):return self.f.__exit__(*args)
+        def readline(self,*args):
+            assert self.f.tell()>=offset
+            return self.f.readline(*args)
+    def guarded(path,*args,**kwargs):
+        f=real_open(path,*args,**kwargs)
+        return SuffixOnly(f) if Path(path)==raw and args and args[0]=='rb' else f
+    monkeypatch.setattr(builtins,'open',guarded)
+    result,metadata=P.update_and_load_pipeline_event_summaries(**options)
+    assert not metadata['rebuilt'] and metadata['start_raw_offset']==offset
+    assert sum(row['event_count']for row in result)==2
+    receipt=metadata['contract_migration']
+    assert receipt['from_parser']==C.PRE_READ_REUSE_PARSER and receipt['to_parser']==C.CURRENT_PARSER
+    assert Path(receipt['original_manifest_archive']).read_bytes()==original
+
+
+def test_projection_reuse_successor_preserves_all_parser_and_aggregation_source():
+    import subprocess
+    root=Path(P.__file__).resolve().parents[2]
+    previous=subprocess.check_output(['git','-C',str(root),'show','a7c0b0dc5:src/engine/pipeline_event_summary.py'])
+    current=Path(P.__file__).read_bytes()
+    old=b'    return _load_summary_rows(path, include_samples=include_samples, strict=strict)'
+    new=b'    return _load_summary_rows(path, include_samples=include_samples, strict=strict,\n                              _projection_reuse=not include_samples)'
+    assert previous.count(old)==1 and previous.replace(old,new)==current
+    assert hashlib.sha256(previous).hexdigest()==C.PRE_READ_REUSE_PARSER
+    assert hashlib.sha256(current).hexdigest()==C.CURRENT_PARSER
+
+
+def test_liquidity_cache_successor_keeps_native_summary_and_only_reads_new_suffix(tmp_path, monkeypatch):
+    raw, options, manifest, original, rows = predecessor(tmp_path,
+        parser_contract=C.CURRENT_PARSER, buy_owner=C.PRE_LIQUIDITY_BUY_OWNER)
+    offset = raw.stat().st_size
+    with raw.open('a') as stream: stream.write(json.dumps(event(2))+'\n')
+    real_open = builtins.open
+    class SuffixOnly:
+        def __init__(self, stream): self.stream = stream
+        def __getattr__(self, name): return getattr(self.stream, name)
+        def __enter__(self): return self
+        def __exit__(self, *args): return self.stream.__exit__(*args)
+        def readline(self, *args):
+            assert self.stream.tell() >= offset
+            return self.stream.readline(*args)
+    def guarded(path, *args, **kwargs):
+        stream = real_open(path, *args, **kwargs)
+        return SuffixOnly(stream) if Path(path)==raw and args and args[0]=='rb' else stream
+    monkeypatch.setattr(builtins, 'open', guarded)
+    result, meta = P.update_and_load_pipeline_event_summaries(**options)
+    assert not meta['rebuilt'] and meta['start_raw_offset'] == offset
+    assert sum(row['event_count'] for row in result) == 2
+    assert Path(meta['contract_migration']['original_manifest_archive']).read_bytes() == original
+    assert meta['contract_migration']['from_parser'] == meta['contract_migration']['to_parser'] == C.CURRENT_PARSER
+
+
+@pytest.mark.parametrize('parser_sha', [C.PREVIOUS_PARSER, C.BASE_PARSER, C.PRE_RECHECK_PARSER, C.PRE_READ_REUSE_PARSER])
+def test_scope_extraction_predecessor_cannot_be_combined_with_other_parsers(tmp_path, parser_sha):
+    _, options, manifest, original, _ = predecessor(tmp_path,
+        parser_contract=parser_sha, buy_owner=C.PRE_SCOPE_EXTRACTION_BUY_OWNER)
+    with pytest.raises(RuntimeError, match='callback_predecessor_unverified'):
+        P.update_and_load_pipeline_event_summaries(**options)
+    assert manifest.read_bytes() == original
+    assert not (manifest.parent/'contract_migrations').exists()

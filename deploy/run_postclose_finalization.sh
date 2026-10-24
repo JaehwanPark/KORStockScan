@@ -45,8 +45,17 @@ elif [[ -n "${2:-}" ]]; then
   exit 2
 fi
 cleanup_recovery_args=()
+RESUME_FINAL_DETECTOR=false
+REBIND_COMPLETED=false
+resume_mode=--resume-prefix
 if [[ "${3:-}" == "--recover-storage-only" && "$RECOVERY_MODE" == "true" && $# -eq 3 ]]; then
   cleanup_recovery_args+=(--recover-storage-only)
+elif [[ "${3:-}" == "--resume-final-detector" && "$RECOVERY_MODE" == "true" && $# -eq 3 ]]; then
+  RESUME_FINAL_DETECTOR=true
+elif [[ "${3:-}" == "--rebind-final-generation" && "$RECOVERY_MODE" == "true" && $# -eq 3 ]]; then
+  RESUME_FINAL_DETECTOR=true
+  REBIND_COMPLETED=true
+  resume_mode=--rebind-completed
 elif [[ -n "${3:-}" || $# -gt 3 ]]; then
   echo "[FAIL] postclose_finalization reason=unknown_cleanup_recovery_mode"
   exit 2
@@ -113,6 +122,15 @@ exec 8>"$PROJECT_DIR/tmp/postclose_finalization_${TARGET_DATE}.lock"
 if ! flock -n 8; then
   echo "[SKIP] postclose_finalization target_date=${TARGET_DATE} reason=active_owner"
   exit 75
+fi
+resume_receipt=""
+if [[ "$RESUME_FINAL_DETECTOR" == "true" ]]; then
+  resume_receipt="$(env PYTHONPATH=. "$VENV_PY" \
+    "$SCRIPT_DIR/../src/engine/automation/postclose_finalization_generation.py" \
+    "$resume_mode" "$PROJECT_DIR" "$TARGET_DATE")" || {
+    echo "[FAIL] postclose_finalization target_date=${TARGET_DATE} reason=detector_resume_prefix_invalid"
+    exit 1
+  }
 fi
 started_at="$(TZ=Asia/Seoul date +%FT%T%z)"
 echo "[START] postclose_finalization target_date=${TARGET_DATE} effective_date=${TARGET_EFFECTIVE_DATE} recovery=${RECOVERY_MODE} wait_timeout_sec=${WAIT_TIMEOUT_SEC} hard_deadline_kst=${HARD_DEADLINE_KST} started_at=${started_at}"
@@ -242,6 +260,8 @@ run_final_detector() {
     bash "$ERROR_DETECTION_RUNNER" "${detector_args[@]}"
 }
 
+finalization_generation=""
+if [[ "$RESUME_FINAL_DETECTOR" != "true" ]]; then
 waited=0
 while true; do
   if [[ "$RECOVERY_MODE" != "true" && "$ALLOW_NONCURRENT_TARGET" != "true" ]]; then
@@ -433,6 +453,16 @@ PY
   fi
 fi
 
+else
+  finalization_generation="$("$VENV_PY" - "$resume_receipt" <<'PY'
+import json,sys
+receipt=json.loads(sys.argv[1])
+print(receipt['chain_sha256'],receipt['snapshot_sha256'])
+PY
+)"
+  echo "[INFO] postclose_finalization target_date=${TARGET_DATE} prefix_reused=${resume_receipt}"
+fi
+
 # The child detector reports its live ancestor as pending, never as PASS.
 echo "[INFO] postclose_finalization target_date=${TARGET_DATE} cleanup=done detector_handoff=started"
 detector_started_after_ns="$(date +%s%N)"
@@ -460,12 +490,12 @@ PY
   detector_generation_fields=" detector_run_id=${detector_run_id} detector_report_sha256=${detector_report_sha256}"
 fi
 if [[ -n "$finalization_generation" ]]; then
-  current_generation="$(env PYTHONPATH=. "$VENV_PY" - "$PROJECT_DIR" "$TARGET_DATE" <<'PY'
+  current_generation="$(env PYTHONPATH=. "$VENV_PY" - "$PROJECT_DIR" "$TARGET_DATE" "$REBIND_COMPLETED" <<'PY'
 import sys
 from pathlib import Path
 from src.engine.automation.postclose_finalization_generation import capture_finalization_generation
 
-receipt = capture_finalization_generation(Path(sys.argv[1]), sys.argv[2])
+receipt = capture_finalization_generation(Path(sys.argv[1]), sys.argv[2], consumed_checklist=sys.argv[3] == "true")
 print(receipt["chain_sha256"], receipt["snapshot_sha256"])
 PY
 )" || {

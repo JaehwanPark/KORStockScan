@@ -81,20 +81,35 @@ def cached_code_generation(paths):
     return value
 
 
-def seal_dependency_receipt(sidecar, payload, *, fact_projection=None):
+def seal_dependency_receipt(sidecar, payload, *, fact_projection=None,
+                            projection_generation=None,trailing_completed_index=None):
     """Only the existing, census-verified projection writer calls this."""
     from src.engine.sniper_trade_review_report import verify_completed_census_manifest
     from src.engine.scalping.pre_submit_delay_initial_policy import _atomic
     if verify_completed_census_manifest(payload, payload['date']) is not None:
         raise ValueError('window_dependency_census_invalid')
+    if projection_generation is not None:
+        from src.engine.infrastructure.validation_digest_session import _native_bytes
+        proof=_native_bytes(Path(sidecar).parent.parent.parent,sidecar)
+        if proof is None or proof['generation']!=projection_generation:
+            raise ValueError('window_dependency_native_writer_proof_missing')
+    observed_projection=projection_generation or byte_generation(sidecar)
+    if projection_generation is None and (Path(sidecar).parent.name=='monitor_snapshots'
+            and Path(sidecar).parent.parent.name=='report'):
+        # Legacy native producers may explicitly seal a fully read generation.
+        # This is a writer action, never an inline consumer repair.
+        from src.engine.infrastructure.validation_digest_session import publish_native_bytes
+        publish_native_bytes(Path(sidecar).parent.parent.parent,sidecar,observed_projection)
     body = {'schema':'holding_projection_dependency_receipt_v1', 'date':payload['date'],
-            'projection':byte_generation(sidecar), 'snapshot_identity':payload['snapshot_identity'],
+            'projection':observed_projection, 'snapshot_identity':payload['snapshot_identity'],
             'census_sha256':digest(payload['meta']['completed_census_manifest']),
             'meta':{k:payload['meta'].get(k) for k in (
                 'actual_cost_source_generation', 'knowledge_cutoff', 'snapshot_profile')},
             'completed_count':len(payload['sections']['completed_trade_projection'])}
     if fact_projection is not None:
         body['fact_projection'] = byte_generation(fact_projection)
+    if trailing_completed_index is not None:
+        body['trailing_completed_index']=trailing_completed_index
     body['artifact_sha256'] = digest(body)
     if len(json.dumps(body).encode()) > MAX_METADATA_BYTES:
         raise ValueError('window_dependency_metadata_budget_exceeded')
@@ -125,9 +140,11 @@ def _file_generation(path: Path) -> dict:
             "sha256": hashlib.sha256(raw).hexdigest()}, raw
 
 
-def _capture_day(root, directory, day):
+def _capture_day(root, directory, day, *, original_cost_generation=None, allow_cost_revision=False):
     with ExitStack() as budget:
-        return _capture_day_inputs(root, directory, day, budget)
+        return _capture_day_inputs(root, directory, day, budget,
+                                   original_cost_generation=original_cost_generation,
+                                   allow_cost_revision=allow_cost_revision)
 
 
 def completed_projection_census_issue(value, day, *, costs):
@@ -344,7 +361,7 @@ def _verified_legacy_projection_dependency(data_root, day, *, projection_generat
     import os
     import stat
     from src.engine.strategy_position_performance_report import _legacy_original_generation_issue, _legacy_source_json
-    from .snapshot_archive import snapshot_identity
+    from .snapshot_archive import snapshot_identity, snapshot_identity_matches
     root = Path(data_root).resolve()
     directory = root / 'report/monitor_snapshots'
     raw = directory / f'trade_review_{day}.json'
@@ -372,7 +389,7 @@ def _verified_legacy_projection_dependency(data_root, day, *, projection_generat
     generation = projection_generation or byte_generation(projection)
     expected = proof['projection']
     if (generation != dict(path=projection.name, size=expected['identity']['size'], sha256=expected['sha256'])
-            or snapshot_identity(raw) != proof['snapshot']['identity']):
+            or not snapshot_identity_matches(raw, proof['snapshot']['identity'], expected_sha256=proof['snapshot']['sha256'])):
         raise ValueError('window_dependency_legacy_original_generation_changed')
     # Native snapshots put the metadata before the large section. Bound this
     # read independently; a different layout needs an explicit partition.
@@ -456,7 +473,7 @@ def _verified_legacy_projection_dependency(data_root, day, *, projection_generat
     return value, generation
 
 
-def _capture_day_inputs(root, directory, day, budget):
+def _capture_day_inputs(root, directory, day, budget, *, original_cost_generation=None, allow_cost_revision=False):
     from .research_input_budget import Claim
     def decode(content):
         budget.enter_context(Claim(len(content) * 8))
@@ -466,7 +483,8 @@ def _capture_day_inputs(root, directory, day, budget):
     sidecar = raw.with_suffix(".completed_projection.json")
     # The bounded sidecar is authoritative only with its original snapshot
     # identity. Preserve that binding as well as the sidecar's bytes.
-    from .snapshot_archive import present, snapshot_identity, identity_available
+    from .snapshot_archive import present, snapshot_identity, identity_available, snapshot_identity_matches
+    native_receipt = False
     if identity_available(raw) and present(sidecar):
         receipt = Path(str(sidecar) + '.dependencies.json')
         if receipt.is_file():
@@ -482,6 +500,7 @@ def _capture_day_inputs(root, directory, day, budget):
                 raise ValueError('window_dependency_receipt_invalid')
             generation['dependency_receipt'] = receipt_generation
             value = metadata
+            native_receipt = True
         else:
             # Legacy projections remain verifiable when small. Large historical
             # files require the existing producer's receipt, not an unbounded
@@ -493,16 +512,18 @@ def _capture_day_inputs(root, directory, day, budget):
                 generation, content = _file_generation(sidecar)
                 value = decode(content)
         identity = snapshot_identity(raw)
-        if raw.is_symlink() or value.get("snapshot_identity") != identity:
+        if raw.is_symlink() or ('legacy_validation' not in generation
+                and not snapshot_identity_matches(raw, value.get("snapshot_identity"))):
             raise ValueError("window_dependency_snapshot_binding_invalid")
-        generation["snapshot_identity"] = identity
+        generation["snapshot_identity"] = value["snapshot_identity"]
         if not receipt.is_file() and 'legacy_validation' not in generation:
             payload = {k: v for k, v in value.items() if k != 'artifact_sha256'}
             expected = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(',', ':'),
                                                 ensure_ascii=False).encode()).hexdigest()
             if (value.get('schema') != 'trade_review_completed_projection_sidecar_v1'
                     or expected != value.get('artifact_sha256')
-                    or completed_projection_census_issue(value, day, costs=source_generation(root,day)) is not None):
+                    or completed_projection_census_issue(value, day, costs=(original_cost_generation
+                        if original_cost_generation is not None else source_generation(root, day))) is not None):
                 raise ValueError('window_dependency_projection_contract_invalid')
     elif raw.is_file() or compressed.is_file():
         path = raw if raw.is_file() or Path(str(compressed)+'.archive_receipt.json').is_file() else compressed
@@ -529,11 +550,16 @@ def _capture_day_inputs(root, directory, day, budget):
                 value = decode(content)
     else:
         generation, value = None, None
-    costs = source_generation(root, day)
+    # A historical fact reader can verify its immutable original cost seal.
+    # Its caller must bind and validate later costs separately; holding/window
+    # consumers retain the strict current-generation default.
+    costs = (original_cost_generation if original_cost_generation is not None
+             else source_generation(root, day))
     status = "missing"
     census = None
     cutoff = None
     profile = None
+    revised = False
     if value is not None:
         if value.get("date") != day:
             raise ValueError("window_dependency_snapshot_date_invalid")
@@ -541,20 +567,31 @@ def _capture_day_inputs(root, directory, day, budget):
         recorded = meta.get("actual_cost_source_generation")
         if recorded != costs and (recorded is not None or costs["count"]
                                   or costs.get("official_source_sha256")):
-            raise ValueError("window_dependency_cost_generation_changed:" + day)
+            if (not allow_cost_revision or not native_receipt
+                    or not isinstance(recorded, dict)
+                    or recorded.get('schema') != 'holding_actual_cost_source_generation_v1'
+                    or recorded.get('completion_date') != day
+                    or type(recorded.get('count')) is not int or recorded['count'] < 0):
+                raise ValueError("window_dependency_cost_generation_changed:" + day)
+            revised = True
         census = meta.get("completed_census_manifest")
         cutoff = meta.get("knowledge_cutoff")
         profile = meta.get("snapshot_profile")
+        if profile == "intraday_light":
+            raise ValueError("window_dependency_partial_snapshot_not_terminal")
         census_sha = value.get('census_sha256') or (digest(census) if census else None)
         status = "observed" if (value.get('completed_count', 0) > 0 or (value.get("sections") or {}).get(
             "completed_trade_projection")) else "valid_empty" if census_sha else "unverified"
-    return {"status": status, "projection": generation,
+    result = {"status": status, "projection": generation,
             "census_sha256": (value.get('census_sha256') or (digest(census) if census else None)) if value else None,
             "cost_generation": costs, "profile": profile,
             "knowledge_cutoff": cutoff}
+    if revised:
+        result['original_cost_generation'] = recorded
+    return result
 
 
-def capture_window(data_root: Path, dates: list[str]) -> dict:
+def capture_window(data_root: Path, dates: list[str], *, allow_cost_revision=False) -> dict:
     if not dates or len(dates) > MAX_DATES or dates != sorted(set(dates)):
         raise ValueError("window_dependency_dates_invalid")
     parsed = [date.fromisoformat(day) for day in dates]
@@ -567,7 +604,8 @@ def capture_window(data_root: Path, dates: list[str]) -> dict:
     rows = {}
     for day in dates:
         try:
-            rows[day] = _capture_day(root, directory, day)
+            rows[day] = (_capture_day(root, directory, day, allow_cost_revision=True)
+                         if allow_cost_revision else _capture_day(root, directory, day))
         except (OSError, ValueError, TypeError, KeyError) as exc:
             # The date is identifiable. Isolate it and retain its generation;
             # an invalid old row cannot erase valid current analysis.
@@ -601,6 +639,8 @@ def capture_window(data_root: Path, dates: list[str]) -> dict:
                          'profile':None, 'knowledge_cutoff':None}
     body = {"schema": SCHEMA, "data_root": str(root), "dates": dates,
             "dependencies": rows}
+    if any('original_cost_generation' in row for row in rows.values()):
+        body['cost_revision_mode'] = 'native_original_with_current_costs'
     return {**body, "input_window_generation_sha256": digest(body)}
 
 
@@ -611,5 +651,10 @@ def verify_window(data_root: Path, recorded: dict) -> None:
             if key != "input_window_generation_sha256"}
     if digest(body) != recorded.get("input_window_generation_sha256"):
         raise ValueError("window_dependency_hash_invalid")
-    if capture_window(data_root, recorded.get("dates")) != recorded:
+    mode = recorded.get('cost_revision_mode')
+    if mode not in (None, 'native_original_with_current_costs'):
+        raise ValueError('window_dependency_cost_revision_mode_invalid')
+    current = (capture_window(data_root, recorded.get('dates'), allow_cost_revision=True)
+               if mode else capture_window(data_root, recorded.get('dates')))
+    if current != recorded:
         raise ValueError("window_dependency_generation_changed")

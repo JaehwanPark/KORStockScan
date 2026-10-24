@@ -10,7 +10,7 @@ from src.engine.lifecycle import research_storage as storage
 from src.engine.scalping import pre_submit_delay_initial_policy as initial
 
 
-def _committed(tmp_path, *, missing_identity=False, with_short=False):
+def _committed(tmp_path, *, missing_identity=False, with_short=False, short_value=2, algorithm=None, parents=None):
     data = tmp_path / "data"
     candidate = tmp_path / "candidate"
     rows = []
@@ -18,7 +18,7 @@ def _committed(tmp_path, *, missing_identity=False, with_short=False):
         for n in range(6):
             at = 1792112400.0 + n * 600
             row = dict(identity=initial.digest([anchor, n]), alias=["2026-10-16", f"{n+1:06d}", anchor+str(n)],
-                anchor_kind=anchor, session="REGULAR", parent_compatibility=["a"*64, "b"*64],
+                anchor_kind=anchor, session="REGULAR", parent_compatibility=parents or ["a"*64, "b"*64],
                 native_evaluation_bound=True, committed_at=at, observation_end_at=at+183,
                 p0_valid=True, situation="test_situation", execution_context="ALL",
                 decision_source_sha256=initial.digest(["decision", anchor, n]),
@@ -31,14 +31,14 @@ def _committed(tmp_path, *, missing_identity=False, with_short=False):
                 row["original_machine_observation_sha256"] = initial.digest(["machine", n])
                 row["native_evaluation_attempt_id"] = "native:" + str(n)
             if with_short:
-                row.update(research_short_p0_valid=True, research_short_pairs={"1": 2})
+                row.update(research_short_p0_valid=True, research_short_pairs={"1": short_value})
             rows.append(row)
     report, policy = partitioned.build(rows,
         dict(raw_commit_n=12, qualified_pass_n=12, p0_valid_n=12,
              native_evaluation_unverified_n=0, parent_compatibility_unverified_n=0, exclusions={}),
         output_root=candidate, source_date="2026-10-16", publication_date="2026-10-16",
         effective_date="2026-10-19", source_sha256="c"*64, code_contract_sha256="d"*64,
-        source_receipt={})
+        source_receipt={}, _algorithm=algorithm)
     generation = initial.digest([report, policy])
     base = data / "threshold_cycle/pre_submit_delay_policy/generations" / generation
     base.mkdir(parents=True)
@@ -70,6 +70,8 @@ def test_all_sharded_cells_frozen_membership_sparse_pairs_and_native_opportuniti
     # The training winner fails holdout. This diagnostic cannot switch to 60.
     assert cell["selected_delay_sec"] == 0
     assert cell["selection_reason_normalized"] == "training_holdout_direction_not_confirmed"
+    assert cell["evidence_verdict"] == "indeterminate"
+    assert cell["optimal_delay_proven"] is False
     assert cell["candidates"]["30"]["train"]["n"] == 4
     assert cell["candidates"]["60"]["train"]["n"] == 3
     overlap = next(p for p in cell["pairwise_common_cohort"] if p["split"] == "train")
@@ -92,7 +94,7 @@ def test_anchor_counts_do_not_become_independent_opportunities_when_identity_mis
 
 
 def test_short_diagnostics_are_visible_without_reselecting_the_committed_policy(tmp_path):
-    data, _, _, _ = _committed(tmp_path, with_short=True)
+    data, _, _, _ = _committed(tmp_path, with_short=True, algorithm=initial.PAIRED_ALGORITHM)
     result = review.generate(data, "2026-10-16", tmp_path / "review")
     assert result["horizons_sec"] == [1, 30, 60]
     cell = next(storage.iter_tree(tmp_path / "review", result["cells_ref"]))
@@ -101,6 +103,295 @@ def test_short_diagnostics_are_visible_without_reselecting_the_committed_policy(
     groups = list(storage.iter_tree(tmp_path / "review", result["feature_groups_ref"]))
     assert {r["feature"] for r in groups} == {"original_signal_price_progress", "p0_spread_bp"}
     assert all(r["selection_authority"] is False for r in groups)
+
+
+def test_v4_short_candidate_is_consumed_by_native_prepared_lookup(tmp_path):
+    data, base, report, policy = _committed(tmp_path, with_short=True, short_value=50)
+    prepared = initial.PreparedPolicy.from_artifacts(policy, report, target_date="2026-10-19")
+    selected = prepared.lookup(target_date="2026-10-19", market="REGULAR",
+                               kind="test_situation", parents=["a"*64, "b"*64])
+    assert selected["delay_sec"] == 1
+    assert policy["algorithm"] == initial.ALGORITHM
+    initial.validate(policy, report, target_date="2026-10-19")
+
+
+@pytest.mark.parametrize("invalid", [False, None, "true"])
+def test_v4_cannot_select_short_quote_without_strict_p0_clock(invalid):
+    row = dict(pairs={30: 1}, p0_valid=True, research_short_p0_valid=invalid, research_short_pairs={"1": 30})
+    with pytest.raises(ValueError, match="short_pair_contract_invalid"):
+        initial.selection_pairs(row, initial.ALGORITHM)
+    assert initial.selection_pairs(row, initial.PAIRED_ALGORITHM) == {30: 1}
+
+
+@pytest.mark.parametrize("basis,delay,allowed,expected", [
+    ("incumbent_on_unconfirmed_pattern", 0, True, "indeterminate"),
+    ("unsupported", None, False, "indeterminate"),
+    ("unverified_lineage_immediate_default", 0, False, "indeterminate"),
+    ("paired_quote_immediate", 0, True, "immediate_supported_on_observed_pairs"),
+    ("paired_quote_initial", 30, True, "positive_delay_supported"),
+    ("paired_quote_initial", 30, False, "indeterminate"),
+])
+def test_zero_evidence_is_distinct_from_existing_behavior(basis, delay, allowed, expected):
+    assert initial.selection_evidence(dict(selection_basis=basis, delay_sec=delay,
+                                           runtime_apply_allowed=allowed)) == expected
+
+
+def _actual_fill():
+    from src.engine.ai.holding_exit_vote import buy_fill_identity_from_legs
+    at = "2026-10-20T09:25:30"
+    legs = [dict(at=at, order_no="order1", execution_no="exec1", qty=1, price=100),
+            dict(at="2026-10-20T09:25:34", order_no="order2", execution_no="exec2", qty=3, price=98)]
+    trade = dict(id=1, code="403870", status="COMPLETED", buy_time=legs[1]["at"],
+                 buy_qty=4, buy_price=98.5, add_count=0)
+    fill = dict(code="403870", legs=legs, source={"sha256": "a"*64},
+                buy_fill_identity=buy_fill_identity_from_legs(legs), position_buy_time=trade["buy_time"])
+    return trade, fill, {"1": {"order1", "order2"}}
+
+
+def test_fill_path_uses_first_and_last_fill_and_does_not_backfill_missing_horizons():
+    trade, fill, orders = _actual_fill()
+    first = review._epoch(fill["legs"][0]["at"])
+    quotes = [dict(symbol="403870", known_at=first+1.1, ask=100, bid=99, source_sha256="a"*64),
+              dict(symbol="403870", known_at=first+4+30.1, ask=97, bid=96, source_sha256="b"*64)]
+    result = review._fill_path(trade, fill, quotes, orders)
+    early, late = result["anchors"]
+    assert early["fill_price"] == 100
+    assert late["fill_price"] == 98.5
+    assert early["horizons"][0]["ask_change_bp"] == 0
+    assert early["horizons"][0]["bid_change_bp"] == -100
+    assert early["horizons"][1]["status"] == "no_exact_horizon_quote"
+    assert late["horizons"][3]["ask_change_bp"] < 0
+    assert result["realized_pnl_krw"] is None
+    assert early["continuous_coverage_proven"] is False
+
+
+@pytest.mark.parametrize("mutation,reason", [
+    ("owner", "main_order_owner_unverified"),
+    ("quantity", "position_generation_or_scale_in_conflict"),
+    ("symbol", "position_generation_or_scale_in_conflict"),
+    ("scale_in", "position_generation_or_scale_in_conflict"),
+])
+def test_fill_path_rejects_wrong_owner_generation_and_scale_in(mutation, reason):
+    trade, fill, orders = _actual_fill()
+    if mutation == "owner":
+        orders = {}
+    elif mutation == "quantity":
+        trade["buy_qty"] = 5
+    elif mutation == "symbol":
+        fill["code"] = "005930"
+    else:
+        trade["add_count"] = 1
+    result = review._fill_path(trade, fill, [], orders)
+    assert result["anchor_status"] == reason
+    assert result["anchors"] == []
+
+
+def test_execution_review_keeps_every_unlinked_trade_and_null_economics(tmp_path, monkeypatch):
+    data = tmp_path/"data"
+    data.mkdir()
+    trade, _, _ = _actual_fill()
+    monkeypatch.setattr(review, "_execution_sources", lambda *a: ([], {"gaps": ["missing"]}))
+    monkeypatch.setattr(review, "_snapshot_fills", lambda *a: ({}, {"gaps": ["missing"]}))
+    output = tmp_path/"review"
+    result = review.generate_execution_review(data, "2026-10-20", output, trades=[trade])
+    rows = list(storage.iter_tree(output, result["trades_ref"]))
+    assert len(rows) == result["census"]["position_records"] == 1
+    assert result["census"]["exact_fill_clock_records"] == 0
+    assert result["default_zero_optimality_proven"] is False
+    assert rows[0]["realized_pnl_krw"] is None
+    assert result["policy_reselected"] is False
+
+
+@pytest.mark.parametrize("fault", [None, "outer_hash_absent", "attempt", "machine", "position", "hash",
+                                  "quote_hash", "stale_quote"])
+def test_execution_join_requires_native_plan_identity_not_symbol_and_time(tmp_path, monkeypatch, fault):
+    from src.tests.test_main_trailing_source_assembler import _issued_trailing_receipt, DAY
+    from src.engine.scalping import pre_submit_delay_tuning as owner
+    receipt, known, _ = _issued_trailing_receipt(tmp_path, monkeypatch)
+    commit = dict(delay_intent_id="intent", owner="main_scalping", entry_action="ENTER_NOW",
+        auxiliary_effective_action="PASS", original_machine_observation_sha256=receipt["machine_observation_sha256"],
+        original_evaluation_attempt_id=receipt["evaluation_attempt_id"], planned_qty=2,
+        decision_committed_at_epoch=known, market_session_bucket="REGULAR",
+        anchor_kind="price_ready", route="KRX_NXT_INTEGRATED", quote_transport_epoch=7)
+    if fault in ("attempt", "machine"):
+        key = "original_evaluation_attempt_id" if fault == "attempt" else "original_machine_observation_sha256"
+        commit[key] = "other" if fault == "attempt" else "f"*64
+    commit["decision_source_sha256"] = owner.decision_source_sha256(commit)
+    plan = dict(stage="entry_execution_sizing_plan", record_id=7, stock_code="005930", emitted_date=DAY,
+        fields=dict(trailing_entry_plan_receipt=receipt, trailing_entry_plan_receipt_sha256=receipt["receipt_sha256"]))
+    if fault == "position":
+        plan["record_id"] = 8
+    if fault == "hash":
+        plan["fields"]["trailing_entry_plan_receipt_sha256"] = "e"*64
+    if fault == "outer_hash_absent":
+        plan["fields"].pop("trailing_entry_plan_receipt_sha256")
+    event = dict(stage="pre_submit_delay_committed", stock_code="005930", emitted_date=DAY, fields=commit)
+    quote = dict(delay_intent_id="intent", decision_source_sha256=commit["decision_source_sha256"],
+        target_delay_sec=180, actual_offset_sec=180, quote_observed_at_epoch=known+180,
+        quote_transport_epoch=7, route=commit["route"], quote_route=commit["route"],
+        ask_price=90, best_bid=89, ask_qty=5, ws_last_0d_epoch=known+179.8,
+        quote_valid=True, quote_consistency_state="single_source", route_depth_source_sha256="a"*64)
+    if fault == "stale_quote":
+        quote["ws_last_0d_epoch"] = known+170
+    quote["quote_source_sha256"] = owner.quote_source_sha256(quote)
+    if fault == "quote_hash":
+        quote["quote_source_sha256"] = "f"*64
+    observation = dict(event, stage="pre_submit_delay_quote_observed", fields=quote)
+    rows, quotes, _, _ = review._timing_opportunities([(event, {}), (plan, {}), (observation, {"offset": 99})])
+    assert len(rows) == 1
+    assert rows[0]["record_id"] == ("7" if fault in (None, "outer_hash_absent", "quote_hash", "stale_quote") else None)
+    assert rows[0]["modeled_fill"] is None
+    # The native delay sampler remains useful after the trailing observer has
+    # stopped. Preserve its actual timestamp and reject bad source/plan links.
+    if fault in (None, "outer_hash_absent"):
+        assert quotes["7"][0]["ask"] == 90
+        assert quotes["7"][0]["known_at"] == known+180
+        assert quotes["7"][0]["source"] == {"offset": 99}
+    else:
+        assert not quotes
+
+
+def test_execution_source_invalidated_mid_read_discards_partial_day(tmp_path, monkeypatch):
+    from src.engine.automation import main_trailing_source_store as native
+    index = tmp_path/"report/main_trailing_source_index/2026-10-20/pipeline_events.sqlite"
+    index.parent.mkdir(parents=True)
+    index.touch()
+    monkeypatch.setattr(native, "generation", lambda *a: {"sha256": "a"*64})
+    def changed(*args, **kwargs):
+        yield {"row": {"stage": "order_leg_sent"}}, {}
+        raise native.InputPending("trailing_index_source_generation_changed")
+    monkeypatch.setattr(native, "read_rows", changed)
+    rows, receipt = review._execution_sources(tmp_path, ["2026-10-20"])
+    assert not rows
+    assert receipt["gaps"][0]["reason"] == "trailing_index_source_generation_changed"
+
+
+def test_execution_source_record_budget_does_not_publish_partial_census(tmp_path, monkeypatch):
+    from src.engine.automation import main_trailing_source_store as native
+    index = tmp_path/"report/main_trailing_source_index/2026-10-20/pipeline_events.sqlite"
+    index.parent.mkdir(parents=True)
+    index.touch()
+    monkeypatch.setattr(review, "MAX_COMPACT_RECORDS", 0)
+    monkeypatch.setattr(native, "generation", lambda *a: {"sha256": "a"*64})
+    monkeypatch.setattr(native, "read_rows", lambda *a, **k: iter([
+        ({"row": {"stage": "order_leg_sent"}}, {})]))
+    with pytest.raises(ValueError, match="execution_source_budget_exceeded"):
+        review._execution_sources(tmp_path, ["2026-10-20"])
+
+
+def test_fill_snapshot_never_reads_oversized_history(tmp_path, monkeypatch):
+    path = tmp_path/"report/monitor_snapshots/trade_review_2026-10-20.json"
+    path.parent.mkdir(parents=True)
+    with path.open("wb") as stream:
+        stream.truncate(17*1024*1024)
+    original = Path.open
+    def guarded(p, *a, **kw):
+        assert p != path, "oversized historical source was opened"
+        return original(p, *a, **kw)
+    monkeypatch.setattr(Path, "open", guarded)
+    fills, receipt = review._snapshot_fills(tmp_path, ["2026-10-20"])
+    assert not fills
+    assert receipt["gaps"][0]["reason"] == "fill_snapshot_requires_native_projection"
+
+
+def test_native_fill_reader_reuses_producer_tree_without_raw_or_quote_copy(tmp_path, monkeypatch):
+    from src.tests.test_strategy_position_performance_report import _native_fact_projection
+    day, raw = _native_fact_projection(tmp_path, monkeypatch, large=False)
+    original = Path.open
+    def guarded(path, *args, **kwargs):
+        assert path not in {raw, raw.with_suffix(".completed_projection.json")}
+        return original(path, *args, **kwargs)
+    monkeypatch.setattr(Path, "open", guarded)
+    rows, source = review._native_fill_rows(tmp_path, day)
+    assert rows
+    assert source["source_kind"] == "native_completed_fill_fields"
+    assert source["path"].startswith(str(tmp_path))
+    assert rows[0]["buy_time"] == day + " 09:00:00"
+
+
+def test_native_fill_plain_fact_is_bound_by_dependency_not_self_seal(tmp_path, monkeypatch):
+    from src.tests.test_strategy_position_performance_report import _native_fact_projection
+    from src.engine.lifecycle.holding_window_generation import byte_generation
+    day, raw = _native_fact_projection(tmp_path, monkeypatch, large=False)
+    dependency_path = raw.with_suffix(".completed_projection.json.dependencies.json")
+    dependency = json.loads(dependency_path.read_bytes())
+    fact = raw.with_suffix(".fact_projection.json")
+    fact.write_bytes(storage.encoded(dict(date=day, snapshot_identity=dependency["snapshot_identity"],
+        sections={"completed_trade_projection": [{"id": 1, "buy_time": day+" 09:00:00"}]})))
+    dependency["fact_projection"] = byte_generation(fact)
+    dependency["artifact_sha256"] = initial.digest({k: v for k,v in dependency.items() if k != "artifact_sha256"})
+    dependency_path.write_bytes(storage.encoded(dependency))
+    rows, _ = review._native_fill_rows(tmp_path, day)
+    assert rows[0]["buy_time"] == day+" 09:00:00"
+    fact.write_bytes(fact.read_bytes()+b" ")
+    with pytest.raises(ValueError, match="native_fill_fact_changed"):
+        review._native_fill_rows(tmp_path, day)
+
+
+def test_native_fill_reader_rejects_changed_snapshot_epoch(tmp_path, monkeypatch):
+    from src.tests.test_strategy_position_performance_report import _native_fact_projection
+    day, raw = _native_fact_projection(tmp_path, monkeypatch, large=False)
+    raw.write_bytes(raw.read_bytes()+b" ")
+    with pytest.raises(ValueError, match="source_binding_invalid"):
+        review._native_fill_rows(tmp_path, day)
+
+
+def test_fill_clock_is_not_replaced_by_position_update_clock():
+    trade, fill, orders = _actual_fill()
+    trade["buy_time"] = fill["position_buy_time"] = "2026-10-20T09:25:33"
+    result = review._fill_path(trade, fill, [], orders)
+    assert result["anchors"][1]["at"] == review._epoch("2026-10-20T09:25:34")
+    assert result["recorded_buy_time"] == "2026-10-20T09:25:33"
+
+
+def test_old_position_generation_does_not_match_reused_record_id():
+    trade, fill, orders = _actual_fill()
+    fill["position_buy_time"] = "2026-10-19T09:25:34"
+    result = review._fill_path(trade, fill, [], orders)
+    assert result["anchor_status"] == "position_generation_or_scale_in_conflict"
+
+
+def test_projection_pools_only_verified_alias_equivalence_and_retains_captured_hashes(tmp_path, monkeypatch):
+    from copy import deepcopy
+    from src.tests.test_pre_submit_delay_tuning import _price_pattern_fixture
+    from src.engine.scalping import reversal_auxiliary_registry as registry
+    records, originals = [], []
+    for alias in ("f6", "f7"):
+        schema = {"format": {"schema": {"properties": {"fact": {"type": "string", "enum": [alias]}}}}}
+        proof = registry.provider_identity(dict(instructions="Same prompt", model="gpt-5.4-nano", text=schema),
+            dict(policy_version="continuous_reversal_policy_v6", registry_sha256="c"*64))
+        proof["semantic"]["response_contract"] = deepcopy(schema)
+        proof["identity_sha256"] = initial.digest(proof["semantic"])
+        originals.append(proof["identity_sha256"])
+        records.append(dict(prices={0: 10000, 30: 9900}, commit_overrides=dict(
+            original_evaluation_attempt_id="native-"+alias,
+            entry_mechanistic_policy_sha256="a"*64,
+            entry_ai_soft_policy_sha256=proof["identity_sha256"],
+            entry_auxiliary_policy_identity_version=proof["schema"],
+            entry_auxiliary_policy_identity=json.dumps(proof))))
+    _price_pattern_fixture(tmp_path, monkeypatch, records)
+    path = next(tmp_path.glob("threshold_cycle/date=*/family=pre_submit_delay/*.jsonl"))
+    rows = [json.loads(line) for line in path.read_text().splitlines()]
+    projected, _ = initial.project_rows(rows)
+    assert len(projected) == 2
+    assert projected[0]["parent_compatibility"] == projected[1]["parent_compatibility"]
+    assert [r["captured_parent_compatibility"][1] for r in projected] == originals
+
+    # The production provider emits that same canonical parent. Connect it to
+    # an actually selected native map, rather than passing a research key by
+    # hand and overlooking a future request/consumer mismatch.
+    _, _, report, policy = _committed(tmp_path/'selected', with_short=True, short_value=50,
+        parents=projected[0]['parent_compatibility'])
+    prepared = initial.PreparedPolicy.from_artifacts(policy, report, target_date='2026-10-19')
+    for alias, risk in [('f6', None), ('f7', None), ('f7', 'STALE_SOURCE')]:
+        schema = {'format':{'schema':{'properties':{'fact':{'type':'string','enum':[alias]}}}}}
+        if risk:schema['format']['schema']['properties']['risk']={'enum':[risk]}
+        actual = registry.provider_identity(dict(instructions='Same prompt', model='gpt-5.4-nano', text=schema),
+            dict(policy_version='continuous_reversal_policy_v6', registry_sha256='c'*64))
+        result = prepared.lookup(target_date='2026-10-19', market='REGULAR', kind='test_situation',
+            parents=['a'*64, actual['identity_sha256']])
+        assert result['delay_sec'] == (0 if risk else 1)
+        assert result['status'] == ('unsupported_existing_behavior' if risk else 'loaded')
 
 
 def test_tampered_projection_shard_rejected_and_complete_report_not_written(tmp_path):

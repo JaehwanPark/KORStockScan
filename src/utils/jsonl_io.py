@@ -886,10 +886,31 @@ def existing_or_gzip_path(path: Path) -> Path:
     return gz_path if gz_path.exists() or gz_path.is_symlink() else path
 
 
+class _DigestingReader:
+    """Minimal file wrapper that hashes compressed bytes as gzip reads."""
+
+    def __init__(self, handle: Any, digest: Any) -> None:
+        self._handle = handle
+        self._digest = digest
+
+    def read(self, size: int = -1) -> bytes:
+        chunk = self._handle.read(size)
+        if chunk:
+            self._digest.update(chunk)
+        return chunk
+
+    def readable(self) -> bool:
+        return True
+
+    def seekable(self) -> bool:
+        return False
+
+
 def _read_json_object_strict_pinned(
     logical: Path,
     generation: ArtifactGenerationLease,
-) -> dict[str, Any]:
+    *, receipt: bool = False,
+) -> dict[str, Any] | JsonObjectReadReceipt:
     candidate_names = (logical.name, f"{logical.name}.gz")
 
     def census() -> dict[str, tuple[int, int, int, int]]:
@@ -908,6 +929,7 @@ def _read_json_object_strict_pinned(
     if not initial_census:
         raise FileNotFoundError(logical)
     decoded: list[tuple[str, dict[str, Any], bytes]] = []
+    stored_digests = {}
     for name, expected_identity in initial_census.items():
         candidate = logical.parent / name
         try:
@@ -924,13 +946,16 @@ def _read_json_object_strict_pinned(
             with os.fdopen(os.dup(descriptor), "rb") as raw_handle:
                 try:
                     if name.endswith(".gz"):
+                        stored = hashlib.sha256()
                         with gzip.GzipFile(
-                            fileobj=raw_handle,
+                            fileobj=_DigestingReader(raw_handle, stored),
                             mode="rb",
                         ) as decoded_handle:
                             decoded_bytes = decoded_handle.read()
+                        stored_digests[name] = stored.hexdigest()
                     else:
                         decoded_bytes = raw_handle.read()
+                        stored_digests[name] = hashlib.sha256(decoded_bytes).hexdigest()
                 except (EOFError, UnicodeDecodeError, gzip.BadGzipFile, ValueError):
                     raise
             value = _json_object_from_bytes(decoded_bytes, source=candidate)
@@ -948,6 +973,16 @@ def _read_json_object_strict_pinned(
         raise ValueError(f"json_artifact_changed_during_read:{logical}")
     if len(decoded) == 2 and decoded[0][2] != decoded[1][2]:
         raise ValueError(f"json_artifact_plain_gzip_conflict:{logical}")
+    generation.assert_parent_current()
+    if receipt:
+        name, payload, content = decoded[0]
+        return JsonObjectReadReceipt(
+            logical_path=logical, physical_path=logical.parent / name, payload=payload,
+            raw_sha256=stored_digests[name], decoded_sha256=hashlib.sha256(content).hexdigest(),
+            physical_identity=initial_census[name],
+            generation_census=tuple(sorted(initial_census.items())),
+            parent_identity=generation.parent_identity,
+        )
     return decoded[0][1]
 
 
@@ -986,52 +1021,7 @@ def _read_json_object_strict_receipt_pinned(
     logical: Path,
     generation: ArtifactGenerationLease,
 ) -> JsonObjectReadReceipt:
-    payload = _read_json_object_strict_pinned(logical, generation)
-    names = (logical.name, f"{logical.name}.gz")
-    initial_census: dict[str, tuple[int, int, int, int]] = {}
-    for name in names:
-        metadata = generation.stat_name(name)
-        if metadata is None:
-            continue
-        if not stat.S_ISREG(metadata.st_mode):
-            raise ValueError(f"json_artifact_path_type_invalid:{logical.parent / name}")
-        initial_census[name] = _file_identity(metadata)
-    if not initial_census:
-        raise FileNotFoundError(logical)
-    selected_name = logical.name if logical.name in initial_census else names[1]
-    raw, identity = _read_generation_name_bytes(generation, selected_name)
-    try:
-        decoded = gzip.decompress(raw) if selected_name.endswith(".gz") else raw
-    except (EOFError, gzip.BadGzipFile, OSError) as exc:
-        raise ValueError(
-            f"json_generation_gzip_invalid:{logical.parent / selected_name}"
-        ) from exc
-    if (
-        _json_object_from_bytes(decoded, source=logical.parent / selected_name)
-        != payload
-    ):
-        raise ValueError(f"json_artifact_changed_during_read:{logical}")
-    final_census: dict[str, tuple[int, int, int, int]] = {}
-    for name in names:
-        metadata = generation.stat_name(name)
-        if metadata is None:
-            continue
-        if not stat.S_ISREG(metadata.st_mode):
-            raise ValueError(f"json_artifact_path_type_invalid:{logical.parent / name}")
-        final_census[name] = _file_identity(metadata)
-    if final_census != initial_census:
-        raise ValueError(f"json_artifact_changed_during_read:{logical}")
-    generation.assert_parent_current()
-    return JsonObjectReadReceipt(
-        logical_path=logical,
-        physical_path=logical.parent / selected_name,
-        payload=payload,
-        raw_sha256=hashlib.sha256(raw).hexdigest(),
-        decoded_sha256=hashlib.sha256(decoded).hexdigest(),
-        physical_identity=identity,
-        generation_census=tuple(sorted(initial_census.items())),
-        parent_identity=generation.parent_identity,
-    )
+    return _read_json_object_strict_pinned(logical, generation, receipt=True)
 
 
 def read_json_object_strict_receipt(
@@ -1177,24 +1167,6 @@ def _iter_jsonl_objects_strict_pinned(
             ):
                 raise ValueError(f"jsonl_artifact_changed_during_read:{item}")
 
-        class _DigestingReader:
-            """Minimal file wrapper that hashes compressed bytes as gzip reads."""
-
-            def __init__(self, handle: Any, digest: Any) -> None:
-                self._handle = handle
-                self._digest = digest
-
-            def read(self, size: int = -1) -> bytes:
-                chunk = self._handle.read(size)
-                if chunk:
-                    self._digest.update(chunk)
-                return chunk
-
-            def readable(self) -> bool:
-                return True
-
-            def seekable(self) -> bool:
-                return False
 
         def stream(
             name: str,

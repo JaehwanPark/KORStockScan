@@ -5,11 +5,12 @@ import json
 import threading
 import time
 import copy
+import math
 import os
 import re
 import shlex
 from collections import OrderedDict, deque
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from queue import Queue, Empty
 from datetime import datetime
 from pathlib import Path
@@ -2441,6 +2442,7 @@ class KiwoomWSManager:
         realtime_type="0B",
         observation_only=None,
         snapshot_target=None,
+        snapshot_lock_held=False,
     ):
         if self._stop_event.is_set():
             return
@@ -2448,7 +2450,8 @@ class KiwoomWSManager:
         normalized_realtime_type = str(realtime_type or "").strip()
         if normalized_realtime_type in {"0B", "0D"}:
             self._observe_micro_reversion_forward(
-                code, data, realtime_type=normalized_realtime_type
+                code, data, realtime_type=normalized_realtime_type,
+                snapshot_lock_held=snapshot_lock_held,
             )
         normalized_code = self._normalize_code(code)
         if observation_only is None:
@@ -2577,24 +2580,68 @@ class KiwoomWSManager:
             )
             self._close_micro_reversion_forward_collector()
 
-    def _observe_micro_reversion_forward(self, code, data, *, realtime_type):
+    def _observe_micro_reversion_forward(self, code, data, *, realtime_type,
+                                         snapshot_lock_held=False):
         collector = self._micro_reversion_forward_collector
-        if collector is None:
+        if collector is None and not getattr(self, "_exact_probe_item_leases", None):
             return
+        normalized_type = str(realtime_type or "").strip()
+        if normalized_type not in {"0B", "0D"}:
+            return
+        # Only an existing exact lease owns this bounded diagnostic. Capture
+        # its identity before the callback can release/replace it or reconnect.
+        snapshot = data if isinstance(data, dict) else {}
+        items = snapshot.get("last_realtime_type_item")
+        item = items.get(normalized_type) if isinstance(items, dict) else None
+        item = item if isinstance(item, str) else None
+        source = snapshot.get("last_trade_tick" if normalized_type == "0B" else "last_depth_tick")
+        source = source if isinstance(source, dict) else {}
+        # Native ingress already owns the non-reentrant snapshot lock. Direct
+        # offline/source callers acquire it; never infer ownership from locked().
+        with nullcontext() if snapshot_lock_held else self.lock:
+            lease = getattr(self, "_exact_probe_item_leases", {}).get(item)
+            interval = (lease or {}).get("interval_started_epoch")
+            received = source.get("received_at_ms")
+            bound = bool(lease and lease.get("epoch") == self._market_data_transport_epoch
+                and source.get("transport_epoch") == lease.get("epoch")
+                and source.get("item") == item
+                and source.get("market_route") == self._ws_item_route(item)
+                and self._normalize_code(item) == code
+                and type(interval) in (int, float) and math.isfinite(interval)
+                and type(received) in (int, float) and math.isfinite(received)
+                and received >= interval * 1000)
+            original_epoch = self._market_data_transport_epoch
+            original_lease_id = (lease or {}).get("lease_id")
+            source_clock = {key: source.get(key) for key in ("route_sequence", "received_at_ms")} if bound else None
+        outcome = "collector_unavailable"
         try:
-            normalized_type = str(realtime_type or "").strip()
             # Per-packet ticks already contain native identity. Do not copy
             # the whole frame or resolve its exact route a second time.
-            if normalized_type == "0B":
-                collector.observe_kiwoom_0b(code, data, realtime_type="0B")
-            elif normalized_type == "0D":
-                collector.observe_kiwoom_0d(code, data, realtime_type="0D")
+            if collector is not None:
+                observe = collector.observe_kiwoom_0b if normalized_type == "0B" else collector.observe_kiwoom_0d
+                result = observe(code, data, realtime_type=normalized_type)
+                if bound:
+                    from src.engine.scalping.micro_reversion.forward_collector import ProducerCanaryResult
+                    outcome = result.value if isinstance(result, ProducerCanaryResult) else "unobservable_result"
         except Exception as exc:
+            outcome = "callback_error"
             self._micro_reversion_forward_collector_error = type(exc).__name__
             log_error(
                 "[WS] micro-reversion forward observer callback isolated "
                 f"failure ({code}): {exc}"
             )
+        if bound:
+            with nullcontext() if snapshot_lock_held else self.lock:
+                if (self._market_data_transport_epoch == original_epoch
+                        and self._exact_probe_item_leases.get(item) is lease
+                        and lease.get("epoch") == original_epoch
+                        and lease.get("lease_id") == original_lease_id):
+                    counts = lease.setdefault("collector_result_counts_by_type", {}).setdefault(normalized_type, {})
+                    counts[outcome] = counts.get(outcome, 0) + 1
+                    receipt = dict(source_clock, result=outcome)
+                    lease.setdefault("collector_last_result_by_type", {})[normalized_type] = receipt
+                    if outcome != "enqueued":
+                        lease.setdefault("collector_first_non_enqueued_by_type", {}).setdefault(normalized_type, receipt)
 
     def _begin_micro_reversion_transport_epoch(self):
         """Rotate source-only collector state after a successful WS reconnect."""
@@ -2884,8 +2931,7 @@ class KiwoomWSManager:
     def stop(self):
         if self._stop_event.is_set():
             self._micro_reversion_canary_monitor_stop_event.set()
-            self._close_micro_reversion_forward_collector()
-            return
+            return self._close_micro_reversion_forward_collector()
 
         self._stop_event.set()
         self._micro_reversion_canary_monitor_stop_event.set()
@@ -2929,8 +2975,9 @@ class KiwoomWSManager:
             if thread and thread is not current_thread and thread.is_alive():
                 thread.join(timeout=2)
 
-        self._close_micro_reversion_forward_collector()
+        closed = self._close_micro_reversion_forward_collector()
         self.websocket = None
+        return closed
 
     def _close_micro_reversion_forward_collector(self):
         """Close the one-shot observer, retaining it when shutdown needs a retry."""
@@ -2938,7 +2985,7 @@ class KiwoomWSManager:
         with self._micro_reversion_forward_collector_close_lock:
             collector = self._micro_reversion_forward_collector
             if collector is None:
-                return
+                return not bool(self._micro_reversion_forward_collector_error)
             try:
                 collector.close(timeout_sec=10.0)
             except Exception as exc:
@@ -2947,6 +2994,7 @@ class KiwoomWSManager:
                     "[WS] micro-reversion forward observer shutdown isolated "
                     f"failure: {exc}"
                 )
+                return False
             else:
                 if self._micro_reversion_forward_collector is collector:
                     final_snapshot_error = None
@@ -2958,14 +3006,16 @@ class KiwoomWSManager:
                             "[WS] micro-reversion final canary snapshot isolated "
                             f"failure: {exc}"
                         )
-                    self._micro_reversion_forward_collector = None
                     self._micro_reversion_canary_monitor_stop_event.set()
                     if final_snapshot_error is None:
                         self._micro_reversion_forward_collector_error = ""
+                        self._micro_reversion_forward_collector = None
+                        return True
                     else:
                         self._micro_reversion_forward_collector_error = type(
                             final_snapshot_error
                         ).__name__
+                        return False
 
     @staticmethod
     def _is_login_success_message(msg_dict):
@@ -4824,6 +4874,7 @@ class KiwoomWSManager:
                                 realtime_type=real_type,
                                 observation_only=observation_only_item,
                                 snapshot_target=target,
+                                snapshot_lock_held=True,
                             )
                 self._flush_deferred_scalp_condition_matches_if_allowed()
 
@@ -5691,6 +5742,15 @@ class KiwoomWSManager:
         if not normalized_codes:
             return
 
+        # Recheck at the command consumer: admissions can follow a producer's
+        # inactive-target snapshot. Keep both physical items and the 0D cache.
+        from src.engine.scalping.pre_submit_delay_observation import should_retain_ws_subscription
+        now_ts = time.time()
+        normalized_codes = {code for code in normalized_codes
+                            if not should_retain_ws_subscription(code, now_ts=now_ts)}
+        if not normalized_codes:
+            return
+
         items_by_code_snapshot = {}
         with self.lock:
             items_by_code_snapshot = {
@@ -5947,6 +6007,23 @@ class KiwoomWSManager:
             target = self.realtime_data.get(code, {})
             snapshot = self._snapshot_target(target, _defer_finish=True) if target else {}
         return self._finish_snapshot(snapshot) if snapshot else {}
+
+    def get_pre_submit_delay_depth(self, code):
+        """Source-only copy of existing route-owned 0D; no protocol operation.
+
+        Excludes accumulated trades, candles and quote normalization. The
+        observation consumer still checks exact route/epoch and depth age.
+        """
+        code = self._normalize_code(code)
+        with self._snapshot_lock():
+            target = self.realtime_data.get(code, {})
+            partitions = target.get('realtime_type_snapshots_by_route') or {}
+            if not isinstance(partitions, dict) or len(partitions) > 16:
+                return {}
+            return dict(market_data_transport_epoch=getattr(self, '_market_data_transport_epoch', None),
+                realtime_type_snapshots_by_route={route: {'0D': copy.deepcopy(value['0D'])}
+                    for route, value in partitions.items()
+                    if isinstance(value, dict) and isinstance(value.get('0D'), dict)})
 
     def get_exact_item_data(self, code, item):
         """Read the registered item's owning view without mixing route stores."""

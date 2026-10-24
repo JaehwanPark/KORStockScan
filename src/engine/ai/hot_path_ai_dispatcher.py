@@ -10,30 +10,14 @@ from __future__ import annotations
 from collections import deque
 from collections.abc import Callable, Mapping
 from concurrent.futures import Future, ThreadPoolExecutor
-from copy import deepcopy
 from dataclasses import dataclass, field
 import threading
 import time
-from types import MappingProxyType
 from typing import AbstractSet, Any
 
+from src.engine.infrastructure.snapshot_copy import immutable_mapping as _immutable_mapping
+
 HOT_PATH_AI_DISPATCHER_VERSION = "hot_path_ai_dispatcher_v1"
-
-
-def _deep_freeze(value: Any) -> Any:
-    if isinstance(value, Mapping):
-        return MappingProxyType(
-            {str(key): _deep_freeze(item) for key, item in value.items()}
-        )
-    if isinstance(value, (list, tuple)):
-        return tuple(_deep_freeze(item) for item in value)
-    if isinstance(value, (set, frozenset)):
-        return frozenset(_deep_freeze(item) for item in value)
-    return deepcopy(value)
-
-
-def _immutable_mapping(value: Mapping[str, Any] | None) -> Mapping[str, Any]:
-    return _deep_freeze(dict(value or {}))
 
 
 @dataclass(frozen=True, slots=True)
@@ -50,6 +34,7 @@ class HotPathAIRequest:
         compare=False,
     )
     metadata: Mapping[str, Any] = field(default_factory=dict)
+    on_complete: Callable[[Any], bool] | None = field(default=None, repr=False, compare=False)
 
     @classmethod
     def create(
@@ -64,9 +49,12 @@ class HotPathAIRequest:
         deadline_epoch: float,
         execute: Callable[[], Mapping[str, Any]],
         metadata: Mapping[str, Any] | None = None,
+        on_complete: Callable[[Any], bool] | None = None,
     ) -> "HotPathAIRequest":
         if not callable(execute):
             raise TypeError("hot-path AI request requires callable execute")
+        if on_complete is not None and not callable(on_complete):
+            raise TypeError('hot-path AI completion must be callable')
         normalized_request_id = str(request_id or "").strip()
         normalized_generation_id = str(generation_id or "").strip()
         normalized_cache_key = str(cache_key or "").strip()
@@ -93,6 +81,7 @@ class HotPathAIRequest:
             deadline_epoch=deadline,
             execute=execute,
             metadata=_immutable_mapping(metadata),
+            on_complete=on_complete,
         )
 
     @property
@@ -181,16 +170,19 @@ class HotPathAIDispatcher:
                 )
             future = self._executor.submit(self._execute, request)
             self._pending[request.dedupe_key] = (request, future)
-            future.add_done_callback(
-                lambda completed, key=request.dedupe_key: self._on_done(key, completed)
-            )
-            return HotPathAISubmitDecision(
+            decision = HotPathAISubmitDecision(
                 accepted=True,
                 reason="ai_request_dispatched",
                 request_id=request.request_id,
                 canonical_request_id=request.request_id,
                 pending_count=len(self._pending),
             )
+        # An already settled Future invokes this synchronously. Publication
+        # must never run under the dispatcher scheduling lock.
+        future.add_done_callback(
+            lambda completed, key=request.dedupe_key: self._on_done(key, completed)
+        )
+        return decision
 
     def _execute(self, request: HotPathAIRequest) -> HotPathAIResult:
         started = time.time()
@@ -204,7 +196,7 @@ class HotPathAIDispatcher:
             )
         try:
             raw_payload = request.execute()
-            payload = deepcopy(dict(raw_payload or {}))
+            payload = _immutable_mapping(raw_payload)
             completed = time.time()
             late = completed > request.deadline_epoch
             return self._result(
@@ -281,9 +273,30 @@ class HotPathAIDispatcher:
                 error_type=type(exc).__name__,
                 error_message=str(exc)[:240],
             )
+        # Publication acknowledgement transfers only immutable result custody.
+        # Rejection/failure leaves the original result for ordinary polling.
+        callback = request_and_future[0].on_complete if request_and_future else None
+        callback_error = None
+        if callback is not None:
+            try:
+                if callback(result) is True:
+                    return
+            except Exception as exc:
+                callback_error = type(exc).__name__
+        self.restore_completed(result, front=False)
+        if callback_error is not None:
+            from src.engine.monitoring.runtime_performance import failure
+            failure('async_completion_delivery', callback_error, emit_log=False)
+
+    def restore_completed(self, result, *, front=True):
+        """Retain the same settled result; never reevaluate or renew its deadline."""
         with self._lock:
-            self._completed.append(result)
-            notification = getattr(self, "completion_event", None)
+            if not any(item is result for item in self._completed):
+                if front:
+                    self._completed.appendleft(result)
+                else:
+                    self._completed.append(result)
+            notification = getattr(self, 'completion_event', None)
             if notification is not None:
                 notification.set()
 

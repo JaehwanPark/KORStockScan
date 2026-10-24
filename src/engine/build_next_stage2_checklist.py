@@ -1781,6 +1781,55 @@ def _existing_manual_task_ids(existing: str) -> set[str]:
     return {match.group(1) for match in re.finditer(r"`\[([A-Za-z0-9_:-]+)\]", text)}
 
 
+def _carry_open_semantic_owners(
+    source: str, existing: str, source_date: str, target_date: str,
+    projected_tasks: list[GeneratedTask],
+) -> str:
+    """Preserve ongoing diagnostic acceptance absent from direct-family summaries.
+
+    Only the exact source-day OPEN owners continue. A closed or absent owner
+    is never recreated because economics are unavailable, and a target-day
+    operator disposition takes precedence. Keep the original body verbatim.
+    """
+    owners = {"HoldingProfitExitSourceContractRepair", "InitialQuantityProducerConsumerRepair1010",
+              "MainMarketWeaknessPostcloseObservation1008"}
+    target_ids = _task_ids_from_text(existing)
+    target_matches = re.findall(r"^- \[[ xX]\] `\[([A-Za-z0-9_:-]+)\]", existing, re.MULTILINE)
+    if any(target_matches.count(owner) > 1 for owner in owners):
+        raise RuntimeError("duplicate target semantic owner")
+    projected = {task.task_id: task for task in projected_tasks}
+    seen: set[str] = set()
+    lines = source.splitlines(keepends=True)
+    carried = []
+    for index, line in enumerate(lines):
+        match = re.match(r"^- \[([ xX])\] `\[([A-Za-z0-9_:-]+)\]", line)
+        if not match or match[2] not in owners:
+            continue
+        state, owner = match.groups()
+        if owner in seen:
+            raise RuntimeError(f"duplicate source semantic owner: {owner}")
+        seen.add(owner)
+        if state != " " or owner in target_ids:
+            continue
+        due = re.search(r"`Due: (\d{4}-\d{2}-\d{2})`", line)
+        if not due or not all(f"`{field}: " in line for field in ("Slot", "TimeWindow", "Track")):
+            raise RuntimeError(f"source semantic owner schedule missing: {owner}")
+        date.fromisoformat(due[1])
+        header = line.replace(f"`Due: {due[1]}`", f"`Due: {target_date}`") if due[1] <= source_date else line
+        end = index + 1
+        while end < len(lines) and (not lines[end].strip() or lines[end][0].isspace()):
+            end += 1
+        body = "".join(lines[index + 1:end])
+        if owner in projected:
+            rendered = _render_task(projected[owner], target_date)
+            header = rendered[0] + "\n"
+            body = body.rstrip() + "\n" + "\n".join(rendered[1:]) + "\n"
+        carried.append(header + body)
+    if not carried:
+        return existing
+    return (existing or _render_new_document(target_date, "")) + "\n\n## 미완료 원천 진단 인계\n\n" + "\n".join(carried)
+
+
 def _remove_direct_generation_markers(existing: str) -> str:
     from src.engine.automation.postclose_summary_handoff import (
         FUTURE_HANDOFF_MARKER,
@@ -2355,6 +2404,17 @@ def _build_direct_family_checklist(
         summary_sha256=summary_sha256,
     )
     existing = target_path.read_text(encoding="utf-8") if target_path.exists() else ""
+    target_existed = bool(existing)
+    source_checklist = stage2_checklist_path(source_date)
+    source_checklist_bytes = None
+    if source_date < target_date:
+        try:
+            source_checklist_bytes = source_checklist.read_bytes()
+        except FileNotFoundError:
+            pass
+        if source_checklist_bytes is not None:
+            existing = _carry_open_semantic_owners(
+                source_checklist_bytes.decode("utf-8"), existing, source_date, target_date, projected_tasks)
     existing = _remove_direct_generation_markers(existing)
     manual_ids = _existing_manual_task_ids(existing) if existing else set()
     tasks_to_render = [
@@ -2414,12 +2474,14 @@ def _build_direct_family_checklist(
     if source_date >= '2026-09-17':
         content = upsert_checklist_handoff(content, source_date, target_date, EV_REPORT_DIR.parent)
     assert_sources_unchanged(handoff_receipt, handoff_paths)
+    if source_checklist_bytes is not None and source_checklist.read_bytes() != source_checklist_bytes:
+        raise RuntimeError("source semantic owner checklist changed during generation")
     _atomic_write_checklist(target_path, content)
     return {
         "source_date": source_date,
         "target_date": target_date,
         "path": str(target_path),
-        "created": not bool(existing),
+        "created": not target_existed,
         "task_count": len(projected_tasks),
         "tasks": [task.task_id for task in projected_tasks],
         "generated_task_count": len(tasks_to_render),

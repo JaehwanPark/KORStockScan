@@ -25,6 +25,7 @@ from src.engine.ai.hot_path_ai_dispatcher import (
     HotPathAIRequest,
 )
 from src.engine.scalping.scanner_runtime_scheduler import ScannerGeneration
+from src.engine.infrastructure.snapshot_copy import immutable_mapping as _immutable_mapping
 
 SCANNER_ASYNC_EVAL_VERSION = "scanner_async_eval_commit_v1"
 _MAX_READY_RESULTS = 128
@@ -149,18 +150,6 @@ class FixedWatchGeneration:
                     signal_age_seconds=max(0.,now_epoch-self.claim_epoch))
 
 
-def _deep_freeze(value: Any) -> Any:
-    if isinstance(value, Mapping):
-        return MappingProxyType(
-            {str(key): _deep_freeze(item) for key, item in value.items()}
-        )
-    if isinstance(value, (list, tuple)):
-        return tuple(_deep_freeze(item) for item in value)
-    if isinstance(value, (set, frozenset)):
-        return frozenset(_deep_freeze(item) for item in value)
-    return deepcopy(value)
-
-
 def thaw_scanner_async_value(value: Any) -> Any:
     """Return a private mutable copy for a worker/provider call."""
 
@@ -171,10 +160,6 @@ def thaw_scanner_async_value(value: Any) -> Any:
     if isinstance(value, frozenset):
         return {thaw_scanner_async_value(item) for item in value}
     return deepcopy(value)
-
-
-def _immutable_mapping(value: Mapping[str, Any] | None) -> Mapping[str, Any]:
-    return _deep_freeze(dict(value or {}))
 
 
 @dataclass(frozen=True, slots=True)
@@ -327,6 +312,7 @@ class ScannerAsyncEvalCoordinator:
             thread_name_prefix="scanner_market_prepare",
         )
         self._lock = threading.RLock()
+        self._poll_lock = threading.Lock()
         self._requests: dict[str, ScannerAsyncEvalRequest] = {}
         self._preparation_futures: dict[str, Future] = {}
         self._prepared: dict[str, Mapping[str, Any]] = {}
@@ -537,6 +523,7 @@ class ScannerAsyncEvalCoordinator:
                     "scanner_async_request_id": request_id,
                     "scanner_state_version": request.context.state_version,
                 },
+                on_complete=self._on_ai_completed,
             )
             decision = self.ai_dispatcher.submit(ai_request)
         except Exception as exc:
@@ -617,44 +604,57 @@ class ScannerAsyncEvalCoordinator:
             self._prepared[request_id] = prepared
         return request.evaluate(request.context, prepared)
 
-    def poll(self) -> int:
-        finished = 0
+    def _complete_ai_result(self, ai_result):
+        request_id = ai_result.request_id
         with self._lock:
-            request_ids = frozenset(self._requests)
-        for ai_result in self.ai_dispatcher.drain_completed(request_ids=request_ids):
-            request_id = ai_result.request_id
+            request = self._requests.get(request_id)
+            prepared = self._prepared.get(request_id, MappingProxyType({}))
+            timings = self._preparation_timings.get(
+                request_id, (ai_result.submitted_epoch, ai_result.submitted_epoch))
+            superseded = self._closed or (request is not None and
+                request.context.generation.generation_id in self._cancelled_generations)
+        if request is None:
+            return False
+        expired = request.context.expired()
+        self._finish(request,
+            status='superseded_result' if superseded else 'evaluation_deadline_expired'
+                if expired and ai_result.status == 'completed' else ai_result.status,
+            preparation_started_epoch=timings[0], preparation_completed_epoch=timings[1],
+            ai_started_epoch=ai_result.started_epoch, completed_epoch=ai_result.completed_epoch,
+            observation_only=bool(ai_result.observation_only or superseded or expired),
+            prepared_context=prepared, ai_payload=ai_result.payload,
+            ai_dispatch_wait_sec=ai_result.ai_dispatch_wait_sec, ai_response_sec=ai_result.ai_response_sec,
+            error_type=ai_result.error_type, error_message=ai_result.error_message)
+        return True
+
+    def _on_ai_completed(self, result):
+        if not self._poll_lock.acquire(blocking=False):
+            return False
+        try:
+            return self._complete_ai_result(result)
+        finally:
+            self._poll_lock.release()
+
+    def poll(self) -> int:
+        if not self._poll_lock.acquire(blocking=False):
+            return 0
+        try:
             with self._lock:
-                request = self._requests.get(request_id)
-                prepared = self._prepared.pop(request_id, MappingProxyType({}))
-                timings = self._preparation_timings.pop(
-                    request_id,
-                    (ai_result.submitted_epoch, ai_result.submitted_epoch),
-                )
-            if request is None:
-                continue
-            with self._lock:
-                superseded = (
-                    self._closed or
-                    request.context.generation.generation_id
-                    in self._cancelled_generations
-                )
-            self._finish(
-                request,
-                status="superseded_result" if superseded else "evaluation_deadline_expired" if request.context.expired() and ai_result.status == 'completed' else ai_result.status,
-                preparation_started_epoch=timings[0],
-                preparation_completed_epoch=timings[1],
-                ai_started_epoch=ai_result.started_epoch,
-                completed_epoch=ai_result.completed_epoch,
-                observation_only=bool(ai_result.observation_only or superseded or request.context.expired()),
-                prepared_context=prepared,
-                ai_payload=ai_result.payload,
-                ai_dispatch_wait_sec=ai_result.ai_dispatch_wait_sec,
-                ai_response_sec=ai_result.ai_response_sec,
-                error_type=ai_result.error_type,
-                error_message=ai_result.error_message,
-            )
-            finished += 1
-        return finished
+                request_ids = frozenset(self._requests)
+            results = self.ai_dispatcher.drain_completed(request_ids=request_ids)
+            finished = 0
+            for index, result in enumerate(results):
+                try:
+                    finished += bool(self._complete_ai_result(result))
+                except BaseException:
+                    # Publication failed: preserve this and all not-yet-owned
+                    # results, prepared inputs and the original request clocks.
+                    for pending in reversed(results[index:]):
+                        self.ai_dispatcher.restore_completed(pending)
+                    raise
+            return finished
+        finally:
+            self._poll_lock.release()
 
     def _finish(
         self,

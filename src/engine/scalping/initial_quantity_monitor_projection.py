@@ -12,6 +12,7 @@ import fcntl
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 
 from src.engine.scalping import entry_split_monitor_projection as files
@@ -26,8 +27,9 @@ MAX_REFERENCES = 8192
 CHILD_LIMIT = 4 * 1024 * 1024
 
 
-def manifest_path(stage_path):
-    return Path(stage_path).with_suffix('.monitor.json')
+def manifest_path(stage_path, *, code=None):
+    suffix = '.monitor.json' if code is None else '.monitor.' + _digest(code) + '.json'
+    return Path(stage_path).with_suffix(suffix)
 
 
 def _digest(value):
@@ -43,6 +45,7 @@ def _code():
     from src.engine.lifecycle.holding_window_generation import cached_code_generation
     engine = Path(__file__).resolve().parents[1]
     names = set('''scalping/initial_quantity_monitor_projection.py
+automation/main_trailing_source_store.py
 scalping/entry_split_monitor_projection.py
 scalping/initial_quantity_policy.py
 scalping/initial_quantity_source_cache.py
@@ -60,17 +63,23 @@ scalping/pre_submit_delay_initial_policy.py
 scalping/mechanistic_entry_runtime_policy.py
 lifecycle/broker_cost_reconciliation.py
 lifecycle/broker_cost_allocation.py
+ai/holding_exit_vote.py
+scalping/main_stop_quantity_source.py
+lifecycle/main_stop_research_cost.py
 lifecycle/broker_cost_source.py
 lifecycle/holding_window_generation.py
 lifecycle/research_storage.py
 lifecycle/research_input_budget.py
+lifecycle/research_json_stream.py
 lifecycle/research_disk_budget.py
 lifecycle/snapshot_archive.py
 infrastructure/validation_digest_session.py
 strategy_position_performance_report.py
 sniper_trade_review_report.py
+sniper_execution_receipts.py
 sniper_position_tags.py
 log_archive_service.py
+monitor_snapshot_runtime.py
 trade_profit.py
 error_detectors/artifact_freshness.py'''.split())
     from src.engine.scalping.initial_quantity_refresh_evaluation import EXECUTION_READERS
@@ -78,6 +87,7 @@ error_detectors/artifact_freshness.py'''.split())
     paths = [engine/name for name in sorted(names)]
     paths.extend(engine.parent/relative for relative in (
         'trading/order/tick_utils.py', 'trading/order/split_execution_math.py',
+        'trading/market/execution_venue.py',
         'utils/jsonl_io.py'))
     observed = cached_code_generation(paths)
     return {str(path.relative_to(engine.parent)): observed[str(path)] for path in paths}
@@ -171,6 +181,59 @@ def _directories(report, data_root):
     return result
 
 
+def _snapshot_sources(dependencies, data_root):
+    """Cold publisher binds logical bytes once; warm readers use native custody."""
+    from src.engine.lifecycle import snapshot_archive as archive
+    parent = Path(data_root)/'report/monitor_snapshots'
+    result = {}
+    for name in dependencies:
+        path = Path(name)
+        if path.parent != parent or not re.fullmatch(
+                r'trade_review_\d{4}-\d{2}-\d{2}(?:\.completed_projection)?\.json', path.name):
+            continue
+        aliases = [str(path), str(path)+'.gz', str(path)+'.gz.archive_receipt.json']
+        if not all(alias in dependencies for alias in aliases):
+            continue
+        if path.exists():
+            generation = archive.generation(path)
+            identity = archive.file_identity(path.stat())
+        elif Path(aliases[1]).exists():
+            receipt = archive.archived_receipt(path)
+            generation = dict(path=path.name, size=receipt['logical_size_bytes'],
+                              sha256=receipt['logical_content_sha256'])
+            identity = receipt['original_identity']
+        else:
+            continue
+        result[name] = dict(generation=generation, original_identity=identity)
+    return result
+
+
+def _verified_dependencies(dependencies, snapshots, data_root):
+    """Accept only native lossless representation changes of cold-bound bytes."""
+    from src.engine.lifecycle import snapshot_archive as archive
+    observed = {name: _identity(Path(name)) for name in dependencies}
+    parent = Path(data_root)/'report/monitor_snapshots'
+    for name, bound in snapshots.items():
+        path = Path(name)
+        aliases = [name, name+'.gz', name+'.gz.archive_receipt.json']
+        if (path.parent != parent or not re.fullmatch(
+                r'trade_review_\d{4}-\d{2}-\d{2}(?:\.completed_projection)?\.json', path.name)
+                or not all(alias in dependencies for alias in aliases)):
+            raise ValueError('quantity_monitor_logical_source_path_invalid')
+        if all(observed[alias] == dependencies[alias] for alias in aliases):
+            continue
+        if observed[name] is not None or any(observed[alias] is None for alias in aliases[1:]):
+            raise ValueError('quantity_monitor_source_changed')
+        receipt = archive.archived_receipt(path, bound_logical_generation=bound['generation'])
+        if receipt['original_identity'] != bound['original_identity']:
+            raise ValueError('quantity_monitor_source_changed')
+        # Only these three physical names moved. All unrelated source, cost,
+        # directory and issued-stage identities retain their strict checks.
+        for alias in aliases:
+            observed[alias] = dependencies[alias]
+    return observed
+
+
 def _check_directories(expected):
     for name, generation in expected.items():
         path = Path(name)
@@ -212,6 +275,9 @@ def _cost_signature(data_root, costs):
         paths.add(root/'runtime/holding_broker_cost_sources'/(day+'.json'))
         for source in item['generation'].get('quantity_research_cost_generation', {}).get('source_dates', []):
             paths.add(root/'runtime/holding_broker_cost_sources'/(source['source_date']+'.json'))
+            logical=source.get('source_sha256')
+            if isinstance(logical,str) and re.fullmatch('[0-9a-f]{64}',logical):
+                paths.add(root/'runtime/holding_broker_cost_sources/generations'/source['source_date']/(logical+'.json'))
         for receipt in item['generation'].get('quantity_research_cost_generation', {}).get('receipts', []):
             paths.add(research/'generations'/(receipt['content_sha256']+'.json'))
     if len(paths) > 20000:
@@ -230,7 +296,8 @@ def _costs(report, data_root):
         if isinstance(generation, dict) and isinstance(generation.get('cost_generation'), dict):
             expected.append({'source_date': day, 'generation': generation['cost_generation']})
     for day, generation in census.get('completion_overlay_generations', {}).items():
-        costs = (generation.get('completion_snapshot_source') or {}).get('actual_cost_source_generation')
+        costs = generation.get('current_cost_generation',
+            (generation.get('completion_snapshot_source') or {}).get('actual_cost_source_generation'))
         if isinstance(costs, dict):
             expected.append({'source_date': day, 'generation': costs})
     expected = list({(item['source_date'], _digest(item['generation'])): item
@@ -240,8 +307,8 @@ def _costs(report, data_root):
         raise ValueError('quantity_monitor_cost_date_budget')
     for item in expected:
         costs, day = item['generation'], item['source_date']
-        dates = costs.get('quantity_research_cost_generation', {}).get('source_dates')
-        kwargs = {'additional_source_dates': [row['source_date'] for row in dates]} if dates is not None else {}
+        declared=costs.get('quantity_research_cost_generation')
+        kwargs={'declared_research':declared if declared is not None else False}
         if source_generation(data_root, day, **kwargs) != costs:
             raise ValueError('quantity_monitor_cost_generation_changed')
     return expected
@@ -258,10 +325,101 @@ def _observation(stage, report, evaluation, data_root):
         stage['source_date'], stage, report, evaluation, bounded_read)
 
 
-def publish(stage_path, stage, report, *, data_root):
-    """Publish only for oversized children, after full native validation."""
-    if not any(Path(stage[name+'_path']).stat().st_size > CHILD_LIMIT
-               for name in ('report', 'timeout_research') if name+'_path' in stage):
+def _historical_exclusions(stage, observation, disposition, input_manifest):
+    """Classify an explicitly accepted, isolated historical population only.
+
+    The original gap, economic exclusions and null economics remain evidence.
+    Source/code freshness is still checked by the enclosing native projection.
+    """
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    rows = disposition.get('excluded_rows', [])
+    accepted = datetime.fromisoformat(disposition['accepted_at'])
+    counts = Counter(row['reason'] for row in rows)
+    if (disposition.get('schema') != 'initial_quantity_historical_exclusions_v1'
+            or disposition.get('disposition') != 'excluded_from_economic_sample'
+            or disposition.get('source_date') != stage.get('source_date')
+            or disposition.get('stage_content_sha256') != stage.get('receipt_content_sha256')
+            or disposition.get('report_content_sha256') != stage.get('report_content_sha256')
+            or disposition.get('input_manifest_sha256') != input_manifest
+            or accepted.tzinfo is None or accepted > datetime.now(ZoneInfo('Asia/Seoul'))
+            or stage['source_date'] >= accepted.astimezone(ZoneInfo('Asia/Seoul')).date().isoformat()
+            or stage.get('generation_kind') != 'refresh'
+            or stage.get('stage_status') != 'complete_source_only' or stage.get('terminal') is not True
+            or any(stage.get(key) is not False for key in
+                   ('runtime_apply_allowed', 'runtime_effect', 'actual_order_submitted'))
+            or stage.get('decision') != 'carry_parent'
+            or observation.get('economic_sample_status') != 'cost_eligible'
+            or observation.get('trade_policy_binding_status') != 'bound'
+            or observation.get('postclose_completed_trade_count', 0) <= 0
+            or observation.get('postclose_semantic_findings') != ['initial_quantity_economic_source_gap']
+            or not rows or len({row['record_id'] for row in rows}) != len(rows)
+            or any(not row['record_id'] or not row['stock_code']
+                   or len(row['fact_sha256']) != 64 for row in rows)
+            or set(counts) - {'terminal_cost_or_quantity_missing', 'quantity_research_cost_invalid'}
+            or dict(counts) != observation.get('postclose_source_gap_reasons')
+            or dict(counts) != disposition.get('exclusion_counts')):
+        raise ValueError('quantity_historical_exclusions_binding_invalid')
+    return {**observation, 'postclose_semantic_findings': [],
+        'postclose_historical_diagnostics': observation['postclose_semantic_findings'],
+        'postclose_attention_status': 'historical_exclusions_recorded',
+        'postclose_historical_exclusions': disposition}
+
+
+def _exclusion_disposition(stage_path, stage, report, observation, data_root, record_ids):
+    """Reuse an exact prior acknowledgement, or issue one on explicit request."""
+    from src.engine.scalping import initial_quantity_policy as native
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    disposition = None
+    if record_ids is None and manifest_path(stage_path).exists():
+        pointer, _ = files._read(manifest_path(stage_path), 65536)
+        selected = Path(pointer['projection_path'])
+        if (selected.parent != Path(stage_path).parent/'monitor_generations'
+                or selected.name != pointer['projection_content_sha256']+'.projection.json'):
+            raise ValueError('quantity_monitor_projection_path_invalid')
+        previous, metadata = files._read(selected, MAX_BYTES)
+        if (metadata['sha256'] != pointer['projection_sha256']
+                or _digest(previous) != pointer['projection_content_sha256']):
+            raise ValueError('quantity_monitor_projection_invalid')
+        disposition = previous.get('historical_exclusion_disposition')
+    if record_ids is not None or disposition is not None:
+        rows = []
+        for fact in report['census']['input_fact_rows']:
+            _, census = native.completed_trade_fact_census(stage['source_date'],
+                fact_rows=[fact], data_dir=data_root,
+                entry_on_or_after=report['census'].get('entry_on_or_after'))
+            for reason, count in census['excluded'].items():
+                if reason in observation['postclose_source_gap_reasons']:
+                    if count != 1:
+                        raise ValueError('quantity_historical_exclusions_population_invalid')
+                    rows.append(dict(record_id=str(fact['recommendation_id']),
+                        stock_code=str(fact['stock_code']), fact_sha256=native._digest(fact), reason=reason))
+        rows.sort(key=lambda row: row['record_id'])
+        if record_ids is not None:
+            if sorted(map(str, record_ids)) != [row['record_id'] for row in rows]:
+                raise ValueError('quantity_historical_exclusions_population_invalid')
+            disposition = dict(schema='initial_quantity_historical_exclusions_v1',
+                disposition='excluded_from_economic_sample',
+                accepted_at=datetime.now(ZoneInfo('Asia/Seoul')).isoformat(),
+                source_date=stage['source_date'], stage_content_sha256=stage['receipt_content_sha256'],
+                report_content_sha256=stage['report_content_sha256'],
+                input_manifest_sha256=report['census']['input_manifest_sha256'],
+                exclusion_counts=dict(Counter(row['reason'] for row in rows)), excluded_rows=rows)
+        if disposition['excluded_rows'] != rows:
+            raise ValueError('quantity_historical_exclusions_population_changed')
+        _historical_exclusions(stage, observation, disposition, report['census']['input_manifest_sha256'])
+    return disposition
+
+
+def publish(stage_path, stage, report, *, data_root, accepted_historical_record_ids=None,
+            publish_current=True):
+    if type(publish_current) is not bool:
+        raise ValueError('quantity_monitor_publication_mode_invalid')
+    """Publish a native proof; historical exclusions require explicit acceptance."""
+    if (accepted_historical_record_ids is None and not manifest_path(stage_path).exists()
+            and not any(Path(stage[name+'_path']).stat().st_size > CHILD_LIMIT
+                        for name in ('report', 'timeout_research') if name+'_path' in stage)):
         return None
     from src.engine.scalping import initial_quantity_policy as native
     data_root = Path(data_root).resolve()
@@ -288,6 +446,7 @@ def publish(stage_path, stage, report, *, data_root):
             issued['candidate' if name == 'candidate_policy' else name] = value
     costs = _costs(report, data_root)
     cost_signature = _cost_signature(data_root, costs)
+    snapshots = _snapshot_sources(before, data_root)
     issued_sources = {str(Path(stage_path)): before[str(Path(stage_path))]}
     issued_hashes = {str(Path(stage_path)): stage_file['sha256']}
     for name, child in stage.items():
@@ -306,7 +465,8 @@ def publish(stage_path, stage, report, *, data_root):
             status_counts=dict(Counter(str(row.get('status')) for row in report['census']['input_fact_rows'])),
             full_native_stage_validated=True, full_semantic_census_validated=True),
         native_validation_scope='full_stage_policy_timeout_census_and_native_completion',
-        dependencies=before, issued_sources=issued_sources, issued_file_sha256=issued_hashes,
+        dependencies=before, logical_snapshot_dependencies=snapshots,
+        issued_sources=issued_sources, issued_file_sha256=issued_hashes,
         cost_generations=[{'source_date': item['source_date'],
             'generation_sha256': _digest(item['generation'])} for item in costs],
         cost_source_inventory=cost_signature, source_directories=directories_before, code=code,
@@ -318,7 +478,6 @@ def publish(stage_path, stage, report, *, data_root):
             or directories_before != _directories(report, data_root) or code != _code()):
         raise ValueError('quantity_monitor_source_changed')
     base = Path(stage_path).parent/'monitor_generations'
-    ident = _digest(projection)
     base.mkdir(exist_ok=True)
     lock_path = Path(stage_path).parent/'.monitor.lock'
     with os.fdopen(os.open(lock_path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600), 'a+b') as lock:
@@ -329,6 +488,15 @@ def publish(stage_path, stage, report, *, data_root):
             raise ValueError('quantity_monitor_source_changed')
         if costs != _costs(report, data_root) or cost_signature != _cost_signature(data_root, costs) or code != _code():
             raise ValueError('quantity_monitor_cost_generation_changed')
+        # Read the prior disposition under the same publisher lock: a refresh
+        # that started earlier must not erase a concurrently accepted population.
+        disposition = _exclusion_disposition(stage_path, stage, report, observation,
+            data_root, accepted_historical_record_ids)
+        if disposition is not None:
+            projection['historical_exclusion_disposition'] = disposition
+        if len(files._canonical(projection)) > MAX_BYTES:
+            raise ValueError('quantity_monitor_projection_budget')
+        ident = _digest(projection)
         path = base/(ident+'.projection.json')
         files._write_atomic(path, projection, MAX_BYTES, immutable=True)
         pointer = dict(schema=MANIFEST, source_date=stage['source_date'],
@@ -338,7 +506,7 @@ def publish(stage_path, stage, report, *, data_root):
             decision_authority='report_only', runtime_effect=False, runtime_apply_allowed=False,
             actual_order_submitted=False)
         previous = manifest_path(stage_path)
-        if previous.exists():
+        if publish_current and previous.exists():
             _, record = files._read(previous, 65536)
             with previous.open('rb') as original:
                 old = original.read(65537)
@@ -349,7 +517,12 @@ def publish(stage_path, stage, report, *, data_root):
                 with archived.open('xb') as handle:
                     handle.write(old)
                     handle.flush(); os.fsync(handle.fileno())
-        files._write_atomic(previous, pointer, 65536)
+        # A reviewed candidate can prove its own generation before selection
+        # without replacing the incumbent reader's manifest. Both consumers
+        # retain the same native source, coverage and authority checks.
+        files._write_atomic(manifest_path(stage_path, code=code), pointer, 65536)
+        if publish_current:
+            files._write_atomic(previous, pointer, 65536)
         if (before != _dependencies(stage_path, stage, report, data_root)
                 or cost_signature != _cost_signature(data_root, costs)
                 or projection['source_directories'] != _directories(report, data_root) or code != _code()):
@@ -361,11 +534,13 @@ def read_verified(stage_path, stage, *, read, data_root=None, role='current_stag
     """Return a native proof or None for the unchanged bounded legacy reader."""
     if role not in {'current_stage', 'issued_ancestry'}:
         raise ValueError('quantity_monitor_role_invalid')
-    pointer_path = manifest_path(stage_path)
+    code = _code() if role == 'current_stage' else None
+    pointer_path = manifest_path(stage_path, code=code)
+    if code is not None and not pointer_path.exists() and not pointer_path.is_symlink():
+        pointer_path = manifest_path(stage_path)
     if not pointer_path.exists() and not pointer_path.is_symlink():
         return None
     pointer = read(pointer_path, limit=65536)
-    code = _code() if role == 'current_stage' else None
     if (pointer.get('schema') != MANIFEST or (role == 'current_stage' and pointer.get('code') != code)
             or pointer.get('source_date') != stage.get('source_date')
             or pointer.get('stage_content_sha256') != stage.get('receipt_content_sha256')):
@@ -429,7 +604,10 @@ def read_verified(stage_path, stage, *, read, data_root=None, role='current_stag
         if issued_before != {name: _identity(Path(name)) for name in issued_sources}:
             raise ValueError('quantity_monitor_issued_source_changed')
         return {'issued': value['issued'], 'observation': value['observation']}
-    before = {name: _identity(Path(name)) for name in dependencies}
+    snapshots = value.get('logical_snapshot_dependencies', {})
+    if not isinstance(snapshots, dict) or len(snapshots) > MAX_REFERENCES:
+        raise ValueError('quantity_monitor_reference_budget')
+    before = _verified_dependencies(dependencies, snapshots, root)
     if before != dependencies:
         raise ValueError('quantity_monitor_source_changed')
     _check_directories(value['source_directories'])
@@ -464,8 +642,12 @@ def read_verified(stage_path, stage, *, read, data_root=None, role='current_stag
         return observed
     if current_cost_inventory() != inventory:
         raise ValueError('quantity_monitor_cost_generation_changed')
-    if (before != {name: _identity(Path(name)) for name in dependencies}
+    if (before != _verified_dependencies(dependencies, snapshots, root)
             or current_cost_inventory() != inventory or code != _code()):
         raise ValueError('quantity_monitor_source_changed')
     _check_directories(value['source_directories'])
-    return {'issued': value['issued'], 'observation': value['observation']}
+    observation = value['observation']
+    if value.get('historical_exclusion_disposition') is not None:
+        observation = _historical_exclusions(stage, observation,
+            value['historical_exclusion_disposition'], coverage['input_manifest_sha256'])
+    return {'issued': value['issued'], 'observation': observation}

@@ -7,6 +7,8 @@ strategy thresholds.
 
 from __future__ import annotations
 
+from src.engine.monitoring import sentinel_event_scope as event_scope
+
 from src.engine.monitoring.sentinel_compact_store import fields_identity
 
 import argparse
@@ -104,6 +106,7 @@ BROKER_SUBMIT_FAILURE_STAGES = {
 BLOCKER_STAGE_PREFIXES = ("blocked_",)
 BLOCKER_STAGES = {
     "machine_submit_lineage_rejected",
+    "main_entry_order_route_invalid",
     "latency_block",
     "entry_armed_expired",
     "entry_armed_expired_after_wait",
@@ -112,6 +115,7 @@ BLOCKER_STAGES = {
     "entry_local_not_sent",
     "entry_physical_send_guard_block",
     "pre_submit_weak_context_late_entry_guard_block",
+    "pre_submit_liquidity_guard_block",
     "real_weak_pullback_entry_block",
     *UPSTREAM_BLOCK_STAGES,
     *BUDGET_BLOCKER_STAGES,
@@ -120,7 +124,9 @@ BLOCKER_STAGES = {
     *BROKER_SUBMIT_FAILURE_STAGES,
 }
 DEFAULT_WINDOWS = (5, 10, 30)
-SESSION_START = time(9, 0)
+SESSION_START = time(8, 0)
+PREMARKET_SENTINEL_START = time(8, 5)
+PREMARKET_SENTINEL_END = time(8, 50)
 SENTINEL_START = time(9, 5)
 SENTINEL_END = time(15, 20)
 NXT_SENTINEL_START = time(16, 0)
@@ -130,8 +136,8 @@ SUBMIT_DROUGHT_MIN_BUDGET_UNIQUE = 3
 SUBMIT_TO_AI_CRITICAL_PCT = 20.0
 SUBMIT_TO_BUDGET_CRITICAL_PCT = 10.0
 REPORT_DIRNAME = "buy_funnel_sentinel"
-EVENT_CACHE_SCHEMA_VERSION = 19
-LOSSLESS_EVENT_CACHE_SCHEMA_VERSION = 20
+EVENT_CACHE_SCHEMA_VERSION = 21
+LOSSLESS_EVENT_CACHE_SCHEMA_VERSION = 22
 EVENT_CACHE_NAME = "buy_funnel_sentinel_events"
 FORBIDDEN_AUTOMATIONS = [
     "score_threshold_relaxation",
@@ -200,12 +206,6 @@ PROBE_BUNDLE_LIFECYCLE_STAGES = {
     "residual_partial_complete",
     "bundle_completed",
     "order_bundle_submitted",
-}
-EXPLICIT_TRADABLE_VENUES = {
-    "KRX",
-    "NXT",
-    "KRX_NXT_INTEGRATED",
-    "PREMARKET_KRX_LIKE",
 }
 VENUE_SCOPE_FIELD_KEYS = (
     "decision_market_scope",
@@ -494,45 +494,30 @@ def _event_from_cache_row(row: dict[str, Any]) -> PipelineEvent | None:
 def _previous_cache_schema_proof(target_date, raw_path, previous_schema):
     """A native stage census can prove that newly retained stages were absent."""
     from src.engine import observation_source_quality_audit as audit
-    if previous_schema not in {11, 13, 15, 16, 17, 18}:
+    if previous_schema not in {11, 13, 15, 16, 17, 18, 19, 20}:
         return None
     try:
         meta_path = _event_cache_dir() / f"{EVENT_CACHE_NAME}_{target_date}.meta.json"
         meta = json.loads(meta_path.read_text())
         actual_schema = meta.get("schema_version")
-        if previous_schema in {17, 18}:
-            if actual_schema not in {previous_schema, previous_schema - 2}:
-                return None
+        if previous_schema >= 15:
             stat = raw_path.stat()
-            if (str(meta.get('raw_path')) != str(raw_path)
+            if (actual_schema not in range(15 + int(previous_schema % 2 == 0), previous_schema + 1, 2)
+                    or str(meta.get('raw_path')) != str(raw_path)
                     or meta.get('raw_inode') != stat.st_ino
                     or not 0 <= int(meta.get('raw_offset', -1)) <= stat.st_size):
                 return None
-            stages = ['zero_base_probe_result', 'main_fixed_watch_observation_wait']
-            if actual_schema == previous_schema - 2:
-                stages += ['pre_submit_weak_context_late_entry_guard_block', 'real_weak_pullback_entry_block']
-            return dict(from_schema=actual_schema, to_schema=previous_schema + 2,
+            admissions = (
+                (17, ['pre_submit_weak_context_late_entry_guard_block', 'real_weak_pullback_entry_block']),
+                (19, ['zero_base_probe_result', 'main_fixed_watch_observation_wait']),
+                (21, ['pre_submit_liquidity_guard_block']),
+            )
+            stages = [stage for version, values in admissions
+                      if actual_schema < version <= previous_schema + 2 for stage in values]
+            return dict(from_schema=actual_schema, to_schema=previous_schema+2,
                 raw_generation=audit._raw_generation(raw_path), raw_offset=int(meta['raw_offset']),
                 newly_admitted_stages=stages, population_proof='forward_only_stage_extension',
                 historical_stage_coverage='not_backfilled_before_raw_offset')
-        if previous_schema in {15, 16}:
-            if actual_schema != previous_schema:
-                return None
-            stat = raw_path.stat()
-            if (str(meta.get("raw_path")) != str(raw_path)
-                    or meta.get("raw_inode") != stat.st_ino
-                    or not 0 <= int(meta.get("raw_offset", -1)) <= stat.st_size):
-                return None
-            # Existing rows retain identical semantics. New guard stages begin
-            # at this verified append cursor; missing historical stages stay gaps.
-            return {"from_schema": previous_schema,
-                    "to_schema": previous_schema + 2,
-                    "raw_generation": audit._raw_generation(raw_path),
-                    "raw_offset": int(meta["raw_offset"]),
-                    "newly_admitted_stages": ["pre_submit_weak_context_late_entry_guard_block",
-                                              "real_weak_pullback_entry_block"],
-                    "population_proof": "forward_only_stage_extension",
-                    "historical_stage_coverage": "not_backfilled_before_raw_offset"}
         if actual_schema not in ({12, 13} if previous_schema == 13 else {10, 11}):
             return None
         previous_schema = actual_schema
@@ -579,7 +564,7 @@ def load_pipeline_events(
             target_date=target_date,
             schema_version=cache_schema_version,
             verified_schema_migration=_previous_cache_schema_proof(
-                target_date, path, 18 if exclude_summary_stages else 17),
+                target_date, path, 20 if exclude_summary_stages else 19),
             parse_payload=lambda payload: _payload_to_cache_row(
                 payload,
                 exclude_summary_stages=exclude_summary_stages,
@@ -754,134 +739,6 @@ def _attempt_key(event: PipelineEvent) -> str:
     return f"name:{event.stock_name}"
 
 
-def _canonical_venue(value: Any) -> str | None:
-    text = _safe_str(value).upper()
-    if text in {"KRX_NXT_INTEGRATED", "KRX_NXT", "KRX+NXT", "SOR"}:
-        return "KRX_NXT_INTEGRATED"
-    if text in {"NXT_ONLY", "NXT"}:
-        return "NXT"
-    if text in {"KRX_ONLY", "KRX"}:
-        return "KRX"
-    if text in EXPLICIT_TRADABLE_VENUES:
-        return text
-    if text in {"_NX", "NXT_PREMARKET", "NXT_AFTERMARKET", "NXT_REGULAR"}:
-        return "NXT"
-    if text in {"KRX_REGULAR", "KRX"}:
-        return "KRX"
-    return None
-
-
-def _canonical_session(value: Any) -> str | None:
-    text = _safe_str(value).upper()
-    if not text:
-        return None
-    if text in {
-        "KRX_NXT_AFTERMARKET",
-        "KRX_NXT_AFTERMARKET_CLOSE_ONLY",
-        "KRX_NXT_AFTERMARKET_TERMINAL_EXIT",
-        "NXT_AFTERMARKET_SOLO",
-        "SESSION_TRANSITION",
-        "CLOSED",
-    }:
-        return text
-    if "PREMARKET_KRX_LIKE" in text or "KRX_LIKE_PREMARKET" in text:
-        return "PREMARKET_KRX_LIKE"
-    if "NXT" in text and "PRE" in text:
-        return "NXT_PREMARKET"
-    if "NXT" in text and ("AFTER" in text or "POST" in text):
-        return "NXT_AFTERMARKET"
-    if "NXT" in text:
-        return "NXT_REGULAR"
-    if "KRX" in text:
-        return "KRX_REGULAR"
-    return None
-
-
-def _session_for_venue(venue: str, emitted_at: datetime) -> str:
-    if venue == "PREMARKET_KRX_LIKE":
-        return "PREMARKET_KRX_LIKE"
-    if venue == "KRX":
-        return "KRX_REGULAR"
-    if venue == "KRX_NXT_INTEGRATED":
-        if emitted_at.date() < date(2026, 9, 14):
-            return "UNKNOWN"
-        if time(16, 0) <= emitted_at.time() < time(19, 40):
-            return "KRX_NXT_AFTERMARKET"
-        if time(19, 40) <= emitted_at.time() < time(19, 45):
-            return "KRX_NXT_AFTERMARKET_CLOSE_ONLY"
-        if time(19, 45) <= emitted_at.time() < time(20, 0):
-            return "KRX_NXT_AFTERMARKET_TERMINAL_EXIT"
-        return "UNKNOWN"
-    if emitted_at.time() < time(9, 0):
-        return "NXT_PREMARKET"
-    if emitted_at.time() > time(15, 30):
-        return "NXT_AFTERMARKET"
-    return "NXT_REGULAR"
-
-
-def _explicit_event_scope(event: PipelineEvent) -> tuple[str, str, str] | None:
-    venue = next(
-        (
-            venue
-            for key in VENUE_SCOPE_FIELD_KEYS[:-1]
-            if (venue := _canonical_venue(event.fields.get(key))) is not None
-        ),
-        None,
-    )
-    fallback_venue = _canonical_venue(event.fields.get(VENUE_SCOPE_FIELD_KEYS[-1]))
-    session = next(
-        (
-            session
-            for key in SESSION_SCOPE_FIELD_KEYS[:-1]
-            if (session := _canonical_session(event.fields.get(key))) is not None
-        ),
-        None,
-    )
-    fallback_session = _canonical_session(
-        event.fields.get(SESSION_SCOPE_FIELD_KEYS[-1])
-    )
-    venue = venue or fallback_venue
-    session = session or fallback_session
-    if venue is None and session is not None:
-        if session.startswith("KRX_NXT_AFTERMARKET"):
-            venue = "KRX_NXT_INTEGRATED"
-        else:
-            venue = (
-                "PREMARKET_KRX_LIKE"
-                if session == "PREMARKET_KRX_LIKE"
-                else ("NXT" if session.startswith("NXT_") else "KRX")
-            )
-    if venue is None:
-        return None
-    if session is None:
-        session = _session_for_venue(venue, event.emitted_at)
-    elif (
-        venue == "NXT"
-        and session == "NXT_REGULAR"
-        and (
-            event.emitted_at.time() < time(9, 0)
-            or event.emitted_at.time() > time(15, 30)
-        )
-    ):
-        session = _session_for_venue(venue, event.emitted_at)
-    if (
-        (venue == "NXT" and not session.startswith("NXT_"))
-        or (venue == "KRX" and session != "KRX_REGULAR")
-        or (
-            venue == "KRX_NXT_INTEGRATED"
-            and not session.startswith("KRX_NXT_AFTERMARKET")
-        )
-        or (venue == "PREMARKET_KRX_LIKE" and session != "PREMARKET_KRX_LIKE")
-    ):
-        return "CONFLICT", "CONFLICT", "conflict"
-    return venue, session, "pass"
-
-
-def _actual_execution_venue(event: PipelineEvent) -> str:
-    value = _safe_str(event.fields.get("actual_execution_venue")).upper()
-    return value if value in {"KRX", "NXT"} else "UNKNOWN"
-
-
 def _partition_events_by_venue_session(
     events: list[PipelineEvent],
 ) -> tuple[dict[str, list[PipelineEvent]], dict[str, int]]:
@@ -889,7 +746,9 @@ def _partition_events_by_venue_session(
         defaultdict(list)
     )
     for event in events:
-        scope = _explicit_event_scope(event)
+        scope = event_scope.explicit_event_scope(
+            event.fields, event.emitted_at, venue_keys=VENUE_SCOPE_FIELD_KEYS,
+            session_keys=SESSION_SCOPE_FIELD_KEYS)
         exact_key = _exact_attempt_key(event)
         if scope and scope[2] == "pass" and exact_key:
             explicit_by_attempt[exact_key].append(
@@ -899,7 +758,9 @@ def _partition_events_by_venue_session(
     groups: dict[str, list[PipelineEvent]] = defaultdict(list)
     quality_counts: Counter[str] = Counter()
     for event in events:
-        explicit = _explicit_event_scope(event)
+        explicit = event_scope.explicit_event_scope(
+            event.fields, event.emitted_at, venue_keys=VENUE_SCOPE_FIELD_KEYS,
+            session_keys=SESSION_SCOPE_FIELD_KEYS)
         if explicit is not None:
             venue, session, quality = explicit
         else:
@@ -1012,7 +873,7 @@ def _submit_drought_axis_for_event(event: PipelineEvent) -> str | None:
         if mode != expected:
             return None
         return "BROKER_RECEIPT" if attempts else "UPSTREAM_GATE"
-    if event.stage in UPSTREAM_BLOCK_STAGES:
+    if event.stage in UPSTREAM_BLOCK_STAGES or event.stage == "pre_submit_liquidity_guard_block":
         return "UPSTREAM_GATE"
     if event.stage == "latency_block" and (
         _field_first(event.fields, ("reason", "latency_danger_reasons", "decision"))
@@ -1046,6 +907,7 @@ def _exact_submit_drought_axis_summary(
         | {
             "latency_block",
             "order_bundle_failed",
+            "pre_submit_liquidity_guard_block",
         }
         | ENTRY_AI_AUTHORITY_GUARD_STAGES
         | ENTRY_PRICE_GUARD_STAGES
@@ -2091,12 +1953,12 @@ def _economic_submit_participation(events: list[PipelineEvent]) -> dict[str, Any
             for event in attempt_events
             for key in ("rising_missed_effective_venue", "effective_venue")
             for value in (_safe_str(event.fields.get(key)).upper(),)
-            if value in EXPLICIT_TRADABLE_VENUES
+            if value in event_scope.EXPLICIT_TRADABLE_VENUES
         }
         fallback_venue_values = {
             _safe_str(event.fields.get("venue")).upper()
             for event in attempt_events
-            if _safe_str(event.fields.get("venue")).upper() in EXPLICIT_TRADABLE_VENUES
+            if _safe_str(event.fields.get("venue")).upper() in event_scope.EXPLICIT_TRADABLE_VENUES
         }
         if len(authoritative_venue_values) == 1:
             effective_venue = next(iter(authoritative_venue_values))
@@ -2190,7 +2052,7 @@ def _economic_submit_participation(events: list[PipelineEvent]) -> dict[str, Any
     valid_rows = [row for row in rows if row["source_quality_valid"]]
     by_venue = {
         venue: _summary([row for row in valid_rows if row["effective_venue"] == venue])
-        for venue in sorted(EXPLICIT_TRADABLE_VENUES)
+        for venue in sorted(event_scope.EXPLICIT_TRADABLE_VENUES)
         if any(row["effective_venue"] == venue for row in valid_rows)
     }
     return {
@@ -3557,10 +3419,53 @@ def _machine_primary_entry_funnel(events: list[PipelineEvent]) -> dict[str, Any]
         ]
         if invalid_broker_failure_rows:
             conflict_reasons.append("broker_failure_contract_invalid")
+        def call_local_guard_terminal(row):
+            # Nonterminal CompactFields may hold a large lazy replay capsule.
+            # Do not request absent completion fields and decode that payload.
+            if row.stage != "entry_submit_attempt_finished":
+                return False
+            fields = row.fields
+            call = _safe_str(fields.get("entry_submit_attempt_id"))
+            reason = _safe_str(fields.get("entry_submit_attempt_terminal_reason"))
+            guard_reasons = (BLOCKER_STAGES - BROKER_SUBMIT_FAILURE_STAGES
+                - AI_TERMINAL_ATTRIBUTION_STAGES - {"blocked_ai_score"}) | {
+                "entry_split_probe_first_deferred", "pre_submit_delay_pending",
+                "pre_submit_delay_due_recheck_blocked", "pre_submit_delay_intent_invalid",
+                "pre_submit_delay_observation_unavailable", "initial_quantity_sequential_plan_block",
+                # Native plan route binding returns before sequential/broker submission.
+                "main_entry_order_route_invalid",
+            }
+            # A local return is not a broker receipt. Only an exact known
+            # return-site guard can close the single observed invocation.
+            if (not call or reason not in guard_reasons
+                    or fields.get("entry_submit_attempt_schema") != "call_local_submit_attempt_v1"
+                    or fields.get("entry_submit_attempt_authority") != "observation_only"
+                    or fields.get("entry_submit_attempt_terminal_schema") != "call_local_terminal_v1"
+                    or _safe_str(row.record_id).strip().lower() in {"", "0", "none", "null"}
+                    or _safe_str(fields.get("entry_submit_attempt_parent_promotion_id")) != identity_parts[0]
+                    or any(_safe_str(fields.get(k)).lower() != "false" for k in (
+                        "entry_submit_attempt_broker_accepted", "submit_call_broker_accepted"))
+                    or any(fields.get(k) != "returned_false" for k in (
+                        "entry_submit_attempt_return_outcome", "submit_call_return_outcome", "submit_call_outcome"))):
+                return False
+            calls = {_safe_str(r.fields.get("entry_submit_attempt_id")) for r in rows
+                     if r.fields.get("entry_submit_attempt_id")}
+            finishes = [r for r in rows if r.stage == "entry_submit_attempt_finished"]
+            return (calls == {call}
+                and all(r.record_id == row.record_id
+                    and all(_safe_str(r.fields.get(k)) == _safe_str(fields.get(k)) for k in (
+                        "entry_submit_attempt_terminal_reason", "entry_submit_attempt_terminal_schema",
+                        "entry_submit_attempt_schema", "entry_submit_attempt_authority",
+                        "entry_submit_attempt_parent_promotion_id", "entry_submit_attempt_return_outcome",
+                        "submit_call_outcome", "submit_call_return_outcome",
+                        "entry_submit_attempt_broker_accepted", "submit_call_broker_accepted")) for r in finishes)
+                and any(r.stage != "entry_submit_attempt_finished" and r.emitted_at <= row.emitted_at
+                    and r.record_id == row.record_id and r.fields.get("entry_submit_attempt_id") == call for r in rows))
+
         final_guard_block_rows = [
             row
             for row in rows
-            if row.stage
+            if call_local_guard_terminal(row) or row.stage
             in (BLOCKER_STAGES - BROKER_SUBMIT_FAILURE_STAGES
                 - AI_TERMINAL_ATTRIBUTION_STAGES - {"blocked_ai_score"})
             or (
@@ -3713,7 +3618,7 @@ def _machine_primary_entry_funnel(events: list[PipelineEvent]) -> dict[str, Any]
                 "stage": event.stage, "observed_at": event.emitted_at.isoformat(),
                 "submit_attempt_id": _safe_str(event.fields.get("entry_submit_attempt_id")),
                 "reason": _safe_str(_field_first(event.fields, (
-                    "weak_context_guard_reason", "weak_pullback_entry_block_reason",
+                    "entry_submit_attempt_terminal_reason", "weak_context_guard_reason", "weak_pullback_entry_block_reason",
                     "reason", "order_bundle_failure_mode"))),
             } for event in final_guard_block_rows[:3]],
             "broker_rejected": bool(broker_rejected_rows),
@@ -4902,7 +4807,10 @@ def _classify(
     submitted_unique = int(unique.get("order_bundle_submitted", 0) or 0)
     latest = _parse_iso_datetime(_safe_str(current.get("latest_event_at")))
     stale_sec = int((as_of - latest).total_seconds()) if latest else None
-    if _safe_str(scope_key).startswith("NXT|"):
+    if _safe_str(scope_key).startswith("PREMARKET_KRX_LIKE|"):
+        before_sentinel_hours = as_of.time() < PREMARKET_SENTINEL_START
+        during_sentinel_hours = PREMARKET_SENTINEL_START <= as_of.time() < PREMARKET_SENTINEL_END
+    elif _safe_str(scope_key).startswith("NXT|"):
         before_sentinel_hours = as_of.time() < NXT_SENTINEL_START
         during_sentinel_hours = NXT_SENTINEL_START <= as_of.time() <= NXT_SENTINEL_END
     else:
@@ -5824,7 +5732,7 @@ def build_buy_funnel_sentinel_report(
             "actual_execution_venue_counts": dict(
                 sorted(
                     Counter(
-                        _actual_execution_venue(event) for event in source_events
+                        event_scope.actual_execution_venue(event.fields) for event in source_events
                     ).items()
                 )
             ),

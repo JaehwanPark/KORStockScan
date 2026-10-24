@@ -233,6 +233,22 @@ def test_native_claim_digest_survives_only_exact_public_content_binding(monkeypa
         assert stored['continuous_reversal_rejected_claim_receipt'] == receipt
 
 
+def test_sanitizer_reuses_labels_without_reusing_values_or_path_permissions(monkeypatch):
+    calls = []
+    original = trace._sanitize_text
+    def measured(value):
+        calls.append(value)
+        return original(value)
+    monkeypatch.setattr(trace, '_sanitize_text', measured)
+    rows = [{'price': number, 'api_token': 'secret-' + str(number)} for number in range(100)]
+    safe, redacted = trace.sanitize_ai_trace_value({'rows': rows})
+    assert redacted and safe['rows'] == [{'price': n, 'api_token': '[REDACTED]'} for n in range(100)]
+    assert calls.count('price') == calls.count('api_token') == 1
+    # The next invocation must use its own labels and fresh values.
+    assert trace.sanitize_ai_trace_value({'price': 7}) == ({'price': 7}, False)
+    assert calls.count('price') == 2
+
+
 def test_request_capture_preparation_reuses_indexes_and_rolls_date(monkeypatch, tmp_path):
     _enable(monkeypatch, tmp_path)
     calls = []
@@ -303,8 +319,9 @@ def test_native_reversal_request_capture_binds_actual_bytes_without_claiming_exe
     assert binding['provider_fact'] == 'request_prepared_not_execution'
 
 
+@pytest.mark.parametrize('source_invalid', [False, True])
 def test_machine_observation_keeps_exact_input_without_provider_request(
-    monkeypatch, tmp_path
+    monkeypatch, tmp_path, source_invalid
 ):
     _enable(monkeypatch, tmp_path)
     timing = {"entry_machine_input_as_of": 1789970400.0,
@@ -316,9 +333,13 @@ def test_machine_observation_keeps_exact_input_without_provider_request(
     result = trace.capture_machine_observation(
         exact_payload={"stock_code": "005930", "name": "삼성전자", "best_ask": 10000,
                        "entry_machine_input_trace": timing,
+                       **({'entry_source_quote_recovery': {'sha256': 'd'*64}}
+                          if source_invalid else {}),
                        "features": {"large_sell_print_detected": True}},
         setup_evidence={"setup_state": "WAIT_CONFIRMATION"},
-        assessment={"action": "RECHECK"},
+        assessment=({'schema': 'mechanistic_entry_source_invalid_v1',
+                     'action': 'source_invalid', 'reason': 'rejected_before_assessment'}
+                    if source_invalid else {"action": "RECHECK"}),
         bundle_sha256="b" * 64,
         metadata={"record_id": 123,
                   "machine_source_recovery_parent_sha256": "c" * 64,
@@ -332,6 +353,9 @@ def test_machine_observation_keeps_exact_input_without_provider_request(
     assert row["provider_called"] is False
     assert row["source"]["exact_payload"]["name"] == "삼성전자"
     assert row["source"]["exact_payload"]["entry_machine_input_trace"] == timing
+    if source_invalid:
+        assert row['source']['exact_payload']['entry_source_quote_recovery'] == {'sha256': 'd'*64}
+        assert 'entry_source_quote_label' not in row['label_context']
     assert row["label_context"]["record_id"] == 123
     assert row["label_context"]["machine_source_recovery_parent_attempt_id"] == "aims-parent"
     assert row["label_context"]["evaluation_attempt_id"] is None

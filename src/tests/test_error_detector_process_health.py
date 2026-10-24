@@ -405,7 +405,7 @@ class TestProcessHealthDetector:
         assert guard["active_block_count"] == 0
 
     @pytest.mark.parametrize("thread_alive", [True, False])
-    @pytest.mark.parametrize("other_source", [None, "", "auto_open_loss", "auto_hard_stop_handoff_extra"])
+    @pytest.mark.parametrize("other_source", [None, "", "auto_scale_in_qty_guard_block", "auto_hard_stop_handoff_extra"])
     def test_hard_stop_handoff_is_expected_but_other_unowned_blocks_still_fail(
         self, monkeypatch, other_source, thread_alive
     ):
@@ -441,6 +441,61 @@ class TestProcessHealthDetector:
         assert result.severity == ("pass" if other_source is None and thread_alive else "fail")
         if other_source is None:
             assert guard["status"] == "expected_hard_stop_manual_handoff"
+
+    @pytest.mark.parametrize("damage", [None, "missing_file", "unknown_source", "failed_owner", "released"])
+    @pytest.mark.parametrize("thread_alive", [True, False])
+    def test_native_open_loss_registration_is_expected_without_hiding_unowned_failure(
+        self, monkeypatch, tmp_path, damage, thread_alive
+    ):
+        from src.engine.risk import manual_control_exclusion as control
+
+        now = datetime.now().astimezone().replace(microsecond=0)
+        monkeypatch.setattr(process_health_module.time, "time", now.timestamp)
+        path = tmp_path / "manual_control_excluded_codes.txt"
+        monkeypatch.setenv(control.EXCLUDED_CODES_FILE_ENV, str(path))
+        for key in (control.EXCLUDED_CODES_ENV, control.LEGACY_WATCH_EXCLUDED_CODES_ENV):
+            monkeypatch.delenv(key, raising=False)
+        source = "auto_open_loss" if damage != "unknown_source" else "auto_scale_in_qty_guard_block"
+        assert control.add_manual_control_exclusion_code("034020", comment=source + " KRX_OPEN").excluded
+        if damage in ("missing_file", "released"):
+            path.unlink()
+        original = path.read_bytes() if path.exists() else None
+        if damage in ("missing_file", "failed_owner", "released"):
+            reason = (
+                "symbol_owner_policy_fail_closed:SymbolOwnerPolicyError"
+                if damage == "failed_owner" else "operator_manual_control_excluded_symbol"
+            )
+            monkeypatch.setattr(
+                process_health_module, "evaluate_main_bot_control_exclusion",
+                lambda code, **kw: control.ManualControlExclusionDecision(
+                    damage != "released", code, reason, str(path)
+                ),
+            )
+        directory = process_health_module.PIPELINE_EVENTS_DIR
+        directory.mkdir(parents=True)
+        event = {
+            "event_type": "pipeline_event", "pipeline": "HOLDING_PIPELINE",
+            "stage": "manual_control_fast_exit_monitor_blocked",
+            "stock_code": "034020", "record_id": 49399, "emitted_at": now.isoformat(),
+            "fields": {"target_status": "HOLDING", "target_strategy": "SCALPING",
+                       "manual_control_exclusion_source": str(path)},
+        }
+        (directory / f"pipeline_events_{now.date().isoformat()}.jsonl").write_text(
+            json.dumps(event) + "\n", encoding="utf-8"
+        )
+        write_heartbeat("main_loop")
+        write_heartbeat("telegram", alive=thread_alive)
+        result = ProcessHealthDetector().check()
+        guard = result.details["manual_control_holding_guard"]
+        expected = damage is None
+        active = damage not in (None, "released")
+        assert result.severity == ("fail" if active or not thread_alive else "pass")
+        assert guard["active_block_count"] == int(active)
+        assert guard.get("expected_open_loss_guard_count", 0) == int(expected)
+        if expected:
+            assert guard["expected_open_loss_guards"][0]["classification"] == "expected_open_loss_policy_guard"
+            assert guard["status"] == "expected_open_loss_policy_guard"
+        assert (path.read_bytes() if path.exists() else None) == original
 
     def test_detector_accepts_latest_legacy_handoff_retirement(self, monkeypatch):
         now = datetime.now().astimezone().replace(microsecond=0)

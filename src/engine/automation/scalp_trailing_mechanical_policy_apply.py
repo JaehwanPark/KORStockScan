@@ -229,7 +229,7 @@ def _type_view(report, generation, *, report_path, market, kind):
     if len(set(train['verified_days']+holdout['verified_days']))<7:return None
     _,window=_analysis_window_start(target_date=report['source_date'],month_start=None)
     from src.engine.lifecycle.holding_window_generation import capture_window
-    dependency=capture_window(Path(manifest['source_data_root']),manifest['consumed_dates'])
+    dependency=capture_window(Path(manifest['source_data_root']),manifest['consumed_dates'],allow_cost_revision=True)
     from src.engine.lifecycle import research_storage as storage
     def metrics(row):
         return dict(n=row['n'],paired_ev_pct=row['equal_weight_avg_profit_pct'],

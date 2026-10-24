@@ -9,6 +9,7 @@ from pathlib import Path
 import signal
 import subprocess
 import sys
+import tempfile
 import uuid
 from zoneinfo import ZoneInfo
 
@@ -19,9 +20,8 @@ from src.engine.monitoring import policy_generation_validation as validation
 def _assert_committed(family):
     paths = [*validation.plan_identity(family),
              *('src/engine/'+name for name in generation.COMPONENTS[family]),
-             'src/engine/monitoring/policy_generation_contract.py',
-             'src/engine/lifecycle/holding_window_generation.py']
-    status = subprocess.check_output(['git','status','--porcelain','--',*paths],
+             *('src/engine/'+name for name in generation.COMMON_CODE_COMPONENTS)]
+    status = subprocess.check_output(['git','status','--porcelain','--',*dict.fromkeys(paths)],
                                      cwd=validation.ROOT,text=True)
     if status.strip():
         raise ValueError('fixture_publication_requires_committed_sources')
@@ -45,7 +45,7 @@ def validate(family, data, *, source_date, target_date, publish=False):
         data/'runtime/policy_bootstrap'/f'runtime_policy_bootstrap_{target_date}.json',
         data/'runtime/policy_bootstrap'/f'runtime_policy_bootstrap_{target_date}.env',
     ]
-    before = {str(path): validation.file_sha(path) if path.exists() else None for path in protected}
+    before = {str(path): validation.file_sha(path, stream=True) if path.exists() else None for path in protected}
     destination = validation.fixture_path(data, family)
     if destination.exists() or destination.is_symlink():
         value, reference = validation.verify_fixture(data, family)
@@ -57,7 +57,9 @@ def validate(family, data, *, source_date, target_date, publish=False):
     # Deny real network access for the entire child interpreter. Mocked provider
     # tests remain available; any attempted connection fails the validation even
     # if application code catches its exception.
-    guard = run/'fixture_network_guard.py'
+    scratch = tempfile.TemporaryDirectory(prefix='korstockscan-policy-fixtures-')
+    private = Path(scratch.name)
+    guard = private/'fixture_network_guard.py'
     guard.write_text("""import json, socket
 from pathlib import Path
 attempts = []
@@ -73,7 +75,7 @@ def pytest_sessionfinish(session, exitstatus):
     if attempts: session.exitstatus = 1
 """)
     command = [sys.executable,'-B','-m','pytest','-q',*validation.PLANS[family],
-               '--junitxml='+str(run/'tests.xml'),'-p','no:cacheprovider','-p','fixture_network_guard']
+               '--junitxml='+str(private/'tests.xml'),'-p','no:cacheprovider','-p','fixture_network_guard']
     start = datetime.now(ZoneInfo('Asia/Seoul')).isoformat()
     process = None
     def stop(signum, frame):
@@ -82,15 +84,19 @@ def pytest_sessionfinish(session, exitstatus):
     try:
         with (run/'tests.log').open('xb') as log:
             process = subprocess.Popen(command, cwd=validation.ROOT,
-                env={**os.environ,'PYTHONPATH':str(run)+os.pathsep+str(validation.ROOT),'PYTHONDONTWRITEBYTECODE':'1'},
+                env={**os.environ,'PYTHONPATH':str(private)+os.pathsep+str(validation.ROOT),'PYTHONDONTWRITEBYTECODE':'1'},
                 stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
             result = process.wait(timeout=180)
+        # The trusted publisher alone transfers bounded child output into evidence.
+        for name in ('tests.xml', 'network.json'):
+            if (private/name).exists():
+                (run/name).write_bytes(validation.file_bytes(private/name))
         if result != 0:
             raise ValueError('fixture_tests_failed:'+str(result))
         count = validation.junit_counts(run/'tests.xml', family)
         if json.loads((run/'network.json').read_text()) != {'blocked_attempts':0}:
             raise ValueError('fixture_network_attempted')
-        after = {str(path): validation.file_sha(path) if path.exists() else None for path in protected}
+        after = {str(path): validation.file_sha(path, stream=True) if path.exists() else None for path in protected}
         if before != after:
             raise ValueError('fixture_protected_artifact_changed')
         if code != generation.code_generation(family) or plan != validation.plan_identity(family):
@@ -127,6 +133,7 @@ def pytest_sessionfinish(session, exitstatus):
         raise
     finally:
         signal.signal(signal.SIGTERM,previous)
+        scratch.cleanup()
 
 
 def main(argv=None):

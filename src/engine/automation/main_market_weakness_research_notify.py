@@ -165,12 +165,19 @@ def current_parent_matches(data_root, candidate):
     from src.engine.automation.main_market_weakness_research import stat_receipt
 
     pointer = Path(data_root) / "runtime/mechanistic_entry_policy/current.json"
+    overlay_pointer = pointer.parent / "auxiliary/current.json"
     try:
         before = stat_receipt(pointer) if pointer.exists() else None
+        overlay_before = (
+            stat_receipt(overlay_pointer) if overlay_pointer.exists() else None
+        )
         valid = _current_parent_matches(data_root, candidate)
         after = stat_receipt(pointer) if pointer.exists() else None
-        return valid and before == after
-    except (OSError, ValueError, TypeError):
+        overlay_after = (
+            stat_receipt(overlay_pointer) if overlay_pointer.exists() else None
+        )
+        return valid and before == after and overlay_before == overlay_after
+    except (OSError, ValueError, TypeError, KeyError):
         return False
 
 
@@ -239,6 +246,25 @@ def _current_parent_matches(data_root, candidate):
         if auxiliary.get("payload_sha256") != R.digest(payload):
             return False
         binding = payload.get("binding", {})
+        if d["auxiliary_binding"].get("registry_sha256") or family.get(
+            "auxiliary_report_sha256"
+        ):
+            from src.engine.scalping import reversal_auxiliary_intraday as I
+            from src.engine.scalping import reversal_auxiliary_registry as G
+
+            overlay = I.at_confirmation(
+                data_root, bundle, datetime.now(R.KST).timestamp()
+            )
+            ident = (overlay or {}).get("bindings", {}).get(scope) or I.inherited(
+                data_root, bundle
+            ).get(scope)
+            if (
+                d["auxiliary_binding"].get("registry_sha256")
+                and ident != d["auxiliary_binding"]["registry_sha256"]
+            ):
+                return False
+            if ident:
+                binding = G.binding(G.load(data_root, ident))
         projected = {k: binding.get(k) for k in d["auxiliary_binding"]}
         return projected == d["auxiliary_binding"] and R.digest(projected) == d.get(
             "auxiliary_hash"

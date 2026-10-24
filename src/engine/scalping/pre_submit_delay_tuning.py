@@ -92,6 +92,8 @@ _V2_SOURCE_FIELDS = frozenset(_DECISION_SOURCE_KEYS + _QUOTE_SOURCE_KEYS + (
     'recheck_native_status', 'recheck_machine_policy_sha256', 'recheck_ai_policy_sha256',
     'successor_machine_observation_sha256',
     'delay_decision_type', 'price_cap',
+    'delay_policy_status', 'delay_selection_basis', 'delay_evidence_verdict',
+    'delay_selected_cell_key',
 ))
 
 
@@ -1606,33 +1608,37 @@ def build_report(
 
 
 def _load_legacy_runtime_policy(*, now: datetime | None = None,
-                        decision_type: dict[str, Any] | None = None, _preloaded=None) -> dict[str, Any]:
+                        decision_type: dict[str, Any] | None = None, _preloaded=None,
+                        env=None, data_root=None, target_date=None) -> dict[str, Any]:
     """Return zero unless an exact-date, economic-valid independent policy loads."""
+    env = os.environ if env is None else env
     fallback = {
         "delay_sec": 0.0,
         "status": "no_validated_delay_policy_existing_submit_behavior",
         "policy_sha256": None,
     }
-    if os.getenv("KORSTOCKSCAN_PRE_SUBMIT_DELAY_POLICY_ENABLED", "").lower() not in {
+    if env.get("KORSTOCKSCAN_PRE_SUBMIT_DELAY_POLICY_ENABLED", "").lower() not in {
         "1", "true", "yes", "on"
     }:
         return fallback
-    path = Path(os.getenv("KORSTOCKSCAN_PRE_SUBMIT_DELAY_POLICY_FILE") or "")
+    path = Path(env.get("KORSTOCKSCAN_PRE_SUBMIT_DELAY_POLICY_FILE") or "")
     if not path.is_file() or path.stat().st_size > 1024 * 1024:
         return {**fallback, "status": "policy_missing_or_unbounded"}
     try:
         policy = dict(_preloaded[0]) if _preloaded is not None else json.loads(path.read_text(encoding="utf-8"))
-        now_date = (now or datetime.now(KST)).astimezone(KST).date().isoformat()
+        now_date = target_date or (now or datetime.now(KST)).astimezone(KST).date().isoformat()
         digest = policy.pop("policy_sha256")
         valid = (
             policy.get("schema") == POLICY_SCHEMA
             and digest == _digest(policy)
             and policy.get("effective_from") <= now_date <= policy.get("expires_on")
-            and os.getenv("KORSTOCKSCAN_PRE_SUBMIT_DELAY_POLICY_ACTIVE_DATE", now_date) == now_date
+            and env.get("KORSTOCKSCAN_PRE_SUBMIT_DELAY_POLICY_ACTIVE_DATE", now_date) == now_date
         )
         if not valid:
             return {**fallback, "status": "policy_identity_or_date_invalid"}
-        report_file = report_path(str(policy.get("source_date") or ""))
+        report_file = ((Path(data_root) / "report/pre_submit_delay_tuning" /
+                        report_path(str(policy.get("source_date") or "")).name)
+                       if data_root is not None else report_path(str(policy.get("source_date") or "")))
         if not report_file.is_file() or report_file.stat().st_size > 1024 * 1024:
             return {**fallback, "status": "policy_report_missing_or_unbounded"}
         report = dict(_preloaded[1]) if _preloaded is not None else json.loads(report_file.read_text(encoding="utf-8"))
@@ -1708,16 +1714,19 @@ def _load_legacy_runtime_policy(*, now: datetime | None = None,
 
 _PREPARED_DELAY_POLICY = None
 _PREPARED_DELAY_KEY = None
+_PREPARED_DELAY_RECEIPT = None
 
 
-def _runtime_preparation_key(day):
+def _runtime_preparation_key(day, *, env=None, data_root=None):
     # Include every mutable environment input used by preparation. A same-path
     # enable/date/manifest change must not reuse another activation's cache.
+    env = os.environ if env is None else env
+    root = DATA_DIR if data_root is None else Path(data_root)
     return (os.getpid(), day,
-            os.getenv("KORSTOCKSCAN_PRE_SUBMIT_DELAY_POLICY_MANIFEST_SHA256"),
-            os.getenv("KORSTOCKSCAN_PRE_SUBMIT_DELAY_POLICY_FILE"),
-            os.getenv("KORSTOCKSCAN_PRE_SUBMIT_DELAY_POLICY_ENABLED", "").lower(),
-            os.getenv("KORSTOCKSCAN_PRE_SUBMIT_DELAY_POLICY_ACTIVE_DATE"))
+            env.get("KORSTOCKSCAN_PRE_SUBMIT_DELAY_POLICY_MANIFEST_SHA256"),
+            env.get("KORSTOCKSCAN_PRE_SUBMIT_DELAY_POLICY_FILE"),
+            env.get("KORSTOCKSCAN_PRE_SUBMIT_DELAY_POLICY_ENABLED", "").lower(),
+            env.get("KORSTOCKSCAN_PRE_SUBMIT_DELAY_POLICY_ACTIVE_DATE"), str(root.resolve()))
 
 
 def _verify_runtime_code_contract(policy, day):
@@ -1732,20 +1741,29 @@ def _verify_runtime_code_contract(policy, day):
         paths={name: name for name in CONTRACT_PATHS}, actual=actual)
 
 
-def prepare_runtime_policy(*, now=None):
+def prepare_runtime_policy(*, now=None, target_date=None, env=None, data_root=None):
     """Called by the existing preparation owner, never from warm submission."""
-    global _PREPARED_DELAY_POLICY, _PREPARED_DELAY_KEY
+    global _PREPARED_DELAY_POLICY, _PREPARED_DELAY_KEY, _PREPARED_DELAY_RECEIPT
     from .pre_submit_delay_initial_policy import PreparedPolicy, POLICY_SCHEMA as V2, committed_paths
-    day = (now or datetime.now(KST)).astimezone(KST).date().isoformat()
-    key = _runtime_preparation_key(day)
+    env = os.environ if env is None else env
+    explicit_root = data_root is not None
+    data_root = DATA_DIR if data_root is None else Path(data_root)
+    day = target_date or (now or datetime.now(KST)).astimezone(KST).date().isoformat()
+    date.fromisoformat(day)
+    key = _runtime_preparation_key(day, env=env, data_root=data_root)
     if key == _PREPARED_DELAY_KEY:
-        return {"status": "prepared_reused"}
+        receipt = dict(_PREPARED_DELAY_RECEIPT or {"status": "disabled"})
+        if receipt.get("status") == "prepared":
+            receipt["status"] = "prepared_reused"
+        return receipt
     _PREPARED_DELAY_POLICY = None
     _PREPARED_DELAY_KEY = None
-    if os.getenv("KORSTOCKSCAN_PRE_SUBMIT_DELAY_POLICY_ENABLED", "").lower() not in {"1", "true", "on", "yes"}:
+    _PREPARED_DELAY_RECEIPT = None
+    if env.get("KORSTOCKSCAN_PRE_SUBMIT_DELAY_POLICY_ENABLED", "").lower() not in {"1", "true", "on", "yes"}:
         _PREPARED_DELAY_KEY = key
-        return {"status": "disabled"}
-    path = Path(os.getenv("KORSTOCKSCAN_PRE_SUBMIT_DELAY_POLICY_FILE") or "")
+        _PREPARED_DELAY_RECEIPT = {"status": "disabled"}
+        return dict(_PREPARED_DELAY_RECEIPT)
+    path = Path(env.get("KORSTOCKSCAN_PRE_SUBMIT_DELAY_POLICY_FILE") or "")
     try:
         code_compatibility = None
         if path.stat().st_size > 1024 * 1024:
@@ -1754,24 +1772,25 @@ def prepare_runtime_policy(*, now=None):
         if policy.get("schema") == V2:
             from .pre_submit_delay_initial_policy import verify_source, _read
             code_compatibility = _verify_runtime_code_contract(policy, day)
-            report_file, policy_file, pointer, manifest = committed_paths(DATA_DIR, policy["source_date"])
+            report_file, policy_file, pointer, manifest = committed_paths(data_root, policy["source_date"])
             policy, prepared_report = _read(policy_file), _read(report_file)
-            verify_source(DATA_DIR, prepared_report, pipeline_reference_only=True)
+            verify_source(data_root, prepared_report, pipeline_reference_only=True)
             if (policy_file.resolve() != path.resolve()
                 or manifest["manifest_sha256"] != key[2]
-                or os.getenv("KORSTOCKSCAN_PRE_SUBMIT_DELAY_POLICY_ACTIVE_DATE") != day):
+                or env.get("KORSTOCKSCAN_PRE_SUBMIT_DELAY_POLICY_ACTIVE_DATE") != day):
                 raise ValueError("committed_policy_binding_invalid")
             _PREPARED_DELAY_POLICY = PreparedPolicy.from_artifacts(policy, prepared_report, target_date=day)
         else:
             # Preserve legacy economics and selectors, but decode/validate at
             # preparation once. Warm selection never rebuilds the full tree.
-            report_file = report_path(str(policy.get('source_date') or ''))
+            report_file = ((data_root / 'report/pre_submit_delay_tuning' / report_path(str(policy.get('source_date') or '')).name)
+                           if explicit_root else report_path(str(policy.get('source_date') or '')))
             if report_file.stat().st_size > 1024*1024:
                 raise ValueError('legacy_delay_report_unbounded')
             legacy_report = json.loads(report_file.read_text())
             types, scopes = policy.get('type_policies') or {}, policy.get('scope_policies') or {}
             first_key = next(iter(types), next(iter(scopes), '') + '|PREPARE')
-            result = _load_legacy_runtime_policy(now=now, decision_type={
+            result = _load_legacy_runtime_policy(now=now, target_date=day, env=env, data_root=data_root if explicit_root else None, decision_type={
                 'schema':'pre_submit_delay_decision_type_v1', 'type_key':first_key},
                 _preloaded=(policy, legacy_report))
             if result.get('status') == 'loaded':
@@ -1780,11 +1799,34 @@ def prepare_runtime_policy(*, now=None):
                     'default_delay_sec':policy.get('selected_delay_sec'),
                     'types':MappingProxyType({k:v['selected_delay_sec'] for k,v in types.items()}),
                     'scopes':MappingProxyType({k:v['selected_delay_sec'] for k,v in scopes.items()})}
+        native_status = "prepared" if _PREPARED_DELAY_POLICY else "not_applicable"
+        if isinstance(_PREPARED_DELAY_POLICY, PreparedPolicy):
+            cells = {key: dict(value) for key, value in _PREPARED_DELAY_POLICY.cells.items()}
+            loaded = {"policy_sha256": _PREPARED_DELAY_POLICY.policy_sha256,
+                      "effective_from": _PREPARED_DELAY_POLICY.effective_from,
+                      "expires_on": _PREPARED_DELAY_POLICY.expires_on, "cells": cells,
+                      "code_contract_sha256": _PREPARED_DELAY_POLICY.code_contract_sha256}
+        else:
+            loaded = {key: dict(value) if hasattr(value, "items") else value
+                      for key, value in (_PREPARED_DELAY_POLICY or {}).items()}
+        source_hashes = {}
+        loaded_report = prepared_report if policy.get("schema") == V2 else legacy_report
+        for source_path, loaded_value in ((path, policy), (report_file, loaded_report)):
+            raw = source_path.read_bytes()
+            if json.loads(raw) != loaded_value:
+                raise ValueError("delay_source_changed_after_loading")
+            source_hashes[str(source_path)] = hashlib.sha256(raw).hexdigest()
+        _PREPARED_DELAY_RECEIPT = {"status": native_status, "target_date": day,
+            "policy_sha256": policy.get("policy_sha256"),
+            "loaded_object_sha256": _digest(loaded),
+            "source_hashes": source_hashes,
+            **({"fallback_status": result["status"]} if native_status == "not_applicable" else {}),
+            **({'code_compatibility': code_compatibility} if code_compatibility else {})}
         _PREPARED_DELAY_KEY = key
-        return {"status": "prepared" if _PREPARED_DELAY_POLICY else "not_applicable",
-                **({'code_compatibility': code_compatibility} if code_compatibility else {})}
-    except (OSError, ValueError, TypeError, KeyError):
-        return {"status": "preparation_invalid"}
+        return dict(_PREPARED_DELAY_RECEIPT)
+    except (OSError, ValueError, TypeError, KeyError) as exc:
+        _PREPARED_DELAY_POLICY = _PREPARED_DELAY_KEY = _PREPARED_DELAY_RECEIPT = None
+        return {"status": "preparation_invalid", "reason": str(exc)}
 
 
 def load_runtime_policy(*, now=None, decision_type=None):

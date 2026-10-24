@@ -1930,6 +1930,17 @@ def freeze_entry_operating_context(handlers, stock, sizing_context, *, now_ts, c
         from src.engine.sniper_execution_receipts import initial_main_entry_exit_fields
         initial_exit = initial_main_entry_exit_fields(stock, rules=SimpleNamespace(**snapshot["rules"]))
         decision_source=stock.get("last_watching_ai_machine_primary_fields") or {}
+        broker_route = decision_source.get("ai_trace_broker_route")
+        from src.engine.scalping import main_fixed_watch
+        if (main_fixed_watch.is_fixed_watch(stock)
+                or str(stock.get("source_signature") or "").startswith("ZERO_BASE_DISCOVERY:")):
+            request = {}
+            if not handlers._bind_main_entry_order_request(stock, request, now_ts=now_ts):
+                raise ValueError("initial_operating_main_route_invalid")
+            observed_route = request["dmst_stex_tp"]
+            if broker_route and broker_route != observed_route:
+                raise ValueError("initial_operating_decision_route_conflict")
+            broker_route = observed_route
         # Record the SAME existing listing owner used by holding routing. A
         # quote scope or SOR route never manufactures NXT eligibility.
         nxt_enabled, nxt_owner = handlers._holding_sell_nxt_enabled_status(stock, stock.get("code", ""))
@@ -1942,7 +1953,7 @@ def freeze_entry_operating_context(handlers, stock, sizing_context, *, now_ts, c
             cancel_wait_profile=resolve_profile(stock.get('position_tag'), stock.get('entry_mode')),
             nxt_listing_receipt=dict(value=nxt_enabled, owner=nxt_owner, stock_code=stock.get("code"),
                 frozen_at=datetime.fromtimestamp(now_ts, KST).isoformat()),
-            broker_route=decision_source.get("ai_trace_broker_route"),
+            broker_route=broker_route,
             initial_fill_exit_contract_version="main_role_initial_fill_v2",
             initial_fill_exit_owner="sniper_execution_receipts.initial_main_entry_exit_fields",
             initial_fill_exit_state=initial_exit,

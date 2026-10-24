@@ -11,7 +11,7 @@ from src.utils import kiwoom_utils
 from src.utils.logger import log_error, log_info
 from src.core.event_bus import EventBus
 from src.utils.constants import TRADING_RULES  # 필요에 따라 상수를 추가/수정해서 사용
-from src.engine.sniper_condition_handlers_big_bite import (
+from src.engine.sniper_condition_handlers import (
     detect_big_bite_trigger,
     build_tick_data_from_ws,
 )

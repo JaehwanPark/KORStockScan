@@ -18,6 +18,34 @@ from src.tests.test_reversal_path_policy import row,T
 FIXTURES=json.loads((Path(__file__).parent/'fixtures/reversal_extended/signals.json').read_text())
 
 
+@pytest.mark.parametrize('barrier',['deadline','wrong_day','preopen','bootstrap_json','bootstrap_env','bootstrap_verify','proof'])
+def test_closed_postclose_stage_preserves_window_and_proof_barriers(tmp_path,monkeypatch,barrier):
+    from datetime import datetime
+    from types import SimpleNamespace
+    from src.engine.scalping import mechanistic_entry_runtime_policy as N
+    from src.engine.scalping import continuous_reversal_operating_postclose as O
+    clock=datetime(2026,10,23,7,30 if barrier=='deadline' else 0,tzinfo=V.K.KST)
+    if barrier=='wrong_day':clock=clock.replace(day=24)
+    monkeypatch.setattr(V,'datetime',SimpleNamespace(now=lambda tz:clock))
+    def runtime(**kwargs):raise ValueError('v6_contract_code_changed:reversal_code_handoff.py')
+    monkeypatch.setattr(N,'load_effective',runtime)
+    files={
+        'preopen':'report/threshold_cycle_preopen_status/threshold_cycle_preopen_2026-10-23.status.json',
+        'bootstrap_json':'runtime/policy_bootstrap/runtime_policy_bootstrap_2026-10-23.json',
+        'bootstrap_env':'runtime/policy_bootstrap/runtime_policy_bootstrap_2026-10-23.env',
+        'bootstrap_verify':'runtime/policy_bootstrap/runtime_policy_bootstrap_verify_2026-10-23.json'}
+    if barrier in files:
+        path=tmp_path/files[barrier];path.parent.mkdir(parents=True);path.write_bytes(b'preserved')
+    def attested(*args):
+        if barrier=='proof':raise ValueError('v6_historical_parent_source_changed:original')
+        pytest.fail('closed preparation window bypassed')
+    monkeypatch.setattr(O,'load_report_parent',attested)
+    with pytest.raises(ValueError,match='historical_parent_source_changed' if barrier=='proof' else 'closed_postclose_window_invalid'):
+        V.stage(tmp_path,'2026-10-22','2026-10-22',{}, {},target_date='2026-10-23',release_commit='a'*40)
+    assert not (N.root(tmp_path)/'candidates/policy_2026-10-23.json').exists()
+    if barrier in files:assert (tmp_path/files[barrier]).read_bytes()==b'preserved'
+
+
 @pytest.mark.parametrize('bid',list(C.NEW_DEFINITIONS))
 def test_exact_research_definition_scope_and_typed_request(bid,tmp_path):
     d=C.definition(bid);assert P.digest(d)==bid.removeprefix('manual_extended_')+P.digest(d)[16:]
@@ -118,7 +146,8 @@ from src.tests.test_continuous_reversal_policy_v3 import native
 from src.tests.test_reversal_operating_policy import parent,replay,transport,authorize_initial
 
 
-def test_v6_stage_keeps_old_versions_and_adds_exact_thirteen(replay,monkeypatch):
+@pytest.mark.parametrize('midnight',[False,True])
+def test_v6_stage_keeps_old_versions_and_adds_exact_thirteen(replay,monkeypatch,midnight):
     from src.engine.scalping import continuous_reversal_operating_postclose as O
     from src.engine.scalping import reversal_extended_registration as ER
     from src.engine.scalping import mechanistic_entry_runtime_policy as N
@@ -149,7 +178,21 @@ def test_v6_stage_keeps_old_versions_and_adds_exact_thirteen(replay,monkeypatch)
     assert (P.directory(root,'2026-10-08')/'call-freeze.json').exists()
     assert (P.directory(root,'2026-10-08')/'provider-results.jsonl').read_text()==''
     issued=json.loads((O.directory(root,'2026-10-08')/'machine.json').read_text())
+    original_datetime,original_loader=V.datetime,N.load_effective
+    if midnight:
+        from datetime import datetime
+        from types import SimpleNamespace
+        clock=datetime(2026,10,12,1,tzinfo=V.K.KST)
+        monkeypatch.setattr(V,'datetime',SimpleNamespace(now=lambda tz:clock))
+        def runtime(**kwargs):raise ValueError('v6_contract_code_changed:reversal_code_handoff.py')
+        monkeypatch.setattr(N,'load_effective',runtime)
+        def attested(data,day):
+            assert day=='2026-10-08'
+            return old
+        monkeypatch.setattr(O,'load_report_parent',attested)
     new=V.stage(root,'2026-10-08','2026-10-08',issued,out,target_date='2026-10-12',release_commit='a'*40)
+    monkeypatch.setattr(V,'datetime',original_datetime)
+    monkeypatch.setattr(N,'load_effective',original_loader)
     V.validate_sources(new,root)
     N.validate(new,target_date='2026-10-12')
     assert P.digest(old)==before

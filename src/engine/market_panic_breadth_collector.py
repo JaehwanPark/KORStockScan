@@ -1119,7 +1119,10 @@ def build_market_weakness_observation(
     elif bool(summary.get("risk_off_advisory")):
         raw_state = "BROAD_WEAKNESS"
     elif bool(summary.get("single_market_risk_off_advisory")) and affected_markets:
-        raw_state = "SINGLE_MARKET_WEAKNESS"
+        # Independent market triggers can cover both markets even when the
+        # weighted composite panic threshold is not met.
+        raw_state = ("BROAD_WEAKNESS" if len(affected_markets) == 2
+                     else "SINGLE_MARKET_WEAKNESS")
     elif release_margin_pass:
         raw_state = "RECOVERY_EVIDENCE"
     else:

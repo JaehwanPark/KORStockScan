@@ -1221,6 +1221,7 @@ def _integrated_sor_execution_view_proof(
         "holding_score",
         "holding_score_submit_authority",
         "holding_flow",
+        "holding_path_vote",
     } or stage.startswith("overnight")
     entry_stage = stage in {"entry_context", "entry_screen", "gatekeeper"}
     post_probe_stage = stage == "post_probe"
@@ -1890,7 +1891,7 @@ def build_ai_market_snapshot(
         not require_position_reconciliation
         and not simulation_position_reconciled
         and explicit_position_is_active
-        and stage_value in {"holding_score", "scalping_holding_score"}
+        and stage_value in {"holding_score", "scalping_holding_score", "holding_path_vote"}
     )
     if optional_holding_reconciliation_advisory and not position_reconciled:
         # A plain holding-score observation may remain provider-call eligible,

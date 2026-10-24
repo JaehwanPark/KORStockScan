@@ -324,7 +324,7 @@ def test_known_sparse_source_availability_diagnostics_remain_warning_not_contrac
     assert monitor.observation_health_projection(result)['status']=='not_eligible'
 
 
-@pytest.mark.parametrize('reason',['reversal_first_signal_invalidated','reversal_signal_generation_changed',
+@pytest.mark.parametrize('reason',['reversal_first_signal_invalidated','reversal_first_price_hold_invalidated','reversal_signal_generation_changed',
                                   'required_feature_blocked_before_assessment'])
 def test_native_validated_lifecycle_diagnostic_is_not_an_observer_failure(reason):
     result=_recorded_guard_health_fixture()
@@ -2294,6 +2294,33 @@ def test_provider_lineage_never_joins_symbol_or_time_when_exact_request_binding_
     assert result['source_gaps']['response_request_unresolved'] == 1
 
 
+@pytest.mark.parametrize('tamper', [None, 'pid', 'observation', 'request', 'input', 'binding_missing', 'one_async'])
+def test_synchronous_provider_lineage_requires_exact_native_binding(tmp_path, tamper):
+    now, observations, requests, traces, write = _current_provider_lineage_fixture(tmp_path, verdicts=('PASS',))
+    request, trace = requests[0], traces[0]
+    for row in (request, trace):
+        for field in ('async_request_id', 'async_producer_pid', 'async_producer_start_ticks'):
+            row[field] = None
+    binding = dict(binding_status='matched', request_id=request['request_id'],
+        machine_observation_sha256=observations[0]['machine_observation_sha256'],
+        continuous_reversal_consumption=dict(trace['continuous_reversal_consumption']))
+    request['continuous_reversal_request_binding'] = binding
+    if tamper == 'pid': binding['continuous_reversal_consumption']['pid'] = 999
+    if tamper == 'observation': binding['machine_observation_sha256'] = 'e'*64
+    if tamper == 'request': binding['request_id'] = 'wrong'
+    if tamper == 'input': binding['continuous_reversal_consumption']['input_sha256'] = 'e'*64
+    if tamper == 'binding_missing': request.pop('continuous_reversal_request_binding')
+    if tamper == 'one_async': request['async_producer_pid'] = 123
+    write()
+    result = monitor._reversal_provider_lineage(tmp_path, now, observations, tail_bytes=16384)
+    assert result['request_prepared_count'] == (1 if tamper is None else 0)
+    if tamper is None:
+        assert result['issues'] == {}
+        assert result['provider_transmission_attempt_count'] == 1
+    else:
+        assert result['issues']['reversal_provider_request_hash_or_identity_mismatch'] == 1
+
+
 def test_provider_lineage_request_only_is_unresolved_and_partial_without_fabricated_timeout(tmp_path):
     now, observations, requests, traces, write = _current_provider_lineage_fixture(tmp_path, verdicts=(None,))
     write(trace_values=[])
@@ -3252,6 +3279,111 @@ def test_complete_current_quiet_cohort_with_only_lazy_pending_missing_is_warning
     assert health['allowed_runtime_apply'] is False and health['runtime_effect'] is False
     assert json.dumps(result,sort_keys=True)==before
 
+@pytest.mark.parametrize('hour,missing',[(hour,missing) for hour in ('07:55','08:44','09:00','16:10') for missing in ('all','aux')])
+@pytest.mark.parametrize('damage',[None,'entry_open','classification','io','empty','malformed',
+    'birth','selection','assessment','provider','bootstrap','stale','incident','async','source_partial'])
+def test_native_pre_entry_lazy_sources_are_pending_without_proving_coverage(monkeypatch, hour, missing, damage):
+    from copy import deepcopy
+    result=_observation_health_fixture()
+    old=monitor.stamp(result['as_of']);now=old.replace(hour=int(hour[:2]),minute=int(hour[3:]))
+    delta=now-old
+    def shift(value):
+        if isinstance(value,dict):return {k:shift(v) for k,v in value.items()}
+        if isinstance(value,list):return [shift(v) for v in value]
+        if isinstance(value,str) and len(value)>10 and value[10]=='T' and monitor.stamp(value):
+            return (monitor.stamp(value)+delta).isoformat()
+        return value
+    result=shift(result)
+    inp=result['input_provenance'];at=monitor.stamp(inp['snapshot_as_of'])
+    inp.update(sentinel_classification='NOT_YET_DUE',latest_event_status='no_recent_loaded_events',
+        loaded_recent_event_count=0,latest_event_at=(at-timedelta(days=1)).isoformat(),
+        latest_event_age_seconds=(now-at).total_seconds()+86400)
+    actor=['9','900'];proof,generation=_health_birth_fixture(now,actor)
+    generation.update(status='current',generation_current=True,selector_reported_actual_pid_consumed=True)
+    result['observer_generation']=generation
+    from src.trading.market import session_contract
+    context=session_contract.resolve_market_session(now)
+    result['source_gap_semantics']['fixed_watch_waits'].update(count=0,session_boundary_wait_count=0,
+        reason_counts={},native_session_regime=context.session_regime,
+        native_entry_allowed_by_clock=context.entry_allowed_by_clock)
+    for name in ('source_gap_semantics','machine_semantics'):
+        original=result[name];token=monitor._HEALTH_BIRTH.set(proof)
+        try:original['current_health_cohort']=monitor._health_cohort(deepcopy(original),actor,now)
+        finally:monitor._HEALTH_BIRTH.reset(token)
+    gap=result['source_gap_semantics']['current_health_cohort']['view']
+    machine=result['machine_semantics']['current_health_cohort']['view']
+    absent=dict(status='unobservable',tail_truncated=False,window_covered=False,recent_count=0,reason='FileNotFoundError')
+    for name in (('probe','trace','pending') if missing=='all' else ('trace','pending')):
+        gap['sources'][name]=deepcopy(absent)
+    gap['async_pass_projection_coverage']='partial'
+    if missing=='all':
+        machine['source_status']='unobservable:FileNotFoundError'
+        for key in ('read_count','bytes_read','source_bytes','window_coverage','read_limit_bytes'):
+            machine.pop(key,None)
+    else:machine['tail_truncated']=True
+    if damage=='entry_open':
+        from dataclasses import replace
+        monkeypatch.setattr(session_contract,'resolve_market_session',lambda _: replace(context,entry_allowed_by_clock=True))
+    if damage=='classification':inp.pop('sentinel_classification')
+    elif damage=='io':gap['sources']['trace']['reason']='PermissionError'
+    elif damage=='empty':gap['sources']['trace']['reason']='empty_source'
+    elif damage=='malformed':gap['sources']['trace']['malformed_rows']=1
+    elif damage=='birth':proof['boot_epoch']+=1
+    elif damage=='selection':machine['selection']['representative']['score_contract_valid']=False
+    elif damage=='assessment':gap['observed']['entry_traces']=1
+    elif damage=='provider':machine['observation_count']=1
+    elif damage=='bootstrap':result['entry_execution_tuning_semantics']['bootstrap']['status']='missing'
+    elif damage=='stale':inp['snapshot_age_seconds']+=1
+    elif damage=='incident':result['incidents']['new']=dict(status='active',last_seen=now.isoformat(),issues={'unknown':1})
+    elif damage=='async':gap['async_pass_unmapped_count']=1
+    elif damage=='source_partial':gap['sources']['trace']['status']='partial'
+    before=json.dumps(result,sort_keys=True)
+    health=monitor.observation_health_projection(result)
+    expected=damage is None and int(hour[:2]) < 9
+    assert health['status']==('warning_pending' if expected else 'not_eligible'),health
+    if expected:assert health['reason']=='native_pre_entry_observation_not_due'
+    assert not any(health[k] for k in ('current_observation_verified','full_coverage_proven',
+        'runtime_effect','allowed_runtime_apply'))
+    assert json.dumps(result,sort_keys=True)==before
+
+
+@pytest.mark.parametrize('damage',[None,'unaccounted_probe','missing_probe','partial_probe','unknown_wait',
+    'missing_trace_io','assessment','async','birth','selection','payload_missing'])
+def test_complete_native_wait_census_explains_lazy_trace_without_source_validation(damage):
+    from copy import deepcopy
+    result=_observation_health_fixture();now=monitor.stamp(result['as_of']);actor=['9','900']
+    proof,generation=_health_birth_fixture(now,actor)
+    generation.update(status='current',generation_current=True,selector_reported_actual_pid_consumed=True)
+    result['observer_generation']=generation
+    inp=result['input_provenance'];at=monitor.stamp(inp['snapshot_as_of'])
+    inp.update(latest_event_status='no_recent_loaded_events',loaded_recent_event_count=0,
+        latest_event_at=(at-timedelta(days=1)).isoformat(),latest_event_age_seconds=(now-at).total_seconds()+86400)
+    for name in ('source_gap_semantics','machine_semantics'):
+        original=result[name];token=monitor._HEALTH_BIRTH.set(proof)
+        try:original['current_health_cohort']=monitor._health_cohort(deepcopy(original),actor,now)
+        finally:monitor._HEALTH_BIRTH.reset(token)
+    gap=result['source_gap_semantics']['current_health_cohort']['view']
+    machine=result['machine_semantics']['current_health_cohort']['view'];machine['tail_truncated']=True
+    absent=dict(status='unobservable',tail_truncated=False,window_covered=False,recent_count=0,reason='FileNotFoundError')
+    gap['sources']['trace']=deepcopy(absent);gap['sources']['pending']=deepcopy(absent)
+    gap['async_pass_projection_coverage']='partial'
+    if damage=='unaccounted_probe':gap['sources']['probe']['recent_count']+=1
+    elif damage=='missing_probe':gap['sources']['probe']=deepcopy(absent)
+    elif damage=='partial_probe':gap['sources']['probe'].update(status='partial',window_covered=False)
+    elif damage=='unknown_wait':gap['fixed_watch_waits']['unclassified_or_actionable_wait_count']=1
+    elif damage=='missing_trace_io':gap['sources']['trace']['reason']='PermissionError'
+    elif damage=='assessment':gap['observed']['entry_traces']=1
+    elif damage=='async':gap['async_pass_unmapped_count']=1
+    elif damage=='birth':proof['boot_epoch']+=1
+    elif damage=='selection':machine['selection']['representative']['score_contract_valid']=False
+    elif damage=='payload_missing':machine['source_status']='unobservable:FileNotFoundError'
+    health=monitor.observation_health_projection(result)
+    assert health['status']==('warning_pending' if damage is None else 'not_eligible'),health
+    if damage is None:assert health['reason']=='bounded_source_quality_observation'
+    assert not health['current_observation_verified'] and not health['full_coverage_proven']
+    assert not health['runtime_effect'] and not health['allowed_runtime_apply']
+
+
 def _derived_coverage_health_fixture(route='krx_nxt_integrated'):
     result,gap,machine,lineage=_bounded_outcome_health_fixture(partial=False)
     gap.update(status='gap_observed',issues={'machine_probe:coverage_degraded:'+route:1},
@@ -3278,6 +3410,24 @@ def test_exact_recomputed_route_coverage_quality_preserves_issue_and_domain_aler
     assert result['notification_pending']==['machine_auxiliary_intraday_source_gap']
     assert result['incidents']['machine_auxiliary_intraday_source_gap']['status']=='active'
     assert json.dumps(result,sort_keys=True)==before
+
+
+@pytest.mark.parametrize('diagnostic', ['reversal_first_signal_invalidated', 'unknown_cancellation'])
+def test_first_turn_cancellation_does_not_hide_remaining_route_coverage(diagnostic):
+    result, gap = _derived_coverage_health_fixture()
+    gap['observed'].update(probe_results=33, probe_native_invalidated=1)
+    gap.update(probe_route_counts={'krx_nxt_integrated': 32},
+               probe_route_source_covered_counts={'krx_nxt_integrated': 6},
+               diagnostics={'machine_probe:'+diagnostic: 1},
+               diagnostics_by_scope={'route:krx_nxt_integrated|machine_probe:'+diagnostic: 1})
+    before = json.dumps(result, sort_keys=True)
+    health = monitor.observation_health_projection(result)
+    assert health['status'] == ('warning_pending' if diagnostic == 'reversal_first_signal_invalidated'
+                               else 'not_eligible')
+    assert gap['issues'] == {'machine_probe:coverage_degraded:krx_nxt_integrated': 1}
+    assert result['notification_pending'] == ['machine_auxiliary_intraday_source_gap']
+    assert not health['full_coverage_proven'] and not health['current_observation_verified']
+    assert json.dumps(result, sort_keys=True) == before
 
 
 @pytest.mark.parametrize('bad',['issue_bool','issue_count','scope_bool','scope_count','wrong_scope','unknown_route',
@@ -3750,7 +3900,7 @@ def test_real_main_seals_final_generation_and_notification_before_health_publica
     monkeypatch.setattr(monitor,'datetime',Clock)
     monkeypatch.setattr(monitor,'PROJECT_ROOT',root)
     for key in ('source_gap_semantics','machine_semantics','entry_execution_tuning_semantics'):
-        def reader(*args,_key=key):
+        def reader(*args,_key=key,**kwargs):
             result=deepcopy(fixture[_key])
             if _key!='entry_execution_tuning_semantics':
                 result['current_health_cohort']=monitor._health_cohort(deepcopy(result),actor,now)
@@ -3918,6 +4068,61 @@ def test_main_defers_without_overwriting_when_selection_changes_before_publicati
     assert not list((root / "data/report/buy_funnel_sentinel").glob("*.json"))
 
 
+@pytest.mark.parametrize("with_notify,costs,expected,reserve", [
+    (False, (4, 5, 3), 0, 5),
+    (True, (4, 5, 3), 75, 15),
+    (False, (4, 9, 9), 75, 5),
+])
+def test_cli_reserves_only_requested_notification_work(
+        tmp_path, monkeypatch, capsys, with_notify, costs, expected, reserve):
+    from contextlib import contextmanager
+    from types import SimpleNamespace
+    from src.engine.monitoring import observation_budget
+
+    root, _, _, _ = _observer_selection_fixture(tmp_path, monkeypatch)
+    monkeypatch.setattr(monitor, "PROJECT_ROOT", root)
+    clock = [0.0]
+    monkeypatch.setattr(monitor, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+    limits = []
+
+    @contextmanager
+    def computation_budget(deadline):
+        limits.append(deadline)
+        if clock[0] >= deadline:
+            raise observation_budget.ObservationDeadline("validation_deferred:deadline")
+        yield
+        if clock[0] > deadline:
+            raise observation_budget.ObservationDeadline("validation_deferred:deadline")
+
+    monkeypatch.setattr(observation_budget, "computation_budget", computation_budget)
+    for name, cost in zip(("source_gap_semantics", "entry_execution_tuning_semantics",
+                           "machine_semantics"), costs):
+        def read(*args, _cost=cost, **kwargs):
+            clock[0] += _cost
+            return dict(status="unobservable", issues={})
+        monkeypatch.setattr(monitor, name, read)
+        monkeypatch.setattr(monitor, "attach_" + name,
+                            lambda result, value, _name=name: result.update({_name: value}))
+    monkeypatch.setattr(monitor, "notify", lambda *args: None)
+    raw = root / "source.json"
+    raw.write_text("{}")
+    args = ["--report", str(raw), "--budget-seconds", "25"]
+    if with_notify:
+        args.append("--notify")
+    assert monitor.main(args) == expected
+    terminal = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert limits == [25 - reserve] * 3
+    assert terminal["execution_status"] == ("completed" if expected == 0 else "deferred")
+    report = json.loads((root / "data/report/buy_funnel_sentinel" /
+                         "submission_bottleneck_monitor_latest.json").read_text())
+    assert report["execution_status"] == terminal["execution_status"]
+    assert report["execution_budget"] == terminal["execution_budget"] == dict(
+        total_seconds=25, computation_reserve_seconds=reserve,
+        notification_requested=with_notify)
+    assert report["semantic_status"] == "partial"
+    assert clock[0] <= 25
+
+
 def test_observer_publication_lease_serializes_existing_selector_writer(tmp_path, monkeypatch):
     root, path, selection, code = _observer_selection_fixture(tmp_path, monkeypatch)
     lock_path = path.with_suffix(".lock")
@@ -3983,7 +4188,7 @@ def test_observer_read_open_race_fifo_replacement_uses_nonblocking_fd(tmp_path, 
     import os
     from pathlib import Path
     root, path, _, _ = _observer_selection_fixture(tmp_path, monkeypatch)
-    real_open = monitor.os.open
+    real_open = monitor.observer_io.os.open
     def replacement(selected, flags, *args, **kwargs):
         if Path(selected) == path:
             assert flags & os.O_NOFOLLOW
@@ -3992,7 +4197,7 @@ def test_observer_read_open_race_fifo_replacement_uses_nonblocking_fd(tmp_path, 
         return real_open(selected, flags, *args, **kwargs)
     monkeypatch.setattr(monitor.os, "open", replacement)
     with pytest.raises(ValueError, match="regular_file_required"):
-        monitor._observer_regular_bytes(path, limit=1024 * 1024)
+        monitor.observer_io.regular_bytes(path, limit=1024 * 1024)
 
 
 def test_observer_lease_does_not_reclassify_real_publication_failure(tmp_path, monkeypatch):
@@ -4351,7 +4556,7 @@ def test_observer_continuation_keeps_delay_cursor_and_accepted_source_clock():
 
 def test_observer_state_disappearance_during_read_is_not_a_first_run(tmp_path,monkeypatch):
     path=tmp_path/'state.json';path.write_text(json.dumps(dict(schema=monitor.SCHEMA,incidents={})))
-    real_read=monitor.os.read
+    real_read=monitor.observer_io.os.read
     def removed(fd,size):
         raw=real_read(fd,size)
         path.unlink(missing_ok=True)
@@ -4580,25 +4785,61 @@ def test_feature_gap_rejects_invalid_signed_trade_count(signed_trades):
     assert monitor._probe_verified_pending(row, feature_gap=True) is None
 
 
+@pytest.mark.parametrize('duration', [149.5, 0, 0.0, -1, float('nan'), float('inf'), True, False])
 @pytest.mark.parametrize('defect', [None, 'zero_history','current','pid','epoch','bad_counts'])
-def test_history_receipt_is_separate_from_current_source_and_cannot_grant_coverage(tmp_path, defect):
+def test_history_receipt_is_separate_from_current_source_and_cannot_grant_coverage(tmp_path, defect, duration):
     now = monitor.stamp('2026-10-16T14:56:50+09:00')
     row = _native_no_match_probe(now, receipt_format='dict'); f = row['fields']; r = f['native_observation_receipt']
     f.update(zero_base_probe_result='observation_incomplete',
              zero_base_probe_reason='native_history_observed_current_source_stale')
-    r.update(native_source_current=False, source_censored_count=0,
+    r.update(native_source_current=False, source_censored_count=1, observed_seconds=duration,
              selected_lifecycle_counts={'G1':{'FALSE':20},'G2':{'FALSE':10}})
     if defect == 'zero_history': r['selected_lifecycle_counts'] = {'G1':{'UNKNOWN':1},'G2':{'UNKNOWN':2}}
     if defect == 'current': r['native_source_current'] = True
     if defect == 'pid': r['process_pid'] = 999
     if defect == 'epoch': r['native_epoch'] = 0
     if defect == 'bad_counts': r['selected_lifecycle_counts']['G1']['FALSE'] = True
-    assert (monitor._probe_verified_history(row) is not None) == (defect is None)
+    valid = defect is None and type(duration) in (int, float) and duration >= 0 and duration != float('inf')
+    assert (monitor._probe_verified_history(row) is not None) == valid
     assert monitor._probe_verified_no_match(row) is False
+    assert monitor._probe_verified_pending(row) is None
     _source_gap_files(tmp_path, now, probes=[row]); gap = monitor.source_gap_semantics(tmp_path,now)
     assert gap['probe_route_source_covered_counts'] == {}
-    assert gap['native_history_observations']['verified_count'] == int(defect is None)
+    assert gap['native_history_observations']['verified_count'] == int(valid)
     assert gap['native_history_observations']['current_source_coverage_proven'] is False
+
+
+def test_reset_segment_history_keeps_diagnostic_without_observer_contract_failure(tmp_path):
+    result = _observation_health_fixture(); now = monitor.stamp(result['as_of'])
+    rows = []
+    for index, (duration, known) in enumerate(((0, 4), (72.37, 6), (114.9, 5), (0, 41))):
+        row = _native_no_match_probe(now, receipt_format='dict'); fields = row['fields']
+        fields.update(zero_base_probe_result='observation_incomplete',
+            zero_base_probe_reason='native_history_observed_current_source_stale',
+            physical_probe_lease_id=f'history-{index}')
+        fields['native_observation_receipt'].update(observed_seconds=duration,
+            native_source_current=False, source_censored_count=int(duration == 0),
+            reason='required_window_incomplete', selected_branch_truth={'G4':'UNKNOWN'},
+            selected_lifecycle_counts={'G4':{'FALSE':known,'UNKNOWN':2}})
+        rows.append(row)
+    duplicate = json.loads(json.dumps(rows[0]))
+    duplicate['fields']['evaluation_attempt_id'] = 'different-summary-label-same-native-lease'
+    rows.append(duplicate)
+    _source_gap_files(tmp_path, now, probes=rows)
+    actual = monitor.source_gap_semantics(tmp_path, now); gap = result['source_gap_semantics']
+    for key in ('observed','diagnostics','diagnostics_by_scope','native_history_observations',
+                'probe_route_counts','probe_route_assessed_counts','probe_route_source_covered_counts',
+                'probe_route_native_no_match_counts'):
+        gap[key] = actual[key]
+    gap['status'] = 'gap_observed'; gap['sources']['probe']['recent_count'] = 4
+    assert gap['native_history_observations']['verified_count'] == 4
+    assert gap['native_history_observations']['known_count'] == 56
+    assert gap['diagnostics'] == {'machine_probe:native_history_observed_current_source_stale':4}
+    assert gap['probe_route_source_covered_counts'] == gap['probe_route_native_no_match_counts'] == {}
+    health = monitor.observation_health_projection(result)
+    assert health['status'] == 'warning_pending', health
+    assert health['unmet_conditions'] == []
+    assert health['current_observation_verified'] is health['full_coverage_proven'] is False
 
 
 def test_delay_signal_observation_complete_has_no_submit_terminal_requirement(tmp_path):
@@ -4709,13 +4950,13 @@ def test_delay_cursor_partial_append_and_legacy_generation_do_not_lose_boundary(
 
 def _delay_semantic_fixture(tmp_path, *, grid=False, anchor='signal_ready', observation_only=None,
                             quote_horizons=(0,), selected=0, terminal=None, recheck=None,
-                            commit_updates=None, quote_updates=None, extra_terminals=()):
+                            commit_updates=None, quote_updates=None, extra_terminals=(), record_id=9, writer=None):
     """Create all three physical source paths with the same exact rows."""
     from src.engine.pipeline_event_summary import ProducerSummaryCompactor, execution_projection_identity
     day = '2026-10-16'
     started = monitor.stamp(day + 'T10:00:00+09:00')
     base = dict(event_type='pipeline_event', pipeline='ENTRY_PIPELINE', stock_code='005930',
-                stock_name='test', record_id=9, emitted_date=day)
+                stock_name='test', record_id=record_id, emitted_date=day)
     fields = dict(delay_intent_id='source-intent', anchor_kind=anchor,
                   market_session_bucket='krx_regular', route='KRX_NXT_INTEGRATED',
                   decision_committed_at_epoch=started.timestamp(), decision_source_sha256='a'*64,
@@ -4753,7 +4994,7 @@ def _delay_semantic_fixture(tmp_path, *, grid=False, anchor='signal_ready', obse
     (compact/'part-execution-1000.jsonl').write_text(''.join(json.dumps(dict(row,
         family='pre_submit_delay', execution_source_event_sha256=execution_projection_identity(row)))+'\n'
         for row in rows))
-    writer = ProducerSummaryCompactor(summary_dir=tmp_path/'pipeline_event_summaries', mode='shadow')
+    writer = writer or ProducerSummaryCompactor(summary_dir=tmp_path/'pipeline_event_summaries', mode='shadow')
     for row in rows:
         writer.submit(row)
     writer.flush()
@@ -4835,6 +5076,44 @@ def test_delay_recheck_admission_is_pending_only_until_its_exact_deadline(tmp_pa
     assert expired['issues']['selected_due_completion_missing'] == 1
 
 
+@pytest.mark.parametrize("selected", [1, 3, 5])
+def test_delay_short_selected_policy_keeps_due_receipt_monitoring(tmp_path, selected):
+    started = monitor.stamp('2026-10-16T10:00:00+09:00')
+    _delay_semantic_fixture(tmp_path, grid=True, anchor='price_ready', selected=selected,
+        recheck=(selected+1, {'recheck_status': 'admitted', 'successor_request_id': 'successor',
+            'due_at_epoch': started.timestamp()+selected,
+            'recheck_submitted_at_epoch': started.timestamp()+selected+1,
+            'recheck_deadline_epoch': started.timestamp()+100}))
+    pending = monitor.pre_submit_delay_source_semantics(tmp_path, started+timedelta(seconds=70))
+    assert pending['recheck_states'] == {'admitted': 1}
+    assert pending['diagnostics']['selected_due_recheck_pending'] == 1
+    assert 'selected_due_instrumentation_gap' not in pending['diagnostics']
+    assert 'recheck_receipt_invalid' not in pending['issues']
+    expired = monitor.pre_submit_delay_source_semantics(tmp_path, started+timedelta(seconds=101))
+    assert expired['issues']['selected_due_completion_missing'] == 1
+
+
+@pytest.mark.parametrize("status,basis,evidence", [
+    ('unsupported_existing_behavior', None, 'indeterminate'),
+    ('loaded', 'paired_quote_immediate', 'immediate_supported_on_observed_pairs'),
+    ('loaded', 'paired_quote_holdout_immediate', 'indeterminate'),
+])
+def test_delay_zero_policy_evidence_is_not_source_loss(tmp_path, status, basis, evidence):
+    started = monitor.stamp('2026-10-16T10:00:00+09:00')
+    _delay_semantic_fixture(tmp_path, grid=True, anchor='price_ready', selected=0,
+        quote_horizons=(0, 1, 3, 5, 30, 60, 120, 180),
+        commit_updates={'delay_policy_status': status, 'delay_selection_basis': basis,
+                        'delay_evidence_verdict': 'positive_delay_supported'},
+        terminal=(2, {'terminal_reason': 'submitted', 'submit_call_outcome': 'returned_true',
+                      'submit_finished_at_epoch': started.timestamp()+2}))
+    result = monitor.pre_submit_delay_source_semantics(tmp_path, started+timedelta(seconds=360))
+    assert result['issues'] == {}
+    assert result['policy_status_counts'] == {status: 1}
+    assert result['policy_evidence_counts'] == {evidence: 1}
+    assert result['selected_delay_counts'] == {'0': 1}
+    assert result['commit_to_submit_return_sec'] == {'n': 1, 'sum_sec': 2, 'max_sec': 2}
+
+
 def test_delay_wrong_parent_terminal_cannot_satisfy_intent(tmp_path):
     started, _ = _delay_semantic_fixture(tmp_path, anchor='price_ready', selected=30,
         quote_horizons=(0,30,60,120,180), terminal=(61, {
@@ -4898,3 +5177,502 @@ def test_delay_duplicate_actual_terminals_are_visible_without_losing_either_rece
     assert result['issues'] == {'intent_terminal_duplicate':1}
     assert sum(row['stage'] == 'pre_submit_delay_intent_terminal'
                for row in result['cursor']['delay_events']) == 2
+
+
+def _old_scanner_observation(now, birth, actor):
+    from src.engine.scalping.ai_decision_trace import _json_bytes
+    at=datetime.fromtimestamp(birth-60,monitor.KST).isoformat()
+    row=dict(schema='mechanistic_entry_observation_v1', evaluation_role='main_live',
+        captured_at=at, scanner_promotion_id='ZBPROM-exact', bundle_sha256='a'*64,
+        label_context=dict(scanner_promotion_id='ZBPROM-exact',evaluation_attempt_id='aims-old',
+            stock_code='376300',effective_venue='PREMARKET_KRX_LIKE',session_bucket='premarket_krx_like'),
+        runtime_consumption=dict(pid=8,process_start_ticks='800',consumed_at=at,bundle_sha256='a'*64),
+        source=dict(assessment={'action':'ENTER_NOW','original_missing_receipt':True}))
+    row['machine_observation_sha256']=hashlib.sha256(_json_bytes(row)).hexdigest()
+    return row
+
+
+@pytest.mark.parametrize('capture_kind', ['main_live', 'legacy_preflight'])
+@pytest.mark.parametrize('damage',[None,'hash','actor','start','at','date','scope','rule','count','missing',
+    'unknown','duplicate','promotion','new_issue','birth','oversize','conflicting_native'])
+@pytest.mark.parametrize('coverage_order',['none','first','last'])
+@pytest.mark.parametrize('notification_pending', [False, True])
+def test_historical_scanner_health_requires_all_exact_original_evidence(damage,coverage_order,notification_pending,capture_kind):
+    from src.engine.scalping.ai_decision_trace import _json_bytes
+    if coverage_order=='none':
+        result,_,_,_=_bounded_outcome_health_fixture(partial=False)
+    else:
+        result,gap=_derived_coverage_health_fixture()
+    now=monitor.stamp(result['as_of']);generation=result['observer_generation']
+    birth=generation['actor_birth_proof']['birth_lower_bound_epoch']
+    actor=generation['actor_birth_proof']['actor']
+    row=_old_scanner_observation(now,birth,actor)
+    if capture_kind == 'legacy_preflight':
+        row['evaluation_role'] = 'unspecified_legacy'
+        row['source']['exact_payload'] = {'entry_machine_input_trace': {
+            'entry_machine_input_error': 'entry_machine_input_deadline_expired'}}
+        row['source']['assessment'] = dict(schema='mechanistic_entry_source_invalid_v1',
+            action='source_invalid', reason='ai_input_preflight_blocked')
+        row.update(provider_called=False, actual_order_submitted=False,
+            runtime_effect=False, allowed_runtime_apply=False, broker_order_forbidden=True)
+        row['runtime_consumption'].pop('continuous_reversal', None)
+        row['machine_observation_sha256'] = hashlib.sha256(_json_bytes({k:v for k,v in row.items()
+            if k != 'machine_observation_sha256'})).hexdigest()
+    identity=monitor._scanner_observation_identity(row);scope='|'.join(identity.split('|')[-3:])
+    rule='economic_producer_gap';key=hashlib.sha256(f'{scope}|{rule}'.encode()).hexdigest()[:24]
+    item=dict(scope=scope,rule=rule,category='structural_evidence',status='active',
+        first_seen=row['captured_at'],last_seen=now.isoformat(),count=1,evidence_ids=[identity],
+        notified_status='active',examples=[{'economic_source':{'status':'source_gap'}}])
+    result['incidents'][key]=item
+    if notification_pending:
+        result['notification_pending'].append(key)
+    evidence={identity:row};result['machine_semantics']['historical_scanner_observations']=evidence
+    if damage=='hash':row['machine_observation_sha256']='f'*64
+    elif damage=='actor':row['runtime_consumption'].update(pid=actor[0],process_start_ticks=actor[1])
+    elif damage=='start':row['runtime_consumption']['process_start_ticks']=str(int(actor[1])+1)
+    elif damage=='at':row['captured_at']=now.isoformat()
+    elif damage=='date':row['captured_at']=(now-timedelta(days=1)).isoformat()
+    elif damage=='scope':item['scope']='unknown'
+    elif damage=='rule':item['rule']='unknown'
+    elif damage=='count':item['count']=True
+    elif damage=='missing':evidence.clear()
+    elif damage=='unknown':result['incidents']['unknown']=result['incidents'].pop(key)
+    elif damage=='duplicate':item['evidence_ids']*=2;item['count']=2
+    elif damage=='promotion':row['label_context']['scanner_promotion_id']='other'
+    elif damage=='new_issue':result['incidents']['new']={**item,'rule':'unknown'}
+    elif damage=='birth':generation['actor_birth_proof']['boot_epoch']+=1
+    elif damage=='oversize':row['extra']='x'*(128*1024)
+    elif damage=='conflicting_native':row['runtime_consumption']['continuous_reversal']={'pid':9}
+    if damage not in (None,'hash'):
+        row['machine_observation_sha256']=hashlib.sha256(_json_bytes({k:v for k,v in row.items()
+            if k!='machine_observation_sha256'})).hexdigest()
+    if coverage_order=='last':result['incidents']=dict(reversed(list(result['incidents'].items())))
+    before=json.dumps(result,sort_keys=True)
+    health=monitor.observation_health_projection(result)
+    assert health['status']==('warning_pending' if damage is None else 'not_eligible'),health
+    assert json.dumps(result,sort_keys=True)==before
+    assert item['status']=='active' and item['examples'][0]['economic_source']['status']=='source_gap'
+    assert health['runtime_effect'] is False and health['full_coverage_proven'] is False
+    if coverage_order!='none':
+        assert gap['issues']=={'machine_probe:coverage_degraded:krx_nxt_integrated':1}
+        assert result['notification_pending']==['machine_auxiliary_intraday_source_gap'] + ([key] if notification_pending else [])
+        assert result['incidents']['machine_auxiliary_intraday_source_gap']['status']=='active'
+
+
+def test_machine_reader_preserves_exact_old_scanner_bytes_across_bounded_tail(tmp_path,monkeypatch):
+    observation,write=semantic_fixture(tmp_path,monkeypatch)
+    now=START+timedelta(hours=1)
+    row=_old_scanner_observation(now,START.timestamp()+60,['9','900'])
+    identity=monitor._scanner_observation_identity(row);write(row)
+    path=tmp_path/'ai_decision_payloads/ai_decision_payloads_2026-09-21.jsonl'
+    original=json.loads(path.read_bytes())
+    result=monitor.machine_semantics(tmp_path,now,incident_evidence_ids=[identity])
+    assert result['observation_count']==0
+    assert result['historical_scanner_observations']=={identity:original}
+    state={'schema':monitor.SCHEMA,'incidents':{}}
+    monitor.attach_machine_semantics(state,result)
+    cached=monitor._continuation_state(state)['historical_scanner_observations']
+    # The immutable original evidence survives ordinary bounded-tail expiry.
+    write(observation)
+    result=monitor.machine_semantics(tmp_path,now,incident_evidence_ids=[identity],
+        historical_scanner_observations=cached)
+    assert result['historical_scanner_observations']=={identity:original}
+    # A second native observation with the same exact key but changed bytes
+    # cannot replace or silently supersede the preserved original.
+    row['source']['assessment']['action']='BLOCK';write(row)
+    result=monitor.machine_semantics(tmp_path,now,incident_evidence_ids=[identity],
+        historical_scanner_observations=cached)
+    assert result['historical_scanner_observations']=={}
+    assert cached=={identity:original}
+    assert result['historical_scanner_conflicts']==[identity]
+    result=monitor.machine_semantics(tmp_path,now,incident_evidence_ids=[identity],
+        historical_scanner_observations={},historical_scanner_conflicts=[identity])
+    assert result['historical_scanner_observations']=={}
+
+
+@pytest.mark.parametrize('damage',[None,'provider','order','clock','snapshot','pid','attempt','hash',
+    'action','capture','authority','kind','missing_safety','future_snapshot'])
+def test_preprovider_input_deadline_is_diagnostic_only_with_exact_safe_terminal(tmp_path,damage):
+    now=START
+    row=dict(schema='ai_decision_trace_v1',decision_ts=now.isoformat(),decision_stage='entry_screen',
+        machine_evaluation_status='assessment_contract_invalid',
+        machine_contract_error='entry_machine_input_deadline_expired',
+        decision_evaluation_status='not_evaluated_provider_or_preflight',
+        result_source='mechanistic_pre_adjudication_rejected',action='DROP',
+        reason='mechanistic_input_contract_invalid',provider_called=False,actual_order_submitted=False,
+        runtime_effect=False,allowed_runtime_apply=False,broker_order_forbidden=True,
+        machine_observation_sha256=None,request_capture_status='missing',
+        async_producer_pid=9,async_producer_start_ticks='900',async_request_id='exact-async',
+        evaluation_attempt_id='exact-attempt',decision_trace_id='exact-trace',
+        effective_venue='KRX',session_bucket='krx_regular',market_data_route='krx_nxt_integrated',
+        machine_bundle_sha256='a'*64,async_origin_deadline_epoch=now.timestamp()-5,
+        input_source_clock_captured_at=(now-timedelta(seconds=10)).isoformat())
+    if damage=='provider':row['provider_called']=True
+    elif damage=='order':row['actual_order_submitted']=True
+    elif damage=='clock':row['async_origin_deadline_epoch']=now.timestamp()+1
+    elif damage=='snapshot':row.pop('input_source_clock_captured_at')
+    elif damage=='pid':row.pop('async_producer_start_ticks')
+    elif damage=='attempt':row.pop('evaluation_attempt_id')
+    elif damage=='hash':row['machine_bundle_sha256']='bad'
+    elif damage=='action':row['action']='BUY'
+    elif damage=='capture':row['machine_observation_sha256']='b'*64
+    elif damage=='authority':row['runtime_effect']=True
+    elif damage=='kind':row['machine_source_gap_kind']='source_route_conflict'
+    elif damage=='missing_safety':row.pop('broker_order_forbidden')
+    elif damage=='future_snapshot':row['input_source_clock_captured_at']=(now+timedelta(seconds=1)).isoformat()
+    assert bool(monitor._entry_input_deadline_guard(row))==(damage is None)
+    _source_gap_files(tmp_path,now,traces=[row])
+    result=monitor.source_gap_semantics(tmp_path,now)
+    key='machine_trace:'+row.get('machine_source_gap_kind','entry_machine_input_deadline_expired')
+    assert result['diagnostics'].get(key,0)==int(damage is None)
+    assert result['issues'].get(key,0)==int(damage is not None)
+
+
+@pytest.mark.parametrize('key', [{}, [], None, True, 'unknown_new_incident'])
+def test_pending_notification_unknown_or_malformed_key_remains_actionable(key):
+    result,*_=_bounded_outcome_health_fixture(partial=False)
+    result['notification_pending']=[key]
+    assert monitor.observation_health_projection(result)['status']=='not_eligible'
+
+
+@pytest.mark.parametrize('format', ['dict','json','literal'])
+def test_native_feature_gap_false_branch_with_missing_features_is_verified(tmp_path, format):
+    from src.engine.scalping.zero_base_probe import native_wait_result
+    now = monitor.stamp('2026-10-21T08:32:48+09:00')
+    row = _native_feature_gap_probe(now)
+    f = row['fields']; receipt = f['native_observation_receipt']
+    readiness = f['zero_base_branch_readiness']
+    readiness['branch_descriptors']['G1'].update(feature_availability='incomplete',
+        missing_inputs=['ret', 'backward_window'])
+    assert native_wait_result(receipt, readiness) == (
+        'required_feature_insufficient', 'required_branch_feature_missing')
+    for key in ('native_observation_receipt', 'zero_base_branch_readiness'):
+        value = f[key]
+        if format != 'dict': f[key] = json.dumps(value) if format == 'json' else repr(value)
+    before = json.dumps(row, sort_keys=True)
+    assert monitor._probe_verified_pending(row, feature_gap=True)['unknown_count'] == 37
+    _source_gap_files(tmp_path, now, probes=[row])
+    gap = monitor.source_gap_semantics(tmp_path, now)
+    census = gap['native_feature_gap_observations']
+    assert census['count'] == census['verified_count'] == 1 and census['unclassified_count'] == 0
+    assert not census['source_coverage_proven'] and not census['machine_admission_proven']
+    assert gap['probe_route_assessed_counts'] == gap['probe_route_source_covered_counts'] == {}
+    assert json.dumps(row, sort_keys=True) == before
+
+
+@pytest.mark.parametrize("reason", ["entry_split_probe_first_deferred", "main_entry_order_route_invalid"])
+@pytest.mark.parametrize("tamper", [None, "missing_reason", "unknown_reason", "accepted", "raised", "parent", "schema", "call", "record", "before", "other_call", "missing_record", "conflicting_finish", "duplicate"])
+def test_call_local_terminal_reason_reaches_monitor_without_inventing_old_outcomes(tamper, reason):
+    from dataclasses import replace
+    fields = dict(entry_submit_attempt_id="call-one", entry_submit_attempt_schema="call_local_submit_attempt_v1",
+        entry_submit_attempt_authority="observation_only", entry_submit_attempt_parent_promotion_id="parent-1",
+        entry_submit_attempt_broker_accepted=False, entry_submit_attempt_return_outcome="returned_false",
+        entry_submit_attempt_terminal_schema="call_local_terminal_v1",
+        entry_submit_attempt_terminal_reason=reason,
+        submit_call_outcome="returned_false", submit_call_return_outcome="returned_false", submit_call_broker_accepted=False)
+    if tamper == "missing_reason": fields.pop("entry_submit_attempt_terminal_reason")
+    if tamper == "unknown_reason": fields["entry_submit_attempt_terminal_reason"] = "unknown_guard"
+    if tamper == "accepted": fields["entry_submit_attempt_broker_accepted"] = True
+    if tamper == "raised": fields["submit_call_return_outcome"] = "raised"
+    if tamper == "parent": fields["entry_submit_attempt_parent_promotion_id"] = "parent-foreign"
+    if tamper == "schema": fields["entry_submit_attempt_terminal_schema"] = "unverified"
+    if tamper == "call": fields["entry_submit_attempt_id"] = "call-foreign"
+    decision = event(1, entry_submit_attempt_id="call-one")
+    terminal = event(1, stage="entry_submit_attempt_finished", when=START + timedelta(seconds=1), **fields)
+    if tamper == "missing_record": terminal = replace(terminal, record_id="")
+    if tamper == "record": terminal = replace(terminal, record_id="foreign-record")
+    if tamper == "before": terminal = replace(terminal, emitted_at=START - timedelta(seconds=1))
+    # Exercise the actual source cache parser, not only the classification helper.
+    cached = sentinel._payload_to_cache_row(dict(event_type="pipeline_event", emitted_at=terminal.emitted_at.isoformat(),
+        pipeline=terminal.pipeline, stage=terminal.stage, stock_name=terminal.stock_name,
+        stock_code=terminal.stock_code, record_id=terminal.record_id, fields=terminal.fields))
+    terminal = replace(terminal, fields=cached["fields"])
+    rows = [decision, terminal]
+    if tamper == "other_call": rows.append(event(1, stage="latency_pass", entry_submit_attempt_id="unresolved-call"))
+    if tamper in {"conflicting_finish", "duplicate"}:
+        duplicate = replace(terminal, fields=dict(terminal.fields))
+        if tamper == "conflicting_finish": duplicate.fields['entry_submit_attempt_terminal_schema'] = 'unknown'
+        rows.append(duplicate)
+    valid = tamper in {None, "duplicate"}
+    row = monitor.snapshot(rows, START + timedelta(seconds=2))["rows"][0]
+    assert row["final_guard_blocked"] is valid
+    assert row["broker_acceptance_observed"] is False
+    if valid:
+        assert row["final_state"] == "final_guard_blocked"
+        assert row["final_guard_evidence"][0]["reason"] == reason
+    else:
+        assert row["final_state"] not in {"final_guard_blocked", "broker_rejected", "submit_pipeline_reached"}
+
+
+@pytest.mark.parametrize("reason", ["entry_split_probe_first_deferred", "main_entry_order_route_invalid"])
+def test_submit_return_site_to_native_logger_cache_and_monitor(monkeypatch, reason):
+    from src.engine import sniper_state_handlers as handlers
+    from src.engine.monitoring.entry_attempt_identity import bind_submit_attempt_machine_lineage, observe_submit_attempt
+    stock = {'id': 1, 'code': '005930', 'name': 'fixture', 'strategy': 'SCALPING', 'scanner_promotion_id': 'parent-1'}
+    receipt = dict(event(1).fields, entry_ai_screen_pass=True)
+    events = []
+    def emit(*args, **kwargs):
+        payload = dict(event_type='pipeline_event', emitted_at=(START + timedelta(seconds=len(events))).isoformat(),
+            pipeline=args[0], stage=args[3], stock_name=args[1], stock_code=args[2], record_id=kwargs['record_id'], fields=kwargs['fields'])
+        cached = sentinel._payload_to_cache_row(payload)
+        events.append(sentinel._event_from_cache_row(cached))
+    monkeypatch.setattr(handlers, 'emit_pipeline_event', emit)
+    for name in ('_remember_scanner_terminal_block', 'observe_candidate_transition_safe',
+                 '_maybe_register_rising_missed_nxt_downstream_block_sampler'):
+        monkeypatch.setattr(handlers, name, lambda *a, **kw: None)
+    @observe_submit_attempt(on_finish=handlers._observe_entry_submit_finished)
+    def run(stock, code):
+        assert bind_submit_attempt_machine_lineage(stock, code, receipt)
+        handlers._log_entry_pipeline(stock, code, 'latency_pass')
+        handlers._set_async_terminal(stock, reason)
+        return False
+    assert run(stock, stock['code']) is False
+    assert [e.stage for e in events] == ['latency_pass', 'entry_submit_attempt_finished']
+    row = monitor.snapshot(events, START + timedelta(seconds=3))['rows'][0]
+    assert row['final_state'] == 'final_guard_blocked'
+    assert row['final_guard_evidence'][0]['reason'] == reason
+    assert row['broker_acceptance_observed'] is False
+    assert '_async_consumption_guard' not in stock
+
+
+def test_nonterminal_machine_rows_do_not_read_new_terminal_payload():
+    class NonterminalFields(dict):
+        def get(self, key, default=None):
+            if key == 'entry_submit_attempt_terminal_reason':
+                pytest.fail('nonterminal payload decoded for unrelated submit completion')
+            return super().get(key, default)
+    from dataclasses import replace
+    decision = event(1)
+    decision = replace(decision, fields=NonterminalFields(decision.fields))
+    result = sentinel._machine_primary_entry_funnel([decision])
+    assert result['evaluation_ledger'][0]['final_state'] == 'pending'
+
+
+@pytest.mark.parametrize('legacy', [False, True])
+@pytest.mark.parametrize('damage', [None, 'raw_changed', 'index_stale', 'missing_clock', 'budget'])
+def test_lineage_native_index_reads_exact_entry_rows_outside_large_irrelevant_suffix(tmp_path, monkeypatch, damage, legacy):
+    from src.engine.automation import main_trailing_source_store as store
+    from pathlib import Path
+    if legacy or damage == 'raw_changed':
+        project = store.project
+        def original_projection(*args):
+            value = project(*args)
+            if value is not None:value.pop('lineage_projection_version', None)
+            return value
+        monkeypatch.setattr(store, 'project', original_projection)
+    now, observations, requests, traces, write = _current_provider_lineage_fixture(tmp_path, verdicts=('PASS',))
+    trace = traces[0]
+    trace['decision_stage'] = 'entry_screen'
+    if damage == 'missing_clock':
+        trace.pop('decision_ts')
+    path = tmp_path/'ai_decision_trace'/f'ai_decision_trace_{now.date()}.jsonl'
+    path.parent.mkdir(exist_ok=True);path.write_bytes(b'')
+    def append(value):
+        before = store.signature(path.stat());raw = json.dumps(value).encode()+b'\n'
+        with path.open('ab') as stream:stream.write(raw)
+        assert store.record_append(tmp_path,path,before=before,after=store.signature(path.stat()),raw=raw,row=value)
+    append(trace)
+    # A large holding row displaces a valid entry trace from the bounded tail.
+    append(dict(schema='ai_decision_trace_v1',decision_stage='holding_screen',
+        decision_ts=now.isoformat(),padding='x'*32768))
+    if damage == 'index_stale':
+        with path.open('ab') as stream:stream.write(b'{}\n')
+    elif damage == 'raw_changed':
+        # Keep the native index identity pinned so the exact-byte check, rather
+        # than only metadata, must detect the mismatched original line.
+        generation = store.generation(tmp_path,path)
+        original_signature = store.signature
+        with path.open('r+b') as stream:stream.write(b'!')
+        monkeypatch.setattr(store,'signature',lambda metadata:generation['source_stat'])
+        monkeypatch.setattr(store,'generation',lambda *a:generation)
+    original_open = Path.open;reads=[]
+    class ObservedStream:
+        def __init__(self,stream):self.stream=stream
+        def __getattr__(self,key):return getattr(self.stream,key)
+        def __enter__(self):self.stream.__enter__();return self
+        def __exit__(self,*args):return self.stream.__exit__(*args)
+        def read(self,size=-1):
+            assert size >= 0
+            value=self.stream.read(size);reads.append(len(value));return value
+    def observed_open(candidate,*args,**kwargs):
+        stream=original_open(candidate,*args,**kwargs)
+        return ObservedStream(stream) if candidate==path else stream
+    monkeypatch.setattr(Path,'open',observed_open)
+    budget = 100 if damage == 'budget' else 16384
+    joined=monitor._reversal_provider_lineage(tmp_path,now,observations,tail_bytes=budget,pid_identity=(123,'456'))
+    source=joined['source_windows']['traces']
+    assert sum(reads) <= budget
+    if damage:
+        assert source['status'] != 'complete' and joined['status'] != 'observed'
+        return
+    assert joined['source_gaps'] == joined['issues'] == {}, joined
+    assert joined['trace_attempt_count'] == joined['raw_response_observed_count'] == 1
+    assert source['coverage_basis']=='native_index_projection_or_exact_raw_offset_size_sha256'
+    assert source['window_covered'] is True and source['read_count']==int(legacy)
+    assert source['bytes_read']+source['index_bytes_read'] <= budget
+    assert source['bytes_read'] < path.stat().st_size/2
+
+
+@pytest.mark.parametrize('legacy', [False, True])
+@pytest.mark.parametrize('damage', [None, 'seal', 'path', 'namespace', 'stat', 'size', 'chain',
+    'selected_count', 'whole_file', 'budget', 'reads', 'missing_clock', 'partial', 'reason',
+    'extra', 'bool_identity', 'raw_without_read', 'negative_stat'])
+def test_indexed_lineage_source_reaches_bounded_health_without_raw_scan(tmp_path, monkeypatch, legacy, damage):
+    from src.engine.automation import main_trailing_source_store as store
+    monkeypatch.setattr(store, 'maintain', lambda *a: None)
+    if legacy:
+        project = store.project
+        def old_projection(*args):
+            value = project(*args)
+            if value is not None: value.pop('lineage_projection_version', None)
+            return value
+        monkeypatch.setattr(store, 'project', old_projection)
+    result, gap, machine, lineage = _bounded_outcome_health_fixture(partial=False)
+    now = monitor.stamp(result['as_of'])
+    path = tmp_path/'ai_decision_trace'/f'ai_decision_trace_{now.date()}.jsonl'
+    path.parent.mkdir(); path.touch()
+    for index in range(2):
+        row = dict(schema='ai_decision_trace_v1', decision_stage='entry_screen',
+            decision_trace_id='trace-'+str(index), decision_ts=now.isoformat())
+        before=store.signature(path.stat()); raw=json.dumps(row).encode()+b'\n'
+        with path.open('ab') as stream: stream.write(raw)
+        assert store.record_append(tmp_path,path,before=before,after=store.signature(path.stat()),raw=raw,row=row)
+    rows, source = monitor._indexed_entry_trace_rows(tmp_path,path,now,tail_bytes=16384,window_sec=605)
+    assert len(rows)==2 and source['read_count']==2*int(legacy)
+    generation=source['native_index_generation']
+    if damage=='seal': generation['sha256']='f'*64
+    elif damage=='path': generation['path']=f'ai_decision_trace_{(now-timedelta(days=1)).date()}.jsonl'
+    elif damage=='namespace': generation['namespace']='ai_decision_requests'
+    elif damage=='stat': generation['source_stat'][1]+=1
+    elif damage=='size': generation['size']+=1
+    elif damage=='chain': generation['append_chain_sha256']='invalid'
+    elif damage=='selected_count': generation['selected_records']=0
+    elif damage=='whole_file': generation['whole_file_sha256']=True
+    elif damage=='budget': source['index_bytes_read']=8*1024*1024+1
+    elif damage=='reads': source['read_count']=True
+    elif damage=='missing_clock': source['missing_timestamp_rows']=1
+    elif damage=='partial': source['status']='partial'; source['window_covered']=False
+    elif damage=='reason': source['reason']='source_generation_changed'
+    elif damage=='extra': generation['unverified_extension']={}
+    elif damage=='bool_identity': source['source_identity']['device']=True
+    elif damage=='raw_without_read': source['bytes_read']=1; source['read_count']=0
+    elif damage=='negative_stat': generation['source_stat'][3]=-1
+    if damage not in (None,'seal'):
+        generation['sha256']=hashlib.sha256(store.encode({k:v for k,v in generation.items() if k!='sha256'})).hexdigest()
+    lineage['source_windows']['traces']=source
+    original=json.dumps(result,sort_keys=True)
+    health=monitor.observation_health_projection(result)
+    assert health['status']==('warning_pending' if damage is None else 'not_eligible'),health
+    assert health['full_coverage_proven'] is False and health['current_observation_verified'] is False
+    assert json.dumps(result,sort_keys=True)==original
+
+
+@pytest.mark.parametrize('cumulative', [False, True])
+@pytest.mark.parametrize('damage', [None, 'no_breach', 'ready', 'predicate_missing', 'source',
+    'epoch', 'scope', 'registration', 'route', 'bundle', 'branch_phase', 'late'])
+def test_registered_native_first_hold_breach_is_diagnostic_only(tmp_path, monkeypatch, cumulative, damage):
+    from copy import deepcopy
+    from src.engine.scalping import reversal_extended_runtime as B
+    from src.engine.scalping import reversal_current_backend as dispatch
+    from src.engine.scalping import reversal_source_diagnostics as source
+    from src.engine.scalping.reversal_extended_state import State
+    from src.engine.scalping.reversal_path_catalog import cell_key
+    from src.tests.test_reversal_manual_registration import bid_for, hold_rows
+    from src.tests.test_reversal_path_policy import row
+    bid = 'manual_cumulative_a2a227bdaaad838d381a774c' if cumulative else bid_for('other_non_fixed', 'FIRST_HOLD3')
+    symbol = '034020' if cumulative else '000001'
+    values = hold_rows()
+    for tick in values:
+        if cumulative: tick[3:6] = [x*59000/99.5 for x in tick[3:6]]
+        tick[9] = symbol+'_NX'
+    state = State(branch_ids=[bid], session_anchor=values[0], generation='a'*64)
+    for tick in values: state.observe(tick, symbol=symbol, venue='NXT', session='NXT_PREMARKET')
+    assert state.ready
+    at = values[-1][0]; day = datetime.fromtimestamp(at, B.K.KST).date().isoformat()
+    cell = cell_key(symbol, 'PRE', values[-1][3])
+    monkeypatch.setattr(B, '_STATES', {(symbol,'NXT',symbol+'_NX','PRE',day,cell):state})
+    monkeypatch.setattr(B, '_CLAIMS', {})
+    monkeypatch.setattr(B, '_GENERATION', 'f'*64)
+    monkeypatch.setattr(B, '_FAMILY', dict(family_sha256='f'*64,
+        machine_cells={cell:dict(routes={'NXT':dict(scope_execution_hash='a'*64)})}))
+    monkeypatch.setattr(dispatch, 'backend', lambda *args:B)
+    monkeypatch.setattr(source.time, 'time', lambda:at)
+    claim = source.claim_snapshot_with_receipt(symbol,'NXT','NXT_PREMARKET',now=at,
+        item=symbol+'_NX',family_sha256='f'*64)
+    assert claim
+    # The actual native owner retires the held signal when its floor breaks.
+    price = 58999 if cumulative else 99.49
+    update = row(126,price); update[9]=symbol+'_NX'
+    state.observe(update,symbol=symbol,venue='NXT',session='NXT_PREMARKET')
+    monkeypatch.setattr(source.time, 'time', lambda:at+1)
+    with pytest.raises(ValueError) as error:
+        source.validate_claim_with_receipt(claim,'f'*64,now=at+1,
+            evaluation_attempt_id='aims-held',machine_bundle_sha256='b'*64)
+    assert str(error.value)=='reversal_signal_path_changed'
+    receipt=deepcopy(error.value.reversal_source_receipt)
+    trace=dict(schema='ai_decision_trace_v1',stock_code=symbol,decision_trace_id='held-trace',
+        decision_ts=B.K.iso(at+1.01),decision_stage='entry_screen',provider_called=False,
+        actual_order_submitted=False,machine_evaluation_status='assessment_contract_invalid',
+        market_data_route='nxt_only',evaluation_attempt_id='aims-held',machine_bundle_sha256='b'*64,
+        machine_contract_error='reversal_signal_path_changed',continuous_reversal_rejected_claim_receipt=receipt)
+    if damage=='no_breach':receipt['latest_native_observation'][3]=values[-1][3]
+    elif damage=='ready':receipt['registered_signal_ready']=True
+    elif damage=='predicate_missing':receipt['native_predicates'].pop('first_signal_turn_matches')
+    elif damage=='source':receipt['latest_native_observation'][8]=0
+    elif damage=='epoch':receipt['latest_native_observation'][1]+=1
+    elif damage=='scope':receipt['scope'][0]='foreign'
+    elif damage=='registration':receipt['source_registration_receipt']['sha256']='c'*64
+    elif damage=='route':trace['market_data_route']='krx_only'
+    elif damage=='bundle':trace['machine_bundle_sha256']='c'*64
+    elif damage=='branch_phase':next(iter(receipt['snapshot'][0]['branch_signals'].values()))['decision_phase']='FIRST_UPTICK'
+    elif damage=='late':receipt['state_observed_epoch']+=10
+    _source_gap_files(tmp_path,datetime.fromtimestamp(at+1.1,B.K.KST),traces=[trace])
+    before=deepcopy(trace)
+    result=monitor.source_gap_semantics(tmp_path,datetime.fromtimestamp(at+1.1,B.K.KST))
+    assert result['issues']==({} if damage is None else {'machine_trace:reversal_signal_path_changed':1})
+    if damage is None:
+        assert result['diagnostics']=={'machine_trace:reversal_first_price_hold_invalidated':1}
+    assert trace==before
+
+
+@pytest.mark.parametrize('damage', [None, 'provider', 'order', 'runtime', 'authority', 'broker',
+    'action', 'schema', 'reason', 'role', 'exact_role', 'capture_contract', 'native_claim'])
+def test_legacy_preflight_historical_membership_never_invents_consumption(damage):
+    from src.engine.scalping.ai_decision_trace import _json_bytes
+    result, *_ = _bounded_outcome_health_fixture(partial=False)
+    now = monitor.stamp(result['as_of'])
+    generation = result['observer_generation']
+    actor = generation['actor_birth_proof']['actor']
+    birth = generation['actor_birth_proof']['birth_lower_bound_epoch']
+    row = _old_scanner_observation(now, birth, actor)
+    row.update(evaluation_role='unspecified_legacy', provider_called=False,
+        actual_order_submitted=False, runtime_effect=False, allowed_runtime_apply=False,
+        broker_order_forbidden=True)
+    row['runtime_consumption'].pop('continuous_reversal', None)
+    row['source']['exact_payload'] = {}
+    assessment = dict(schema='mechanistic_entry_source_invalid_v1', action='source_invalid',
+        reason='ai_input_preflight_blocked')
+    row['source']['assessment'] = assessment
+    if damage in ('provider', 'order', 'runtime', 'authority', 'broker'):
+        field = dict(provider='provider_called', order='actual_order_submitted',
+            runtime='runtime_effect', authority='allowed_runtime_apply', broker='broker_order_forbidden')[damage]
+        row[field] = damage != 'broker'
+    elif damage in ('action', 'schema', 'reason'): assessment[damage] = 'unknown'
+    elif damage == 'role': row['evaluation_role'] = 'probe_observation'
+    elif damage == 'exact_role': row['source']['exact_payload']['evaluation_role'] = 'probe_observation'
+    elif damage == 'capture_contract': row['capture_contract'] = 'continuous_reversal_consumption_v1'
+    elif damage == 'native_claim': row['runtime_consumption']['continuous_reversal'] = {}
+    row['machine_observation_sha256'] = hashlib.sha256(_json_bytes({k:v for k,v in row.items()
+        if k != 'machine_observation_sha256'})).hexdigest()
+    identity = monitor._scanner_observation_identity(row)
+    scope = '|'.join(identity.split('|')[-3:]); rule = 'source_or_submit_lineage_gap'
+    key = hashlib.sha256(f'{scope}|{rule}'.encode()).hexdigest()[:24]
+    incident = dict(scope=scope, rule=rule, category='structural_evidence', status='active',
+        count=1, evidence_ids=[identity], first_seen=now.isoformat(), last_seen=now.isoformat())
+    result['incidents'][key] = incident
+    result['machine_semantics']['historical_scanner_observations'] = {identity:row}
+    original = json.dumps(result, sort_keys=True)
+    health = monitor.observation_health_projection(result)
+    assert health['status'] == ('warning_pending' if damage is None else 'not_eligible')
+    assert json.dumps(result, sort_keys=True) == original
+    assert health['current_observation_verified'] is False and health['full_coverage_proven'] is False

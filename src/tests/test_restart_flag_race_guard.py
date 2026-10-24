@@ -16,10 +16,11 @@ def test_bot_main_restart_flag_consumption_is_owner_guarded():
     assert "source=unknown_legacy_touch" in source
 
 
-def test_sniper_engine_restart_flag_claim_terminates_the_whole_process():
+def test_sniper_engine_restart_flag_claim_requests_cooperative_shutdown():
     source = inspect.getsource(kiwoom_sniper_v2)
     assert "consume_restart_request(" in source
-    assert "os.kill(os.getpid(), signal.SIGTERM)" in source
+    assert "os.kill(os.getpid(), signal.SIGTERM)" not in source
+    assert "request_shutdown()" in inspect.getsource(kiwoom_sniper_v2._run_sniper_iterations)
 
 
 def test_restart_script_publishes_request_metadata_atomically():
@@ -142,7 +143,7 @@ def test_release_source_root_change_requires_drained_supervisor_reload():
 
 
 def test_launcher_clears_intraday_pins_before_loading_dated_authority():
-    source = Path("src/run_bot.sh").read_text()
+    source = Path("src/engine/infrastructure/main_policy_environment.sh").read_text()
     reset = source.split("reset_runtime_policy_env_before_handoff() {", 1)[1].split(
         "\n}", 1
     )[0]
@@ -181,7 +182,7 @@ def test_launcher_imports_selected_release_despite_inherited_pythonpath(tmp_path
 
 
 def test_launcher_clears_auto_promotion_pins_before_loading_handoff():
-    source = Path("src/run_bot.sh").read_text()
+    source = Path("src/engine/infrastructure/main_policy_environment.sh").read_text()
     reset = source.split("reset_runtime_policy_env_before_handoff() {", 1)[1].split(
         "\n}", 1
     )[0]
@@ -230,3 +231,70 @@ def test_context_promotion_uses_canonical_data_identity():
 
     assert context.PROMOTION_DIR == DATA_DIR / "runtime"
     assert context.RUNTIME_ENV_DIR == DATA_DIR / "threshold_cycle/runtime_env"
+
+
+@pytest.mark.parametrize('claimant', ['src/bot_main.py', 'src/engine/kiwoom_sniper_v2.py'])
+def test_restart_claimant_closes_real_epoch_before_process_exit(tmp_path, claimant):
+    import json
+    import os
+    import sys
+    tree = ast.parse(Path(claimant).read_text())
+    branch = next(node for node in ast.walk(tree) if isinstance(node, ast.If)
+                  and ast.unparse(node.test) == 'RESTART_FLAG_PATH.exists()')
+    branch_source = ast.unparse(branch)
+    # Execute the actual claim branch in an isolated process, with real request
+    # coordination, collector, writer, WS cleanup and native final consumer.
+    script = '''
+import json, os, signal, sys, threading, time
+from pathlib import Path
+from types import SimpleNamespace
+from datetime import datetime
+from src.engine.infrastructure import restart_requests as R
+from src.engine.scalping.micro_reversion import canary_monitor as C
+from src.engine.scalping.micro_reversion.forward_collector import ForwardObservationCollector, ForwardCollectorConfig
+from src.engine.scalping.micro_reversion.observation_adapter import ObserverFeatureFlags
+from src.engine.kiwoom_websocket import KiwoomWSManager
+from src.tests.test_micro_reversion_forward_collector import _snapshot
+from src.engine.scalping.continuous_reversal_source import _source_quality_receipt
+root = Path(sys.argv[1]); branch = sys.argv[2]; claimant = sys.argv[3]
+c = ForwardObservationCollector(flags=ObserverFeatureFlags(observer_enabled=True, path_capture_enabled=True),
+    config=ForwardCollectorConfig(output_root=root/'data/observations/scalp_micro_reversion_forward'))
+c.start()
+c.observe_kiwoom_0b('000001', _snapshot(), realtime_type='0B')
+for _ in range(65): c.observe_kiwoom_0b('000001', _snapshot(exchange_time='invalid'), realtime_type='0B')
+manager = KiwoomWSManager('offline-token'); manager._micro_reversion_forward_collector = c
+latest = root/'data/runtime/scalp_micro_reversion_forward_collector/latest.json'
+manager._persist_micro_reversion_canary_snapshot = lambda: C.write_canary_runtime_snapshot(
+    c.runtime_snapshot().as_dict(), output_path=latest, now=datetime.fromisoformat('2026-08-08T20:00:00+09:00'))
+flag = root/'restart.flag'; flag.write_text('source=offline-restart-test')
+scope = dict(os=os, time=time, signal=signal, RESTART_FLAG_PATH=flag,
+    consume_restart_request=lambda path, **kw: R.consume_restart_request(path, lock_path=root/'claim.lock', **kw),
+    request_shutdown=R.request_shutdown, event_bus=SimpleNamespace(publish=lambda *a: None),
+    _sn_whb=lambda *a, **kw: None, log_error=lambda *a: None)
+program = compile('while True:\\n' + ''.join('    '+line+'\\n' for line in branch.splitlines()), '<native restart branch>', 'exec')
+def await_request():
+    deadline = time.monotonic() + 5
+    while not R.shutdown_requested() and time.monotonic() < deadline: time.sleep(.005)
+    assert R.shutdown_requested()
+def engine():
+    try:
+        if claimant.endswith('kiwoom_sniper_v2.py'): exec(program, scope)
+        else: await_request()
+    finally:
+        assert manager.stop() is True
+thread = threading.Thread(target=engine); thread.start()
+if claimant.endswith('bot_main.py'): exec(program, scope)
+else: await_request()
+# Summary drain is unrelated I/O; it must execute only after immutable close.
+def summary():
+    assert not thread.is_alive()
+    assert _source_quality_receipt(root/'data', '2026-08-08')['eligible']
+    (root/'closed-before-exit').write_text('verified')
+sys.modules['src.utils.pipeline_event_logger'] = SimpleNamespace(drain_pipeline_event_summary_before_termination=summary)
+R.finish_main_shutdown(thread)
+'''
+    result = subprocess.run([sys.executable, '-c', script, str(tmp_path), branch_source, claimant],
+                            capture_output=True, text=True, timeout=15, env={**os.environ, 'PYTHONPATH':str(Path.cwd())})
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (tmp_path/'closed-before-exit').read_text() == 'verified'
+    assert len(list((tmp_path/'data/runtime/scalp_micro_reversion_forward_collector/closed').glob('*.json'))) == 1

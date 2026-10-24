@@ -541,6 +541,7 @@ def _runtime_probe_contract_errors(
     env: dict[str, str] | None = None,
     cohort: tuple[str, str] = DEFAULT_COHORT,
     now: datetime | None = None,
+    preparation_target_date: str | None = None,
 ) -> list[str]:
     """Verify normal setup-risk rollout, date and execution contracts.
 
@@ -566,7 +567,9 @@ def _runtime_probe_contract_errors(
     }
     from src.engine.scalping.entry_setup_scalping_rollout import authorized_scopes
 
-    allowed_scopes.update(authorized_scopes(env=env, now=now))
+    content_kwargs = ({"preparation_target_date": preparation_target_date}
+                      if preparation_target_date is not None else {})
+    allowed_scopes.update(authorized_scopes(env=env, now=now, **content_kwargs))
     from src.engine.scalping.entry_setup_scalping_rollout import runtime_scope
 
     if runtime_scope(*cohort) not in allowed_scopes:
@@ -2101,9 +2104,16 @@ def resolve_live_prompt_policy(
     strategy: Any = None,
     now: datetime | None = None,
     _allow_initial_policy: bool = True,
+    policy_target_date: str | None = None,
+    preparation: bool = False,
+    data_root: Path | None = None,
 ) -> dict[str, Any]:
     current = (now or datetime.now(KST)).astimezone(KST)
-    target_date = current.date().isoformat()
+    target_date = policy_target_date or current.date().isoformat()
+    if date.fromisoformat(target_date).isoformat() != target_date:
+        raise ValueError("entry_prompt_policy_date_invalid")
+    if policy_target_date and not preparation and target_date != current.date().isoformat():
+        raise ValueError("entry_prompt_future_date_requires_preparation")
     configured_fallback = str(configured_prompt_version or "").strip()
     cohort = _normalize_cohort(effective_venue, session_bucket)
     from src.engine.scalping.entry_setup_scalping_rollout import (
@@ -2115,8 +2125,9 @@ def resolve_live_prompt_policy(
         load_rollout,
     )
 
-    rollout = load_rollout(now=current)
-    auto_promotion = load_auto_promotion(now=current)
+    content_kwargs = {"preparation_target_date": target_date} if preparation else {}
+    rollout = load_rollout(now=current, **content_kwargs)
+    auto_promotion = load_auto_promotion(now=current, **content_kwargs)
     strategy_is_scalping = str(strategy or "").upper() in {"SCALPING", "SCALP"}
     auto_scope = bool(
         auto_promotion
@@ -2184,7 +2195,8 @@ def resolve_live_prompt_policy(
             result["status"] = "fallback_operator_disabled"
             return result
         errors = _runtime_probe_contract_errors(
-            target_date=target_date, cohort=cohort, now=current
+            target_date=target_date, cohort=cohort, now=current,
+            **content_kwargs,
         )
         if errors:
             result.update(
@@ -2201,8 +2213,7 @@ def resolve_live_prompt_policy(
             and result["position_tag"] in CANARY_POSITION_TAGS
         ):
             from src.engine.scalping.mechanistic_entry_runtime_policy import (
-                load_effective,
-                for_cohort,
+                load, load_effective, for_cohort,
             )
 
             try:
@@ -2212,8 +2223,10 @@ def resolve_live_prompt_policy(
                     # read-only, as in the existing verified_evaluation scope.
                     # Avoid copying every market's historical policy graph
                     # on the machine-to-AI deadline.
-                    load_effective(data_root=DATA_DIR, target_date=target_date,
-                                   _immutable=True), cohort
+                    (load(data_root=Path(data_root or DATA_DIR), target_date=target_date)
+                     if preparation else
+                     load_effective(data_root=Path(data_root or DATA_DIR), target_date=target_date,
+                                    _immutable=True)), cohort
                 )
             except (ValueError, OSError, TypeError, KeyError) as exc:
                 result.update(
@@ -2247,6 +2260,9 @@ def resolve_live_prompt_policy(
                         strategy=strategy,
                         now=current,
                         _allow_initial_policy=False,
+                        policy_target_date=policy_target_date,
+                        preparation=preparation,
+                        data_root=data_root,
                     )
                 )
                 optimized_ai_selected = bool(
@@ -2370,7 +2386,8 @@ def resolve_live_prompt_policy(
         result["status"] = "fallback_position_owner_out_of_scope"
         return result
     runtime_contract_errors = _runtime_probe_contract_errors(
-        target_date=target_date, cohort=cohort, now=current
+        target_date=target_date, cohort=cohort, now=current,
+        **content_kwargs,
     )
     if runtime_contract_errors:
         result["status"] = "fallback_probe_first_runtime_contract_invalid"

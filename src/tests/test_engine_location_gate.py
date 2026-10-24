@@ -65,7 +65,6 @@ LEGACY_ENGINE_ROOT_PY_FILES = {
     "signal_radar.py",
     "sniper_analysis.py",
     "sniper_condition_handlers.py",
-    "sniper_condition_handlers_big_bite.py",
     "sniper_config.py",
     "sniper_dynamic_thresholds.py",
     "sniper_entry_latency.py",

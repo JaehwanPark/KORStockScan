@@ -421,3 +421,162 @@ def test_new_turn_after_block_wakes_machine_and_preserves_transport_backoff(monk
     stock['_scanner_entry_ai_transport_retry_after_epoch']=10
     r=H._resolve_watching_state_change_refresh(stock,ws,now_ts=4,last_ai_time=2,cooldown_sec=60)
     assert not r['allowed'] and r['reason']=='transport_timeout_retry_backoff'
+
+
+def test_completed_bars_selects_day_before_open(tmp_path):
+    root = tmp_path / 'runtime/shared_ws_completed_bars'
+    stale = root / '2026-10-18/005930/KRX.json'
+    stale.parent.mkdir(parents=True)
+    stale.write_text('not JSON and must never be opened')
+    current = root / '2026-10-19/005930/KRX.json'
+    current.parent.mkdir(parents=True)
+    current.write_text(json.dumps({'trade_date': '2026-10-19', 'bars': []}))
+    bars, receipts = P.completed_bars(tmp_path, '2026-10-19')
+    assert bars == {}
+    ws=[r for r in receipts if r['kind']=='ws']
+    assert len(ws)==1 and ws[0]['origin_path']==str(current)
+    assert __import__('pathlib').Path(ws[0]['path']).read_bytes()==current.read_bytes()
+    assert all(r['source_date']=='2026-10-19' for r in receipts)
+
+
+def test_normalized_symbols_stream_sorted_and_reject_corruption(tmp_path):
+    import gzip
+    from src.engine.scalping.continuous_reversal_source import iter_normalized_symbols
+    path = tmp_path / 'source.json.gz'
+    value = {'symbols': {'333333': rows([3, 4]), '111111': rows([1, 2])}, 'issues': {}}
+    path.write_bytes(gzip.compress(json.dumps(value).encode()))
+    assert list(iter_normalized_symbols(path)) == sorted(value['symbols'].items())
+    path.write_bytes(path.read_bytes()[:-5])
+    with pytest.raises((ValueError, EOFError, OSError)):
+        list(iter_normalized_symbols(path))
+
+
+def completed_history_fixture(root, *, price=101, item='003010_AL', day='2026-10-08'):
+    from datetime import datetime, timedelta
+    from src.trading.market import completed_history as H
+    start=datetime.fromisoformat(day+'T09:00:00+09:00');now=(start+timedelta(minutes=40)).timestamp()
+    records=[dict(source_timestamp=(start+timedelta(minutes=i)).strftime('%Y%m%d%H%M%S'),
+                  시가=100,고가=100,저가=99,현재가=100,거래량=1) for i in range(40)]
+    records[3].update(고가=max(price,100),저가=min(price,99),현재가=price)
+    identity=H.key(['offline','test'],item,day.replace('-',''),'KRX_REGULAR')
+    meta=dict(api_id='ka10080',request_code=item,request_base_dt=day.replace('-',''),rest_received_ts_ms=int(now*1000),
+              last_http_status_code=200,read_rate_control_status='admitted')
+    assert H.publish(root,identity,records,meta,now=now)
+    return start.timestamp()+30,identity,records,now
+
+
+def test_native_rest_revision_reaches_machine_outcome_source(tmp_path):
+    at,_,_,_=completed_history_fixture(tmp_path)
+    bars,receipts=P.completed_bars(tmp_path,'2026-10-08')
+    outcome=bars['2026-10-08','003010_AL'].label(at,100,1800)
+    assert outcome['status']=='WIN' and outcome['completed_bar_revision']
+    assert all(P.file_hash(r['path'])==r['sha256'] for r in receipts)
+    assert any(r['kind']=='rest_history' for r in receipts)
+
+
+def test_frozen_machine_source_does_not_rediscover_changed_history(tmp_path,monkeypatch):
+    from src.trading.market import completed_history as H
+    at,_,_,_=completed_history_fixture(tmp_path)
+    _,receipts=P.completed_bars(tmp_path,'2026-10-08');source=dict(completed_bar_sources={'2026-10-08':receipts})
+    monkeypatch.setattr(H,'outcome_revisions',lambda *a,**k:pytest.fail('frozen source reopened live history'))
+    bars,resumed=P.completed_bars(tmp_path,'2026-10-08',source=source)
+    assert bars['2026-10-08','003010_AL'].label(at,100,1800)['status']=='WIN' and resumed==receipts
+    path=__import__('pathlib').Path(receipts[0]['path']);path.write_bytes(b'changed')
+    with pytest.raises(ValueError,match='snapshot_changed'):P.completed_bars(tmp_path,'2026-10-08',source=source)
+
+
+@pytest.mark.parametrize('item',['003010_NX','003010'])
+def test_preserved_rest_never_relabels_a_different_source_item(tmp_path,item):
+    completed_history_fixture(tmp_path,item=item)
+    bars,_=P.completed_bars(tmp_path,'2026-10-08')
+    assert ('2026-10-08','003010_AL') not in bars and ('2026-10-08',item) in bars
+
+
+@pytest.mark.parametrize('change',[dict(request_base_dt='20261007'),dict(last_http_status_code=500),dict(rate_limit_detected=True),dict(continuous_next_key_missing=True)])
+def test_bad_preserved_rest_is_excluded_with_receipt(tmp_path,change):
+    # Publish the original producer record; the outcome contract rejects its provenance.
+    from src.trading.market import completed_history as H
+    at,identity,records,now=completed_history_fixture(tmp_path)
+    meta=dict(api_id='ka10080',request_code=identity['item'],request_base_dt='20261008',rest_received_ts_ms=int((now+1)*1000),last_http_status_code=200,read_rate_control_status='admitted')
+    meta.update(change)
+    records[-1]['현재가']=99
+    assert H.publish(tmp_path,identity,records,meta,now=now+1)
+    bars,receipts=P.completed_bars(tmp_path,'2026-10-08')
+    assert ('2026-10-08','003010_AL') not in bars
+    assert any(json.loads(__import__('pathlib').Path(r['path']).read_text()).get('status')=='excluded' for r in receipts)
+
+
+def test_rest_and_ws_are_not_spliced_and_conflicting_outcomes_stay_unknown():
+    # Neither disconnected half can manufacture a full horizon.
+    primary=K.Bars([dict(t=i*60,h=100,l=99) for i in range(15)])
+    later=K.Bars([dict(t=i*60,h=100,l=99) for i in range(15,33)])
+    primary.alternatives=(later,)
+    assert primary.label(30,100,1800)['status']=='UNRESOLVED'
+    win=K.Bars([dict(t=i*60,h=101 if i==3 else 100,l=99) for i in range(33)],revision='a'*64)
+    stop=K.Bars([dict(t=i*60,h=100,l=96 if i==3 else 99) for i in range(33)])
+    stop.alternatives=(win,)
+    assert stop.label(30,100,1800)==dict(status='UNRESOLVED',reason='completed_bar_source_disagreement')
+    assert K.Bars([],alternatives=(win,)).label(30,100,1800)['status']=='WIN'
+
+
+def test_new_population_binds_rest_snapshot_and_resume_detects_mutation(tmp_path,monkeypatch):
+    from pathlib import Path
+    from src.engine.scalping import continuous_reversal_source as S
+    day='2026-10-08';completed_history_fixture(tmp_path,day=day)
+    monkeypatch.setattr(S,'freeze_normalized_sources',lambda *a:[])
+    source=P.ensure_population(tmp_path,day,source_generation='rest-integration')
+    assert source['completed_bar_sources'][day]==source['completed_bar_receipts']
+    assert P.ensure_population(tmp_path,day,source_generation='rest-integration',expected_sha256=source['artifact_content_sha256'])==source
+    Path(source['completed_bar_receipts'][0]['path']).write_bytes(b'changed')
+    with pytest.raises(ValueError,match='snapshot_changed'):P.ensure_population(tmp_path,day,source_generation='rest-integration',expected_sha256=source['artifact_content_sha256'])
+
+
+def test_outcome_source_binds_producer_and_consumer_code(tmp_path):
+    from pathlib import Path
+    from src.trading.market import completed_history as H
+    completed_history_fixture(tmp_path)
+    _,receipts=P.completed_bars(tmp_path,'2026-10-08')
+    rec=next(r for r in receipts if r['kind']=='rest_history')
+    assert rec['consumer_code_sha256']==P.file_hash(H.__file__)
+    assert json.loads(Path(rec['path']).read_bytes())['source_code_sha256']==P.file_hash(H.__file__)
+
+
+@pytest.mark.parametrize('change',[dict(runtime_effect=True),dict(allowed_runtime_apply=True),dict(decision_authority='runtime_apply'),dict(source_item='003010_NX'),dict(source_date='2026-10-07')])
+def test_portable_history_rejects_authority_and_identity_changes(tmp_path,change):
+    from src.trading.market import completed_history as H
+    completed_history_fixture(tmp_path)
+    packet=next(v for v in H.outcome_revisions(tmp_path,'2026-10-08') if v['status']=='verified')
+    with pytest.raises(ValueError,match='source_invalid'):H.outcome_rows(dict(packet,**change),day='2026-10-08')
+
+
+@pytest.mark.parametrize('defect',['missing_revision','foreign_scope','corrupt_bar','future_revision'])
+def test_native_history_index_failures_are_explicit_and_do_not_become_valid_empty(tmp_path,defect):
+    import sqlite3
+    from src.trading.market import completed_history as H
+    _,identity,_,now=completed_history_fixture(tmp_path)
+    with sqlite3.connect(H._path(tmp_path,identity)) as db:
+        if defect=='missing_revision':db.execute("UPDATE current SET revision=?",('0'*64,))
+        elif defect=='foreign_scope':db.execute("UPDATE current SET scope=?",('0'*64,))
+        elif defect=='corrupt_bar':db.execute("UPDATE bars SET content='{}'")
+        else:db.execute('UPDATE revisions SET available=?',(now+3600,))
+    packets=list(H.outcome_revisions(tmp_path,'2026-10-08',as_of=now))
+    assert packets and all(p['status']=='excluded' for p in packets)
+
+
+def test_an_ambiguous_series_cannot_be_overridden_by_another_source():
+    class Ambiguous:
+        def label(self,*args):return dict(status='UNRESOLVED',reason='completed_bar_clock_disagreement')
+    primary=K.Bars([dict(t=i*60,h=101 if i==3 else 100,l=99) for i in range(33)],alternatives=[Ambiguous()])
+    assert primary.label(30,100,1800)==dict(status='UNRESOLVED',reason='completed_bar_source_ambiguity')
+
+
+def test_one_invalid_history_scope_does_not_exclude_valid_items(tmp_path):
+    from src.trading.market import completed_history as H
+    _,_,records,now=completed_history_fixture(tmp_path)
+    identity=H.key([], '003010_NX','20261008','KRX_REGULAR')
+    meta=dict(api_id='ka10080',request_code=identity['item'],request_base_dt='20261008',rest_received_ts_ms=int(now*1000),last_http_status_code=200,read_rate_control_status='admitted')
+    assert H.publish(tmp_path,identity,records,meta,now=now)
+    packets=list(H.outcome_revisions(tmp_path,'2026-10-08'))
+    assert {p['status'] for p in packets}=={'verified','excluded'}
+    bars,_=P.completed_bars(tmp_path,'2026-10-08')
+    assert ('2026-10-08','003010_AL') in bars and ('2026-10-08','003010_NX') not in bars

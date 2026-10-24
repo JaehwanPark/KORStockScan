@@ -569,7 +569,7 @@ def _reviewed_ws_lineage_sources():
     # Keep the historical receipt and runtime guard frozen. The additive raw
     # lineage path has a separate measured, exact-source receipt.
     root = Path(__file__).resolve().parents[2]
-    receipt = json.loads((root / "docs/audit-reports/2026-10-09-main-market-source-latency-validation.json.txt").read_text())
+    receipt = json.loads((root / "docs/audit-reports/2026-10-21-collector-epoch-latency-validation.json.txt").read_text())
     assert receipt["status"] == "PASS_WITH_UNCHANGED_RUNTIME_LIMITS"
     assert receipt['scope']=='collector_0b_absolute_canary_only'
     assert receipt["runtime_guard_changed"] is False

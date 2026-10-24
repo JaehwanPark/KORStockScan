@@ -289,7 +289,7 @@ def slim_summary_projection(path, loader, *, contract):
         pass
     rows = loader()
     if before != stamp(path):
-        return rows  # The upstream source check retains authority over races.
+        raise ValueError('summary_projection_source_changed_during_read')
     body = dict(source=str(path.resolve()), generation=before, contract=contract, rows=rows)
     encoded = json.dumps(body, sort_keys=True, separators=(',', ':')).encode()
     if len(encoded) > 32 * 1024 * 1024:

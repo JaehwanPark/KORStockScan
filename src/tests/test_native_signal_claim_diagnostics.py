@@ -33,6 +33,8 @@ def native(monkeypatch):
     monkeypatch.setattr(R, '_SELECTED_EVICTED', dict(claimed=0, expired_before_claim=0, unobservable=0))
     monkeypatch.setattr(R, '_LIFECYCLE_APPEND_DROPPED', 0)
     monkeypatch.setattr(R, '_LIFECYCLE_SINK', None)
+    monkeypatch.setattr(R, '_MAIN_PHASE', dict(name='not_observed',code=None,epoch=None,perf=None))
+    monkeypatch.setattr(R, '_COVERAGE', {kind:dict(ready=0,claimed=0) for kind in ('fixed_watch','other')})
     monkeypatch.setattr(R.time, 'time', lambda: T+1)
     band = C.cell_key('123456', 'REGULAR', 100)
     scope = ('123456', 'SOR', '123456_AL', 'REGULAR', '2026-10-12', band)
@@ -63,6 +65,194 @@ def test_raw_first_can_be_ineligible_without_ever_being_a_delivery_miss(native):
     assert row['first_eligible_seen'] is None
     assert native[2].ready == before
     assert R.snapshot()['native_signal_lifecycle']['count'] == 1
+
+
+@pytest.mark.parametrize('damage,reason', [
+    ('band', 'price_band_not_selected'),
+    ('parent', 'carried_backend_not_selected'),
+    ('generation', 'scope_generation_mismatch'),
+    ('branch', 'selected_branch_missing'),
+    ('missing_cell', 'selection_contract_unobservable'),
+    (None, 'selected'),
+])
+def test_raw_ready_selection_keeps_exact_nonselection_evidence(native, damage, reason):
+    backend, scope, state, event = native
+    if damage == 'band':
+        other = scope[:-1] + ('other_non_fixed|REGULAR|GE_100000',)
+        backend._STATES = {other: state}
+    elif damage == 'parent':
+        backend.R = SimpleNamespace(_LOCK=threading.RLock(), _STATES={scope[:-1]: state},
+                                   _GENERATION='scope')
+        backend._STATES = {}
+    elif damage == 'generation':
+        state.generation = 'older-scope'
+    elif damage == 'branch':
+        event['branch_signals'] = {'unselected': {'decision_phase': 'FIRST_UPTICK'}}
+    elif damage == 'missing_cell':
+        backend._FAMILY['machine_cells'] = {}
+    before = deepcopy(state.ready)
+    R.record_native_ready(backend, *scope[:4], T)
+    report = R.snapshot()['native_ready_selection']
+    assert report['retained_ready_count'] == 1
+    receipt = report['recent'][0]
+    assert receipt['signal_id'] == event['signal_id']
+    assert receipt['native_epoch'] == 1 and receipt['native_sequence'] == 0
+    assert receipt['selections'][0]['reason'] == reason
+    assert receipt['selections'][0]['family_sha256'] == 'family'
+    assert receipt['selections'][0]['expected_scope'] == scope[-1]
+    assert state.ready == before and not backend._CLAIMS
+    assert R.snapshot()['selected_native_coverage']['count'] == int(damage is None)
+    # Published views cannot mutate the next diagnostic snapshot.
+    receipt['selections'][0]['reason'] = 'tampered'
+    assert R.snapshot()['native_ready_selection']['recent'][0]['selections'][0]['reason'] == reason
+
+
+def test_same_tick_raw_scopes_do_not_hide_the_selected_scope(native):
+    backend, scope, state, event = native
+    other = scope[:-1] + ('other_non_fixed|REGULAR|GE_100000',)
+    backend._STATES = {other: deepcopy(state), scope: state}
+    R.record_native_ready(backend, *scope[:4], T)
+    view = R.snapshot()['native_ready_selection']
+    assert view['retained_ready_count'] == 1
+    assert {r['reason'] for r in view['recent'][0]['selections']} == {
+        'price_band_not_selected', 'selected'}
+    assert R.snapshot()['selected_native_coverage']['count'] == 1
+
+
+def _preclaim_guard_source(native):
+    _, scope, _, event = native
+    return dict(
+        stock=dict(id=42, watch_origin='MAIN_FIXED_WATCH', watch_admission_id='admission',
+                   watch_generation_id='watch-generation', market_session_bucket='krx_regular'),
+        code=scope[0],
+        ws_data=dict(last_realtime_type_item={'0B':scope[2]},
+            realtime_type_snapshots_by_route={'_AL|krx_nxt_integrated': {'0B':dict(
+                item=scope[2],market_route='krx_nxt_integrated',transport_epoch=event['native_epoch'],
+                route_sequence=event['native_sequence'], observed_epoch=event['epoch'])}}),
+        reason='extreme_sell_dominant', now=T+.1)
+
+
+def test_main_preclaim_guard_survives_later_native_invalidation(native):
+    row = observe(native)
+    R.acknowledge_native_watch_visit(dict(code=native[1][0]), None, now=T+.05)
+    before = deepcopy(native[2].ready)
+    assert R.record_native_preclaim_guard(**_preclaim_guard_source(native)) == 1
+    native[2].legacy.turn = {'event_id':'new-low'}
+    observe(native, T+.4)
+    assert row['terminal'] == 'invalidated_before_claim'
+    assert row['main_preclaim_guard']['reason'] == 'extreme_sell_dominant'
+    assert row['main_preclaim_guard']['source_sequence'] == 0
+    assert row['main_preclaim_guard']['observed_epoch'] == T+.1
+    assert row['claimed'] is False and native[2].ready == before
+
+
+@pytest.mark.parametrize('damage', ['origin','item','epoch','sequence','future','before_signal',
+    'deadline','market','no_visit','terminal','claimed','missing_market','missing_routes','bad_item_map',
+    'route_conflict','nonreason','ambiguous_tape','changed_bundle','unknown_reason'])
+def test_preclaim_guard_cannot_join_another_source_or_unvisited_signal(native, damage):
+    row = observe(native)
+    args = _preclaim_guard_source(native)
+    R.acknowledge_native_watch_visit(dict(code=native[1][0]), None, now=T+.05)
+    tape = args['ws_data']['realtime_type_snapshots_by_route']['_AL|krx_nxt_integrated']['0B']
+    if damage == 'origin': args['stock']['watch_origin'] = 'SCANNER'
+    elif damage == 'item': tape['item'] = 'other_AL'
+    elif damage == 'epoch': tape['transport_epoch'] = 2
+    elif damage == 'sequence': tape['route_sequence'] = -1
+    elif damage == 'future': tape['observed_epoch'] = T+.2
+    elif damage == 'before_signal': tape['observed_epoch'] = T-.1
+    elif damage == 'deadline': args['now'] = T+6
+    elif damage == 'market': args['stock']['market_session_bucket'] = 'nxt_aftermarket'
+    elif damage == 'no_visit': row['main_queue_first_visit'] = None
+    elif damage == 'terminal': row['terminal'] = 'invalidated_before_claim'
+    elif damage == 'claimed': row['claimed'] = True
+    elif damage == 'missing_market': args['stock'].pop('market_session_bucket')
+    elif damage == 'missing_routes': args['ws_data']['realtime_type_snapshots_by_route'] = []
+    elif damage == 'bad_item_map': args['ws_data']['last_realtime_type_item'] = []
+    elif damage == 'route_conflict': tape['market_route'] = 'krx_only'
+    elif damage == 'nonreason': args['reason'] = {}
+    elif damage == 'ambiguous_tape': args['ws_data']['realtime_type_snapshots_by_route']['other'] = {'0B':deepcopy(tape)}
+    elif damage == 'changed_bundle': row['bundle_sha256'] = 'other-bundle'
+    elif damage == 'unknown_reason': args['reason'] = 'unknown_guard'
+    assert R.record_native_preclaim_guard(**args) == 0
+    assert 'main_preclaim_guard' not in row
+
+
+def test_guard_evidence_does_not_prevent_a_later_valid_native_claim(native):
+    row = observe(native)
+    R.acknowledge_native_watch_visit(dict(code=native[1][0]), None, now=T+.05)
+    assert R.record_native_preclaim_guard(**_preclaim_guard_source(native)) == 1
+    claim = dict(snapshot=[native[3], {}], generation='scope')
+    R.record_selected_native_claim(claim, family_sha256='family', now=T+.2)
+    assert row['claimed'] and row['terminal'] == 'claimed'
+    assert row['main_preclaim_guard']['reason'] == 'extreme_sell_dominant'
+
+
+def test_signal_arriving_during_main_visit_retains_its_real_guard(native, monkeypatch):
+    row = observe(native)
+    monkeypatch.setattr(R, '_MAIN_PHASE', dict(name='target_visit',code=native[1][0],epoch=T-.1))
+    assert row.get('main_queue_first_visit') is None
+    assert R.record_native_preclaim_guard(**_preclaim_guard_source(native)) == 1
+    assert row['main_preclaim_guard']['main_visit_basis'] == 'current_target_phase'
+    assert row['claim_attempt'] is None and row['claimed'] is False
+
+
+def test_raw_selection_recent_limit_is_explicit_and_keeps_original_counter(native):
+    backend, scope, state, event = native
+    for i in range(40):
+        event['signal_id'] = f'signal-{i}'
+        R.record_native_ready(backend, *scope[:4], T)
+    report = R.snapshot()['native_ready_selection']
+    assert report['retained_ready_count'] == 40 and len(report['recent']) == 32
+    assert report['recent_truncated'] is True
+    assert report['recent'][0]['signal_id'] == 'signal-8'
+    assert not any(r['claimed'] for r in state.ready)
+
+
+def test_actual_main_guard_reaches_native_lifecycle_writer(native, monkeypatch, tmp_path):
+    from dataclasses import replace
+    from src.engine import sniper_state_handlers as H
+    from src.tests.test_sniper_scale_in import _DummyDB
+    from src.utils.constants import TRADING_RULES
+    from src.utils import pipeline_event_logger as E
+    monkeypatch.setattr(R.time, 'time', lambda:T+.1)
+    row = observe(native)
+    args = _preclaim_guard_source(native)
+    R.acknowledge_native_watch_visit(dict(code=args['code']), None, now=T+.05)
+    for name in ('COOLDOWNS','HIGHEST_PRICES','LAST_AI_CALL_TIMES','LAST_LOG_TIMES'):
+        monkeypatch.setattr(H, name, {})
+    monkeypatch.setattr(H, 'ALERTED_STOCKS', set())
+    monkeypatch.setattr(H, 'ACTIVE_TARGETS', [])
+    monkeypatch.setattr(H, 'DB', _DummyDB())
+    monkeypatch.setattr(H, 'TRADING_RULES', replace(TRADING_RULES,
+        SCALP_PRE_AI_SOFT_GATE_ENABLED=True, SCALP_PRE_AI_SOURCE_QUALITY_BLOCK_ENABLED=True))
+    monkeypatch.setattr(H, 'evaluate_scalping_strength_momentum', lambda *_: dict(
+        enabled=True,allowed=False,reason='insufficient_history'))
+    monkeypatch.setattr(H, 'arm_big_bite_if_triggered', lambda **_: (False,{}))
+    monkeypatch.setattr(H, 'confirm_big_bite_follow_through', lambda **_: (True,{}))
+    monkeypatch.setattr(H, 'build_tick_data_from_ws', lambda *_: {})
+    stages=[]
+    monkeypatch.setattr(H, '_log_entry_pipeline', lambda stock,code,stage,**fields: stages.append((stage,fields)))
+    stock=dict(args['stock'],name='fixed',strategy='SCALPING',position_tag='SCANNER',prob=.9,rt_ai_prob=.9)
+    ws=dict(args['ws_data'],curr=100,v_pw=121.,ask_tot=50000,bid_tot=50000,open=99,fluctuation=1.,
+            last_ws_update_ts=T,orderbook={'asks':[{'price':101}],'bids':[{'price':100}]})
+    H.handle_watching_state(stock=stock,code=args['code'],ws_data=ws,admin_id=1,
+        now_ts=T+.1,now_dt=datetime.fromtimestamp(T+.1,K.KST),
+        radar=SimpleNamespace(get_smart_target_price=lambda price,**_: (price,0.)),
+        ai_engine=SimpleNamespace(analyze_target=lambda *_a,**_kw:pytest.fail('guard must stop AI')))
+    assert dict(stages)['blocked_strength_momentum']['gate_action'] == 'source_quality_block'
+    assert row['main_preclaim_guard']['reason'] == 'insufficient_history'
+    native[2].legacy.turn={'event_id':'new-low'}
+    observe(native,T+.4)
+    monkeypatch.setattr(E,'DATA_DIR',tmp_path)
+    monkeypatch.setattr(E,'log_info',lambda *_:None)
+    R.set_lifecycle_sink(lambda fn,record: (fn(record),{'status':'queued'})[1])
+    R.flush_lifecycle()
+    records=[json.loads(line) for path in (tmp_path/'pipeline_events').glob('*.jsonl')
+             for line in path.read_text().splitlines()]
+    capsule=json.loads(records[-1]['fields']['native_signal_lifecycle'])
+    assert capsule['terminal']=='invalidated_before_claim'
+    assert capsule['main_preclaim_guard']['reason']=='insufficient_history'
+    assert capsule['claimed'] is False and not native[2].ready[0]['claimed']
 
 
 def test_later_first_invalidation_preserves_valid_interval_and_main_visit(native):
@@ -337,18 +527,18 @@ def test_long_wait_does_not_starve_short_cohort_and_retains_original_wait():
             market='KOSPI', source_kind='activity')
     requirements = lambda c, _: {'minimum_seconds': 0 if c.code=='100006' else 61}
     selected = queue.claim(now_epoch=T+1,limit=5,residence_requirements=requirements)
-    assert len(selected) == 4 and selected[-1]['code'] == '100006'
-    assert queue.residence_deferred == {'long_slot_wait':2}
-    waiting = queue.snapshot()['candidates'][3]
+    assert len(selected) == 5 and selected[-1]['code'] == '100006'
+    assert queue.residence_deferred == {'long_slot_wait':1}
+    waiting = queue.snapshot()['candidates'][4]
     assert waiting['claim_count'] == 0 and waiting['residence_wait_since_epoch'] == T+1
     first = selected[0]
     assert queue.resolve(first,result='required_feature_insufficient',machine_action='',next_due_epoch=T+100,
                          handoff_id=first['physical_probe_lease_id'])
     assert queue.close_handoff(first,first['physical_probe_lease_id'])
     next_claim = queue.claim(now_epoch=T+10,limit=1,residence_requirements=requirements)[0]
-    assert next_claim['code'] == '100004' and next_claim['residence_wait_seconds'] == 9
+    assert next_claim['code'] == '100005' and next_claim['residence_wait_seconds'] == 9
     assert next_claim['residence_deadline_epoch'] == T+160
-    assert queue.snapshot()['candidates'][3]['residence_wait_since_epoch'] == 0
+    assert queue.snapshot()['candidates'][4]['residence_wait_since_epoch'] == 0
 
 
 def test_probe_capsules_survive_actual_execution_writer_without_text_duplication(monkeypatch, tmp_path):
@@ -391,13 +581,13 @@ def test_required_history_allocates_long_slots_and_preserves_queued_candidates()
         queue.observe(code=f'{i:06}', route='krx_nxt_integrated', observed_epoch=T,
             source_sha256='a'*64, source_scope='observed_panel', received_epoch=T)
     selected = queue.claim(now_epoch=T+1, limit=5, residence_requirements=lambda *a: {'minimum_seconds': 61})
-    assert len(selected) == 3
+    assert len(selected) == 4
     assert all(c['residence_deadline_epoch'] == T+151 for c in selected)
     assert len(queue.snapshot()['candidates']) == 5
     assert queue.claim(now_epoch=T+2, limit=5, residence_requirements=lambda *a: {'minimum_seconds': 61}) == []
     # A genuinely short independent branch can still use existing short slots.
     short = queue.claim(now_epoch=T+3, limit=5, residence_requirements=lambda *a: {'minimum_seconds': 0})
-    assert len(short) == 2 and all(c['residence_deadline_epoch'] == T+63 for c in short)
+    assert len(short) == 1 and all(c['residence_deadline_epoch'] == T+63 for c in short)
     assert queue.in_flight_count() == 5
 
 
@@ -557,3 +747,344 @@ def test_unjoinable_identity_does_not_abort_other_research_rows():
     result = L.native_lifecycle_outcomes([invalid, research_record()], window_reader=lambda ref: None)
     assert result['outcomes'][0]['reason'] == 'exact_identity_missing'
     assert result['outcomes'][1]['reason'] == 'indexed_source_missing'
+
+
+@pytest.fixture
+def hold_invalidation(native, monkeypatch):
+    """Exercise the real ready survival rule, without reconstructing qualification."""
+    from src.engine.scalping.reversal_extended_state import State
+    from src.engine.scalping import reversal_current_backend
+    bid = 'manual_residual_0d7e29b0230e5b49'
+    family, bundle, generation = 'a'*64, 'b'*64, 'c'*64
+    item, symbol, venue, market = '066970_NX', '066970', 'NXT', 'PRE'
+    band = C.cell_key(symbol, market, 100100)
+    scope = (symbol, venue, item, market, '2026-10-12', band)
+    state = State(branch_ids=[bid], generation=generation)
+    def tick(seq, price, **changes):
+        row = quote(seq, stamp=T+seq*.1, price=price)
+        row[9] = item
+        for key, value in changes.items(): row[int(key)] = value
+        state.observe(row, symbol=symbol, venue=venue, session='NXT_PREMARKET')
+        return row
+    tick(0, 100100)
+    eid = '2026-10-12:NXT:NXT_PREMARKET:066970:1:0'
+    event = dict(epoch=T, event_id=eid, signal_id=eid, native_epoch=1, native_sequence=0,
+        symbol=symbol, source_item=item, venue=venue, market=market, confirmation_price=100100,
+        registry_generation=generation, entry_ask=100100,
+        branch_signals={bid: dict(decision_phase='FIRST_PRICE_HOLD', signal_proof={'price':100100})})
+    state.ready.append(dict(event=deepcopy(event), claimed=False, path_inputs={}))
+    carried = SimpleNamespace(_LOCK=threading.RLock(), _STATES={}, _GENERATION='d'*64,
+                              __name__='registered')
+    backend = SimpleNamespace(__name__='reversal_operating_runtime', _LOCK=threading.RLock(),
+        _STATES={scope: state}, _GENERATION=family, R=carried,
+        _FAMILY=dict(schema='continuous_reversal_policy_v6', family_sha256=family,
+            native_parent_bundle={'continuous_reversal':{'family_sha256':'d'*64}},
+            machine_cells={band:{'routes':{venue:dict(backend='union_v6', scope_execution_hash=generation,
+                payload={'branches':[{'branch_id':bid}]})}}}))
+    monkeypatch.setattr(R, '_GENERATION', bundle)
+    monkeypatch.setattr(reversal_current_backend, 'backend', lambda *a: backend)
+    R.record_native_ready(backend, *scope[:4], T)
+    return backend, state, event, tick
+
+
+def test_real_hold_breach_records_terminal_and_does_not_resurrect(hold_invalidation):
+    backend, state, event, tick = hold_invalidation
+    tick(1, 100000)
+    assert not state.ready
+    R.record_native_ready(backend, '066970', 'NXT', '066970_NX', 'PRE', T+.1)
+    life = next(iter(R._SELECTED_READY.values()))
+    assert life['terminal'] == 'invalidated_before_claim'
+    assert life['terminal_reason'] == 'first_price_hold_breached'
+    assert life['branch_survival'] == {next(iter(event['branch_signals'])):False}
+    original = deepcopy(life)
+    tick(2, 100100)
+    R.record_native_ready(backend, '066970', 'NXT', '066970_NX', 'PRE', T+.2)
+    assert next(iter(R._SELECTED_READY.values())) == original
+    assert not state.ready and life['original_deadline'] == T+5
+
+
+@pytest.mark.parametrize('damage', ['source','epoch','gap','generation','unknown_removal','quote'])
+def test_hold_terminal_never_upgrades_invalid_or_unobserved_source(hold_invalidation, damage):
+    backend, state, event, tick = hold_invalidation
+    changes = {'source':{'8':False},'epoch':{'1':2},'quote':{'5':None}}.get(damage,{})
+    tick(2 if damage=='gap' else 1, 100100 if damage=='unknown_removal' else 100000, **changes)
+    if damage=='generation':state.generation='e'*64
+    if damage=='unknown_removal':state.ready.clear()
+    R.record_native_ready(backend, '066970', 'NXT', '066970_NX', 'PRE', T+(.2 if damage=='gap' else .1))
+    life=next(iter(R._SELECTED_READY.values()))
+    assert life['terminal_reason'] != 'first_price_hold_breached'
+
+
+def _hold_rejection(hold_invalidation, monkeypatch):
+    from src.engine.scalping import entry_machine_source_recovery as recovery
+    backend, state, event, tick = hold_invalidation
+    tick(1, 100000)
+    R.record_native_ready(backend, '066970', 'NXT', '066970_NX', 'PRE', T+.1)
+    monkeypatch.setattr(D.time, 'time', lambda:T+.2)
+    observation=dict(schema='entry_source_quote_observer_v1', snapshot=[event,{}],
+        family_sha256=backend._GENERATION, deadline_epoch=T+5, deadline_perf=R.time.perf_counter()+5,
+        observer_pid=R.os.getpid(), observer_start_ticks=R._PROCESS_START_TICKS)
+    with pytest.raises(ValueError,match='machine_source_quote_observer_native_root_changed') as caught:
+        recovery.validated_observer_snapshot(observation, now=T+.2,
+            evaluation_attempt_id='hold-attempt',machine_bundle_sha256='b'*64)
+    return dict(decision_ts=K.iso(T+.3),decision_stage='entry_screen',stock_code='066970',
+        evaluation_attempt_id='hold-attempt',machine_bundle_sha256='b'*64,
+        market_data_route='nxt_only',provider_called=False,
+        machine_evaluation_status='assessment_contract_invalid',machine_contract_error=str(caught.value),
+        continuous_reversal_rejected_claim_receipt=caught.value.reversal_source_receipt)
+
+
+@pytest.mark.parametrize('damage',[None,'hash','attempt','bundle','pid','family','scope','item','signal',
+    'epoch','sequence','gap','quote','floor','deadline','future','claimed','survivor','ready','source','unknown',
+    'bool_price','bool_sequence','new_root_conflict'])
+def test_hold_rejection_consumes_exact_native_terminal_only(hold_invalidation, monkeypatch, damage):
+    from src.engine.monitoring.submission_bottleneck_monitor import _reversal_lifecycle_diagnostic
+    from src.engine.scalping.entry_machine_source_recovery import _digest
+    trace=_hold_rejection(hold_invalidation,monkeypatch)
+    receipt=trace['continuous_reversal_rejected_claim_receipt'];selection=receipt['native_selection']
+    life=selection['original_signal_lifecycle'];bid=next(iter(life['branch_survival']))
+    if damage=='bool_price':life['latest_native_observation'][3]=True
+    elif damage=='bool_sequence':life['latest_native_observation'][2]=True
+    elif damage=='new_root_conflict':receipt['current_root']=dict(receipt['original_root'],signal_id='new',native_epoch=2)
+    elif damage=='attempt':trace['evaluation_attempt_id']='other'
+    elif damage=='bundle':trace['machine_bundle_sha256']='d'*64
+    elif damage=='pid':life['process_pid']+=1
+    elif damage=='family':life['family_sha256']='d'*64
+    elif damage=='scope':selection['scope_execution_hash']='d'*64
+    elif damage=='item':life['latest_native_observation'][9]='066970_AL'
+    elif damage=='signal':life['signal_id']='other'
+    elif damage=='epoch':life['latest_native_observation'][1]+=1
+    elif damage=='sequence':life['latest_native_observation'][2]=0
+    elif damage=='gap':life['continuous_ingress']=False
+    elif damage=='quote':selection['native_quote_current']=False
+    elif damage=='floor':life['branch_hold_floors'][bid]=99900
+    elif damage=='deadline':receipt['original_deadline_epoch']+=1
+    elif damage=='future':life['first_ineligible_seen']=T+1
+    elif damage=='claimed':life['claimed']=True
+    elif damage=='survivor':life['branch_survival'][bid]=True
+    elif damage=='ready':life['ready_membership_present']=True
+    elif damage=='source':selection['native_source_current']=False
+    elif damage=='unknown':life['terminal_reason']='ready_removed_without_terminal_receipt'
+    receipt['sha256']=_digest({k:v for k,v in receipt.items() if k!='sha256'})
+    if damage=='hash':receipt['sha256']='0'*64
+    assert _reversal_lifecycle_diagnostic(trace)==('reversal_first_price_hold_invalidated' if damage is None else None)
+    from src.engine.scalping.ai_decision_trace import sanitize_ai_trace_value
+    safe,redacted=sanitize_ai_trace_value(trace)
+    assert not redacted and safe==trace
+
+
+def test_same_hold_attempt_probe_and_trace_are_diagnostics_not_source_loss(hold_invalidation,monkeypatch,tmp_path):
+    from src.engine.monitoring import submission_bottleneck_monitor as monitor
+    from src.tests.test_submission_bottleneck_monitor import _source_gap_files
+    trace=_hold_rejection(hold_invalidation,monkeypatch)
+    probe=dict(emitted_at=K.iso(T+.4),pipeline='ENTRY_PIPELINE',stage='zero_base_probe_result',stock_code='066970',
+        fields=dict(zero_base_probe_result='policy_unavailable',zero_base_probe_reason='assessment_contract_invalid',
+            zero_base_producer_pid=R.os.getpid(),native_observation_reference=dict(observer_pid=R.os.getpid(),
+                observer_start_ticks=R._PROCESS_START_TICKS,family_sha256='a'*64,deadline_epoch=T+5),
+            zero_base_route='nxt_only',zero_base_machine_contract_error=trace['machine_contract_error'],
+            evaluation_attempt_id=trace['evaluation_attempt_id'],machine_bundle_sha256='b'*64,provider_called='False',
+            continuous_reversal_rejected_claim_receipt=trace['continuous_reversal_rejected_claim_receipt']))
+    from src.utils import pipeline_event_logger as logger
+    monkeypatch.setattr(logger,'DATA_DIR',tmp_path)
+    monkeypatch.setattr(logger,'log_info',lambda *a:None)
+    probe=logger.emit_pipeline_event(probe['pipeline'],'test',probe['stock_code'],probe['stage'],
+        fields=probe['fields'],observed_at_epoch=T+.4)
+    assert probe['structured_append_succeeded'] is True
+    assert isinstance(probe['fields']['continuous_reversal_rejected_claim_receipt'],str)
+    now=datetime.fromtimestamp(T+1,K.KST)
+    _source_gap_files(tmp_path,now,probes=[probe],traces=[trace])
+    result=monitor.source_gap_semantics(tmp_path,now)
+    assert result['issues']=={}
+    assert result['diagnostics']=={'machine_probe:reversal_first_price_hold_invalidated':1,
+                                   'machine_trace:reversal_first_price_hold_invalidated':1}
+    assert result['observed']['probe_native_invalidated']==1
+    from src.tests.test_submission_bottleneck_monitor import _observation_health_fixture
+    health_input=_observation_health_fixture()
+    health_input['source_gap_semantics']=dict(result,as_of=health_input['as_of'])
+    unmet=monitor.observation_health_projection(health_input)['unmet_conditions']
+    assert 'unknown_or_unbound_source_diagnostic' not in unmet
+    assert 'source_observation_counts_invalid' not in unmet
+    probe['fields']['zero_base_producer_pid']=int(probe['fields']['zero_base_producer_pid'])+1
+    _source_gap_files(tmp_path,now,probes=[probe],traces=[trace])
+    conflict=monitor.source_gap_semantics(tmp_path,now)
+    assert conflict['issues']=={'machine_probe:machine_source_quote_observer_native_root_changed':1}
+    probe['fields']['zero_base_producer_pid']-=1
+    for malformed in ('{}', '{broken', '__import__("os")', 'x'*65537):
+        probe['fields']['continuous_reversal_rejected_claim_receipt']=malformed
+        _source_gap_files(tmp_path,now,probes=[probe],traces=[trace])
+        result=monitor.source_gap_semantics(tmp_path,now)
+        assert result['issues']=={'machine_probe:machine_source_quote_observer_native_root_changed':1}
+
+
+def _first_turn_rejection(hold_invalidation, monkeypatch, *, batch_clock=False):
+    """The issued observer receipt also carries native FIRST turn terminals."""
+    from src.engine.scalping.entry_machine_source_recovery import _digest
+    trace = _hold_rejection(hold_invalidation, monkeypatch)
+    receipt = trace['continuous_reversal_rejected_claim_receipt']
+    root = receipt['original_root']; life = receipt['native_selection']['original_signal_lifecycle']
+    for signal in root['branch_signals'].values():
+        signal.update({k: root[k] for k in ('event_id', 'signal_id', 'epoch', 'native_epoch',
+                                          'native_sequence', 'source_item', 'confirmation_price')})
+        signal.update(decision_phase='FIRST_UPTICK', signal_proof={})
+    life.update(branch_hold_floors={}, terminal_reason='first_turn_invalidated',
+                branch_membership={bid: root['event_id'] for bid in root['branch_signals']})
+    if batch_clock:
+        life['last_eligible_seen'] = life['first_ineligible_seen']
+    receipt['sha256'] = _digest({k: v for k, v in receipt.items() if k != 'sha256'})
+    return trace
+
+
+def test_hold_breach_can_share_a_receive_clock_with_last_eligible_tick(hold_invalidation, monkeypatch):
+    from src.engine.monitoring.submission_bottleneck_monitor import _reversal_lifecycle_diagnostic
+    from src.engine.scalping.entry_machine_source_recovery import _digest
+    trace = _hold_rejection(hold_invalidation, monkeypatch)
+    r = trace['continuous_reversal_rejected_claim_receipt']; life = r['native_selection']['original_signal_lifecycle']
+    life['last_eligible_seen'] = life['first_ineligible_seen']
+    r['sha256'] = _digest({k: v for k, v in r.items() if k != 'sha256'})
+    assert _reversal_lifecycle_diagnostic(trace) == 'reversal_first_price_hold_invalidated'
+    life['last_eligible_seen'] += .01
+    r['sha256'] = _digest({k: v for k, v in r.items() if k != 'sha256'})
+    assert _reversal_lifecycle_diagnostic(trace) is None
+
+
+def test_native_first_turn_can_end_after_eligible_tick_with_same_batch_clock(native):
+    backend, scope, state, event = native
+    legacy = K.ReversalState(); state.legacy = legacy
+    def ingest(sequence, at, price):
+        row = quote(sequence, stamp=at, price=price); row[9] = scope[2]
+        legacy.observe(row, symbol=scope[0], venue=scope[1], session='SOR_REGULAR')
+    for seq, price in enumerate((101, 100, 99, 100)):
+        ingest(seq, T+(seq-3)*.1, price)
+    assert legacy.turn
+    event.update(epoch=T, event_id=legacy.turn['event_id'], signal_id=legacy.turn['event_id'],
+                 native_sequence=3)
+    event['branch_signals']['first']['event_id'] = event['event_id']
+    observe(native, T)
+    ingest(4, T+.1, 100); observe(native, T+.1)
+    ingest(5, T+.1, 99)
+    assert legacy.turn is None
+    life = observe(native, T+.1)
+    assert life['terminal_reason'] == 'first_turn_invalidated'
+    assert life['last_eligible_seen'] == life['first_ineligible_seen'] == T+.1
+    assert life['latest_native_observation'][2] == 5 > life['native_sequence']
+
+
+def _first_turn_probe(trace, *, original_reference=False):
+    receipt = trace['continuous_reversal_rejected_claim_receipt']
+    probe = dict(emitted_at=K.iso(T+.4), pipeline='ENTRY_PIPELINE', stage='zero_base_probe_result',
+        stock_code=trace['stock_code'], fields=dict(zero_base_probe_result='policy_unavailable',
+        zero_base_probe_reason='assessment_contract_invalid', zero_base_route='nxt_only',
+        zero_base_producer_pid=R.os.getpid(), native_observation_reference=dict(observer_pid=R.os.getpid(),
+            observer_start_ticks=R._PROCESS_START_TICKS, family_sha256='a'*64, deadline_epoch=T+5),
+        zero_base_machine_contract_error=trace['machine_contract_error'],
+        evaluation_attempt_id=trace['evaluation_attempt_id'], machine_bundle_sha256='b'*64,
+        provider_called='False', continuous_reversal_rejected_claim_receipt=json.dumps(receipt)))
+    if original_reference:
+        root = receipt['original_root']; scope = receipt['native_selection']['original_signal_lifecycle']['scope']
+        original = dict(schema='native_observation_selection_v1', evaluation_role='probe_observation',
+            observed_epoch=T, process_pid=R.os.getpid(), process_start_ticks=R._PROCESS_START_TICKS,
+            family_sha256='a'*64, scope_execution_hash=root['registry_generation'], selected_scope=scope[5],
+            item=root['source_item'], venue=root['venue'], native_event_id=root['event_id'],
+            signal_id=root['signal_id'], native_epoch=root['native_epoch'], native_sequence=root['native_sequence'],
+            native_deadline_epoch=T+5, native_source_current=True, native_quote_current=True,
+            raw_ready_count=1, selected_ready_count=1, selected_branch_truth={bid:'TRUE' for bid in root['branch_signals']},
+            reason='ready', runtime_effect=False)
+        probe['fields'].update(native_observation_reference={}, native_observation_receipt=repr(original))
+    return probe
+
+
+@pytest.mark.parametrize('batch_clock', [False, True])
+@pytest.mark.parametrize('original_reference', [False, True])
+def test_first_turn_observer_terminal_is_not_source_loss(hold_invalidation, monkeypatch, tmp_path, batch_clock, original_reference):
+    from src.engine.monitoring import submission_bottleneck_monitor as monitor
+    from src.tests.test_submission_bottleneck_monitor import _source_gap_files
+    trace = _first_turn_rejection(hold_invalidation, monkeypatch, batch_clock=batch_clock)
+    assert monitor._reversal_lifecycle_diagnostic(trace) == 'reversal_first_signal_invalidated'
+    probe = _first_turn_probe(trace, original_reference=original_reference)
+    now = datetime.fromtimestamp(T+1, K.KST)
+    _source_gap_files(tmp_path, now, probes=[probe], traces=[trace])
+    result = monitor.source_gap_semantics(tmp_path, now)
+    assert result['issues'] == {}
+    assert result['diagnostics'] == {stage+':reversal_first_signal_invalidated': 1
+                                     for stage in ('machine_probe', 'machine_trace')}
+    assert result['observed']['probe_native_invalidated'] == 1
+    from src.tests.test_submission_bottleneck_monitor import _observation_health_fixture
+    health = _observation_health_fixture(); health['source_gap_semantics'] = dict(result, as_of=health['as_of'])
+    assert 'unknown_or_unbound_source_diagnostic' not in monitor.observation_health_projection(health)['unmet_conditions']
+
+
+@pytest.mark.parametrize('damage', ['missing', 'schema', 'role', 'actor', 'family', 'scope', 'signal',
+    'epoch', 'sequence', 'bool_sequence', 'clock', 'deadline', 'source', 'quote', 'ready_count',
+    'branch', 'conflicting_reference', 'malformed', 'oversize'])
+def test_empty_observer_reference_requires_intact_original_selection(hold_invalidation, monkeypatch, tmp_path, damage):
+    import ast
+    from src.engine.monitoring import submission_bottleneck_monitor as monitor
+    from src.tests.test_submission_bottleneck_monitor import _source_gap_files
+    trace = _first_turn_rejection(hold_invalidation, monkeypatch)
+    probe = _first_turn_probe(trace, original_reference=True); f = probe['fields']
+    original = ast.literal_eval(f['native_observation_receipt'])
+    if damage == 'schema': original['schema'] = 'unknown'
+    elif damage == 'role': original['evaluation_role'] = 'main_live'
+    elif damage == 'actor': original['process_pid'] += 1
+    elif damage == 'family': original['family_sha256'] = 'e'*64
+    elif damage == 'scope': original['scope_execution_hash'] = 'e'*64
+    elif damage == 'signal': original['signal_id'] = 'other'
+    elif damage == 'epoch': original['native_epoch'] += 1
+    elif damage == 'sequence': original['native_sequence'] += 1
+    elif damage == 'bool_sequence': original['native_sequence'] = False
+    elif damage == 'clock': original['observed_epoch'] = T+1
+    elif damage == 'deadline': original['native_deadline_epoch'] += 1
+    elif damage == 'source': original['native_source_current'] = False
+    elif damage == 'quote': original['native_quote_current'] = False
+    elif damage == 'ready_count': original['selected_ready_count'] = 0
+    elif damage == 'branch': original['selected_branch_truth'] = {}
+    elif damage == 'conflicting_reference': f['native_observation_reference'] = {'observer_pid': 1}
+    f['native_observation_receipt'] = repr(original)
+    if damage == 'missing': f.pop('native_observation_receipt')
+    elif damage == 'malformed': f['native_observation_receipt'] = '{broken'
+    elif damage == 'oversize': f['native_observation_receipt'] = 'x'*65537
+    now = datetime.fromtimestamp(T+1, K.KST)
+    _source_gap_files(tmp_path, now, probes=[probe], traces=[trace])
+    result = monitor.source_gap_semantics(tmp_path, now)
+    assert result['issues'] == {'machine_probe:machine_source_quote_observer_native_root_changed': 1}
+    assert result['diagnostics'] == {'machine_trace:reversal_first_signal_invalidated': 1}
+
+
+@pytest.mark.parametrize('damage', ['hash', 'attempt', 'bundle', 'actor', 'source', 'quote',
+    'ready', 'claimed', 'survivor', 'unknown', 'missing_branch', 'membership', 'signal', 'phase',
+    'signal_epoch', 'signal_sequence', 'bool_sequence', 'item', 'price', 'bool_price', 'bool_root_price',
+    'clock', 'deadline', 'gap', 'mixed'])
+def test_first_turn_observer_keeps_unproved_or_conflicting_loss_actionable(hold_invalidation, monkeypatch, damage):
+    from src.engine.monitoring.submission_bottleneck_monitor import _reversal_lifecycle_diagnostic
+    from src.engine.scalping.entry_machine_source_recovery import _digest
+    trace = _first_turn_rejection(hold_invalidation, monkeypatch, batch_clock=True)
+    r = trace['continuous_reversal_rejected_claim_receipt']; root = r['original_root']
+    selection = r['native_selection']; life = selection['original_signal_lifecycle']
+    bid = next(iter(root['branch_signals'])); signal = root['branch_signals'][bid]
+    if damage == 'attempt': trace['evaluation_attempt_id'] = 'other'
+    elif damage == 'bundle': trace['machine_bundle_sha256'] = 'd'*64
+    elif damage == 'actor': life['process_pid'] += 1
+    elif damage == 'source': selection['native_source_current'] = False
+    elif damage == 'quote': selection['native_quote_current'] = False
+    elif damage == 'ready': life['ready_membership_present'] = True
+    elif damage == 'claimed': life['claimed'] = True
+    elif damage == 'survivor': life['branch_survival'][bid] = True
+    elif damage == 'unknown': life['terminal_reason'] = 'ready_removed_without_terminal_receipt'
+    elif damage == 'missing_branch': root['branch_signals'] = {}
+    elif damage == 'membership': life['branch_membership'][bid] = 'other'
+    elif damage == 'signal': signal['event_id'] = 'other'
+    elif damage == 'phase': signal['decision_phase'] = 'UNKNOWN'
+    elif damage == 'signal_epoch': signal['epoch'] += 1
+    elif damage == 'signal_sequence': signal['native_sequence'] += 1
+    elif damage == 'bool_sequence': signal['native_sequence'] = False
+    elif damage == 'item': signal['source_item'] = '066970_AL'
+    elif damage == 'price': life['latest_native_observation'][3] = root['confirmation_price']
+    elif damage == 'bool_price': signal['confirmation_price'] = True
+    elif damage == 'bool_root_price': root['confirmation_price'] = True
+    elif damage == 'clock': life['last_eligible_seen'] = life['first_ineligible_seen']+.01
+    elif damage == 'deadline': r['original_deadline_epoch'] += 1
+    elif damage == 'gap': life['continuous_ingress'] = False
+    elif damage == 'mixed': life['branch_hold_floors'][bid] = root['confirmation_price']
+    r['sha256'] = _digest({k: v for k, v in r.items() if k != 'sha256'})
+    if damage == 'hash': r['sha256'] = '0'*64
+    assert _reversal_lifecycle_diagnostic(trace) is None

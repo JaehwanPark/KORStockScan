@@ -37,6 +37,22 @@ def test_sequential_bundle_owns_timeout_without_legacy_ttl(monkeypatch):
             [order, order], {}, "SCALPING", {}, sequential=True)
 
 
+@pytest.mark.parametrize('blocker', ['broker_symbol_allocation_conflict',
+                                   'sell_cancel_reconciliation_required'])
+def test_missing_local_buy_number_never_erases_unresolved_native_custody(monkeypatch, tmp_path, blocker):
+    from src.engine import sniper_state_handlers as handler
+    stock=dict(id=101,code='005930',name='TEST',strategy='SCALPING',
+        status='BUY_ORDERED',buy_qty=2,buy_price=9900,order_time=1,**{blocker:True})
+    monkeypatch.setattr(handler,'DATA_DIR',tmp_path)
+    monkeypatch.setattr(handler,'_manual_control_exclusion_blocked',lambda *a,**kw:False)
+    monkeypatch.setattr(handler,'_has_open_pending_entry_orders',lambda *_:False)
+    monkeypatch.setattr(handler,'_resolve_buy_order_timeout_sec',lambda *_:90)
+    monkeypatch.setattr(handler,'_clear_pending_entry_meta',lambda *_:pytest.fail('custody erased'))
+    original=deepcopy(stock)
+    handler.handle_buy_ordered_state(stock,'005930')
+    assert stock==original
+
+
 def _row(order_no: str, *, qty: str, filled: str, remaining: str,
          original: str = "0000000", confirmed: str = "0",
          confirmation_time: str = "") -> dict:

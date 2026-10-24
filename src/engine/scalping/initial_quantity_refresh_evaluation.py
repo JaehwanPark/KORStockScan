@@ -41,8 +41,10 @@ def _execution_key(trade,path,source,grid):
     import hashlib
     from src.engine.scalping.initial_quantity_source_cache import encode
     from src.engine.scalping.initial_quantity_policy import _digest
-    return _digest(dict(trade=trade,path=encode(path),source=source,grid=grid,
-                        readers={name:hashlib.sha256(Path(__file__).with_name(name).read_bytes()).hexdigest() for name in EXECUTION_READERS}))
+    readers={name:hashlib.sha256(Path(__file__).with_name(name).read_bytes()).hexdigest() for name in EXECUTION_READERS}
+    readers['trading/market/execution_venue.py']=hashlib.sha256(
+        (Path(__file__).resolve().parents[2]/'trading/market/execution_venue.py').read_bytes()).hexdigest()
+    return _digest(dict(trade=trade,path=encode(path),source=source,grid=grid,readers=readers))
 
 
 def modeled_parent(row):
@@ -189,7 +191,7 @@ def execution_case(trade, path, source, *, mode, shape, horizon, reserve=5):
     from src.engine.scalping.initial_quantity_cap_observation import quote_route_binding
     depth=context.get('ask_depth_source') or {}
     binding=quote_route_binding(depth.get('item'),depth.get('market_route'),legacy=True)
-    route=binding['order_route'] if binding else first.get('venue')
+    route=binding['order_route'] if binding else first.get('route', first.get('venue'))
     fill_venues=binding['fill_venues'] if binding else (route,)
     probe=bool(start.get('probe_applied'))
     if route not in {'KRX','NXT','SOR'}:
@@ -304,6 +306,44 @@ def replay_valid(report):
     except (TypeError,ValueError,KeyError,OverflowError):return False
 
 
+
+def policy_decision_precedes_fill(row, fact):
+    """Verify either exact chronology or the native same-second submit proof."""
+    from src.engine.scalping.initial_quantity_policy import _digest
+    decision, fill = kst_timestamp(row.get('policy_decision_at')),kst_timestamp(row.get('entry_fill_at'))
+    if decision is None or fill is None:return False
+    if decision <= fill:return True
+    try:
+        proof = row['policy_decision_clock_proof']
+        body = {k:v for k,v in proof.items() if k != 'proof_sha256'}
+        source = row['cap_source']
+        request,sent,received = (kst_timestamp(proof[k]) for k in ('request_at','sent_at','fill_received_at'))
+        return bool(proof.get('schema') == 'initial_quantity_policy_clock_interval_v1'
+            and proof.get('proof_sha256') == _digest(body)
+            and (row.get('shapes') or {}).get('parent',{}).get('policy_decision_clock_proof') == proof
+            and proof.get('broker_precision_sec') == row.get('entry_fill_clock_precision_sec') == 1
+            and row.get('entry_fill_clock_source') == 'broker_execution_observed_at'
+            and kst_timestamp(proof['decision_at']) == decision
+            and kst_timestamp(proof['fill_at']) == fill
+            and kst_timestamp(fact['buy_time']) is not None and fill <= kst_timestamp(fact['buy_time'])
+            and fill.date() == kst_timestamp(fact['buy_time']).date()
+            and decision < fill + timedelta(seconds=1)
+            and request is not None and sent is not None and received is not None
+            and decision <= request <= sent <= received
+            and request < fill + timedelta(seconds=1) and sent-request <= timedelta(seconds=120)
+            and proof['attempt_id'] == source['attempt_id'] and proof['attempt_id']
+            and proof['plan_sha256'] == source['plan_sha256'] and proof['plan_sha256']
+            and isinstance(proof['plan_sha256'],str) and len(proof['plan_sha256']) == 64
+            and all(c in '0123456789abcdef' for c in proof['plan_sha256'])
+            and proof['order_no'] == row['entry_fill_order_no'] and proof['order_no']
+            and proof['execution_no'] == row['entry_fill_execution_no'] and proof['execution_no']
+            and proof['request_tag'] and type(proof['fill_qty']) is int and proof['fill_qty'] > 0
+            and proof['fill_qty'] <= fact['buy_qty']
+            and len(source['fills']) >= 1 and source['fills'][0]['qty'] == proof['fill_qty']
+            and kst_timestamp(source['fills'][0]['at']) == fill)
+    except (KeyError,TypeError,ValueError):return False
+
+
 def evaluate(report, *, parent_policy, pid_receipt=None, terminal_receipt=None, following_bars=None,
              timeout_research=None, parent_policy_file_sha256=None, enforce_trade_lineage=True,
              evaluation_algorithm=None):
@@ -329,10 +369,11 @@ def evaluate(report, *, parent_policy, pid_receipt=None, terminal_receipt=None, 
                        else 'initial_policy_v2_loaded' if parent_policy.get('schema_version') == 'initial_entry_quantity_runtime_v2'
                        else 'initial_policy_loaded')
     bound=[];excluded=[]
+    facts={str(r['recommendation_id']):r for r in report['census']['input_fact_rows']}
     for row in report['trades']:
         dt=kst_timestamp(row.get('policy_decision_at'))
         ok=(row.get('applied_policy_status')==expected_status and row.get('policy_decision_stage')=='entry_execution_sizing_plan' and row.get('applied_policy_file_sha256')==parent_policy_file_sha256
-            and dt is not None and kst_timestamp(row.get('entry_fill_at')) is not None and dt<=kst_timestamp(row['entry_fill_at'])
+            and dt is not None and policy_decision_precedes_fill(row,facts[str(row['record_id'])])
             and any(p.get('entry_date')==row['entry_date'] and str(p.get('pid'))==str(row.get('applied_policy_runtime_pid'))
                     and kst_timestamp(p.get('verified_at')) is not None and kst_timestamp(p['verified_at'])<=dt for p in receipts))
         if ok or not enforce_trade_lineage:bound.append(row)
@@ -455,6 +496,45 @@ def read_joint_cases(timeout):
     return result
 
 
+def _issued_replay_representation(rebuilt, timeout, root):
+    """Compare issued gzip receipts through the native lossless custody proof.
+
+    Only the in-memory comparison uses the issued representation. Producers
+    keep canonical logical receipts; no report, timeout or source is rewritten.
+    """
+    from pathlib import Path
+    from src.engine.automation.main_trailing_source_store import _archive_generation, _archive_logical_authority, signature
+    from src.engine.scalping.initial_quantity_policy import _digest, _file_sha256
+    current=rebuilt['pipeline_source_receipts'];issued=timeout['pipeline_source_receipts']
+    if current==issued:return rebuilt
+    if not isinstance(issued,dict) or current.keys()!=issued.keys():return None
+    for day,receipt in current.items():
+        if receipt==issued[day]:continue
+        logical=root/'pipeline_events'/f'pipeline_events_{day}.jsonl'
+        physical=Path(str(logical)+'.gz')
+        authority=Path(str(physical)+'.archive_receipt.json')
+        if logical.exists() or logical.is_symlink() or physical.is_symlink():return None
+        checked=_archive_logical_authority(logical)
+        if checked is None:return None
+        # Enrollment has independently checked the complete logical SHA and
+        # gzip CRC. A report reader never performs an offline migration.
+        _archive_generation(root,logical)
+        proof,epoch=checked;info=physical.stat()
+        generation=dict(device=info.st_dev,inode=info.st_ino,size_bytes=info.st_size,
+                        mtime_ns=info.st_mtime_ns,ctime_ns=info.st_ctime_ns)
+        if (proof['archive_generation']!=generation or receipt.get('path')!=str(logical)
+                or receipt.get('sha256')!=proof['logical_content_sha256']
+                or receipt.get('size_bytes')!=proof['logical_size_bytes']
+                or receipt.get('archive_identity_valid') is not None):return None
+        expected={**receipt,'path':str(physical),'size_bytes':info.st_size,
+                  'sha256':_file_sha256(physical),'archive_identity_valid':True}
+        if (issued[day]!=expected or signature(physical.stat())!=signature(info)
+                or signature(authority.lstat())!=epoch):return None
+    comparable={**rebuilt,'pipeline_source_receipts':issued}
+    comparable['report_content_sha256']=_digest({k:v for k,v in comparable.items() if k!='report_content_sha256'})
+    return comparable
+
+
 def joint_evidence_valid(timeout, *, replay=None):
     from pathlib import Path
     from src.engine.scalping.initial_quantity_policy import build_initial_quantity_replay, _SHAPES, _CAP_MODES
@@ -468,8 +548,9 @@ def joint_evidence_valid(timeout, *, replay=None):
         shared={}
         rebuilt=build_initial_quantity_replay(timeout['source_date'],data_dir=root,fact_rows=timeout['census']['input_fact_rows'],
             entry_on_or_after=timeout['entry_on_or_after'],path_cache=shared,source_census=timeout['census'])
-        if (rebuilt['report_content_sha256']!=timeout['joint_replay_content_sha256'] or rebuilt['census']!=timeout['census']
-            or replay is not None and rebuilt!=replay):return False
+        comparable=_issued_replay_representation(rebuilt,timeout,root)
+        if (comparable is None or comparable['report_content_sha256']!=timeout['joint_replay_content_sha256']
+            or rebuilt['census']!=timeout['census'] or replay is not None and comparable!=replay):return False
         facts={str(f['recommendation_id']):f for f in rebuilt['census']['input_fact_rows']}
         rows={r['trade_id']:r for r in rebuilt['trades']};expected_ids=iter((tid,key) for tid in rows for key in grid);count=0
         from src.engine.scalping.initial_quantity_policy import _digest

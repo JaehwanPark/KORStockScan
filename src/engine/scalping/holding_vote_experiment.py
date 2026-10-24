@@ -40,6 +40,8 @@ def _code_paths():
         "scalping/holding_vote_experiment.py",
         "scalping/holding_vote_exit_models.py",
         "scalping/holding_path_vote_policy.py",
+        "scalping/holding_decision_context.py",
+        "scalping/ai_market_snapshot.py",
         "scalping/holding_path_vote_replay.py",
         "scalping/main_stop_replay.py",
         "scalping/main_stop_policy.py",
@@ -57,6 +59,7 @@ def _code_paths():
         "automation/main_stop_source_index.py",
         "lifecycle/broker_cost_reconciliation.py",
         "lifecycle/research_storage.py",
+        "lifecycle/research_input_budget.py",
     )
     return names + ("lifecycle/holding_window_generation.py", "lifecycle/snapshot_archive.py")
 
@@ -677,7 +680,8 @@ def _native_research(root, day, *, trailing_assembly=None, skip_experiment=False
                 policy=arms[chosen["selected"]], receipt=receipt
             )
     for path, generation in {**inventory, **vote_sources}.items():
-        if byte_generation(Path(path)) != generation:
+        from src.engine.automation.main_trailing_source_assembler import source_generation_matches
+        if not source_generation_matches(root, generation.get('source_date',day), Path(path), generation):
             raise ValueError("holding_vote_source_changed_during_research")
     if any(source_generation(root, d) != g for d, g in cost_generations.items()):
         raise ValueError("holding_vote_cost_generation_changed_during_research")

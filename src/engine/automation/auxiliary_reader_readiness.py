@@ -17,6 +17,10 @@ from src.utils.constants import DATA_DIR
 
 
 def _sha(path: Path) -> str:
+    from src.engine.infrastructure.startup_validation_code_context import preparation_source_digest
+    reused = preparation_source_digest(path)
+    if reused is not None:
+        return reused
     digest = hashlib.sha256()
     with path.open('rb') as source:
         for chunk in iter(lambda: source.read(1024 * 1024), b''):

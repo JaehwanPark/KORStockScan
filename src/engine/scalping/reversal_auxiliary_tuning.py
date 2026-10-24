@@ -569,7 +569,11 @@ def evaluate(data_root, day, *, campaign_path=None):
             and all(r['comparison_eligible'] or r['comparison_terminal_exclusion'] is not None
                 for r in resolution_rows)
             and not c['eligible_census'].get('typed_candidate_incompatible'), **P.AUTH))
-    P.write(out/'resolutions'/(resolution['artifact_content_sha256']+'.json'),resolution)
+    from src.engine.scalping.reversal_auxiliary_research import immutable
+    resolution_path=out/'resolutions'/(resolution['artifact_content_sha256']+'.json')
+    with S.writer_lock(data_root):
+        if resolution_path.is_symlink():raise ValueError('auxiliary_resolution_snapshot_alias')
+        immutable(resolution_path,resolution)
     result=P.seal(dict(schema=SCHEMA,source_date=day,campaign_sha256=c['artifact_content_sha256'],
         resolution_sha256=resolution['artifact_content_sha256'],
         resolution_states=dict(Counter(r['label_state']+'|'+r['response_state'] for r in resolution_rows)),
@@ -596,8 +600,13 @@ def evaluate(data_root, day, *, campaign_path=None):
         source_state='partitioned',comparison_state='complete' if result['comparison_complete'] else 'incomplete',
         handoff_state='research_only_no_policy_change')
     result=P.seal(result)
-    P.write(out/'evaluations'/(result['artifact_content_sha256']+'.json'),result)
-    P.write(out/'evaluation.json',result)
+    evaluation_path=out/'evaluations'/(result['artifact_content_sha256']+'.json')
+    # The content hash fixes semantic identity, including unordered mappings.
+    # Keep the first physical bytes through every policy/code-handoff consumer.
+    with S.writer_lock(data_root):
+        if evaluation_path.is_symlink():raise ValueError('auxiliary_evaluation_snapshot_alias')
+        immutable(evaluation_path,result)
+        P.write(out/'evaluation.json',result)
     return result
 
 

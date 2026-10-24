@@ -52,12 +52,14 @@ def _read_reference(ref):
 
 def code_hashes():
     from src.engine.scalping import reversal_auxiliary_transition as X
-    from src.engine.scalping import ai_decision_quality as executor
-    from src.engine import ai_engine_openai as engine
+    # These are source identities, not execution dependencies. Importing the
+    # provider/decision modules here initializes runtime configuration/logging.
+    source_root = Path(__file__).resolve().parent
     from src.engine.scalping.mechanistic_entry_runtime_policy import _source_hash, _signature
     return {Path(path).name:_source_hash(str(Path(path)),_signature(Path(path))) for path in
             (__file__, G.__file__, T.__file__, R.__file__, E.__file__, M.__file__,
-             W.__file__, CP.__file__, X.__file__, executor.__file__, engine.__file__)}
+             W.__file__, CP.__file__, X.__file__, source_root/'ai_decision_quality.py',
+             source_root.parent/'ai_engine_openai.py')}
 
 
 def _baseline_values(data_root, bundle, expected_parent):

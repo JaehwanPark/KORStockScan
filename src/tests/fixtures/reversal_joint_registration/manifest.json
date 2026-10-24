@@ -1,0 +1,49 @@
+{
+  "schema": "reversal_joint_original_test_inputs_v1",
+  "use": "test_only_immutable_input_not_tuning_or_promotion",
+  "original_parent_bundle_sha256": "d906615b11d8d9175930a0c7e1bed3f7d7f1c7dd237a129814c7629de49f0a5b",
+  "runtime_effect": false,
+  "actual_order_submitted": false,
+  "files": [
+    {
+      "original_relative_path": "data/runtime/mechanistic_entry_policy/generations/d906615b11d8d9175930a0c7e1bed3f7d7f1c7dd237a129814c7629de49f0a5b.json",
+      "fixture_file": "d906615b11d8d9175930a0c7e1bed3f7d7f1c7dd237a129814c7629de49f0a5b.json.gz",
+      "bytes": 5206770,
+      "sha256": "28a0c6e19ebaedffc7c73af3f78173be471c8a6189014a6be7c2f380d0b1d188",
+      "gzip_bytes": 193621,
+      "gzip_sha256": "79538c1b2661b4e296c8e021479e9765b01c71e8132e013b8df3816766b5475d"
+    },
+    {
+      "original_relative_path": "tmp/main-machine-joint-research-20261013/operating-application-plan-evidence.json",
+      "fixture_file": "operating-application-plan-evidence.json.gz",
+      "bytes": 17639,
+      "sha256": "2ed3b288b5c587664999e525cc8f4cdbe3c96b21d9957fdacc919f361ef32e13",
+      "gzip_bytes": 2321,
+      "gzip_sha256": "0a919db3eb31f0f22c34275711fd14f145ef763e6ce1076795cea38adef616e4"
+    },
+    {
+      "original_relative_path": "tmp/main-machine-joint-research-20261013/opportunity-frontier-result.json",
+      "fixture_file": "opportunity-frontier-result.json.gz",
+      "bytes": 191440,
+      "sha256": "eebaf02f318e04f899dad97d282ec338973d9a7804a5be95b165999ed97dd83a",
+      "gzip_bytes": 10350,
+      "gzip_sha256": "423c55e5c95d7c9a300bc123fe81b379f4dad538c0a7c4dbbce976728ea12b4e"
+    },
+    {
+      "original_relative_path": "data/runtime/mechanistic_entry_policy/sources/reversal-06d760496e765673d82f0e956d268f70b4aaee543522f40594a12915318c278b.json",
+      "fixture_file": "reversal-06d760496e765673d82f0e956d268f70b4aaee543522f40594a12915318c278b.json.gz",
+      "bytes": 2195257,
+      "sha256": "c362b475747a3b4837d169f36dc5c59659dac2e65b666d69d4d56f716d727a2f",
+      "gzip_bytes": 79011,
+      "gzip_sha256": "ef7b19ae86e0930ed6101deffbb7716a07d8502bf56fd66ddbf530eeb92a54c2"
+    },
+    {
+      "original_relative_path": "data/runtime/mechanistic_entry_policy/sources/reversal-d5ea836970ff994dfdb0cd28edc49d080e75018dbc58e85817b1e6a51c1b3834.json",
+      "fixture_file": "reversal-d5ea836970ff994dfdb0cd28edc49d080e75018dbc58e85817b1e6a51c1b3834.json.gz",
+      "bytes": 253069,
+      "sha256": "6406bf1adca0d3bef0b6794b50917d497986d48df9c9c840830e33cb534e46d2",
+      "gzip_bytes": 10674,
+      "gzip_sha256": "c95883e3743a81bcbf4796279f08d83f7884f962c48076c0115e00188607c255"
+    }
+  ]
+}

@@ -84,6 +84,34 @@ def _json(path: Path, payload: dict) -> None:
     path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
 
 
+@pytest.mark.parametrize('changed,failed', [(False,False),(True,False),(False,True)])
+def test_verify_cli_shares_only_invocation_digests_and_keeps_full_verification(
+        tmp_path,monkeypatch,capsys,changed,failed):
+    from src.engine.infrastructure import validation_digest_session as digests
+    monkeypatch.setattr(readiness,'DATA_DIR',tmp_path)
+    source=tmp_path/'large.json';source.write_bytes(b'a'*(1024*1024+1))
+    seen=[]
+    def verify(day,*,require_today):
+        assert day=='2026-10-20' and require_today is True
+        session=digests.ACTIVE.get();assert session is not None
+        seen.append(session.digest(source))
+        if changed:source.write_bytes(b'b'*(1024*1024+1))
+        seen.append(session.digest(source))
+        if failed:raise ValueError('native_contract_failure')
+        return dict(status='pass',actual_pid_consumed=False)
+    monkeypatch.setattr(readiness,'verify_prepared',verify)
+    assert readiness.main(['--verify','--target-date','2026-10-20','--require-today']) == int(failed)
+    result=json.loads(capsys.readouterr().out)
+    assert (seen[0]!=seen[1]) is changed
+    if not failed:
+        assert result['validation_io']['full_reads']==(2 if changed else 1)
+        assert result['validation_io']['reused_reads']==(0 if changed else 1)
+        assert result['validation_io']['cache_status']=='invocation_memory_only'
+    else:assert result['status']=='fail' and result['reason']=='native_contract_failure'
+    assert digests.ACTIVE.get() is None
+    assert not list(tmp_path.rglob('*.lock'))
+
+
 def test_target_after_postclose_handles_late_recovery_and_weekend(monkeypatch):
     monkeypatch.setattr(readiness, "is_krx_trading_day", lambda day: day.weekday() < 5)
     assert readiness.target_after_postclose(
@@ -236,6 +264,29 @@ def test_prepare_isolated_then_detects_source_and_release_drift(monkeypatch, tmp
     midnight = datetime(2026, 10, 2, 0, 36, tzinfo=KST)
     assert readiness.prepare(source, target_date=target, now=midnight)["status"] == "prepared_verified"
     assert readiness.verify_prepared(target, require_today=True, now=midnight)["status"] == "pass"
+    from src.engine.automation import intraday_release_handoff as handoff
+    original_selection=selection.read_bytes()
+    with monkeypatch.context() as consumed:
+        _json(selection,dict(git_commit='a'*40,actual_pid_consumed=True,
+            actual_pid_receipt=dict(pid=123)))
+        consumed.setattr(handoff,'_paths',lambda *a:(tmp_path/'no-intraday',tmp_path/'no-consumed'))
+        proof=dict(status='pass',basis='native_preopen',actual_pid_consumed=True,
+            selected_release_commit='a'*40,pid_identity=dict(pid=123,start_ticks='10'))
+        consumed.setattr(handoff,'verify_pid_consumption',lambda *a,**kw:proof.copy())
+        snapshot=tmp_path/'original-checklist.md';snapshot.write_text('original sealed checklist')
+        consumed.setattr(handoff,'preserve_checklist',lambda day:dict(path=str(snapshot),source_date=source))
+        checked=readiness.verify_prepared(target,now=midnight)
+        assert checked['status']=='pass' and checked['handoff_basis']=='native_consumed_preopen_preserved_generation'
+        assert checked['actual_pid_consumed'] is False and checked['runtime_effect'] is False
+        consumed.setattr(handoff,'verify_pid_consumption',lambda *a,**kw:dict(proof,status='fail'))
+        assert readiness.verify_prepared(target,now=midnight)['status']=='fail'
+        calls=[]
+        def changed(*a,**kw):
+            calls.append(True)
+            return dict(proof,pid_identity=dict(pid=123,start_ticks='10' if len(calls)==1 else '11'))
+        consumed.setattr(handoff,'verify_pid_consumption',changed)
+        assert readiness.verify_prepared(target,now=midnight)['status']=='fail'
+    selection.write_bytes(original_selection)
     with monkeypatch.context() as bounded:
         bounded.setattr(readiness.bootstrap, "INITIAL_QUANTITY_CURRENT", tmp_path / "quantity-absent.json")
         bounded.setattr(readiness.bootstrap, "verify_bootstrap", lambda *a, **kw: (_ for _ in ()).throw(

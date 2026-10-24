@@ -138,7 +138,7 @@ def test_factory_is_default_off_and_creates_no_output(tmp_path, monkeypatch) -> 
 
 
 def test_timestamp_rejection_tail_is_bounded_and_keeps_route_epoch(tmp_path) -> None:
-    collector = _collector(tmp_path, depth_capture_enabled=True)
+    collector = _collector(tmp_path, depth_capture_enabled=True, queue_size=128)
     received = int(
         datetime.fromisoformat("2026-08-08T09:00:20+09:00").timestamp() * 1000
     )
@@ -506,6 +506,33 @@ def test_0d_depth_capture_uses_separate_journal_and_sequence(tmp_path) -> None:
     assert row["ask_depth"] == 300
     assert row["actual_order_submitted"] is False
     assert row["broker_order_forbidden"] is True
+
+
+def test_probe_terminal_trace_keeps_real_collector_rejections_and_admission(tmp_path):
+    collector = _collector(tmp_path, path_capture_enabled=True, depth_capture_enabled=True)
+    manager = KiwoomWSManager('test-token')
+    manager._market_data_transport_epoch = 7
+    manager._micro_reversion_forward_collector = collector
+    good = _depth_snapshot()
+    source = good['last_depth_tick']
+    source.update(transport_epoch=7, route_sequence=1, market_route='krx_only')
+    manager._exact_probe_item_leases['000001'] = dict(
+        lease_id='lease', epoch=7, interval_started_epoch=source['received_at_ms']/1000-1)
+    bad = {**good, 'last_depth_tick': {**source, 'ask_levels': []}}
+    try:
+        manager._observe_micro_reversion_forward('000001', bad, realtime_type='0D')
+        source['route_sequence'] = 2
+        manager._observe_micro_reversion_forward('000001', good, realtime_type='0D')
+        trace = manager.exact_probe_source_trace('000001', 'lease')
+    finally:
+        collector.close()
+    counts = trace['lease']['collector_result_counts_by_type']['0D']
+    assert counts == {'invalid_depth_snapshot': 1, 'enqueued': 1}
+    assert trace['lease']['collector_first_non_enqueued_by_type']['0D']['route_sequence'] == 1
+    assert trace['lease']['collector_last_result_by_type']['0D']['route_sequence'] == 2
+    assert collector.runtime_snapshot().depth_writer_persisted_envelope_count == 1
+    assert trace['broker_ack_observed'] is None
+    assert trace['order_authority'] is False
 
 
 def test_low_disk_warning_propagates_for_path_and_depth_without_capture_loss(
@@ -2074,3 +2101,144 @@ def test_integrated_stream_preserves_raw_volume_lineage_without_inventing_missin
     assert row["cumulative_volume_raw"] == (raw_values.get("13") if isinstance(raw_values.get("13"), str) else None)
     assert row["trade_volume_raw"] == (raw_values.get("15") if isinstance(raw_values.get("15"), str) else None)
     assert row["trade_qty"] == 10 and row["actual_order_submitted"] is False
+
+
+def _closed_main_rejection_source(tmp_path, count=65, *, reconnect=False, close_day='2026-08-08', regression=False):
+    from src.engine.scalping.micro_reversion.canary_monitor import write_canary_runtime_snapshot
+    c = ForwardObservationCollector(
+        flags=ObserverFeatureFlags(observer_enabled=True, path_capture_enabled=True),
+        config=ForwardCollectorConfig(output_root=tmp_path/'data/observations/scalp_micro_reversion_forward'),
+    )
+    c.start()
+    received=int(datetime.fromisoformat('2026-08-08T09:00:54.121+09:00').timestamp()*1000)
+    c.observe_kiwoom_0b('000001', _snapshot(exchange_time='090054000',received_at_ms=received) if regression else _snapshot(), realtime_type='0B')
+    deadline = time.monotonic() + 2
+    while c.runtime_snapshot().writer_persisted_envelope_count != 1 and time.monotonic() < deadline:
+        time.sleep(.005)
+    if regression:
+        c.observe_kiwoom_0b('000001',_snapshot(exchange_time='090053000',received_at_ms=received+4),realtime_type='0B')
+    for i in range(count):
+        if reconnect and i == count // 2:
+            c.begin_transport_epoch()
+        c.observe_kiwoom_0b('000001', _snapshot(exchange_time='invalid'), realtime_type='0B')
+    if reconnect:
+        c.observe_kiwoom_0b('000001', _snapshot(), realtime_type='0B')
+    c.close()
+    latest = tmp_path/'data/runtime/scalp_micro_reversion_forward_collector/latest.json'
+    payload = write_canary_runtime_snapshot(c.runtime_snapshot().as_dict(), output_path=latest,
+        now=datetime.fromisoformat(close_day+'T20:00:00+09:00'))
+    closed = next((latest.parent/'closed').glob('2026-08-08-*.json'))
+    return c, payload, closed
+
+
+@pytest.mark.parametrize('fault',[None,'counter','exceeded','accepted','missing','authority','receipt'])
+def test_closed_main_ingress_rejection_keeps_tolerated_path_rows_quarantined(tmp_path,fault):
+    import gzip
+    from src.engine.scalping.continuous_reversal_source import freeze_normalized_sources
+    from src.engine.scalping.micro_reversion.observer_source_quality import main_raw_epoch_validation
+    _,payload,_=_closed_main_rejection_source(tmp_path,count=1,regression=True)
+    snap=payload['collector_snapshot']
+    assert snap['path_exchange_timestamp_regression_quarantined_count']==1
+    assert snap['path_accepted_envelope_count']==1
+    if fault=='counter':snap['path_exchange_timestamp_regression_count']=2
+    elif fault=='exceeded':snap['path_exchange_timestamp_regression_exceeded_count']=1
+    elif fault=='accepted':snap['path_accepted_envelope_count']=2
+    elif fault=='missing':snap.pop('path_exchange_timestamp_regression_quarantined_count')
+    elif fault=='authority':snap['trading_runtime_effect']=True
+    elif fault=='receipt':snap['timestamp_rejection_ledger']['sha256']='0'*64
+    assert main_raw_epoch_validation(payload,source_date='2026-08-08')['eligible'] is (fault is None)
+    if fault is None:
+        parts=freeze_normalized_sources(tmp_path/'data','2026-08-08',tmp_path/'freeze')
+        rows=[row for part in parts for values in json.loads(gzip.decompress(Path(part['path']).read_bytes()))['symbols'].values() for row in values]
+        assert sum(row[8] for row in rows)==1
+
+
+@pytest.mark.parametrize('count,reconnect', [(64, False), (65, False), (121, False), (1000, True)])
+def test_complete_rejection_journal_preserves_valid_rows_through_native_consumer(tmp_path, count, reconnect):
+    import gzip
+    from src.engine.scalping.continuous_reversal_source import freeze_normalized_sources
+    from src.engine.scalping.micro_reversion.observer_source_quality import main_raw_epoch_validation
+    c, payload, closed = _closed_main_rejection_source(tmp_path, count, reconnect=reconnect)
+    snapshot = payload['collector_snapshot']
+    assert len(snapshot['timestamp_rejection_samples']) == 64
+    assert snapshot['timestamp_rejection_ledger']['rows'] == count
+    assert payload['canary_guard']['timestamp_source_quality']['exact_rejected_row_exclusion_proven']
+    verdict = main_raw_epoch_validation(payload, source_date='2026-08-08')
+    assert verdict['eligible']
+    # Quarantine preserves its existing narrow current-epoch scope on reconnect.
+    assert verdict['allowed_sequence_epochs'] == [snapshot['sequence_epoch']]
+    parts = freeze_normalized_sources(tmp_path/'data', '2026-08-08', tmp_path/'freeze')
+    assert sum(row[8] for part in parts for rows in json.loads(gzip.decompress(Path(part['path']).read_bytes()))['symbols'].values() for row in rows) == 1
+    before = closed.read_bytes()
+    c.close()
+    from src.engine.scalping.micro_reversion.canary_monitor import write_canary_runtime_snapshot
+    write_canary_runtime_snapshot(c.runtime_snapshot().as_dict(), output_path=closed.parent.parent/'latest.json',
+        now=datetime.fromisoformat('2026-08-08T20:01:00+09:00'))
+    assert closed.read_bytes() == before
+
+
+@pytest.mark.parametrize('damage', ['missing', 'partial', 'hash', 'pid', 'start', 'epoch', 'index', 'unsealed', 'date'])
+def test_rejection_journal_damage_still_excludes_epoch(tmp_path, damage):
+    import hashlib
+    from src.engine.scalping.micro_reversion.observer_source_quality import main_raw_epoch_validation
+    c, payload, _ = _closed_main_rejection_source(tmp_path)
+    snapshot = payload['collector_snapshot']; ledger = snapshot['timestamp_rejection_ledger']
+    path = Path(ledger['path'])
+    if damage == 'missing': path.unlink()
+    elif damage == 'partial': path.write_bytes(path.read_bytes()[:-1])
+    elif damage == 'hash': ledger['sha256'] = '0'*64
+    elif damage == 'unsealed': ledger['sealed'] = False
+    elif damage != 'date':
+        rows = [json.loads(raw) for raw in path.read_bytes().splitlines()]
+        field = {'pid':'process_pid','start':'process_start_ticks','epoch':'local_observer_epoch','index':'rejection_index'}[damage]
+        rows[0][field] = 'foreign' if damage == 'start' else 999
+        raw = b''.join((json.dumps(row)+'\n').encode() for row in rows)
+        path.write_bytes(raw);ledger.update(bytes=len(raw), sha256=hashlib.sha256(raw).hexdigest())
+    assert not main_raw_epoch_validation(payload, source_date='2026-08-09' if damage == 'date' else '2026-08-08')['eligible']
+
+
+def test_midnight_close_retains_exact_previous_source_date(tmp_path):
+    from src.engine.scalping.continuous_reversal_source import _source_quality_receipt
+    from src.engine.scalping.micro_reversion.observer_source_quality import main_raw_epoch_validation
+    _, _, closed = _closed_main_rejection_source(tmp_path, close_day='2026-08-09')
+    payload = json.loads(closed.read_bytes())
+    assert payload['source_date'] == '2026-08-08'
+    assert payload['generated_at'].startswith('2026-08-09')
+    assert main_raw_epoch_validation(payload, source_date='2026-08-08')['eligible']
+    assert _source_quality_receipt(tmp_path/'data', '2026-08-08')['eligible']
+    assert not main_raw_epoch_validation(payload, source_date='2026-08-09')['eligible']
+
+
+@pytest.mark.parametrize('failure', ['queue_full', 'write', 'fsync'])
+def test_rejection_persistence_failure_never_publishes_clean_close(tmp_path, monkeypatch, failure):
+    c = ForwardObservationCollector(flags=ObserverFeatureFlags(observer_enabled=True, path_capture_enabled=True),
+        config=ForwardCollectorConfig(output_root=tmp_path))
+    c.start()
+    if failure == 'queue_full':
+        def fail(*args): raise collector_module.queue.Full
+        monkeypatch.setattr(c._rejection_queue, 'put_nowait', fail)
+    elif failure == 'write':
+        c._rejection_path.parent.mkdir(); c._rejection_path.write_text('foreign existing bytes')
+    else:
+        def fail(*args): raise OSError('isolated fsync failure')
+        monkeypatch.setattr(collector_module.os, 'fsync', fail)
+    c.observe_kiwoom_0b('000001', _snapshot(exchange_time='invalid'), realtime_type='0B')
+    with pytest.raises(RuntimeError, match='shutdown'):
+        c.close()
+    snapshot = c.runtime_snapshot().as_dict()
+    assert snapshot['collector_lifecycle'] == 'close_failed'
+    assert not snapshot['timestamp_rejection_ledger']['sealed']
+    if c._rejection_file is not None: c._rejection_file.close()
+
+
+def test_ws_retains_closed_collector_until_receipt_persistence_succeeds(tmp_path, monkeypatch):
+    c, _, _ = _closed_main_rejection_source(tmp_path)
+    manager = KiwoomWSManager('offline-token')
+    manager._micro_reversion_forward_collector = c
+    def fail(): raise OSError('receipt unavailable')
+    monkeypatch.setattr(manager, '_persist_micro_reversion_canary_snapshot', fail)
+    assert manager._close_micro_reversion_forward_collector() is False
+    assert manager._micro_reversion_forward_collector is c
+    monkeypatch.setattr(manager, '_persist_micro_reversion_canary_snapshot', lambda: {})
+    assert manager._close_micro_reversion_forward_collector() is True
+    assert manager._micro_reversion_forward_collector is None

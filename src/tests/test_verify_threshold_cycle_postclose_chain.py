@@ -1,4 +1,5 @@
 import json
+import pytest
 from pathlib import Path
 
 from src.engine import runtime_approval_summary as summary_mod
@@ -199,6 +200,28 @@ def test_direct_projection_includes_native_holding_owner_and_ignores_unrelated_m
         '- [ ] `[UnexpectedGeneratedOwner] unowned projection`\n'+checklist_mod.AUTO_END))
     _,issues=mod._direct_checklist_checks(target,summary,path)
     assert 'direct_checklist_task_projection_mismatch' in issues
+
+
+@pytest.mark.parametrize('new_defect', [False, True])
+def test_carried_semantic_owner_preserves_acceptance_and_native_projection(monkeypatch, tmp_path, new_defect):
+    day = '2026-09-19'
+    summary = _seed(monkeypatch, tmp_path, day)
+    summary['holding_exit_threshold_lineage'] = {'source_contract_repair': {
+        'repair_required': new_defect, 'identified_defects': ['fixture_source_binding'] if new_defect else []}}
+    path = mod.REPORT_DIR / 'runtime_approval_summary' / f'runtime_approval_summary_{day}.json'
+    _write(path, summary)
+    source = tmp_path / 'docs/checklists' / f'{day}-stage2-todo-checklist.md'
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_text('- [ ] `[HoldingProfitExitSourceContractRepair] original remaining acceptance` '
+        '(`Due: 2026-09-19`, `Slot: IMPLEMENTATION`, `TimeWindow: 09:00~23:59`, `Track: RuntimeStability`)\n'
+        '  - Acceptance: original BUY/SELL identities; original cost remains null.\n')
+    checklist = _build_direct_checklist(monkeypatch, tmp_path, day)
+    text = checklist.read_text()
+    assert text.count('[HoldingProfitExitSourceContractRepair]') == 1
+    assert 'original BUY/SELL identities' in text
+    view, issues = mod._direct_checklist_checks(day, summary, path)
+    assert issues == []
+    assert view['actual_task_ids'] == view['expected_task_ids']
 
 
 def test_validated_reversal_preserves_one_manual_workflow_owner(monkeypatch, tmp_path):

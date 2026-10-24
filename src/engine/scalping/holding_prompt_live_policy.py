@@ -18,13 +18,12 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from statistics import fmean
 from typing import Any, Mapping
+from zoneinfo import ZoneInfo
 
 from src.engine.ai_prompt_contracts import (
     DECISION_QUALITY_HOLDING_V2_4_LIVE_SCORE_PROMPT_VERSION,
     decision_quality_holding_v2_4_live_score_system_prompt,
 )
-from src.engine.scalping import ai_decision_quality as quality
-from src.engine.scalping import ai_stage_coverage_replay as coverage
 from src.utils.constants import DATA_DIR
 from src.utils.market_day import is_krx_trading_day
 
@@ -34,6 +33,7 @@ CANDIDATE_SCHEMA = "holding_prompt_live_candidate_v1"
 ACTIVATION_SCHEMA = "holding_prompt_preopen_activation_v1"
 PROMPT_SCHEMA_NAME = "decision_quality_holding_score_v1"
 FALLBACK_PROMPT_VERSION = "holding_score_v2"
+KST = ZoneInfo("Asia/Seoul")
 REPORT_DIR = DATA_DIR / "report" / "holding_prompt_paired_replay"
 CANDIDATE_DIR = DATA_DIR / "threshold_cycle" / "holding_prompt_candidates"
 ACTIVATION_DIR = DATA_DIR / "runtime" / "holding_prompt_live_policy"
@@ -54,7 +54,7 @@ SUPPORTED_COHORTS = (
     ("KRX_NXT_INTEGRATED", "KRX_NXT_AFTERMARKET"),
 )
 _POLICY_CACHE_LOCK = threading.Lock()
-_POLICY_CACHE: dict[tuple[str, str, str], dict[str, Any]] = {}
+_POLICY_CACHE: dict[tuple[str, str, str, str], dict[str, Any]] = {}
 
 
 def _slug(value: Any) -> str:
@@ -107,16 +107,18 @@ def report_path(target_date: str, cohort: tuple[str, str]) -> Path:
     )
 
 
-def candidate_path(source_date: str, cohort: tuple[str, str]) -> Path:
+def candidate_path(source_date: str, cohort: tuple[str, str], *, data_root: Path | None = None) -> Path:
     venue, session = _cohort(cohort)
-    return CANDIDATE_DIR / (
+    directory = Path(data_root) / "threshold_cycle/holding_prompt_candidates" if data_root is not None else CANDIDATE_DIR
+    return directory / (
         f"holding_prompt_live_candidate_{source_date}_{_slug(venue)}_{_slug(session)}.json"
     )
 
 
-def activation_path(target_date: str, cohort: tuple[str, str]) -> Path:
+def activation_path(target_date: str, cohort: tuple[str, str], *, data_root: Path | None = None) -> Path:
     venue, session = _cohort(cohort)
-    return ACTIVATION_DIR / (
+    directory = Path(data_root) / "runtime/holding_prompt_live_policy" if data_root is not None else ACTIVATION_DIR
+    return directory / (
         f"holding_prompt_preopen_activation_{target_date}_{_slug(venue)}_{_slug(session)}.json"
     )
 
@@ -136,6 +138,8 @@ def _holding_economics(
     results: list[dict[str, Any]],
     labels: list[dict[str, Any]],
 ) -> dict[str, Any]:
+    from src.engine.scalping import ai_decision_quality as quality
+
     request_by_pair = {str(row.get("paired_replay_id") or ""): row for row in requests}
     label_by_trace = {
         str(row.get("decision_trace_id") or ""): row
@@ -273,7 +277,7 @@ def _valid_report(report: Mapping[str, Any], cohort: tuple[str, str]) -> bool:
         and report.get("session_bucket") == session
         and report.get("candidate_prompt_version")
         == DECISION_QUALITY_HOLDING_V2_4_LIVE_SCORE_PROMPT_VERSION
-        and report.get("candidate_prompt_sha256") == quality._sha256(prompt)
+        and report.get("candidate_prompt_sha256") == _canonical_sha256(prompt)
         and report.get("provider_failed_count") == 0
         and report.get("schema_rejected_count") == 0
         and report.get("request_count") == report.get("result_count")
@@ -380,7 +384,7 @@ def build_candidate(source_date: str, cohort: tuple[str, str]) -> dict[str, Any]
         "session_bucket": session,
         "status": "preopen_apply_ready" if not blockers else "keep_collecting",
         "selected_prompt_version": DECISION_QUALITY_HOLDING_V2_4_LIVE_SCORE_PROMPT_VERSION,
-        "selected_prompt_sha256": quality._sha256(prompt),
+        "selected_prompt_sha256": _canonical_sha256(prompt),
         "selected_response_schema": PROMPT_SCHEMA_NAME,
         "rollback_prompt_version": FALLBACK_PROMPT_VERSION,
         "promotion_thresholds": {
@@ -406,6 +410,8 @@ def build_candidate(source_date: str, cohort: tuple[str, str]) -> dict[str, Any]
 
 
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
+    from src.engine.scalping import ai_decision_quality as quality
+
     quality._atomic_write_json(path, payload)
 
 
@@ -418,6 +424,9 @@ def run_postclose(
     timeout_sec: float,
     write: bool,
 ) -> dict[str, Any]:
+    from src.engine.scalping import ai_decision_quality as quality
+    from src.engine.scalping import ai_stage_coverage_replay as coverage
+
     control = quality._load_json(quality.control_path(target_date))
     traces = coverage._load_rows(quality.TRACE_DIR, "ai_decision_trace", [target_date])
     payloads = coverage._load_rows(
@@ -573,10 +582,11 @@ def run_postclose(
     }
 
 
-def build_activation(target_date: str, cohort: tuple[str, str]) -> dict[str, Any]:
+def build_activation(target_date: str, cohort: tuple[str, str], *, data_root: Path | None = None) -> dict[str, Any]:
     venue, session = _cohort(cohort)
     matching: list[tuple[str, Path, dict[str, Any]]] = []
-    for path in CANDIDATE_DIR.glob(
+    directory = Path(data_root) / "threshold_cycle/holding_prompt_candidates" if data_root is not None else CANDIDATE_DIR
+    for path in directory.glob(
         f"holding_prompt_live_candidate_*_{_slug(venue)}_{_slug(session)}.json"
     ):
         candidate = _read_json(path)
@@ -604,7 +614,7 @@ def build_activation(target_date: str, cohort: tuple[str, str]) -> dict[str, Any
         or candidate.get("session_bucket") != session
     ):
         errors.append("holding_prompt_candidate_cohort_mismatch")
-    if candidate.get("selected_prompt_sha256") != quality._sha256(
+    if candidate.get("selected_prompt_sha256") != _canonical_sha256(
         decision_quality_holding_v2_4_live_score_system_prompt()
     ):
         errors.append("holding_prompt_candidate_prompt_hash_mismatch")
@@ -638,9 +648,16 @@ def build_activation(target_date: str, cohort: tuple[str, str]) -> dict[str, Any
 
 
 def resolve_holding_prompt_policy(
-    *, effective_venue: Any, session_bucket: Any, now: datetime | None = None
+    *, effective_venue: Any, session_bucket: Any, now: datetime | None = None,
+    policy_target_date: str | None = None, prepared_activation: dict[str, Any] | None = None,
+    data_root: Path | None = None,
 ) -> dict[str, Any]:
-    current = (now or datetime.now(quality.KST)).astimezone(quality.KST)
+    current = (now or datetime.now(KST)).astimezone(KST)
+    target_date = policy_target_date or current.date().isoformat()
+    if date.fromisoformat(target_date).isoformat() != target_date:
+        raise ValueError("holding_prompt_policy_date_invalid")
+    if target_date != current.date().isoformat() and prepared_activation is None:
+        raise ValueError("holding_prompt_future_date_requires_preparation")
     cohort = _cohort((effective_venue, session_bucket))
     fallback = {
         "enabled": False,
@@ -651,16 +668,16 @@ def resolve_holding_prompt_policy(
     }
     if cohort not in SUPPORTED_COHORTS:
         return {**fallback, "reason": "holding_prompt_cohort_not_registered"}
-    path = activation_path(current.date().isoformat(), cohort)
-    cache_key = (current.date().isoformat(), cohort[0], cohort[1])
+    path = activation_path(target_date, cohort, data_root=data_root)
+    cache_key = (str(path), target_date, cohort[0], cohort[1])
     activation_signature = _file_signature(path)
     with _POLICY_CACHE_LOCK:
         cached = _POLICY_CACHE.get(cache_key)
-    if cached and cached.get("activation_signature") == activation_signature:
+    if prepared_activation is None and cached and cached.get("activation_signature") == activation_signature:
         cached_candidate_path = Path(str(cached.get("candidate_path") or ""))
         if cached.get("candidate_signature") == _file_signature(cached_candidate_path):
             return dict(cached["result"])
-    activation = _read_json(path)
+    activation = prepared_activation if prepared_activation is not None else _read_json(path)
     if activation.get("artifact_sha256") != _canonical_sha256(
         {key: value for key, value in activation.items() if key != "artifact_sha256"}
     ):
@@ -671,14 +688,14 @@ def resolve_holding_prompt_policy(
         }
     if (
         activation.get("schema") != ACTIVATION_SCHEMA
-        or activation.get("target_date") != current.date().isoformat()
+        or activation.get("target_date") != target_date
         or activation.get("status") != "active"
         or activation.get("effective_venue") != cohort[0]
         or activation.get("session_bucket") != cohort[1]
         or activation.get("selected_prompt_version")
         != DECISION_QUALITY_HOLDING_V2_4_LIVE_SCORE_PROMPT_VERSION
         or activation.get("selected_prompt_sha256")
-        != quality._sha256(decision_quality_holding_v2_4_live_score_system_prompt())
+        != _canonical_sha256(decision_quality_holding_v2_4_live_score_system_prompt())
         or activation.get("response_schema") != PROMPT_SCHEMA_NAME
         or activation.get("hard_safety_unchanged") is not True
     ):
@@ -693,6 +710,7 @@ def resolve_holding_prompt_policy(
     expected_candidate_file = candidate_path(
         str(activation.get("source_date") or ""),
         cohort,
+        data_root=data_root,
     )
     if (
         not candidate
@@ -706,7 +724,7 @@ def resolve_holding_prompt_policy(
         )
         or candidate.get("schema") != CANDIDATE_SCHEMA
         or candidate.get("source_date") != activation.get("source_date")
-        or candidate.get("effective_date") != current.date().isoformat()
+        or candidate.get("effective_date") != target_date
         or candidate.get("effective_venue") != cohort[0]
         or candidate.get("session_bucket") != cohort[1]
         or candidate.get("status") != "preopen_apply_ready"
@@ -733,13 +751,14 @@ def resolve_holding_prompt_policy(
             "activation_artifact_sha256": activation["artifact_sha256"],
             "runtime_effect": True,
         }
-    with _POLICY_CACHE_LOCK:
-        _POLICY_CACHE[cache_key] = {
-            "activation_signature": activation_signature,
-            "candidate_path": str(candidate_file),
-            "candidate_signature": _file_signature(candidate_file),
-            "result": dict(result),
-        }
+    if prepared_activation is None:
+        with _POLICY_CACHE_LOCK:
+            _POLICY_CACHE[cache_key] = {
+                "activation_signature": activation_signature,
+                "candidate_path": str(candidate_file),
+                "candidate_signature": _file_signature(candidate_file),
+                "result": dict(result),
+            }
     return result
 
 

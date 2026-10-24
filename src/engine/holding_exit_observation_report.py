@@ -20,6 +20,7 @@ from src.engine.automation.source_quality_clean_baseline import (
 from src.engine.monitor_snapshot_runtime import guard_stdin_heavy_build
 from src.engine.sniper_trade_review_report import (
     COMPLETED_CENSUS_CONTRACT_FROM, verify_completed_census_manifest,
+    completed_census_projection_ids,
 )
 from src.engine.scalping.trailing_threshold_policy import (
     GRID_VERSION as SCALP_TRAILING_GRID_VERSION,
@@ -125,18 +126,22 @@ def _parse_aware_dt(value: Any) -> datetime | None:
 
 def _sor_krx_post_sell_user_override(trade: dict, candidate: dict) -> bool:
     """Admit a real SOR fill to KRX-reference postclose analysis only."""
-    from src.trading.market.execution_venue import execution_venue_fields, SOR_KRX_AUTHORITY
+    from src.trading.market.execution_venue import execution_venue_fields, VENUE_ASSIGNMENT_AUTHORITIES, MARKET_DEFAULT_AUTHORITY
     assigned = execution_venue_fields(trade, observed_at=trade.get("exact_sell_fill_time"))
-    if assigned["execution_venue_override"] == SOR_KRX_AUTHORITY:
+    authority = assigned["execution_venue_override"]
+    if authority in VENUE_ASSIGNMENT_AUTHORITIES:
         candidate_assignment = execution_venue_fields(candidate,
             observed_at=candidate.get("exact_sell_fill_time"))
-        return bool(candidate_assignment["execution_venue_override"] == SOR_KRX_AUTHORITY
+        return bool(candidate_assignment["execution_venue_override"] == authority
             and trade.get("effective_venue") == candidate.get("actual_execution_venue") == "KRX"
-            and trade.get("execution_venue_override") == candidate.get("execution_venue_override") == SOR_KRX_AUTHORITY
+            and trade.get("execution_venue_override") == candidate.get("execution_venue_override") == authority
             and trade.get("actual_execution_venue_verified") is False
             and candidate.get("actual_execution_venue_verified") is False
             and str(trade.get("exit_execution_broker_route") or "").upper()
-                == str(candidate.get("broker_route_requested") or "").upper() == "SOR"
+                == str(candidate.get("broker_route_requested") or "").upper()
+            and (str(candidate.get("broker_route_requested") or "").upper() == "SOR"
+                 or authority == MARKET_DEFAULT_AUTHORITY and
+                 str(candidate.get("broker_route_requested") or "").upper() in {"KRX", "NXT"})
             and candidate.get("market_axes_source_quality_status") == "route_contract_ready"
             and trade.get("terminal_population_scope") == "real_record_bound"
             and trade.get("terminal_decision_authority") == "broker_sell_fill_observation_only"
@@ -190,6 +195,10 @@ def _post_sell_binding_gap(trade: dict, candidate: dict) -> str | None:
     terminal_route = str(trade.get("exit_execution_broker_route") or "").upper()
     candidate_route = str(candidate.get("broker_route_requested") or "").upper()
     override = _sor_krx_post_sell_user_override(trade, candidate)
+    from src.trading.market.execution_venue import VENUE_ASSIGNMENT_AUTHORITIES
+    assigned_reference = any(row.get(key) in VENUE_ASSIGNMENT_AUTHORITIES
+        for row in (trade, candidate) for key in (
+            "execution_venue_override", "actual_execution_venue_source"))
     unverified_sor_venue_relabel = bool(
         terminal_route == "SOR"
         and str(trade.get("broker_actual_execution_venue") or "").upper()
@@ -201,6 +210,7 @@ def _post_sell_binding_gap(trade: dict, candidate: dict) -> str | None:
     if (candidate.get("market_axes_source_quality_status") != "route_contract_ready"
             or terminal_venue not in {"KRX", "NXT"}
             or (candidate_venue != terminal_venue and not override)
+            or (assigned_reference and not override)
             or unverified_sor_venue_relabel
             or terminal_route not in {"KRX", "NXT", "SOR"}
             or candidate_route != terminal_route):
@@ -325,7 +335,7 @@ def _load_saved_snapshot(snapshot_kind: str, target_date: str) -> dict | None:
 
 
 def _load_saved_snapshots(
-    snapshot_kind: str, dates: list[str], *, excluded_dates=()
+    snapshot_kind: str, dates: list[str], *, excluded_dates=(), window_dependencies=None
 ) -> tuple[list[dict], list[str]]:
     snapshots: list[dict] = []
     paths: list[str] = []
@@ -337,7 +347,9 @@ def _load_saved_snapshots(
             continue
         try:
             if snapshot_kind == "trade_review":
-                projected = _verified_trade_review_projection(path, target_date)
+                original = ((window_dependencies or {}).get(target_date) or {}).get('original_cost_generation')
+                projected = _verified_trade_review_projection(path, target_date,
+                    original_cost_generation=original)
                 if projected is not None:
                     snapshots.append(projected)
                     paths.append(str(path.with_suffix(".completed_projection.json")))
@@ -356,8 +368,9 @@ def _load_saved_snapshots(
 
 
 def _verified_trade_review_projection(path: Path, target_date: str, *, data_root: Path | None = None,
-                                      metadata_only: bool = False, source_generations: dict | None = None) -> dict | None:
-    from src.engine.lifecycle.snapshot_archive import logical_path, present, generation, snapshot_identity, identity_available
+                                      metadata_only: bool = False, source_generations: dict | None = None,
+                                      original_cost_generation=None) -> dict | None:
+    from src.engine.lifecycle.snapshot_archive import logical_path, present, generation, snapshot_identity, identity_available, snapshot_identity_matches
     path = logical_path(path)
     data_root = _data_root() if data_root is None else data_root
     sidecar = path.with_suffix(".completed_projection.json")
@@ -388,7 +401,8 @@ def _verified_trade_review_projection(path: Path, target_date: str, *, data_root
     if metadata_only and generation(sidecar)['size'] > 4 * 1024 * 1024:
         from src.engine.lifecycle.holding_window_generation import _capture_day
         try:
-            dependency=_capture_day(Path(data_root),path.parent,target_date)
+            dependency=_capture_day(Path(data_root),path.parent,target_date,
+                                     original_cost_generation=original_cost_generation)
             if not dependency['census_sha256'] or dependency['profile']!='postclose_exit':return None
             return dict(date=target_date,meta=dict(snapshot_profile=dependency['profile'],
                 actual_cost_source_generation=dependency['cost_generation'],
@@ -405,7 +419,8 @@ def _verified_trade_review_projection(path: Path, target_date: str, *, data_root
         projected = json.loads(raw)
         from src.engine.lifecycle.broker_cost_reconciliation import source_generation
         from src.engine.lifecycle.holding_window_generation import completed_projection_census_issue
-        costs = source_generation(data_root, target_date)
+        costs = (original_cost_generation if original_cost_generation is not None
+                 else source_generation(data_root, target_date))
         recorded_costs = (projected.get("meta") or {}).get("actual_cost_source_generation")
         if recorded_costs != costs and (recorded_costs is not None or costs["count"] or costs.get("official_source_sha256")):
             return None
@@ -416,11 +431,10 @@ def _verified_trade_review_projection(path: Path, target_date: str, *, data_root
             content, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
         ).encode("utf-8")).hexdigest()
         identity = projected.get("snapshot_identity") or {}
-        expected_identity = snapshot_identity(path)
         if (projected.get("schema") != "trade_review_completed_projection_sidecar_v1"
             or projected.get("date") != target_date
             or projected.get("code") or projected.get("since")
-            or identity != expected_identity or declared != actual
+            or not snapshot_identity_matches(path, identity) or declared != actual
             or completed_projection_census_issue(projected, target_date, costs=costs) is not None
             or not isinstance((projected.get("sections") or {}).get(
                 "open_scalp_position_projection"), list)):
@@ -501,10 +515,14 @@ def _collect_completed_trade_rows(
         declared = _safe_int(metrics.get(count_key), -1)
         ids = [_trade_id(row) for row in completed]
         if isinstance(projection, list):
-            raw_event_ids = (snapshot.get("meta") or {}).get("sell_completed_event_ids")
-            if not isinstance(raw_event_ids, list) or {
-                str(item) for item in raw_event_ids
-            } != set(ids):
+            meta = snapshot.get("meta") or {}
+            try:
+                expected_ids = (completed_census_projection_ids(meta["completed_census_manifest"])
+                                if isinstance(meta.get("completed_census_manifest"), dict)
+                                else meta.get("sell_completed_event_ids"))
+            except ValueError:
+                expected_ids = None
+            if not isinstance(expected_ids, list) or {str(item) for item in expected_ids} != set(ids):
                 gaps.append(
                     {
                         "date": snapshot.get("date"),
@@ -2704,6 +2722,9 @@ def build_holding_exit_observation_report(
     """
     root_token = _SOURCE_ROOT.set(Path(input_root).resolve() if input_root is not None else None)
     try:
+        if all_scope_research:
+            from src.engine.automation.main_trailing_completed_store import admit_window
+            admit_window(_data_root(),target_date,start_date=month_start)
         with ExitStack() as budget:
             token = _INPUT_BUDGET.set(budget)
             try:
@@ -2768,7 +2789,7 @@ def _partitioned_holding_report(target_date,month_start,result,out,assembly):
                 if position['evidence_kind']=='actual_completed':yield position['position_key']
     actual_ref=storage.write_tree(out,actual_ids())
     from src.engine.lifecycle.holding_window_generation import capture_window
-    dependency=capture_window(_data_root(),manifest['consumed_dates'])
+    dependency=capture_window(_data_root(),manifest['consumed_dates'],allow_cost_revision=True)
     source_gaps=result['assembly_census'].get('source_gaps',{})
     census_complete=not any(source_gaps.get(key,0) for key in (
         'completed_snapshot_source_gap','completed_snapshot_missing','completed_snapshot_unverified'))
@@ -2843,9 +2864,10 @@ def _build_holding_exit_observation_report(
     dates = _date_range(safe_month_start, safe_date)
     from src.engine.lifecycle.holding_window_generation import capture_window, verify_window, completed_projection_census_issue
     from src.engine.lifecycle.broker_cost_reconciliation import source_generation
-    input_window = capture_window(_data_root(), dates)
+    input_window = capture_window(_data_root(), dates, allow_cost_revision=True)
     isolated_dates = [day for day,row in input_window['dependencies'].items() if row['status'] == 'source_gap']
-    trade_snapshots, trade_snapshot_paths = _load_saved_snapshots('trade_review', dates, excluded_dates=isolated_dates)
+    trade_snapshots, trade_snapshot_paths = _load_saved_snapshots('trade_review', dates, excluded_dates=isolated_dates,
+        window_dependencies=input_window['dependencies'])
     performance_snapshot = _load_saved_snapshot("performance_tuning", safe_date)
     performance_paths = []
     perf_path = _monitor_snapshot_path("performance_tuning", safe_date)
@@ -2853,6 +2875,17 @@ def _build_holding_exit_observation_report(
         performance_paths.append(str(perf_path))
 
     completed_rows, completed_gaps = _collect_completed_trade_rows(trade_snapshots)
+    # Keep the original census while refusing stale actual money. Current
+    # research allocation is consumed separately by the native research owner.
+    for index, row in enumerate(completed_rows):
+        day = str(row.get('completion_observed_date') or row.get('sell_time') or '')[:10]
+        if 'original_cost_generation' in input_window['dependencies'].get(day, {}):
+            completed_rows[index] = {**row, 'profit_rate':None, 'realized_pnl_krw':None,
+                'broker_actual_fees_taxes_krw':None, 'broker_actual_cost_observed':False,
+                'actual_cost_reconciliation':{'status':'actual_cost_unallocated', 'reason':'late_cost_revision'},
+                'strict_completion_status':'excluded',
+                'strict_completion_reasons':sorted(set(row.get('strict_completion_reasons') or []) | {
+                    'source_gap_broker_actual_cost_missing'})}
     completed_gaps.extend({'date':day, 'reason':'input_window_source_gap',
                            'detail':input_window['dependencies'][day]['reason']} for day in isolated_dates)
     census_receipts = [
@@ -2863,7 +2896,9 @@ def _build_holding_exit_observation_report(
              or (snapshot.get("meta") or {}).get("snapshot_profile")
              == "postclose_exit")
         and completed_projection_census_issue(snapshot, str(snapshot.get("date") or ""),
-            costs=source_generation(_data_root(),str(snapshot.get("date") or ""))) is None
+            costs=input_window['dependencies'].get(str(snapshot.get('date') or ''),{}).get(
+                'original_cost_generation',input_window['dependencies'].get(
+                    str(snapshot.get('date') or ''),{}).get('cost_generation'))) is None
     ]
     loaded_trade_dates = {str(item.get("date") or "") for item in trade_snapshots}
     for missing_date in dates:
@@ -3192,9 +3227,10 @@ def _build_holding_exit_observation_report(
         (row.get("actual_cost_reconciliation") or {}).get("status", "cost_source_unavailable")
         for row in main_completed_rows).items()))
     report["actual_cost_source_generations"] = {
-        str(snapshot.get("date")): (snapshot.get("meta") or {}).get("actual_cost_source_generation")
-        for snapshot in trade_snapshots
-    }
+        day:row['cost_generation'] for day,row in input_window['dependencies'].items()}
+    report['original_cost_source_generations'] = {
+        day:row['original_cost_generation'] for day,row in input_window['dependencies'].items()
+        if 'original_cost_generation' in row}
     verify_window(_data_root(), input_window)
     report["input_window_dependencies"] = input_window
     report["input_window_generation_sha256"] = input_window["input_window_generation_sha256"]

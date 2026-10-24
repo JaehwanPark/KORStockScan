@@ -33,6 +33,7 @@ COMPONENTS = {
         "scalping/tp1_capital_replay.py",
         "scalping/rising_missed_candidate.py",
         "sniper_state_handlers.py",
+        "../utils/numeric.py",
         "scalping/market_data_enrichment.py",
         "automation/runtime_policy_bootstrap.py",
     ),
@@ -66,6 +67,7 @@ COMPONENTS = {
         "scalping/main_stop_policy.py",
         "ai/holding_exit_vote.py",
         "sniper_state_handlers.py",
+        "../utils/numeric.py",
         "sniper_execution_receipts.py",
         "ai/holding_vote_replay_source.py",
         "scalping/holding_profit_exit_semantics.py",
@@ -77,6 +79,16 @@ COMPONENTS = {
         "automation/runtime_policy_bootstrap.py",
     ),
 }
+# The shared fixture producer and readers use the same resident-memory Claim
+# contract. A helper-only change requires a distinct capability/fixture path;
+# it must not reuse a formerly current receipt or rewrite a historical one.
+COMMON_CODE_COMPONENTS = (
+    "monitoring/policy_generation_contract.py",
+    "monitoring/policy_generation_validation.py",
+    "automation/policy_generation_fixture_validation.py",
+    "lifecycle/holding_window_generation.py",
+    "lifecycle/research_input_budget.py",
+)
 STEPS = ("source", "comparison", "selection", "publication", "reader")
 OWNERS = {
     "entry_cancel_wait": "DirectFamilySourceRepairEntryCancelWait",
@@ -91,8 +103,7 @@ def code_generation(family):
 
     names = (
         *COMPONENTS[family],
-        "monitoring/policy_generation_contract.py",
-        "lifecycle/holding_window_generation.py",
+        *COMMON_CODE_COMPONENTS,
     )
     values = cached_code_generation([ENGINE / name for name in names])
     return digest({name: values[str(ENGINE / name)] for name in names})
@@ -213,6 +224,10 @@ def inspect(contract, *, family, day, payload=None, data_root=None):
 
         reference = c["fixture_receipt"]
         path = Path(reference["path"])
+        # Older producers stored workspace-relative references. Their owner is
+        # the supplied data root, independent of a bot/report launcher's cwd.
+        if not path.is_absolute():
+            path = Path(data_root).parent / path
         directory = Path(data_root) / "report/postclose_generation_validation"
         if path.resolve().parent != directory.resolve():
             raise ValueError("policy_generation_fixture_path_invalid")
@@ -393,7 +408,8 @@ def observations(root, day, *, data_root=None):
         if not path.exists() and not path.is_symlink():
             continue
         try:
-            payload, report_sha = bounded_object(path, 8 * 1024 * 1024)
+            from src.engine.monitoring.policy_generation_validation import read_native_report
+            payload, report_sha = read_native_report(data,family,day)
             native_payload = (
                 payload.get("holding_path_vote_replay") or {}
                 if family == "holding_vote"

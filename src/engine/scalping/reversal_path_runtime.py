@@ -329,7 +329,9 @@ def configure(family):
         _GENERATION = family['family_sha256']; _FAMILY = family
 
 
-def restore_session_anchors(data_root, day, *, max_bytes=None, max_seconds=None):
+def restore_session_anchors(data_root, day, *, max_bytes=None, max_seconds=None, read_only=False):
+    """Restore the same native prefix; preparation never publishes its cache."""
+    if type(read_only) is not bool:raise ValueError("anchor_read_only_flag_invalid")
     from src.engine.scalping.continuous_reversal_source import discover
     from src.engine.scalping import reversal_anchor_index as I
     with _LOCK:
@@ -413,7 +415,10 @@ def restore_session_anchors(data_root, day, *, max_bytes=None, max_seconds=None)
                 state._feature_key=None;state.diagnostic_features.clear();state.diagnostic_rolling=None
         if complete:_RESTORED_DAYS.add(day)
         frozen={k:list(v) for k,v in _ANCHORS.items() if k[4]==day}
-    I.save(data_root,day,frozen,cursors,unobservable_streams=_ANCHOR_GAPS)
+    if read_only:
+        I.index_payload(day,frozen,cursors,unobservable_streams=_ANCHOR_GAPS)
+    else:
+        I.save(data_root,day,frozen,cursors,unobservable_streams=_ANCHOR_GAPS)
     return dict(status='restored' if complete else 'prefix_incomplete',bytes_read=consumed)
 
 

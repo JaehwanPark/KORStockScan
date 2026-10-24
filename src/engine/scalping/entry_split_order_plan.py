@@ -6207,28 +6207,77 @@ def _execution_projection_census(target_date, events, *, stages=None, data_root=
 
 
 class _ExecutionProjectionRows:
-    """Re-iterable sealed native rows, with no duplicate spool or large list."""
+    """Sealed rows with a bounded process-local cache of selected lines only."""
     def __init__(self, descriptors):
         self.descriptors = descriptors
+        self._cached_lines = None
+        self._cache_claim = None
+        self._cache_disabled = False
+
+    @staticmethod
+    def signature(value):
+        return (value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns, value.st_ctime_ns)
+
+    def _verify_signatures(self):
+        for path, signature, _, _ in self.descriptors:
+            if path.is_symlink() or self.signature(path.stat()) != signature:
+                raise ValueError('execution_partition_changed_during_read')
 
     def __len__(self):
         return sum(len(item[3]) for item in self.descriptors)
 
     def __iter__(self):
-        for path, signature, expected_hash, selected in self.descriptors:
-            before = path.stat()
-            if path.is_symlink() or (before.st_ino, before.st_size, before.st_mtime_ns) != signature:
-                raise ValueError("execution_partition_changed_during_read")
-            hasher = hashlib.sha256()
-            with open_text_auto(path) as handle:
-                for number, line in enumerate(handle):
-                    hasher.update(line.encode())
-                    if number in selected:
+        self._verify_signatures()
+        if self._cached_lines is not None:
+            try:
+                for line in self._cached_lines:
+                    yield json.loads(line)
+            finally:
+                self._verify_signatures()
+            return
+        from src.engine.lifecycle.research_input_budget import Claim
+        claim = Claim(0)
+        cached = [] if not self._cache_disabled else None
+        cached_bytes = 0
+        try:
+            for path, signature, expected_hash, selected in self.descriptors:
+                hasher = hashlib.sha256()
+                with open_text_auto(path) as handle:
+                    for number, line in enumerate(handle):
+                        encoded = line.encode()
+                        hasher.update(encoded)
+                        if number not in selected:
+                            continue
+                        if cached is not None:
+                            amount = len(encoded)
+                            try:
+                                if cached_bytes + amount > 4 * 1024 * 1024:
+                                    raise ValueError('execution_projection_optional_cache_full')
+                                claim.grow(amount * 12)
+                            except ValueError as exc:
+                                if str(exc) not in {'execution_projection_optional_cache_full',
+                                        'shared_research_budget_partition_resume_required'}:
+                                    raise
+                                # This optional cache never expands the native
+                                # source budget or blocks a valid streamed read.
+                                cached = None
+                                claim.close()
+                                self._cache_disabled = True
+                            if cached is not None:
+                                cached.append(line)
+                                cached_bytes += amount
                         yield json.loads(line)
-            after = path.stat()
-            if ((after.st_ino, after.st_size, after.st_mtime_ns) != signature
-                    or hasher.hexdigest() != expected_hash):
-                raise ValueError("execution_partition_changed_during_read")
+                if (self.signature(path.stat()) != signature
+                        or hasher.hexdigest() != expected_hash):
+                    raise ValueError('execution_partition_changed_during_read')
+            self._verify_signatures()
+            if cached is not None:
+                self._cached_lines, self._cache_claim = tuple(cached), claim
+                claim = None
+        finally:
+            if claim is not None:
+                cached = line = encoded = None
+                claim.close()
 
 
 def _bounded_execution_projection(target_date: str, *, stages=None, families=None):
@@ -6277,10 +6326,10 @@ def _bounded_execution_projection(target_date: str, *, stages=None, families=Non
                     identities.add(identity)
                     selected.add(number)
         after = path.stat()
-        if (before.st_ino, before.st_size, before.st_mtime_ns) != (after.st_ino, after.st_size, after.st_mtime_ns):
+        if _ExecutionProjectionRows.signature(before) != _ExecutionProjectionRows.signature(after):
             raise ValueError("execution_partition_changed_during_read")
         sources.append({"path": str(path.resolve()), "sha256": hasher.hexdigest()})
-        descriptors.append((path, (after.st_ino, after.st_size, after.st_mtime_ns), hasher.hexdigest(), selected))
+        descriptors.append((path, _ExecutionProjectionRows.signature(after), hasher.hexdigest(), selected))
     if sorted(p for d in directories for p in d.glob("part-*.jsonl*")) != partition_paths:
         raise ValueError("execution_partition_inventory_changed_during_read")
     rows = _ExecutionProjectionRows(descriptors)
@@ -7410,9 +7459,20 @@ def _load_policy_from_env(
     policy_file: str | None = None,
     *,
     now: datetime | None = None,
+    target_date: str | None = None,
+    env=None,
+    preparation: bool = False,
 ) -> tuple[dict[str, Any], str]:
+    env = os.environ if env is None else env
+    if preparation and target_date is None:
+        raise ValueError("split_preparation_requires_target_date")
+    if target_date is not None:
+        if date.fromisoformat(target_date).isoformat() != target_date:
+            raise ValueError("split_preparation_target_date_invalid")
+        if target_date != _kst_date(now) and not preparation:
+            raise ValueError("split_target_override_requires_preparation")
     configured_enabled = (
-        str(os.environ.get("KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_ENABLED", ""))
+        str(env.get("KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_ENABLED", ""))
         .strip()
         .lower()
     )
@@ -7420,13 +7480,13 @@ def _load_policy_from_env(
     daily_baseline = bool(
         not enabled
         and _safe_bool(
-            os.environ.get("KORSTOCKSCAN_ENTRY_SPLIT_DAILY_OPERATOR_CONTRACT_ENABLED")
+            env.get("KORSTOCKSCAN_ENTRY_SPLIT_DAILY_OPERATOR_CONTRACT_ENABLED")
         )
     )
     if not enabled and not daily_baseline:
         return {}, "policy_disabled"
     active_date = str(
-        os.environ.get(
+        env.get(
             (
                 "KORSTOCKSCAN_ENTRY_SPLIT_DAILY_BASELINE_ACTIVE_DATE"
                 if daily_baseline
@@ -7436,12 +7496,12 @@ def _load_policy_from_env(
         or ""
     ).strip()
     if active_date:
-        now_date = _kst_date(now)
+        now_date = target_date or _kst_date(now)
         if active_date.upper() not in {now_date, DAILY_ACTIVE_DATE_TOKEN}:
             return {}, "policy_inactive_date"
     path_text = str(
         policy_file
-        or os.environ.get(
+        or env.get(
             (
                 "KORSTOCKSCAN_ENTRY_SPLIT_DAILY_BASELINE_POLICY_FILE"
                 if daily_baseline
@@ -7465,7 +7525,7 @@ def _load_policy_from_env(
         if daily_baseline
         else "KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_VERSION"
     )
-    expected_version = str(os.environ.get(version_key) or "").strip()
+    expected_version = str(env.get(version_key) or "").strip()
     # PREOPEN requires this version field.  Runtime independently compares it
     # when present so a later alias rewrite cannot silently change selection.
     if expected_version and payload.get("policy_version") != expected_version:
@@ -7483,12 +7543,19 @@ def _load_policy_from_env(
     if "runtime_apply_allowed" in payload and not _safe_bool(
         payload.get("runtime_apply_allowed")
     ):
-        if not _entry_split_operator_fallback_active(now=now):
+        active = _entry_split_operator_fallback_active(now=now, env=env)
+        prepared = (preparation and _safe_bool(env.get("KORSTOCKSCAN_ENTRY_SPLIT_OPERATOR_FALLBACK_ENABLED"))
+                    and env.get("KORSTOCKSCAN_ENTRY_SPLIT_OPERATOR_FALLBACK_ACTIVE_DATE") == target_date)
+        if not active and not prepared:
             return {}, "policy_runtime_apply_not_allowed"
-        payload = {
-            **payload,
-            "entry_split_order_operator_fallback_authorized": True,
-        }
+        if active:
+            payload = {**payload, "entry_split_order_operator_fallback_authorized": True}
+        elif prepared:
+            # This is content/date validation of a future operator contract.
+            # It must never manufacture present execution permission.
+            payload = {**payload, "entry_split_order_operator_fallback_prepared": True}
+    if preparation:
+        payload = {**payload, "execution_authority": False}
     if daily_baseline:
         payload = {
             **payload,
@@ -7769,13 +7836,14 @@ def _market_first_leg_active(*, now: datetime | None = None) -> bool:
     return active_date == now_date
 
 
-def _entry_split_operator_fallback_active(*, now: datetime | None = None) -> bool:
+def _entry_split_operator_fallback_active(*, now: datetime | None = None, env=None) -> bool:
+    env = os.environ if env is None else env
     if not _safe_bool(
-        os.environ.get("KORSTOCKSCAN_ENTRY_SPLIT_OPERATOR_FALLBACK_ENABLED")
+        env.get("KORSTOCKSCAN_ENTRY_SPLIT_OPERATOR_FALLBACK_ENABLED")
     ):
         return False
     active_date = str(
-        os.environ.get("KORSTOCKSCAN_ENTRY_SPLIT_OPERATOR_FALLBACK_ACTIVE_DATE") or ""
+        env.get("KORSTOCKSCAN_ENTRY_SPLIT_OPERATOR_FALLBACK_ACTIVE_DATE") or ""
     ).strip()
     if not active_date:
         return False

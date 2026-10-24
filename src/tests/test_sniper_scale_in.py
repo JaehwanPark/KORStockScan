@@ -62,9 +62,11 @@ def test_entry_order_eligibility_binds_only_canonical_current_source(monkeypatch
         get_security_market_eligibility=lambda code, day: reads.append((code, day)) or source))
     result = state_handlers._entry_order_venue_eligibility("036930", now=now)
     assert reads == [("036930", now.date())]
-    if failure:
-        assert result is None
-    else:
+    checked = state_handlers.session_contract.resolve_order_type_preflight(
+        state_handlers.session_contract.resolve_market_session(now),
+        "NXT", "buy", "6", eligibility=result)
+    assert checked.allowed is (failure is None)
+    if not failure:
         assert result.stock_code == "036930"
         assert result.quality_state == "PARTIAL"
         assert result.source_revision == "a" * 40
@@ -1449,7 +1451,7 @@ def test_holding_sell_exchange_resolution_blocks_krx_only_during_nxt_time(monkey
     decision = state_handlers._resolve_holding_sell_dmst_stex_tp(
         {"name": "스피어"},
         "347700",
-        now_t=dt_time(16, 10),
+        observed_at=datetime(2026,10,20,16,10,tzinfo=state_handlers._KST),
     )
 
     assert decision["blocked"] is True
@@ -1470,7 +1472,7 @@ def test_holding_sell_exchange_resolution_preserves_missing_nxt_provenance(
     decision = state_handlers._resolve_holding_sell_dmst_stex_tp(
         {"name": "에스티팜", "status": "HOLDING", "buy_qty": 1},
         "237690",
-        now_t=dt_time(17, 0),
+        observed_at=datetime(2026,10,20,17,0,tzinfo=state_handlers._KST),
     )
 
     assert decision["blocked"] is True
@@ -1559,7 +1561,7 @@ def test_holding_sell_exchange_resolution_labels_unconfirmed_nxt_capability(
     decision = state_handlers._resolve_holding_sell_dmst_stex_tp(
         {"name": "미확인"},
         "123456",
-        now_t=dt_time(16, 39),
+        observed_at=datetime(2026,10,20,16,39,tzinfo=state_handlers._KST),
     )
 
     assert decision["blocked"] is True
@@ -8806,6 +8808,7 @@ def test_describe_buy_order_resolution_reports_nxt_market_remap():
         "effective_dmst_stex_tp": "NXT",
         "broker_route": "NXT",
         "broker_route_resolution": "explicit_request",
+        "broker_route_override": None,
         "order_type_remapped": True,
         "order_type_remap_reason": "nxt_market_to_best_limit",
     }
@@ -15898,8 +15901,14 @@ def test_scale_in_exit_authority_blocks_gate_ai_and_broker(monkeypatch):
     assert broker_calls == []
     assert pipeline_logs == []
 
+@pytest.mark.parametrize("hour, expected_route", [(8, "NXT"), (10, "SOR"), (17, "NXT")])
 @pytest.mark.parametrize("resolved_stop_blocked", [False, True])
-def test_execute_scale_in_order_partial_split_submit_keeps_pending(monkeypatch, resolved_stop_blocked):
+def test_execute_scale_in_order_partial_split_submit_keeps_pending(monkeypatch, resolved_stop_blocked, hour, expected_route):
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    native_route = state_handlers.kiwoom_orders.describe_order_route_resolution
+    monkeypatch.setattr(state_handlers.kiwoom_orders, "describe_order_route_resolution",
+        lambda: native_route(now=datetime(2026, 10, 19, hour, 30, tzinfo=ZoneInfo("Asia/Seoul"))))
     monkeypatch.setattr(state_handlers, "_pre_submit_refresh_real_ws_snapshot", lambda code, ws, strategy: (ws, {}))
     monkeypatch.setattr(state_handlers, "_pre_submit_input_snapshot_needs_rest_orderbook_recheck", lambda ws: False)
     import requests
@@ -15976,6 +15985,7 @@ def test_execute_scale_in_order_partial_split_submit_keeps_pending(monkeypatch, 
     send_calls = []
 
     def fake_send_buy_order(code, qty, price, order_type_code, *args, **kwargs):
+        assert kwargs["dmst_stex_tp"] == expected_route
         if not send_calls:
             assert stock["pending_add_order"] is True
             assert stock["pending_add_qty"] == 4
@@ -16518,66 +16528,6 @@ def test_pending_scale_in_revalidation_flags_missing_feature_context():
     assert decision is not None
     assert "feature_context_missing" in decision["reason"]
     assert "tick_acceleration_deteriorated" in decision["reason"]
-
-
-def test_recent_exit_candidate_pyramid_block_context_blocks_within_window():
-    rules = replace(
-        CONFIG,
-        RECENT_EXIT_CANDIDATE_PYRAMID_BLOCK_ENABLED=True,
-        RECENT_EXIT_CANDIDATE_PYRAMID_BLOCK_SEC=180,
-    )
-    original_rules = state_handlers.TRADING_RULES
-    state_handlers.TRADING_RULES = rules
-    try:
-        now_ts = time.time()
-        stock = {
-            "strategy": "SCALPING",
-            "recent_scale_in_exit_candidate_rule": "protect_trailing_stop",
-            "recent_scale_in_exit_candidate_stage": "exit_signal",
-            "recent_scale_in_exit_candidate_ts": now_ts - 60,
-        }
-        decision = state_handlers._recent_exit_candidate_pyramid_block_context(
-            stock,
-            strategy="SCALPING",
-            add_type="PYRAMID",
-            now_ts=now_ts,
-        )
-    finally:
-        state_handlers.TRADING_RULES = original_rules
-
-    assert decision is not None
-    assert decision["exit_rule"] == "protect_trailing_stop"
-    assert decision["elapsed_sec"] == 60
-
-
-def test_recent_exit_candidate_pyramid_block_not_skipped_by_holding_exit_tuning():
-    rules = replace(
-        CONFIG,
-        HOLDING_EXIT_LIVE_TUNING_SELECTED=True,
-        RECENT_EXIT_CANDIDATE_PYRAMID_BLOCK_ENABLED=True,
-        RECENT_EXIT_CANDIDATE_PYRAMID_BLOCK_SEC=180,
-    )
-    original_rules = state_handlers.TRADING_RULES
-    state_handlers.TRADING_RULES = rules
-    try:
-        now_ts = time.time()
-        decision = state_handlers._recent_exit_candidate_pyramid_block_context(
-            {
-                "strategy": "SCALPING",
-                "recent_scale_in_exit_candidate_rule": "protect_trailing_stop",
-                "recent_scale_in_exit_candidate_stage": "exit_signal",
-                "recent_scale_in_exit_candidate_ts": now_ts - 60,
-            },
-            strategy="SCALPING",
-            add_type="PYRAMID",
-            now_ts=now_ts,
-        )
-    finally:
-        state_handlers.TRADING_RULES = original_rules
-
-    assert decision is not None
-    assert decision["exit_rule"] == "protect_trailing_stop"
-    assert decision["elapsed_sec"] == 60
 
 
 
@@ -19863,6 +19813,16 @@ def test_watching_state_rejects_deprecated_fallback_bundle(monkeypatch):
 def test_watching_state_logs_latency_entry_price_guard(monkeypatch):
     from src.utils.constants import TRADING_RULES as CONFIG
     from src.engine.scalping import mechanistic_entry_runtime_policy
+
+    # A refresh under suite load uses the metadata API, not the legacy
+    # wrapper mocked below. Keep the same fixture bars on both paths.
+    monkeypatch.setattr(
+        state_handlers.kiwoom_utils, "get_minute_candles_ka10080_with_meta",
+        lambda _token, code, **kwargs: (
+            _micro_vwap_candles(price=10_020),
+            {"api_id": "ka10080", "entry_candle_request_code": code},
+        ),
+    )
 
     # This synthetic fixture exercises latency price handling, independent
     # of the live dated machine bundle installed on the test host.
@@ -31260,56 +31220,38 @@ def test_shallow_avg_down_pending_lineage_requires_exact_observation_context():
         state_handlers._AVG_DOWN_ROUTE_CONTEXT.reset(token)
 
 
-def test_pyramid_decision_lineage_carries_only_exact_scanner_position():
+def test_historical_pyramid_pending_lineage_requires_exact_scanner_position():
     stock = {
         "id": 171,
         "buy_price": 10000,
         "buy_qty": 10,
         "scanner_promotion_id": "promotion-171",
     }
+    # Existing receipts remain readable after the PYRAMID producer is retired.
     action = {
         "add_type": "PYRAMID",
-        "reason": "scalping_pyramid_ok",
-        "configured_min_profit_pct": 1.1,
-        "effective_min_profit_pct": 1.1,
+        "position_episode_id": main_lifecycle_journal.mint_main_lifecycle_id(
+            record_id=171, stock_code="123456", attempt_id="promotion-171",
+        ),
+        "scale_in_decision_id": "pyr-decision-" + "a" * 32,
     }
-
-    lineage = state_handlers._pyramid_scale_in_decision_lineage(
-        stock,
-        "A123456",
-        action,
-        now_ts=1_778_000_000.125,
-    )
-
-    assert lineage == state_handlers._pyramid_scale_in_decision_lineage(
-        stock,
-        "123456",
-        action,
-        now_ts=1_778_000_000.125,
-    )
-    assert lineage["pyramid_decision_lineage_schema"] == (
-        "pyramid_scale_in_decision_lineage_v1"
-    )
-    assert lineage["scale_in_decision_id"].startswith("pyr-decision-")
-    assert lineage["pyramid_evaluation_id"].startswith("pyr-eval-")
-    assert state_handlers._scale_in_pending_lineage(
-        stock,
-        "123456",
-        {**action, **lineage},
-    ) == {
-        "pending_add_position_episode_id": lineage["position_episode_id"],
-        "pending_add_scale_in_decision_id": lineage["scale_in_decision_id"],
-    }
-    assert not state_handlers._pyramid_scale_in_decision_lineage(
-        {"id": 171, "buy_price": 10000, "buy_qty": 10},
-        "123456",
-        action,
-        now_ts=1_778_000_000.125,
-    )
+    for code in ("123456", "A123456"):
+        assert state_handlers._scale_in_pending_lineage(stock, code, action) == {
+            "pending_add_position_episode_id": action["position_episode_id"],
+            "pending_add_scale_in_decision_id": action["scale_in_decision_id"],
+        }
     assert not state_handlers._scale_in_pending_lineage(
         {**stock, "scanner_promotion_id": "different-promotion"},
         "123456",
-        {**action, **lineage},
+        action,
+    )
+    assert not state_handlers._scale_in_pending_lineage(
+        {key: value for key, value in stock.items() if key != "scanner_promotion_id"},
+        "123456",
+        action,
+    )
+    assert not state_handlers._scale_in_pending_lineage(
+        stock, "123456", {**action, "scale_in_decision_id": ""},
     )
 
 
@@ -32971,6 +32913,8 @@ def test_fast_exit_receipt_first_response_is_corroboration_only(
         "buy_qty": 2,
         "rt_ai_prob": 0.50,
         "fast_exit_broker_route": "SOR",
+        "exit_token": "native-fast-claim",
+        "exit_requested": True,
     }
 
     def receipt_first_submit(*args, **kwargs):
@@ -39558,40 +39502,6 @@ def test_first_touch_runtime_prior_blocks_source_quality_gap(monkeypatch, tmp_pa
     )
 
 
-def test_pyramid_runtime_prior_blocks_source_quality_gap(monkeypatch, tmp_path):
-    monkeypatch.setattr(state_handlers, "_PYRAMID_RUNTIME_PRIOR_REPORT_DIR", tmp_path)
-    state_handlers._PYRAMID_RUNTIME_PRIOR_CACHE.clear()
-    now_dt = datetime(2026, 7, 6, 9, 5, tzinfo=state_handlers._KST)
-    path = tmp_path / "scalping_pyramid_intraday_feedback_2026-07-06.json"
-    path.write_text(
-        json.dumps(
-            {
-                "generated_at": now_dt.isoformat(),
-                "source_quality": {"status": "pressure_provenance_unusable"},
-                "pyramid_feedback_rows": [
-                    {
-                        "record_id": "p1",
-                        "stock_code": "000002",
-                        "pyramid_feedback_label": "pyramid_would_have_helped",
-                    }
-                ],
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    prior = state_handlers._pyramid_runtime_prior_context(
-        {"record_id": "p1"},
-        "000002",
-        now_dt.timestamp(),
-    )["pyramid_runtime_prior_context"]
-
-    assert prior["status"] == "source_quality_blocked"
-    assert prior["signal"] == "neutral"
-    assert prior["sample_count"] == 0
-    assert prior["reason"] == "prior_report_source_quality_pressure_provenance_unusable"
-
-
 
 
 
@@ -40112,9 +40022,13 @@ def test_scale_in_budget_source_never_enters_order_recovery(monkeypatch, pending
 
 
 @pytest.mark.parametrize("strategy", ["SCALPING", "KOSPI_ML", "KOSDAQ_ML"])
-def test_shared_rebound_retirement_pyramid_cannot_submit(monkeypatch, strategy):
-    monkeypatch.setenv("KORSTOCKSCAN_SCALPING_ENABLE_PYRAMID", "true")
-    monkeypatch.setenv("KORSTOCKSCAN_SWING_ENABLE_PYRAMID", "true")
+@pytest.mark.parametrize("enabled", [False, True])
+def test_shared_rebound_retirement_pyramid_cannot_submit(monkeypatch, strategy, enabled):
+    for key in ("KORSTOCKSCAN_SCALPING_ENABLE_PYRAMID", "KORSTOCKSCAN_SWING_ENABLE_PYRAMID"):
+        if enabled:
+            monkeypatch.setenv(key, "true")
+        else:
+            monkeypatch.delenv(key, raising=False)
     monkeypatch.setattr(state_handlers.kiwoom_orders, "send_buy_order",
         lambda *a, **k: pytest.fail("retired PYRAMID cannot call broker"))
     assert not scale_in.evaluate_scalping_pyramid({}, 10, 10, True)["should_add"]
@@ -40831,3 +40745,21 @@ def test_weak_context_observations_do_not_evict_confirmed_block_history():
     counts = state_handlers._recent_trade_quality_block_counts(stock, now_ts=1041, confirmed_only=True)
     assert counts['total_count'] == 1
     assert counts['risk_context_only_count'] == 32
+
+
+@pytest.mark.parametrize('krx,nxt,route,blocked', [(True,True,'SOR',False), (True,False,'KRX',False),
+    (False,True,'NXT',False), (None,None,'SOR',True), (False,False,'SOR',True)])
+@pytest.mark.parametrize('hour', [17,19])
+def test_operator_sor_default_resolves_route_authority_without_inventing_eligibility(monkeypatch,krx,nxt,route,blocked,hour):
+    monkeypatch.setattr(state_handlers,'DB',None)
+    stock=dict(id=7,code='005930',name='TEST',status='HOLDING',buy_qty=1)
+    if krx is not None:stock['krx_aftermarket_eligible']=krx
+    if nxt is not None:stock['is_nxt']=nxt
+    result=state_handlers._resolve_holding_sell_dmst_stex_tp(stock,'005930',
+        observed_at=datetime(2026,10,21,hour,10,tzinfo=state_handlers._KST))
+    assert result['dmst_stex_tp']==route and result['blocked'] is blocked
+    if blocked:assert result['reason']=='holding_sell_route_eligibility_missing'
+    elif route=='SOR':assert result['reason']=='user_2026_10_21_unresolved_venue_krx_route_sor'
+    closed=state_handlers._resolve_holding_sell_dmst_stex_tp(stock,'005930',
+        observed_at=datetime(2026,10,21,20,1,tzinfo=state_handlers._KST))
+    assert closed['blocked'] is True

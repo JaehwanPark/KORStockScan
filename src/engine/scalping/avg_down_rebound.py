@@ -79,7 +79,13 @@ def evaluate_native_rebound(live, *, stock_code, ws_data, session, now_ts):
                 machine_family_sha256=family["family_sha256"],
                 native_source_status=receipt.get("reason"))
     if snapshot is None:
-        return dict(base, reason="shared_main_rebound_native_source_unavailable")
+        # An observed FALSE union is a valid non-entry, not a missing feed.
+        observed_false = (receipt.get("reason") == "no_matching_pattern"
+            and receipt.get("native_source_current") is True
+            and receipt.get("native_quote_current") is True)
+        return dict(base, reason="shared_main_rebound_not_confirmed" if observed_false
+                    else "shared_main_rebound_native_source_unavailable",
+                    machine_action="WAIT" if observed_false else None)
     event = snapshot[0]
     epoch = event.get("epoch")
     if (not isinstance(epoch, (int, float)) or isinstance(epoch, bool)

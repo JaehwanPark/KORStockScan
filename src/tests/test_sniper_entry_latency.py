@@ -1,5 +1,6 @@
 import json
 import time
+import pytest
 from contextlib import contextmanager
 from dataclasses import replace
 from datetime import UTC, datetime
@@ -10075,3 +10076,90 @@ def test_latency_input_health_survives_existing_pipeline_events(monkeypatch):
         assert json.loads(fields["input_quote_source_receipt"]) == retained["input_quote_source_receipt"]
         assert float(fields["cached_quote_received_epoch"]) == retained["cached_quote_received_epoch"]
         assert float(fields["cached_quote_receive_age_ms"]) == retained["cached_quote_receive_age_ms"]
+
+
+@pytest.mark.parametrize('hour,broker,route,suffix', [
+    (8,'NXT','nxt_only','_NX'), (8,'SOR','krx_nxt_integrated','_AL'), (10,'SOR','krx_only',''),
+    (10,'SOR','krx_nxt_integrated','_AL'), (17,'SOR','krx_nxt_integrated','_AL'),
+    (10,'UNKNOWN','unknown','_AL'), (17,'UNKNOWN','unknown','_AL'),
+])
+@pytest.mark.parametrize('fault', [None,'stale','future','crossed','item','epoch','missing_quote','depth','invalid_depth'])
+def test_post_sell_registration_to_native_route_horizons_preserves_unknown_fill_venue(
+        monkeypatch,tmp_path,hour,broker,route,suffix,fault):
+    from src.engine import sniper_post_sell_feedback as feedback
+    from src.engine.scalping.micro_reversion.contracts import registration_item_market_data_identity
+    from types import SimpleNamespace
+    sell=datetime(2026,10,21,hour,10,tzinfo=state_handlers._KST);epoch=sell.timestamp();clock=[epoch]
+    class FrozenDateTime(datetime):
+        @classmethod
+        def now(cls,tz=None):return sell.astimezone(tz) if tz else sell.replace(tzinfo=None)
+    monkeypatch.setattr(feedback,'datetime',FrozenDateTime)
+    monkeypatch.setattr(feedback.time,'time',lambda:clock[0])
+    monkeypatch.setattr(feedback,'DATA_DIR',tmp_path)
+    monkeypatch.setattr(feedback,'TRADING_RULES',SimpleNamespace(POST_SELL_FEEDBACK_ENABLED=True,POST_SELL_WS_RETAIN_MINUTES=10))
+    for name in ('_POST_SELL_EXECUTABLE_BBO_OBSERVERS','_RECORDED_KEYS','_WS_RETAIN_UNTIL'):
+        monkeypatch.setattr(feedback,name,{})
+    monkeypatch.setattr(state_handlers,'_POST_SELL_EXACT_ROUTE_REG_REPAIR_STATE',{})
+    stock=dict(name='TEST',strategy='SCALPING',broker_route_requested=broker,market_data_route=route,
+        market_session_regime='krx_like_premarket' if hour==8 else 'KRX_REGULAR' if hour==10 else 'KRX_NXT_AFTERMARKET',
+        broker_actual_execution_venue='NXT' if broker=='NXT' else 'UNKNOWN',
+        broker_actual_execution_venue_source='official_fid_2134_2135' if broker=='NXT' else 'official_exchange_fields_ambiguous_or_missing',
+        broker_actual_exchange_code='2' if broker=='NXT' else '0',
+        broker_actual_exchange_name='NXT' if broker=='NXT' else 'SOR',broker_sor_flag='N' if broker=='NXT' else 'Y')
+    native_route = 'krx_nxt_integrated' if route == 'unknown' else route
+    candidate=feedback.record_post_sell_candidate(recommendation_id=77,stock=stock,code='005090',
+        sell_time=sell,sell_price=10000,buy_price=9900,buy_qty=2)
+    assert candidate['post_sell_executable_bbo_observer_registered'] is True
+    assert candidate['actual_execution_venue_verified'] is (broker=='NXT')
+    assert candidate['broker_actual_execution_venue']==stock['broker_actual_execution_venue']
+    assert candidate['realized_net_pnl_krw'] is None
+    class Manager:
+        subscribed_codes={'005090'}
+        def __init__(self):self.items=[];self.requests=[]
+        def get_subscription_freshness_snapshot(self,codes,**kw):
+            return dict(rows=[dict(stock_code='005090',subscribed=True,registered_items=list(self.items),
+                registered_market_routes=[registration_item_market_data_identity(item)[1] for item in self.items])])
+        def execute_subscribe(self,items,**kw):
+            assert kw['observation_only'] is True and kw['remove_before_reg'] is False
+            assert kw['realtime_types']==('0B','0D')
+            self.items=list(items);self.requests.append((items,kw))
+        def get_latest_data(self,code):
+            quote_at=clock[0]-.1
+            if fault=='stale':quote_at=clock[0]-2
+            if fault=='future':quote_at=clock[0]+1
+            snapshot=dict(item=('000660' if fault=='item' else code)+suffix,market_route=native_route,
+                effective_venue='NXT' if suffix=='_NX' else '' if suffix=='_AL' else 'KRX',
+                observed_epoch=quote_at,transport_epoch=6 if fault=='epoch' else 7,
+                orderbook=dict(bids=[dict(price=10100,volume=0 if fault=='depth' else -1 if fault=='invalid_depth' else 20)],
+                    asks=[dict(price=10000 if fault=='crossed' else 10110,volume=30)]))
+            if hour==8 and suffix=='_AL':
+                snapshot['route_depth_totals']={'KRX':{'ask':0,'bid':0},'NXT':{'ask':30,'bid':20},
+                    'combined':{'ask':30,'bid':20}}
+            return dict(market_data_transport_epoch=7,
+                realtime_type_snapshots_by_route={} if fault=='missing_quote' else {native_route:{'0D':snapshot}})
+    manager=Manager();logs=[]
+    monkeypatch.setattr(state_handlers,'WS_MANAGER',manager)
+    monkeypatch.setattr(state_handlers,'active_post_sell_executable_bbo_observers',feedback.active_post_sell_executable_bbo_observers)
+    monkeypatch.setattr(state_handlers,'update_post_sell_executable_bbo_observer',feedback.update_post_sell_executable_bbo_observer)
+    monkeypatch.setattr(state_handlers,'emit_pipeline_event',lambda *a,**kw:logs.append(kw['fields']))
+    clock[0]=epoch+60.2
+    assert state_handlers.observe_post_sell_executable_bbo_horizons(now_ts=clock[0])['emitted_horizon_count']==0
+    assert manager.requests[0][0]==['005090'+suffix]
+    if fault is None:
+        for horizon in (60,180,300,600):
+            clock[0]=epoch+horizon+.3
+            result=state_handlers.observe_post_sell_executable_bbo_horizons(now_ts=clock[0])
+            assert result['fresh_horizon_count']==1,result
+        assert len(logs)==4
+        assert all(row['post_sell_executable_bbo_source_gap_reason']=='none' for row in logs)
+        assert all(row['post_sell_executable_bbo_execution_venue_verified'] is (broker=='NXT') for row in logs)
+        assert all(row['post_sell_executable_bbo_broker_actual_execution_venue']==stock['broker_actual_execution_venue'] for row in logs)
+    else:
+        clock[0]=epoch+75.1
+        result=state_handlers.observe_post_sell_executable_bbo_horizons(now_ts=clock[0])
+        assert result['fresh_horizon_count']==0 and result['missing_horizon_count']==1
+        assert logs[0]['post_sell_executable_bbo_bid_return_pct']=='-'
+        assert logs[0]['post_sell_executable_bbo_source_gap_reason']!='none'
+    assert all(row['actual_order_submitted'] is False and row['runtime_effect'] is False
+        and row['broker_order_forbidden'] is True for row in logs)
+    assert candidate['actual_execution_venue_verified'] is (broker=='NXT')

@@ -215,7 +215,7 @@ def test_summary_preserves_only_verified_prepared_incumbent(monkeypatch, tmp_pat
     from src.engine.scalping import holding_path_vote_policy as V, holding_vote_experiment as E
     data=_patch(monkeypatch,tmp_path)
     path=V.policy_path(data,'2026-10-19');path.parent.mkdir(parents=True,exist_ok=True);path.write_text('frozen')
-    prior=dict(schema=V.SUCCESSOR_SCHEMA,selection_mode='incumbent_carry',code_sha256='old',source_date='2026-10-16')
+    prior=dict(schema=V.SUCCESSOR_SCHEMA,selection_mode='incumbent_carry',code_sha256='old',source_date='2026-10-16',source_report_sha256='source')
     calls=[]
     def load(*args,**kw):
         calls.append(kw)
@@ -235,14 +235,43 @@ def test_summary_preserves_only_verified_prepared_incumbent(monkeypatch, tmp_pat
     assert path.read_text()=='frozen'
 
 
-def test_summary_current_code_policy_can_publish_updated_source(monkeypatch,tmp_path):
+@pytest.mark.parametrize('prior_code', ['old', 'current'])
+def test_summary_current_native_replay_can_publish_updated_source(monkeypatch,tmp_path,prior_code):
     from src.engine.scalping import holding_path_vote_policy as V,holding_vote_experiment as E
     data=_patch(monkeypatch,tmp_path);path=V.policy_path(data,'2026-10-19');path.parent.mkdir(parents=True,exist_ok=True);path.write_text('old source')
-    monkeypatch.setattr(V,'load_bundle',lambda *a,**kw: dict(schema=V.SUCCESSOR_SCHEMA,selection_mode='incumbent_carry',code_sha256='current'))
+    monkeypatch.setattr(V,'load_bundle',lambda *a,**kw: dict(schema=V.SUCCESSOR_SCHEMA,selection_mode='incumbent_carry',code_sha256=prior_code,source_report_sha256='old'))
     monkeypatch.setattr(E,'code_sha',lambda:'current')
     monkeypatch.setattr(mod,'create_holding_vote_policy',lambda **kw: {'new_source':kw['source_report_sha256']})
     assert mod._holding_vote_publication_bundle(source_date='2026-10-16',target_date='2026-10-19',
         source_report_sha256='new',replay={},source_quality={})==({'new_source':'new'},False)
+
+
+@pytest.mark.parametrize('stale_replay', [False, True])
+def test_summary_changed_source_uses_native_numeric_validation(monkeypatch,tmp_path,stale_replay):
+    from src.engine.scalping import holding_path_vote_policy as V
+    from src.tests.test_holding_vote_numeric_successor import fixture
+    from src.tests.test_holding_path_vote_replay import EMPTY_SOURCE_QUALITY
+    *_,numeric=fixture(tmp_path)
+    numeric['selected_cells']={}
+    replay=dict(schema='holding_path_vote_postclose_replay_v1',vote_numeric_research=numeric)
+    prior=V.create_successor(source_date='2026-10-08',target_date='2026-10-12',
+        source_report_sha256='a'*64,replay=replay,source_quality=EMPTY_SOURCE_QUALITY)
+    prior['code_sha256']='0'*64
+    prior['bundle_sha256']=V.digest({k:v for k,v in prior.items() if k!='bundle_sha256'})
+    path=V.policy_path(tmp_path,'2026-10-12');_write(path,prior);original=path.read_bytes()
+    monkeypatch.setattr(mod,'DATA_DIR',tmp_path)
+    if stale_replay:numeric['code_sha256']='0'*64
+    args=dict(source_date='2026-10-08',target_date='2026-10-12',source_report_sha256='b'*64,
+              replay=replay,source_quality=EMPTY_SOURCE_QUALITY)
+    if stale_replay:
+        with pytest.raises(ValueError,match='holding_vote_successor_parent_invalid'):
+            mod._holding_vote_publication_bundle(**args)
+    else:
+        bundle,preserved=mod._holding_vote_publication_bundle(**args)
+        assert not preserved and bundle['source_report_sha256']=='b'*64
+        assert bundle['policy_set_sha256']==prior['policy_set_sha256']
+        assert bundle['selection_mode']=='incumbent_carry'
+    assert path.read_bytes()==original
 
 
 def test_summary_publishes_estimated_holding_vote_policy_without_realized_ev(
@@ -1094,3 +1123,86 @@ def test_large_entry_split_uses_native_pair_and_rejects_tampering(tmp_path,monke
     assert mod._large_companion('entry_split',path,day,mod._sha(path),paths)[2]
     monkeypatch.setattr(native,'ENTRY_REPORT_MAX_BYTES',1)
     assert mod._large_companion('entry_split',path,day,mod._sha(path),paths)[2]
+
+
+def test_summary_rejects_partial_root_patch_before_producer_or_write(tmp_path, monkeypatch):
+    production = tmp_path / 'production/report/runtime_approval_summary'
+    production.mkdir(parents=True)
+    original = production / 'runtime_approval_summary_2026-10-12.json'
+    original.write_bytes(b'{"sealed":true}\n')
+    monkeypatch.setattr(mod, 'DATA_DIR', tmp_path / 'test-data')
+    monkeypatch.setattr(mod, 'REPORT_DIR', production)
+    monkeypatch.setattr(mod, '_paths', lambda _: pytest.fail('producer ran before output custody validation'))
+    with pytest.raises(ValueError, match='summary_output_data_root_mismatch'):
+        mod.build_runtime_approval_summary('2026-10-12')
+    assert original.read_bytes() == b'{"sealed":true}\n'
+
+
+def test_summary_publication_keeps_both_generations_and_rejects_archive_damage(tmp_path, monkeypatch):
+    _patch(monkeypatch, tmp_path)
+    path, _ = mod.summary_paths('2026-10-12')
+    before, after = '{"version":1}\n', '{"version":2}\n'
+    mod._atomic_write(path, before)
+    mod._atomic_write(path, after)
+    directory = path.parent / 'generations' / path.stem
+    saved = directory / (hashlib.sha256(before.encode()).hexdigest()+'.json')
+    assert saved.read_text() == before and saved.stat().st_mode & 0o222 == 0
+    assert (directory / (hashlib.sha256(after.encode()).hexdigest()+'.json')).read_text() == after
+    assert path.read_text() == after
+    # A conflicting preserved generation must stop publication, not be resealed.
+    saved.chmod(0o600); saved.write_text('{}')
+    with pytest.raises(ValueError, match='summary_preserved_generation_changed'):
+        mod._atomic_write(path, before)
+    assert path.read_text() == after
+
+
+def test_summary_publication_rejects_symlink_destination(tmp_path, monkeypatch):
+    _patch(monkeypatch, tmp_path)
+    path, _ = mod.summary_paths('2026-10-12')
+    path.parent.mkdir(parents=True)
+    protected=tmp_path/'protected'; protected.write_text('original')
+    path.symlink_to(protected)
+    with pytest.raises(ValueError, match='regular_file'):
+        mod._atomic_write(path, '{}')
+    assert protected.read_text() == 'original'
+
+
+@pytest.mark.parametrize('operation', ['open', 'replace', 'unlink', 'symlink', 'dir_fd'])
+def test_test_guard_blocks_production_mutation_before_it_happens(tmp_path, operation):
+    import os
+    import sys
+    from src.tests.conftest import _reject_production_mutation
+    protected = tmp_path / 'protected'
+    protected.mkdir(); target=protected/'summary.json'; target.write_text('original')
+    temporary=tmp_path/'new.json'; temporary.write_text('replacement')
+    alias=tmp_path/'alias'; alias.symlink_to(protected, target_is_directory=True)
+    # Scope this hook to a temporary root; do not touch real production files.
+    active=[True]
+    def guard(event,args):
+        if active[0]:_reject_production_mutation(event,args,(protected,))
+    sys.addaudithook(guard)
+    try:
+        with pytest.raises(PermissionError,match='unit_test_production_write_forbidden'):
+            if operation=='open': (alias/'summary.json').write_text('changed')
+            elif operation=='replace':os.replace(temporary,target)
+            elif operation=='unlink':target.unlink()
+            elif operation=='symlink':os.symlink(temporary,protected/'new')
+            else:
+                fd=os.open(protected,os.O_RDONLY|os.O_DIRECTORY)
+                try:os.rename(temporary,'summary.json',dst_dir_fd=fd)
+                finally:os.close(fd)
+        assert target.read_text()=='original'
+    finally:active[0]=False
+
+
+def test_session_defaults_are_private_before_writer_imports():
+    from src.utils import constants
+    from src.engine import log_archive_service
+    from src.tests.conftest import _REPOSITORY_ROOT
+
+    assert not constants.DATA_DIR.is_relative_to(_REPOSITORY_ROOT)
+    assert not constants.TMP_DIR.is_relative_to(_REPOSITORY_ROOT)
+    assert constants.CONFIG_PATH.parent == constants.DATA_DIR
+    assert constants.DEV_PATH.parent == constants.DATA_DIR
+    assert log_archive_service.LOG_ARCHIVE_DIR.is_relative_to(constants.DATA_DIR)
+    assert log_archive_service.LOG_ARCHIVE_DIR.is_dir()

@@ -112,9 +112,17 @@ def request_source_shadowed(path):
     except FileNotFoundError:return False
 
 
+def request_source_metadata(path):
+    """Native archive receipts describe original bytes; they are not JSONL rows."""
+    path=Path(path)
+    namespace=path.parent.name
+    return (namespace in {'ai_decision_payloads','ai_decision_prompts','ai_decision_requests'}
+        and re.fullmatch(re.escape(namespace)+r'_\d{4}-\d{2}-\d{2}\.jsonl\.gz\.archive_receipt\.json',path.name) is not None)
+
+
 def original_request_paths(root, namespace, day):
     return tuple(path for path in sorted((Path(root)/namespace).glob(namespace+'_'+day+'.jsonl*'))
-        if not request_source_shadowed(path))
+        if not request_source_metadata(path) and not request_source_shadowed(path))
 
 
 def _request_index(root, output, day, sources):
@@ -130,7 +138,8 @@ def _request_index(root, output, day, sources):
         for namespace,stem in (('ai_decision_payloads','ai_decision_payloads'),
             ('ai_decision_prompts','ai_decision_prompts'),('ai_decision_requests','ai_decision_requests')):
             for original in original_request_paths(root,namespace,day):
-                if str(original) not in sources:sources[str(original)]=byte_generation(original)
+                from src.engine.automation.main_trailing_source_store import input_generation
+                if str(original) not in sources:sources[str(original)]=input_generation(root,original)
                 originals.append((str(original),sources[str(original)]))
         generation=input_snapshot_id(originals)
         loaded=db.execute('SELECT generation FROM loaded').fetchone()
@@ -142,7 +151,16 @@ def _request_index(root, output, day, sources):
                 ('ai_decision_requests','ai_decision_requests','request','request_id')):
                 for original in original_request_paths(root,namespace,day):
                     before=sources[str(original)]
-                    for row, pointer in _records(original):
+                    from src.engine.automation import main_trailing_source_store as indexed
+                    if before.get('schema')==indexed.SCHEMA+':generation':
+                        selected=indexed.read_rows(root,original,kinds=['holding_'+kind])
+                        records=((value['row'],dict(path=reference['path'],offset=reference['decoded_offset'],
+                            line_sha256=reference['sha256'],native_source_index_schema=indexed.SCHEMA))
+                            for value,reference in selected)
+                    else:
+                        indexed.claim_legacy_bytes(before['size'])
+                        records=_records(original)
+                    for row, pointer in records:
                         if row.get('endpoint')!='holding_path_vote':continue
                         content_sha256=input_snapshot_id(row)
                         encoded=storage.encoded({**pointer,'generation':before,'content_sha256':content_sha256}).decode()
@@ -152,7 +170,8 @@ def _request_index(root, output, day, sources):
                             previous_sha=previous.get('content_sha256') or input_snapshot_id(_source_row(previous))
                             if previous_sha!=content_sha256:raise ValueError('holding_request_alias_conflict')
                         db.execute('INSERT OR IGNORE INTO original VALUES (?,?,?)',(kind,row[key],encoded))
-                    if byte_generation(original)!=before:raise ValueError('holding_request_changed')
+                    from src.engine.automation.main_trailing_source_assembler import source_generation_matches
+                    if not source_generation_matches(root,day,original,before):raise ValueError('holding_request_changed')
             db.execute('INSERT INTO loaded VALUES (?)',(generation,));db.commit()
     except BaseException:
         db.close()
@@ -169,6 +188,14 @@ def _verified_generation(path, fingerprint):
 
 def _source_row(pointer):
     path=Path(pointer['path'])
+    if pointer.get('native_source_index_schema'):
+        from src.engine.automation.main_trailing_source_store import read_at,SCHEMA
+        if pointer['native_source_index_schema']!=SCHEMA:
+            raise ValueError('holding_request_index_schema_changed')
+        value,raw_sha=read_at(path.parent.parent,path,pointer['offset'],pointer['generation'])
+        if raw_sha!=pointer['line_sha256'] or input_snapshot_id(value)!=pointer['content_sha256']:
+            raise ValueError('holding_request_reference_invalid')
+        return value
     if _verified_generation(str(path),source_stat(path.stat()))!=pointer['generation']:raise ValueError('holding_request_reference_changed')
     import gzip
     opener=gzip.open if path.suffix=='.gz' else open
@@ -179,7 +206,7 @@ def _source_row(pointer):
     return json.loads(line)
 
 
-def _verify_projection(projection, vote):
+def _verify_projection(projection, vote, *, candidate_position=None):
     ref=vote.get('actual_request_reference') or {}
     if (ref.get('schema')!='holding_actual_request_reference_v1' or ref.get('replay_exact') is not True
             or not re.fullmatch('[0-9a-f]{64}',str(ref.get('response_sha256')))):
@@ -210,6 +237,54 @@ def _verify_projection(projection, vote):
     contract=payload['holding_provider_contract']
     if contract.get('instructions')!=prompt['sanitized_prompt'] or contract.get('model')!=vote['model']:
         raise ValueError('holding_provider_definition_mismatch')
+    if candidate_position is not None:
+        _verify_cf_input_position(actual,vote,candidate_position)
+
+
+def _verify_cf_input_position(actual,vote,expected):
+    """The original request must describe this unchanged initial position.
+
+    The native age producer emits integer seconds. Only the same request
+    second is admitted here; an older evaluation-age clock without its own
+    original receipt stays unobserved. No timestamp or input is rewritten.
+    """
+    def finite(value):return type(value) in (float,int) and math.isfinite(value)
+    if (not isinstance(expected,dict) or type(expected.get('qty')) is not int or expected['qty']<=0
+            or any(not finite(expected.get(key)) or expected[key]<=0 for key in ('buy_basis_krw','entry_at','first_sell_at'))
+            or not finite(expected.get('sell_cost_rate')) or not 0<=expected['sell_cost_rate']<.05
+            or not finite(vote.get('requested_at'))
+            or expected.get('schema')!='cf_original_holding_equivalence_v1'
+            or expected.get('sha256')!=input_snapshot_id({k:v for k,v in expected.items() if k!='sha256'})
+            or actual.get('position_key')!=expected.get('position_key')
+            or actual.get('buy_fill_identity')!=expected.get('buy_fill_identity')
+            or not expected['entry_at']<=vote['requested_at']<expected['first_sell_at']):
+        raise ValueError('cf_holding_request_position_unproven')
+    position=actual.get('position')
+    flow=actual.get('flow')
+    if not isinstance(position,dict) or not isinstance(flow,dict):
+        raise ValueError('cf_holding_request_context_shape')
+    lifecycle=flow.get('position_lifecycle',{})
+    if not isinstance(lifecycle,dict):raise ValueError('cf_holding_request_context_shape')
+    price=expected['buy_basis_krw']/expected['qty']
+    for key,target in (('memory_qty',expected['qty']),('broker_qty',expected['qty']),('average_entry_price',price)):
+        value=lifecycle.get(key)
+        if value is not None and (not finite(value) or value!=target):
+            raise ValueError('cf_holding_request_lifecycle_not_equivalent')
+    if (not finite(position.get('buy_price')) or position['buy_price']!=price
+            or not finite(position.get('held_sec'))
+            or position['held_sec']!=int(vote['requested_at']-expected['entry_at'])
+            or position.get('reversal_add_state') not in (None,'')
+            or position.get('reversal_add_executed_at') not in (None,0,0.0,'')
+            or any(not finite(position.get(key)) for key in ('curr_price','profit_rate','peak_profit','drawdown_from_peak_pct'))
+            or position['curr_price']<=0):
+        raise ValueError('cf_holding_request_position_not_equivalent')
+    from src.engine.trade_profit import calculate_net_profit_rate
+    profit=calculate_net_profit_rate(price,position['curr_price'],cost_rate=expected['sell_cost_rate'])
+    if (position['profit_rate']!=profit or position['peak_profit']<profit
+            or abs(position['drawdown_from_peak_pct']-max(0.,position['peak_profit']-profit))>1e-9):
+        raise ValueError('cf_holding_request_profit_not_equivalent')
+    if lifecycle.get('scale_in_filled_qty') not in (None,0):
+        raise ValueError('cf_holding_request_add_unmodeled')
 
 
 def _verified_request(root, output, vote, sources):
@@ -234,19 +309,37 @@ def assemble_votes(root, output, source, sources):
         if path.name!=source.get('store_name'):raise ValueError('holding_vote_path_mismatch')
         if not path.exists() and not list(path.parent.glob(path.name+'.segment-*')):
             raise ValueError('holding_vote_store_missing')
-        def rows():
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        source_date=(datetime.fromtimestamp(source['observed_at'],ZoneInfo('Asia/Seoul')).date().isoformat()
+            if source.get('observed_at') is not None else None)
+        from src.engine.automation.main_trailing_source_store import vote_rows,scoped_vote_generation,InputPending,claim_legacy_bytes
+        def original_votes():
+            # Prove complete index coverage before emitting any row. A later
+            # typed index failure is not allowed to duplicate an emitted prefix.
+            try:
+                bound=scoped_vote_generation(root,path,source_date) if source_date else None
+            except InputPending:
+                bound=None
+            if bound is not None:
+                sources[str(path)]=bound
+                yield from vote_rows(root,path,source['position_key'],source_date=source_date)
+                return
             for segment in sorted(path.parent.glob(path.name+'.segment-*'))+[path]:
                 if not segment.exists():continue
                 before=byte_generation(segment);sources[str(segment)]=before
-                for vote in iter_path_events_file(segment,source['position_key']):
-                    if (source.get('path_id','EXIT_TRAILING_TP') is not None
-                        and vote.get('path_id')!=source.get('path_id','EXIT_TRAILING_TP')):continue
-                    try:
-                        ref=_verified_request(root,output,vote,sources) if vote['status']=='VALID' else None
-                        yield {**vote,'actual_input_ref':ref,'actual_input_verified':ref is not None}
-                    except (ValueError,OSError,KeyError,TypeError):
-                        yield {**vote,'actual_input_verified':False}
+                claim_legacy_bytes(before['size'])
+                yield from iter_path_events_file(segment,source['position_key'])
                 if byte_generation(segment)!=before:raise ValueError('holding_vote_segment_changed')
+        def rows():
+            for vote in original_votes():
+                if (source.get('path_id','EXIT_TRAILING_TP') is not None
+                    and vote.get('path_id')!=source.get('path_id','EXIT_TRAILING_TP')):continue
+                try:
+                    ref=_verified_request(root,output,vote,sources) if vote['status']=='VALID' else None
+                    yield {**vote,'actual_input_ref':ref,'actual_input_verified':ref is not None}
+                except (ValueError,OSError,KeyError,TypeError):
+                    yield {**vote,'actual_input_verified':False}
         reference=storage.write_tree(output,rows())
         return dict(schema=SCHEMA,root=str(output.resolve()),events_ref=reference,
                     original_position_key=source['position_key'],status='source_bound')
@@ -264,7 +357,8 @@ class PreparedVotes:
         self.db.execute('CREATE TABLE votes(at REAL,body TEXT)')
         for row in storage.iter_tree(reference['root'],reference['events_ref']):
             if row['status']=='VALID' and row.get('actual_input_verified'):
-                try:_verify_projection(row['actual_input_ref'],row)
+                try:_verify_projection(row['actual_input_ref'],row,
+                    candidate_position=reference.get('candidate_position_equivalence'))
                 except (ValueError,OSError,KeyError,TypeError):row={**row,'actual_input_verified':False}
             self.db.execute('INSERT INTO votes VALUES (?,?)',(row['requested_at'],storage.encoded(row).decode()))
         self.db.execute('CREATE INDEX vote_clock ON votes(at)')

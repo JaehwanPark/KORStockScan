@@ -1451,13 +1451,18 @@ def test_async_entry_expired_result_is_discarded_and_schedules_fresh_recheck(
         "ws_route",
         "broker_route",
         "expected_request_code",
+        "explicit_route",
     ),
     (
-        ("KRX", "", "", "KRX", "005930"),
-        ("KRX", "_AL", "krx_nxt_integrated", "SOR", "005930"),
-        ("KRX", "_AL", "krx_nxt_integrated", "KRX", "005930"),
-        ("PREMARKET_KRX_LIKE", "", "", "KRX", "005930_NX"),
-        ("NXT", "", "", "KRX", "005930_NX"),
+        ("KRX", "", "", "KRX", "005930", None),
+        ("KRX", "_AL", "krx_nxt_integrated", "SOR", "005930", None),
+        ("KRX", "_AL", "krx_nxt_integrated", "KRX", "005930", None),
+        ("PREMARKET_KRX_LIKE", "", "", "KRX", "005930_NX", None),
+        ("NXT", "", "", "KRX", "005930_NX", None),
+        ("PREMARKET_KRX_LIKE", "_NX", "nxt_only", "SOR", "005930_NX", "NXT"),
+        ("KRX", "_AL", "krx_nxt_integrated", "SOR", "005930", "SOR"),
+        ("KRX", "_AL", "krx_nxt_integrated", "NXT", "005930", "SOR"),
+        ("KRX_NXT_INTEGRATED", "_AL", "krx_nxt_integrated", "SOR", "005930_AL", "SOR"),
     ),
 )
 @pytest.mark.parametrize("execution_refresh", [False, True])
@@ -1470,6 +1475,7 @@ def test_async_entry_bridge_prepares_off_thread_then_commits_on_current_state(
     ws_route,
     broker_route,
     expected_request_code,
+    explicit_route,
     execution_refresh,
 ):
     # Cold hydration must never scan the growing production pipeline in a
@@ -1494,16 +1500,15 @@ def test_async_entry_bridge_prepares_off_thread_then_commits_on_current_state(
             requested_codes.append(code) or [{"price": 1000}]
         ),
     )
-    monkeypatch.setattr(
-        handlers,
-        "fetch_entry_candles_with_meta",
-        lambda *args, **kwargs: ([{"close": 1000}], {"source": "test"}),
-    )
-    monkeypatch.setattr(
-        handlers,
-        "build_entry_candle_context",
-        lambda *args, **kwargs: {"schema": "test"},
-    )
+    prepared_routes = []
+    def fetch(*args, **kwargs):
+        prepared_routes.append(('candles', kwargs.get('broker_route')))
+        return [{"close":1000}], {"source":"test"}
+    def context(*args, **kwargs):
+        prepared_routes.append(('context', kwargs.get('broker_route')))
+        return {"schema":"test", "broker_route":kwargs.get('broker_route')}
+    monkeypatch.setattr(handlers, "fetch_entry_candles_with_meta", fetch)
+    monkeypatch.setattr(handlers, "build_entry_candle_context", context)
     monkeypatch.setattr(
         handlers,
         "_extract_ai_overlap_snapshot",
@@ -1541,6 +1546,8 @@ def test_async_entry_bridge_prepares_off_thread_then_commits_on_current_state(
         "venue_resolution": f"session_clock_explicit_{venue.lower()}",
         "source_signature": "VALUE_TOP",
     }
+    if explicit_route is not None:
+        stock['broker_route'] = explicit_route
     ws_data = {
         "curr": 1001,
         "orderbook": {"ask": 1002, "bid": 1000},
@@ -1626,6 +1633,7 @@ def test_async_entry_bridge_prepares_off_thread_then_commits_on_current_state(
         assert evaluated[0][0]["curr"] == 1003
         assert ws_data["curr"] == 1001
     assert requested_codes == [expected_request_code]
+    assert prepared_routes == [('candles', explicit_route), ('context', explicit_route)]
     assert "_scanner_async_cache_key" not in stock
 
 

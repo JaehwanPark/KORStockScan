@@ -173,12 +173,19 @@ def test_shared_store_complete_carry_and_loader(replay,monkeypatch):
             dict(schema=stage.STAGE_SCHEMA,stage_id=name,source_date='2026-10-07',status='succeeded',exit_code=0,
                  sources={label:dict(path=str(path.resolve()),sha256=P.file_hash(path))}))
     host=root/'detector-host';host.mkdir();(host/'data').symlink_to(root,target_is_directory=True)
-    for fn in (detector._machine_result_semantics,detector._auxiliary_result_semantics):
+    for fn, component in ((detector._machine_result_semantics,m),
+                          (detector._auxiliary_result_semantics,aux)):
         observed=fn(host,'2026-10-07')
         assert observed['findings']==[]
-        assert observed['scope_census']==aux['scope_census']
-        assert observed['scope_pending']==handoff['scope_pending']
-        assert observed['comparison_complete']==handoff['comparison_complete']
+        # The detector preserves each source report separately from the joint
+        # native handoff. Missing machine comparison/census is not auxiliary data.
+        assert observed['scope_census']==component.get('scope_census')
+        assert observed['scope_pending']==component.get('scope_pending',[])
+        assert observed['comparison_complete']==component.get('comparison_complete')
+        assert observed['component_comparison_complete']==component.get('comparison_complete')
+        assert observed['joint_scope_census']==handoff['scope_census']==aux['scope_census']
+        assert observed['joint_scope_pending']==handoff['scope_pending']
+        assert observed['joint_comparison_complete']==handoff['comparison_complete']
     from src.engine import runtime_approval_summary as summary
     monkeypatch.setattr(summary,'DATA_DIR',root)
     monkeypatch.setattr(summary,'REPORT_DIR',root/'report/runtime_approval_summary')

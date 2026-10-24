@@ -1232,49 +1232,8 @@ def stage_receipt_issues(report_dir, day, stage, *, code_hash=None,
     if code_hash is None:
         code_hash = _stage_code(stage, stage_commands(stage, day, value.get('publication_date') or day, recovery=value.get('recovery_mode', False)), Path(__file__).resolve().parents[3])
     if value.get('stage_code_sha256') != code_hash:
-        # A code-only release transition must not force unchanged stages to
-        # replay. Accept the exact hash from a bounded set of managed immutable
-        # releases; artifact, input, and prerequisite hashes remain checked
-        # below in either case.
-        compatible = set()
-        selection = _load_json(Path(report_dir).parent / 'runtime' / 'runtime_release_selection.json')
-        selected_root = Path(selection.get('release_root', ''))
-        if (selection.get('schema') == 'runtime_release_selection_v1'
-            and len(selection.get('git_commit', '')) == 40
-            and all(ch in '0123456789abcdef' for ch in selection.get('git_commit', ''))
-            and selected_root.is_absolute()
-            and selected_root.parent.name == 'KORStockScan-runtime-releases'):
-            release_roots = [selected_root]
-            try:
-                managed_roots = sorted(
-                    child for child in selected_root.parent.iterdir()
-                    if child.is_dir() and (child / '.git').exists()
-                )
-            except OSError:
-                managed_roots = []
-            if len(managed_roots) <= 256:
-                release_roots.extend(root for root in managed_roots if root != selected_root)
-                commands = stage_commands(stage, day,
-                    value.get('publication_date') or day,
-                    recovery=value.get('recovery_mode', False))
-                for release_root in release_roots:
-                    release_dispatcher = release_root / 'src/engine/automation/postclose_summary_handoff.py'
-                    if release_dispatcher.is_file():
-                        compatible.add(_stage_code(stage, commands, release_root,
-                            dispatcher_path=release_dispatcher))
-                        if value.get('stage_code_sha256') in compatible:
-                            break
-                        if historical_terminal and stage == 'main_machine_policy':
-                            # Before fixed-watch publication, this stage did
-                            # not include the three newly added dependencies.
-                            # Authenticate that old contract against retained
-                            # immutable code, never against a supplied hash.
-                            compatible.add(_stage_code(stage, commands, release_root,
-                                dispatcher_path=release_dispatcher,
-                                legacy_main_machine=True))
-                            if value.get('stage_code_sha256') in compatible:
-                                break
-        if value.get('stage_code_sha256') not in compatible:
+        if not _historical_stage_code_matches(report_dir, day, stage, value,
+                legacy_main_machine=historical_terminal and stage == 'main_machine_policy'):
             return [f'{stage}:code_changed']
     expected = stage_artifacts(report_dir, day, stage)
     if set(value.get('sources', {})) != set(expected):
@@ -1851,6 +1810,78 @@ def stage_commands(stage, day, publication, *, recovery=False):
     return [command('automation.postclose_done_controller', '--date', day, '--summary-handoff-only', '--require-independent-producers')]
 
 
+
+def _historical_stage_code_matches(report_dir, day, stage, value, *, legacy_main_machine=False):
+    """Resolve sealed producer code before bounded legacy discovery.
+
+    New receipts carry their exact root. Old receipts can use the strict
+    verifier's commit as a locator only; the original full code digest must
+    still match. Release inventory growth never skips those direct checks.
+    """
+    selection = _load_json(Path(report_dir).parent/'runtime/runtime_release_selection.json')
+    selected = Path(selection.get('release_root', ''))
+    if (selection.get('schema') != 'runtime_release_selection_v1'
+            or not re.fullmatch('[0-9a-f]{40}', str(selection.get('git_commit', '')))
+            or not selected.is_absolute() or selected.parent.name != 'KORStockScan-runtime-releases'):
+        return False
+    managed = selected.parent.resolve()
+    def admitted(root):
+        return (root.is_absolute() and root.parent == managed and not root.is_symlink()
+            and root.resolve() == root and (root/'.git').exists() and not (root/'.git').is_symlink())
+    commands = stage_commands(stage, day, value.get('publication_date') or day,
+                              recovery=value.get('recovery_mode', False))
+    def matches(root):
+        dispatcher = root/'src/engine/automation/postclose_summary_handoff.py'
+        if not admitted(root) or not dispatcher.is_file():
+            return False
+        options = [False, True] if legacy_main_machine else [False]
+        return any(_stage_code(stage, commands, root, dispatcher_path=dispatcher,
+                    **({'legacy_main_machine': True} if legacy else {})) == value.get('stage_code_sha256')
+                   for legacy in options)
+    origin = value.get('stage_code_root')
+    if 'stage_code_root' in value:
+        return isinstance(origin, str) and matches(Path(origin))
+    if matches(selected):
+        return True
+    strict = _load_json(Path(report_dir)/'threshold_cycle_postclose_verification'/
+                        f'threshold_cycle_postclose_verification_{day}.json')
+    from src.engine.build_next_stage2_checklist import _next_krx_trading_day
+    target = _next_krx_trading_day(day)
+    preopen = _load_json(Path(report_dir)/'threshold_cycle_preopen_status'/
+                        f'threshold_cycle_preopen_{target}.status.json')
+    commits = {commit for commit in (
+        strict.get('code_commit') if strict.get('date') == day else None,
+        preopen.get('selected_release_commit') if preopen.get('target_date') == target
+            and preopen.get('status') == 'succeeded' else None)
+        if re.fullmatch('[0-9a-f]{40}', str(commit))}
+    if commits:
+        # Main P5 forbids process creation. Reuse its native read-only Git
+        # identity reader; commits locate roots, the original code digest still
+        # authenticates them. Bound metadata discovery separately from code IO.
+        from itertools import islice
+        from src.engine.infrastructure.startup_validation_code_context import _git_head
+        try:
+            for root in islice(managed.iterdir(), 4096):
+                if not admitted(root):
+                    continue
+                try:
+                    commit = _git_head(root)
+                except (OSError, ValueError, UnicodeError):
+                    continue
+                if commit in commits and matches(root):
+                    return True
+        except OSError:
+            pass
+    # Compatibility for old receipts without a direct locator. Keep the same
+    # maximum code reads; never turn inventory overflow into whole-input loss.
+    try:
+        from itertools import islice
+        roots = islice((root for root in managed.iterdir() if admitted(root) and root != selected), 256)
+        return any(matches(root) for root in roots)
+    except OSError:
+        return False
+
+
 def _stage_code(stage, commands, project, *, dispatcher_path=None,
                 legacy_main_machine=False):
     paths = {'dispatcher': Path(dispatcher_path or __file__)}
@@ -1938,7 +1969,8 @@ def run_stage(stage, day, *, report_dir, project, publication=None, effective=No
         now = lambda: datetime.now(ZoneInfo('Asia/Seoul')).isoformat()
         value = dict(schema=STAGE_SCHEMA, stage_id=stage, source_date=day, target_date=day,
             publication_date=publication, effective_date=effective, run_id=uuid.uuid4().hex,
-            stage_code_sha256=code, recovery_mode=recovery, status='pending', exit_code=None, pid=os.getpid(),
+            stage_code_sha256=code, stage_code_root=str(project.resolve()),
+            recovery_mode=recovery, status='pending', exit_code=None, pid=os.getpid(),
             process_start_ticks=Path('/proc/self/stat').read_text().split()[21], started_at=now(),
             heartbeat_at=now(), prerequisite_receipts={}, sources={}, retryable=True,
             policy_disposition='incumbent_carry', computation_executed=execute,

@@ -25,7 +25,9 @@ from src.utils import kiwoom_utils
 from src.model.common_v2 import calculate_all_features
 from src.database.db_manager import DBManager
 from src.database.models import DailyStockQuote
+from src.utils.constants import LOGS_DIR
 from src.engine.infrastructure.market_eligibility_source import (
+    master_symbol_removed,
     store_market_eligibility_rows as _store_market_eligibility_rows,
 )
 from src.core.event_bus import EventBus
@@ -36,7 +38,7 @@ import src.notify.telegram_manager as telegram_manager
 # ==========================================
 # 1. 경로 및 로깅 설정
 # ==========================================
-LOG_DIR = os.path.join(PROJECT_ROOT, "logs")
+LOG_DIR = str(LOGS_DIR)
 os.makedirs(LOG_DIR, exist_ok=True)
 
 LOG_PATH = os.path.join(LOG_DIR, "update_kospi_error.log")
@@ -656,13 +658,14 @@ def update_kospi_data():
     kospi_codes = []
     for raw_code in source_codes:
         identity = kiwoom_utils.kiwoom_stock_code_identity(raw_code)
-        if identity["is_equity_code"]:
+        removed = identity['is_equity_code'] and master_symbol_removed(identity['canonical_code'])
+        if identity["is_equity_code"] and not removed:
             kospi_codes.append(identity["canonical_code"])
         else:
             excluded_symbol_identities.append({
                 "raw_code": str(raw_code),
                 "canonical_code": identity["canonical_code"],
-                "reason": "unsupported_equity_namespace",
+                "reason": "operator_removed_from_master" if removed else "unsupported_equity_namespace",
             })
     kospi_codes = sorted(set(kospi_codes))
     if not kospi_codes:

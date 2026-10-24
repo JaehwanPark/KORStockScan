@@ -121,13 +121,17 @@ def _eligibility(*, krx: bool | None = True, nxt: bool | None = True):
         stock_code="005930",
         trade_date=date(2026, 9, 14),
         source_snapshot={
-            "source_id": "test-policy",
+            "source_id": "ka10099",
+            "trade_date": "2026-09-14",
+            "source_revision": "a" * 40,
             "krx_regular_eligible": True,
             "krx_aftermarket_eligible": krx,
             "nxt_eligible": nxt,
-            "quality_state": contract.SOURCE_QUALITY_VALID,
-            "observed_at_kst": _kst_datetime(2026, 9, 14, 15, 55).isoformat(),
-            "payload_sha256": "fixture-sha",
+            "quality_state": "PARTIAL" if krx is None or nxt is None else "VALID",
+            "blocked_reasons_json": (["krx_aftermarket_eligibility_unknown"] if krx is None else []) +
+                (["nxt_enable_unknown"] if nxt is None else []),
+            "observed_at_kst": _kst_datetime(2026, 9, 14, 15, 55),
+            "payload_sha256": "b" * 64,
         },
     )
 
@@ -144,7 +148,7 @@ def _nxt_listing_eligibility():
         })
 
 
-@pytest.mark.parametrize("route,allowed", [("NXT", True), ("SOR", False), ("KRX", False)])
+@pytest.mark.parametrize("route,allowed", [("NXT", True), ("SOR", True), ("KRX", False)])
 def test_official_nxt_axis_preserves_unknown_krx(route, allowed):
     source = _nxt_listing_eligibility()
     result = contract.resolve_order_type_preflight(
@@ -254,8 +258,8 @@ def test_aftermarket_buy_fails_closed_when_eligibility_is_unknown(route):
     [
         ("KRX", _eligibility(krx=None, nxt=True)),
         ("NXT", _eligibility(krx=True, nxt=None)),
-        ("SOR", _eligibility(krx=None, nxt=True)),
-        ("SOR", _eligibility(krx=True, nxt=None)),
+        ("SOR", _eligibility(krx=None, nxt=False)),
+        ("SOR", _eligibility(krx=False, nxt=None)),
     ],
 )
 def test_aftermarket_buy_preserves_nullable_eligibility_as_unknown(route, eligibility):
@@ -278,7 +282,7 @@ def test_aftermarket_buy_preserves_nullable_eligibility_as_unknown(route, eligib
     [
         ("KRX", _eligibility(krx=False, nxt=True)),
         ("NXT", _eligibility(krx=True, nxt=False)),
-        ("SOR", _eligibility(krx=True, nxt=False)),
+        ("SOR", _eligibility(krx=False, nxt=False)),
     ],
 )
 def test_aftermarket_buy_blocks_route_ineligible_symbol(route, eligibility):
@@ -360,3 +364,19 @@ def test_order_type_preflight_rejects_unknown_route_and_closed_session():
     assert unknown_route.reason == contract.ORDER_TYPE_PREFLIGHT_ROUTE_UNSUPPORTED
     assert closed.allowed is False
     assert closed.reason == contract.ORDER_TYPE_PREFLIGHT_SESSION_BLOCKED
+
+
+@pytest.mark.parametrize("krx,nxt,allowed", [
+    (True, False, True), (False, True, True), (True, True, True),
+    (False, False, False), (None, False, False), (False, None, False),
+    (True, None, True), (None, True, True),
+])
+def test_sor_aftermarket_preserves_verified_single_venue_and_unknown_guard(krx, nxt, allowed):
+    context = contract.resolve_market_session(_kst_datetime(2026, 9, 14, 17, 30))
+    evidence = _eligibility(krx=krx, nxt=nxt)
+    result = contract.resolve_order_type_preflight(context, "SOR", "buy", "00", eligibility=evidence)
+    assert result.allowed is allowed
+    # The SOR repair must not widen either direct venue's eligibility.
+    for route, flag in (("KRX", krx), ("NXT", nxt)):
+        direct = contract.resolve_order_type_preflight(context, route, "buy", "00", eligibility=evidence)
+        assert direct.allowed is (flag is True)

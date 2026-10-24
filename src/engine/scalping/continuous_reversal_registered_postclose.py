@@ -157,7 +157,7 @@ def population(data_root,day,*,source=None):
                 if P.file_hash(dst)!=h:raise ValueError('registered_bar_snapshot_changed')
         finally:os.unlink(tmp)
         return dst
-    bars={d:P.completed_bars(data_root,d,snapshot_sink=snapshot_sink) for d in dates}
+    bars={d:P.completed_bars(data_root,d,snapshot_sink=snapshot_sink,source=source) for d in dates}
     for d,(_,rs) in bars.items():
         for rec in rs:
             dst=out/'frozen'/('bars-'+rec['sha256']+'.json'); dst.parent.mkdir(parents=True,exist_ok=True)

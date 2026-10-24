@@ -7,6 +7,7 @@ PREOPEN or runtime stage and cannot regenerate an upstream source or policy.
 from __future__ import annotations
 
 import argparse
+import bisect
 import contextlib
 import ctypes
 from datetime import date, datetime, time as dt_time, timedelta
@@ -294,7 +295,7 @@ def check_seal(value):
     return value
 
 
-def code_hash():
+def code_hash(code_root=None):
     modules = [
         Path(__file__),
         Path(R.__file__),
@@ -303,7 +304,32 @@ def code_hash():
         Path(R.__file__).parents[1] / "risk/market_weakness_threshold_policy.py",
         Path(R.__file__).parents[1] / "market_panic_breadth_collector.py",
         Path(R.__file__).parent / "micro_reversion/symbol_master.py",
+        Path(R.__file__).parent / "continuous_reversal.py",
+        Path(R.__file__).parent / "continuous_reversal_source.py",
+        Path(R.__file__).parents[1] / "lifecycle/research_json_stream.py",
     ]
+    # These existing owners validate the effective registry, wire and native
+    # request. Changing one invalidates research without changing live capture.
+    modules.extend(
+        Path(R.__file__).parent / (name + ".py")
+        for name in (
+            "reversal_auxiliary_intraday",
+            "reversal_auxiliary_registry",
+            "reversal_auxiliary_wire",
+            "reversal_auxiliary_compatibility",
+            "reversal_auxiliary_transition",
+            "reversal_auxiliary_production_input",
+            "reversal_auxiliary_risk_role_experiment",
+            "reversal_operating_auxiliary",
+            "reversal_extended_union",
+            "continuous_reversal_policy_v5",
+        )
+    )
+    if code_root is not None:
+        executing_root = Path(__file__).resolve().parents[3]
+        modules = [
+            Path(code_root) / p.resolve().relative_to(executing_root) for p in modules
+        ]
     return R.digest(
         {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in modules}
     )
@@ -721,6 +747,115 @@ def cursor_current(data_root, cursor):
     )
 
 
+def rebind_compressed_sources(root, prior, descriptor, *, stop_at):
+    """Reuse completed projections only across proven representation changes.
+
+    Keep the original projection IDs and immutable manifests. New physical
+    bindings get a successor generation before cumulative/outbox consumption.
+    Legacy inputs without complete read hashes must use the normal reader once.
+    """
+    old = prior.get("source_descriptor", {})
+    if prior.get("status") not in {"completed", "valid_empty", "completed_with_source_gaps"}:
+        return None
+    if {k: v for k, v in old.items() if k not in {"sources", "listing"}} != {
+        k: v for k, v in descriptor.items() if k not in {"sources", "listing"}
+    }:
+        return None
+    before, after = old.get("listing"), descriptor.get("listing")
+    if before != after and not (
+        isinstance(before, dict) and isinstance(after, dict)
+        and before.get("semantic_sha256") and not after.get("status")
+        and before.get("logical_path") == after.get("logical_path")
+        and before["semantic_sha256"] == after.get("semantic_sha256")
+    ):
+        return None
+    sources, replacements = old.get("sources", []), descriptor["sources"]
+    if len(sources) != len(replacements):
+        return None
+    manifest = check_seal(read_json(prior["manifest_path"]))
+    terminal = check_seal(read_json(prior["terminal_path"]))
+    daily = check_seal(read_json(prior["daily_path"]))
+    if (prior.get("generation") != R.digest(old)
+        or terminal.get("generation") != prior.get("generation")
+        or terminal.get("status") != prior.get("status")
+        or terminal.get("gaps") != prior.get("gaps")
+        or any(daily.get(k) != prior.get(k, {}) for k in (
+            "source_census", "source_projection_census"))
+        or daily.get("native_indexed_rows") != prior.get("native_indexed_rows", 0)
+        or terminal.get("source_manifest_sha256") != manifest["artifact_content_sha256"]
+        or terminal.get("daily_sha256") != daily["artifact_content_sha256"]
+        or any(manifest.get(k) != v for k, v in old.items())
+        or any(manifest.get(k, []) != prior.get(k, []) for k in (
+            "partitions", "source_ranges", "stream_receipts",
+            "shared_object_receipts", "source_dependency_receipts"))
+        or not receipts_current(prior.get("shared_object_receipts", [])
+            + prior.get("source_dependency_receipts", [])
+            + [p["stat"] for p in prior.get("partitions", []) if p.get("stat")])):
+        return None
+    proofs = []
+    for source, replacement in zip(sources, replacements):
+        if source == replacement:
+            continue
+        if (source.get("kind") not in {"native_observations", "natural_trace"}
+            or source.get("kind") != replacement.get("kind")
+            or not source.get("logical_path")
+            or source["logical_path"] != replacement.get("logical_path")
+            or not replacement.get("compressed")):
+            return None
+        whole = next((r for r in prior.get("stream_receipts", [])
+                      if r["path"] == source["path"]), None)
+        ranges = ([dict(start=0, end=whole["decoded_bytes"], sha256=whole["decoded_sha256"])]
+                  if whole else [r for r in prior.get("source_ranges", []) if r["path"] == source["path"]])
+        if not ranges or ranges[0]["start"] != 0 or any(
+            a["end"] != b["start"] for a, b in zip(ranges, ranges[1:])
+        ) or (not source.get("compressed") and ranges[-1]["end"] != source["size"]):
+            return None
+        verify_stream_aliases(root, replacement, stop_at=stop_at)
+        key = R.digest(dict(source=replacement, ranges=ranges))
+        cache = Path(root) / "verified_sources" / ("rebind-" + key + ".json")
+        proof = read_json(cache)
+        if proof:
+            check_seal(proof)
+            if proof.get("source") != replacement or proof.get("ranges") != ranges:
+                raise ValueError("research_rebind_cache_invalid")
+        else:
+            decoded = hashlib.sha256()
+            with source_handle(replacement["path"]) as (handle, physical):
+                for r in ranges:
+                    digest, remaining = hashlib.sha256(), r["end"] - r["start"]
+                    if remaining < 0:
+                        return None
+                    while remaining:
+                        if time.monotonic() >= stop_at:
+                            raise Deferred("compressed_rebind_wall_budget")
+                        raw = handle.read(min(65536, remaining))
+                        if not raw:
+                            return None
+                        digest.update(raw)
+                        decoded.update(raw)
+                        remaining -= len(raw)
+                    if digest.hexdigest() != r["sha256"]:
+                        return None
+                if handle.read(1):  # Also verifies gzip EOF/CRC, not a prefix.
+                    return None
+                proof = R.seal(dict(source=replacement, ranges=ranges,
+                    decoded_sha256=decoded.hexdigest(), decoded_bytes=handle.tell(),
+                    physical_sha256=physical.digest.hexdigest(), **R.AUTH))
+            if not receipts_current([replacement]):
+                raise Deferred("compressed_rebind_source_changed")
+            atomic(cache, proof, immutable=True)
+        if not receipts_current([replacement]):
+            raise Deferred("compressed_rebind_source_changed")
+        proofs.append(dict(path=replacement["path"], **{k: proof[k] for k in (
+            "decoded_sha256", "decoded_bytes", "physical_sha256")}))
+    return dict(prior, source_descriptor=descriptor, generation=R.digest(descriptor),
+        status="in_progress", source_index=len(replacements), offset=0,
+        stream_receipts=prior.get("stream_receipts", []) + proofs,
+        representation_parent=dict(generation=prior["generation"],
+            manifest_sha256=manifest["artifact_content_sha256"],
+            manifest_path=prior["manifest_path"]))
+
+
 def verify_file(root, path, expected, *, stop_at):
     before = stat_receipt(path)
     key = R.digest([before, expected])
@@ -784,6 +919,14 @@ def replay_records(
                     "normalized_or_records_source_invalid": 1
                 }
                 continue
+            issues = ref.get("issues", {})
+            if not isinstance(issues, dict):
+                raise ValueError("replay_upstream_issues_invalid")
+            upstream_gaps = {
+                "replay_upstream_" + reason: count
+                for reason, count in issues.items()
+                if type(count) is int and count > 0
+            }
             for offset in range(
                 row_start if pi == part_start else 0, len(records), CHUNK_ROWS
             ):
@@ -867,18 +1010,19 @@ def replay_records(
                 next_position = (
                     [pi + 1, 0] if next_offset >= len(records) else [pi, next_offset]
                 )
+                # Commit partition-level raw exclusions once, with the final
+                # record chunk, including when resuming within the partition.
+                if next_position[0] == pi + 1:
+                    for reason, count in upstream_gaps.items():
+                        gaps.add(reason, count)
                 yield output, next_position, next_position[0] == len(parts), dict(gaps)
                 gaps = CounterDict()
             if not records:
                 # Empty replay points do not establish an empty market. Preserve
                 # upstream row exclusions instead of silently losing label ancestry.
                 gaps.add("replay_empty_partition")
-                issues = ref.get("issues", {})
-                if not isinstance(issues, dict):
-                    raise ValueError("replay_upstream_issues_invalid")
-                for reason, count in issues.items():
-                    if type(count) is int and count > 0:
-                        gaps.add("replay_upstream_" + reason, count)
+                for reason, count in upstream_gaps.items():
+                    gaps.add(reason, count)
                 yield [], [pi + 1, 0], pi + 1 == len(parts), dict(gaps)
         if not parts:
             yield [], [0, 0], True, {"replay_source_date_partition_missing": 1}
@@ -886,7 +1030,7 @@ def replay_records(
         store.close()
 
 
-def label_index(root, cursor):
+def label_index(root, cursor, *, data_root=None, stop_at=float("inf")):
     path = root / cursor["source_date"] / cursor["generation"] / "label_bindings.sqlite"
     path.parent.mkdir(parents=True, exist_ok=True)
     db = sqlite3.connect(path)
@@ -895,16 +1039,286 @@ def label_index(root, cursor):
         "CREATE TABLE IF NOT EXISTS labels(id TEXT PRIMARY KEY,row TEXT,conflict INTEGER)"
     )
     db.execute("CREATE TABLE IF NOT EXISTS loaded(partition TEXT PRIMARY KEY)")
-    for part in cursor["partitions"]:
-        if db.execute(
-            "SELECT 1 FROM loaded WHERE partition=?", (part["sha256"],)
-        ).fetchone():
+    try:
+        for part in cursor["partitions"]:
+            if db.execute(
+                "SELECT 1 FROM loaded WHERE partition=?", (part["sha256"],)
+            ).fetchone():
+                continue
+            if time.monotonic() >= stop_at:
+                raise Deferred("label_projection_wall_budget")
+            # The immutable partition and its loaded marker commit together.
+            # Later budget/interrupt failures retain this verified progress.
+            with db:
+                for row in projection_rows([part]):
+                    if time.monotonic() >= stop_at:
+                        raise Deferred("label_projection_wall_budget")
+                    _index_label(db, row)
+                db.execute("INSERT INTO loaded VALUES(?)", (part["sha256"],))
+        if data_root is not None:
+            try:
+                index_native_path_labels(data_root, root, cursor, db, stop_at=stop_at)
+            except (ValueError, EOFError, OSError, zlib.error) as exc:
+                # A dependency failure preserves the pending population.
+                raise Deferred(
+                    "native_label_path_budget"
+                    if str(exc) == "normalized_native_window_budget"
+                    else "native_label_source_contract_invalid"
+                ) from exc
+        return db
+    except BaseException:
+        db.close()
+        raise
+
+
+def index_native_path_labels(data_root, root, cursor, db, *, stop_at):
+    """Label captured events in the existing frozen path, not replay FSM events.
+
+    Collector continuity uses columns 1/2; captured WS identity uses 11/12.
+    Neither namespace, the actual ask nor the captured clock is approximated.
+    Each immutable normalized partition is decoded once per research generation.
+    """
+    from src.engine.scalping import continuous_reversal as K
+    from src.engine.scalping.continuous_reversal_source import iter_normalized_symbols
+
+    complete = "native-paths-complete"
+    if db.execute("SELECT 1 FROM loaded WHERE partition=?", (complete,)).fetchone():
+        return
+    natives = native_index(root, cursor)
+    events = {}
+    try:
+        for (raw,) in natives.execute("SELECT row FROM native WHERE conflict=0"):
+            native = strict_json(raw)
+            event = native.get("event") or {}
+            canonical = native.get("canonical_opportunity_id")
+            at = R.timestamp(event.get("at"))
+            if not canonical or not at or not event.get("source_item"):
+                continue
+            ep, seq = event.get("native_epoch"), event.get("native_sequence")
+            if type(ep) is not int or type(seq) is not int or min(ep, seq) <= 0:
+                continue
+            day = cursor["source_date"]
+            if at.date().isoformat() != day or event.get("event_id") != (
+                f"{day}:{event.get('venue')}:{event.get('session')}:"
+                f"{native['symbol']}:{ep}:{seq}"
+            ):
+                continue
+            row = dict(
+                source_date=day,
+                symbol=native["symbol"],
+                opportunity_id=canonical,
+                canonical_alias=event.get("canonical_opportunity_id") or canonical,
+                machine_confirmed_at=event["at"],
+                event_id=event["event_id"],
+                entry_ask=R.number(event.get("entry_ask")),
+                session=event.get("session"),
+                route=event.get("venue"),
+                source_item=event["source_item"],
+                native_epoch=ep,
+                native_sequence=seq,
+            )
+            key = exact_event_key(row)
+            if key and row["entry_ask"] is not None and row["entry_ask"] > 0:
+                events[key] = row
+            if len(events) > 4096:
+                raise Deferred("native_label_population_budget")
+    finally:
+        natives.close()
+    for source in cursor["source_descriptor"].get("sources", []):
+        if source.get("kind") != "operating_comparison" or not events:
             continue
-        for row in projection_rows([part]):
-            _index_label(db, row)
-        db.execute("INSERT INTO loaded VALUES(?)", (part["sha256"],))
-    db.commit()
-    return db
+        report = check_seal(read_json(source["path"]))
+        if not (
+            report.get("schema") == "continuous_reversal_operating_comparison_v1"
+            and report.get("status") == "completed"
+            and report.get("source_date") == cursor["source_date"]
+            and report.get("label_contract") == R.LABEL
+            and report.get("parent_bundle_sha256")
+        ):
+            # replay_records already reports this unavailable/legacy contract.
+            # Preserve the natural population with U, without borrowing labels.
+            continue
+        for part in report.get("partitions", []):
+            ref = part.get("normalized_source", {})
+            selected = {
+                key: row
+                for key, row in events.items()
+                if (
+                    ref.get("day") == row["source_date"]
+                    and ref.get("venue") == row["route"]
+                    and ref.get("session") == row["session"]
+                )
+            }
+            if not selected:
+                continue
+            if (
+                type(ref.get("rows")) is int
+                and ref["rows"] > 0
+                and ref.get("issues", {}).get("source_epoch_unverified") == ref["rows"]
+                and type(part.get("points")) is int
+                and part["points"] == 0
+            ):
+                # The sealed upstream census proves no eligible path in this
+                # partition. Preserve U; never decode excluded raw rows again.
+                continue
+            marker = "native-path:" + R.digest(ref)
+            if db.execute(
+                "SELECT 1 FROM loaded WHERE partition=?", (marker,)
+            ).fetchone():
+                continue
+            if time.monotonic() >= stop_at:
+                raise Deferred("native_label_wall_budget")
+            path = source_path(data_root, ref["path"])
+            before = verify_file(root, path, ref["sha256"], stop_at=stop_at)
+            by_symbol = {}
+            for key, row in selected.items():
+                by_symbol.setdefault(row["symbol"], {})[key] = row
+            native_windows = {
+                symbol: [
+                    (
+                        R.timestamp(row["machine_confirmed_at"]).timestamp(),
+                        R.timestamp(row["machine_confirmed_at"]).timestamp() + 1800,
+                    )
+                    for row in targets.values()
+                ]
+                for symbol, targets in by_symbol.items()
+            }
+            with db:
+                expected_metadata = dict(
+                    day=ref["day"],
+                    venue=ref["venue"],
+                    session=ref["session"],
+                    runtime_effect=False,
+                    columns=[
+                        "receive_epoch",
+                        "transport_epoch",
+                        "series_sequence",
+                        "trade_price",
+                        "bid",
+                        "ask",
+                        "qty",
+                        "side",
+                        "valid",
+                        "source_item",
+                        "quote_age_ms",
+                        "native_transport_epoch",
+                        "native_route_sequence",
+                        "native_receive_session",
+                        "exchange_session",
+                    ],
+                    namespace_contract=dict(
+                        transport_epoch_column="collector_sequence_epoch",
+                        native_transport_epoch="ws_native_epoch",
+                        native_route_sequence="ws_native_route_sequence",
+                    ),
+                )
+                for symbol, rows in iter_normalized_symbols(
+                    path,
+                    expected_metadata=expected_metadata,
+                    legacy_native_columns=ref["day"] < "2026-10-09",
+                    native_windows=native_windows,
+                ):
+                    if time.monotonic() >= stop_at:
+                        raise Deferred("native_label_wall_budget")
+                    targets = by_symbol.get(symbol)
+                    if not targets:
+                        continue
+                    identities = {}
+                    for key, row in targets.items():
+                        identity = (
+                            row["native_epoch"],
+                            row["native_sequence"],
+                            row["source_item"],
+                            R.timestamp(row["machine_confirmed_at"]),
+                        )
+                        identities.setdefault(identity, []).append(key)
+                    anchors = {}
+                    for i, point in enumerate(rows):
+                        if len(point) < 13 or any(
+                            type(v) is not int or v <= 0 for v in point[11:13]
+                        ):
+                            continue  # Legacy collector identity cannot prove WS identity.
+                        identity = (
+                            *point[11:13],
+                            point[9],
+                            R.timestamp(K.iso(point[0])),
+                        )
+                        for key in identities.get(identity, []):
+                            anchors.setdefault(key, []).append(i)
+                    symbol_times = [p[0] for p in rows]
+                    for key, indices in anchors.items():
+                        row = targets[key]
+                        index = indices[0]
+                        point = rows[index]
+                        reason = (
+                            "native_event_path_conflict"
+                            if len(indices) != 1
+                            else (
+                                "native_entry_source_excluded"
+                                if not point[8]
+                                else (
+                                    "native_entry_ask_mismatch"
+                                    if not K.good_quote(point)
+                                    or point[5] != row["entry_ask"]
+                                    else None
+                                )
+                            )
+                        )
+                        label = dict(status="UNRESOLVED", reason=reason)
+                        if reason is None:
+                            # Only the bounded 30-minute suffix is needed. Preserve
+                            # every invalid row and collector/sequence discontinuity.
+                            start = R.timestamp(row["machine_confirmed_at"]).timestamp()
+                            end = bisect.bisect_right(symbol_times, start + 1800)
+                            path_rows = rows[index : min(len(rows), end + 1)]
+                            if len(path_rows) > 200000:
+                                raise Deferred("native_label_path_budget")
+                            path_rows[0] = list(path_rows[0])
+                            path_rows[0][0] = start
+                            _, ends, valid = K.segments(path_rows)
+                            path_times = [p[0] for p in path_rows]
+                            tree = K.Tree([p[3] if p[8] else None for p in path_rows])
+                            label = K.label(
+                                path_rows,
+                                path_times,
+                                tree,
+                                ends,
+                                valid,
+                                0,
+                                row["entry_ask"],
+                            )
+                        outcome, reason = R.label_value(
+                            label, row["entry_ask"], R.LABEL
+                        )
+                        value = dict(
+                            row,
+                            outcome=outcome,
+                            outcome_reason=reason,
+                            source_ref=dict(
+                                normalized_source=ref,
+                                stat=before,
+                                point_index=point[-1],
+                                label_contract=R.LABEL,
+                            ),
+                        )
+                        raw = json.dumps(value, sort_keys=True)
+                        label_key = "native-label:" + key
+                        old = db.execute(
+                            "SELECT row FROM labels WHERE id=?", (label_key,)
+                        ).fetchone()
+                        if old and old[0] != raw:
+                            db.execute(
+                                "UPDATE labels SET conflict=1 WHERE id=?", (label_key,)
+                            )
+                        elif not old:
+                            db.execute(
+                                "INSERT INTO labels VALUES(?,?,0)", (label_key, raw)
+                            )
+                if before != stat_receipt(path):
+                    raise Deferred("native_label_source_changed")
+                db.execute("INSERT INTO loaded VALUES(?)", (marker,))
+    with db:
+        db.execute("INSERT INTO loaded VALUES(?)", (complete,))
 
 
 def native_key(row):
@@ -948,8 +1362,10 @@ def native_index(root, cursor):
 
 
 def scope_contract(data_root, bundle_hash, cell_key, route, *, cache):
+    if len(cache) >= 256:
+        cache.clear()
     key = (bundle_hash, cell_key, route)
-    if key in cache:
+    if key in cache and "bundle:" + str(bundle_hash) in cache:
         return cache[key]
     result = {}
     if not re.fullmatch(r"[0-9a-f]{64}", str(bundle_hash)):
@@ -1043,10 +1459,228 @@ def scope_contract(data_root, bundle_hash, cell_key, route, *, cache):
             ]
     except (OSError, ValueError, TypeError, KeyError):
         result = {}
-    if len(cache) >= 256:
-        cache.clear()
     cache[key] = result
     return result
+
+
+def historical_auxiliary_sources(data_root, bundle, source, old_hashes):
+    """Verify original native validation for research, without launch authority."""
+    from src.engine.scalping import reversal_auxiliary_compatibility as C
+    from src.engine.scalping import reversal_auxiliary_intraday as I
+    from src.engine.scalping import reversal_auxiliary_registry as G
+    from src.engine.scalping import mechanistic_entry_runtime_policy as N
+
+    proof = C.validate(data_root, bundle, source, old_hashes, I.code_hashes())
+    evidence = I.read(proof["evidence_path"])
+    if evidence.get("schema") != "reviewed_historical_auxiliary_reader_parity_v1":
+        return None
+    original_path = evidence["original_reader_result_path"]
+    original = I.read(original_path)
+    inventory_path = original["code_inventory_path"]
+    inventory = I.read(inventory_path)
+    body = I.read(source)
+    bindings = body.get("bindings", body.get("auxiliary_registry_bindings", {}))
+    if (
+        file_hash(original_path) != evidence["original_reader_result_sha256"]
+        or file_hash(inventory_path) != original["code_inventory_sha256"]
+        or original.get("original_validation_status") != "pass"
+        or original.get("bundle_sha256") != bundle["bundle_sha256"]
+        or original.get("source_sha256") != proof["source_sha256"]
+        or original.get("reader_hashes") != old_hashes
+        or original.get("refs") != bindings
+        or original.get("original_reader_root") != inventory.get("root")
+        or original.get("original_reader_commit") != inventory.get("git_commit")
+        or not inventory.get("source_hashes")
+    ):
+        raise ValueError("historical_auxiliary_native_validation_invalid")
+    sources = dict(inventory["source_hashes"])
+    for item in proof["frozen_readers"]:
+        if sources.get(item["path"]) != old_hashes.get(Path(item["path"]).name):
+            raise ValueError("historical_auxiliary_reader_inventory_invalid")
+    for item in original["lineage_sources"]:
+        if sources.setdefault(item["path"], item["sha256"]) != item["sha256"]:
+            raise ValueError("historical_auxiliary_source_conflict")
+    for ident in set(bindings.values()):
+        value = G.load(data_root, ident)
+        if (value != original["values"].get(ident)
+                or G.binding(value) != original["bindings"].get(ident)):
+            raise ValueError("historical_auxiliary_registry_changed")
+    refs = []
+    for name, expected in sources.items():
+        path = Path(name)
+        before = stat_receipt(path)
+        if (N._source_hash(str(path), N._signature(path)) != expected
+                or before != stat_receipt(path)):
+            raise ValueError("historical_auxiliary_source_changed")
+        refs.append(before)
+    refs.extend(stat_receipt(path) for path in [
+        C.path(data_root, bundle, source, I.code_hashes()), proof["evidence_path"],
+        original_path, inventory_path])
+    return bindings, refs
+
+
+def effective_auxiliary_contract(data_root, record, row, *, cache):
+    """Bind the actual request through existing registry/overlay owners only."""
+
+    ident = row.get("auxiliary_registry_sha256")
+    if not row.get("auxiliary_registry_declared"):
+        return
+    row.update(
+        auxiliary_binding=row.get("effective_auxiliary_binding")
+        or {"registry_sha256": ident},
+        effective_auxiliary_status="unverified",
+        auxiliary_source_refs=[],
+    )
+    from src.engine.scalping import reversal_auxiliary_intraday as I
+    from src.engine.scalping import reversal_auxiliary_registry as G
+
+    # Missing dependencies remain row-local gaps; their appearance invalidates
+    # the existing cursor through receipts_current, just like repaired files.
+    try:
+        if not re.fullmatch(r"[0-9a-f]{64}", str(ident)):
+            raise ValueError("auxiliary_registry_identity_missing_or_invalid")
+        path = G.directory(data_root) / (ident + ".json")
+        row["auxiliary_source_refs"].append(
+            stat_receipt(path)
+            if path.exists()
+            else dict(path=str(path), status="missing")
+        )
+        if (
+            not row.get("cohort_contract")
+            or row.get("request_binding_verified") is not True
+        ):
+            raise ValueError("auxiliary_native_scope_or_request_unverified")
+        bundle = cache["bundle:" + row["native_receipt"]["bundle_sha256"]][1]
+        assessment = record["source"]["assessment"]
+        overlay_id = assessment.get("auxiliary_overlay_sha256")
+        if overlay_id and not re.fullmatch(r"[0-9a-f]{64}", str(overlay_id)):
+            raise ValueError("auxiliary_overlay_identity_invalid")
+        path = (
+            I.root(data_root) / "generations" / (overlay_id + ".json")
+            if overlay_id
+            else Path(data_root)
+            / "runtime/mechanistic_entry_policy/sources"
+            / (
+                "reversal-"
+                + bundle["continuous_reversal"]["auxiliary_report_sha256"]
+                + ".json"
+            )
+        )
+        row["auxiliary_source_refs"].append(
+            stat_receipt(path)
+            if path.exists()
+            else dict(path=str(path), status="missing")
+        )
+        key = ("auxiliary_sources", bundle["bundle_sha256"], ident, overlay_id)
+        proof = cache.get(key)
+        if not proof or not receipts_current(proof[0]):
+            value = G.load(data_root, ident)
+            overlay = I.read(path) if overlay_id else None
+            original = overlay if overlay else I.read(path)
+            old_hashes = original.get("code_hashes", original.get("auxiliary_reader_code_hashes"))
+            historical = (historical_auxiliary_sources(data_root, bundle, path, old_hashes)
+                          if old_hashes != I.code_hashes() else None)
+            if historical:
+                bindings, historical_refs = historical
+                sources = []
+            elif overlay:
+                I.validate_record(data_root, overlay, bundle)
+                bindings = overlay["bindings"]
+            else:
+                bindings = I.inherited(data_root, bundle)
+            if not historical:
+                sources = I.lineage_sources(data_root, bundle, overlay)
+            refs = row["auxiliary_source_refs"] + [
+                stat_receipt(s["path"]) for s in sources
+            ]
+            if historical:
+                refs.extend(historical_refs)
+            if overlay and overlay.get("code_hashes") != I.code_hashes():
+                from src.engine.scalping import reversal_auxiliary_compatibility as C
+
+                receipt = C.validate(
+                    data_root, bundle, path, overlay.get("code_hashes"), I.code_hashes()
+                )
+                refs.extend(
+                    stat_receipt(p)
+                    for p in [
+                        C.path(data_root, bundle, path, I.code_hashes()),
+                        receipt["evidence_path"],
+                        *[r["path"] for r in receipt["frozen_readers"]],
+                    ]
+                )
+            current = value
+            while True:
+                refs.append(
+                    stat_receipt(
+                        G.directory(data_root) / (current["registry_sha256"] + ".json")
+                    )
+                )
+                if current.get("research_registry_sha256"):
+                    refs.append(
+                        stat_receipt(
+                            G.directory(data_root)
+                            / (current["research_registry_sha256"] + ".json")
+                        )
+                    )
+                parent = current.get("production_parent_registry_sha256")
+                if not parent:
+                    break
+                current = G.load(data_root, parent)
+            if not receipts_current(refs):
+                raise ValueError("auxiliary_source_changed_during_audit")
+            proof = (refs, value, G.binding(value), bindings, overlay)
+            cache[key] = proof
+        refs, value, binding, bindings, overlay = proof
+        # Cache immutable provenance only. Every row still proves its request,
+        # dynamic schema/wire, scope and original confirmation-time activation.
+        row["auxiliary_source_refs"] = refs
+        request = record["source"]["auxiliary_request"]
+        if (
+            request["prompt"] != value["prompt"]
+            or assessment.get("auxiliary_binding") != binding
+        ):
+            raise ValueError("auxiliary_observation_registry_changed")
+        envelope = G.envelope(request["input"], value)
+        if request["response_schema"] != envelope["logical_schema"]:
+            raise ValueError("auxiliary_observation_response_schema_changed")
+        if value["schema"] == G.SCHEMA_V2 and (
+            assessment.get("auxiliary_wire_contract") != envelope["contract"]
+            or assessment.get("auxiliary_wire_hashes") != envelope["hashes"]
+        ):
+            raise ValueError("auxiliary_observation_wire_changed")
+        scope = str(row["cell_key"]) + "|" + str(row["event"]["venue"])
+        if bindings.get(scope) != ident:
+            raise ValueError("auxiliary_observation_scope_changed")
+        if (
+            overlay
+            and datetime.fromisoformat(overlay["effective_from"]).timestamp()
+            > row["event"]["epoch"]
+        ):
+            raise ValueError("auxiliary_observation_before_effective_time")
+        if not receipts_current(refs):
+            raise ValueError("auxiliary_source_changed_during_audit")
+        row.update(auxiliary_binding=binding, effective_auxiliary_status="verified")
+    except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+        reason = str(exc).split(":", 1)[0][:160]
+        if isinstance(exc, OSError) and exc.filename:
+            path = Path(exc.filename)
+            row["auxiliary_source_refs"].append(
+                stat_receipt(path)
+                if path.exists()
+                else dict(path=str(path), status="missing")
+            )
+            if isinstance(exc, FileNotFoundError):
+                reason = (
+                    "historical_reader_compatibility_missing"
+                    if path.is_relative_to(I.root(data_root) / "compatibility")
+                    else (
+                        "auxiliary_registry_source_missing"
+                        if path.is_relative_to(G.directory(data_root))
+                        else "auxiliary_dependency_missing"
+                    )
+                )
+        row["effective_auxiliary_reason"] = reason
 
 
 def native_records(source, source_date, data_root, start=0, *, stop_at):
@@ -1070,9 +1704,9 @@ def native_records(source, source_date, data_root, start=0, *, stop_at):
                     dict(
                         decoded_sha256=decoded_digest.hexdigest(),
                         decoded_bytes=handle.tell(),
-                        physical_sha256=physical.digest.hexdigest(),
+                        physical_sha256=physical.digest.hexdigest() if physical else decoded_digest.hexdigest(),
                     )
-                    if compressed
+                    if compressed or start == 0
                     else None
                 )
                 yield output, handle.tell(), True, dict(gaps), proof
@@ -1117,6 +1751,7 @@ def native_records(source, source_date, data_root, start=0, *, stop_at):
                                 }
                             }
                         )
+                    effective_auxiliary_contract(data_root, record, row, cache=cache)
                     row["source_ref"] = dict(
                         path=str(path),
                         offset=offset,
@@ -1135,7 +1770,12 @@ def native_records(source, source_date, data_root, start=0, *, stop_at):
 
 def index_native_rows(db, rows, source):
     for row in rows:
-        key, raw = native_key(row), json.dumps(R.seal(row), sort_keys=True)
+        # The cursor owns the deduplicated dependency receipts. Repeating the
+        # same overlay ancestry in every indexed/projected row is unbounded.
+        key, raw = native_key(row), json.dumps(
+            R.seal({k: v for k, v in row.items() if k != "auxiliary_source_refs"}),
+            sort_keys=True,
+        )
         old = db.execute("SELECT row FROM native WHERE key=?", (key,)).fetchone()
         if old:
             if json.loads(old[0]).get("observation_sha256") != row.get(
@@ -1158,7 +1798,11 @@ def bind_trace_native(row, db):
             raise ValueError("native_index_binding_changed")
         R.bind_native(row, observation)
     else:
-        row["native_binding_status"] = "exact_native_binding_missing"
+        row["native_binding_status"] = (
+            "not_adjudicated"
+            if row.get("pre_native_rejection_reason")
+            else "exact_native_binding_missing"
+        )
 
 
 def gzip_trace_records(source, source_date, listing, *, stop_at):
@@ -1226,13 +1870,25 @@ def _index_label(db, row):
 def bind_natural_label(row, labels):
     if row.get("identity_grade") != "canonical" or row.get("entry_ask") is None:
         return
-    keys = {row["opportunity_id"], row.get("canonical_alias"), exact_event_key(row)} - {
-        None
-    }
-    found_rows = [
-        labels.execute("SELECT row,conflict FROM labels WHERE id=?", (k,)).fetchone()
-        for k in keys
-    ]
+    exact = exact_event_key(row)
+    native = (
+        labels.execute(
+            "SELECT row,conflict FROM labels WHERE id=?", ("native-label:" + exact,)
+        ).fetchone()
+        if exact
+        else None
+    )
+    keys = {row["opportunity_id"], row.get("canonical_alias"), exact} - {None}
+    found_rows = (
+        [native]
+        if native
+        else [
+            labels.execute(
+                "SELECT row,conflict FROM labels WHERE id=?", (k,)
+            ).fetchone()
+            for k in keys
+        ]
+    )
     if any(r and r[1] for r in found_rows):
         row["outcome_reason"] = "exact_label_binding_conflict"
         return
@@ -1579,7 +2235,7 @@ def process_date(data_root, source_date, *, stop_at, clock=time.monotonic):
     generation = R.digest(descriptor)
     cursor = prior
     if cursor.get("generation") != generation:
-        cursor = dict(
+        cursor = rebind_compressed_sources(root, prior, descriptor, stop_at=stop_at) or dict(
             schema=R.VERSION + ":cursor",
             source_date=source_date,
             generation=generation,
@@ -1608,7 +2264,7 @@ def process_date(data_root, source_date, *, stop_at, clock=time.monotonic):
         )
     streams = {}
 
-    def abandon_compressed(reason):
+    def abandon_compressed(reason, *, advance=True):
         ticket = cursor.pop("compressed_in_progress", None)
         if not ticket:
             return
@@ -1635,18 +2291,22 @@ def process_date(data_root, source_date, *, stop_at, clock=time.monotonic):
             "source_dependency_receipts", []
         )
         cursor["gaps"] = ticket["gaps"]
-        cursor["gaps"][reason] = cursor["gaps"].get(reason, 0) + 1
+        if advance:
+            cursor["gaps"][reason] = cursor["gaps"].get(reason, 0) + 1
         db = native_index(root, cursor)
         try:
             db.execute("DELETE FROM native WHERE source=?", (ticket["source_path"],))
             db.commit()
         finally:
             db.close()
-        cursor.update(source_index=ticket["source_index"] + 1, offset=0)
+        cursor.update(source_index=ticket["source_index"] + int(advance), offset=0)
         atomic(path, cursor)
 
     if cursor.get("compressed_in_progress"):
-        abandon_compressed("compressed_resume_unavailable")
+        abandon_compressed(
+            "compressed_resume_unavailable",
+            advance=not cursor["compressed_in_progress"].get("label_dependency_pending"),
+        )
     while cursor["source_index"] < len(sources):
         if clock() >= stop_at:
             for stream in streams.values():
@@ -1695,7 +2355,12 @@ def process_date(data_root, source_date, *, stop_at, clock=time.monotonic):
                     cursor.setdefault("source_ranges", []).append(
                         dict(path=source["path"], **range_proof)
                     )
-                labels = label_index(root, cursor)
+                if cursor.get("compressed_in_progress"):
+                    cursor["compressed_in_progress"]["label_dependency_pending"] = True
+                    atomic(path, cursor)
+                labels = label_index(root, cursor, data_root=data_root, stop_at=stop_at)
+                if cursor.get("compressed_in_progress"):
+                    cursor["compressed_in_progress"].pop("label_dependency_pending", None)
                 natives = native_index(root, cursor)
                 try:
                     for row in rows:
@@ -1733,6 +2398,8 @@ def process_date(data_root, source_date, *, stop_at, clock=time.monotonic):
                         dependencies_by_path[r["policy_source_ref"]["path"]] = r[
                             "policy_source_ref"
                         ]
+                    for ref in r.get("auxiliary_source_refs", []):
+                        dependencies_by_path[ref["path"]] = ref
                 cursor["source_dependency_receipts"] = list(
                     dependencies_by_path.values()
                 )
@@ -1813,10 +2480,11 @@ def process_date(data_root, source_date, *, stop_at, clock=time.monotonic):
             for key, n in gaps.items():
                 cursor["gaps"][key] = cursor["gaps"].get(key, 0) + n
             if done:
-                if source.get("compressed") and range_proof:
+                if range_proof and "decoded_sha256" in range_proof:
                     cursor.setdefault("stream_receipts", []).append(
                         dict(path=source["path"], **range_proof)
                     )
+                if source.get("compressed") and range_proof:
                     start = cursor["compressed_in_progress"]["partition_start"]
                     cursor["partitions"][start:] = [
                         promote_compressed_partition(root, part)
@@ -1834,11 +2502,14 @@ def process_date(data_root, source_date, *, stop_at, clock=time.monotonic):
                     raise Deferred("incomplete_source_tail")
                 cursor["offset"] = offset
             atomic(path, cursor)
-        except Deferred:
+        except Deferred as exc:
             for stream in streams.values():
                 stream.close()
             if cursor.get("compressed_in_progress"):
-                abandon_compressed("compressed_resume_unavailable")
+                abandon_compressed(
+                    "compressed_resume_unavailable",
+                    advance=not str(exc).startswith("native_label_"),
+                )
             raise
         except (
             FileNotFoundError,
@@ -1911,6 +2582,7 @@ def process_date(data_root, source_date, *, stop_at, clock=time.monotonic):
             source_dependency_receipts=cursor.get("source_dependency_receipts", []),
             source_ranges=cursor.get("source_ranges", []),
             stream_receipts=cursor.get("stream_receipts", []),
+            representation_parent=cursor.get("representation_parent"),
             **R.AUTH,
         )
     )
@@ -1982,7 +2654,7 @@ def coverage(daily):
     for summary in daily.get("scopes", {}).values():
         for key, value in summary["counts"].items():
             if key == "rows" or key.startswith(
-                ("join_", "outcome_", "native_binding_")
+                ("join_", "outcome_", "native_binding_", "auxiliary_binding_")
             ):
                 counts.add(key, value)
     return dict(counts)
@@ -2016,7 +2688,7 @@ def phase_receipt(data_root, day, daily_generation, phase, **refs):
     )
 
 
-def research_source_scope(data_root, *, through_date=None):
+def research_source_scope(data_root, *, through_date=None, from_date=None):
     """Bound discovery, pending and currentness to the same closed source dates."""
     config = read_json(namespace(data_root) / "installation.json", {})
     if config:
@@ -2030,18 +2702,30 @@ def research_source_scope(data_root, *, through_date=None):
         baseline.get("policy_refresh_start_date", "2026-09-29"),
         config.get("evidence_start_date", "2026-09-29"),
     )
+    configured_start = start
     through = through_date or datetime.now(R.KST).date().isoformat()
+    if from_date is not None:
+        date.fromisoformat(from_date)
+        start = max(start, from_date)
     date.fromisoformat(start)
     date.fromisoformat(through)
-    return dict(
+    if start > through:
+        raise ValueError("research_source_range_invalid")
+    result = dict(
         evidence_start_date=start,
         through_date=through,
         source_dates=[
             d
             for d in discover_dates(data_root, dict(evidence_start_date=start))
-            if d <= through
+            if start <= d <= through
         ],
     )
+    if from_date is not None:
+        result.update(
+            recovery_from_date=from_date,
+            configured_evidence_start_date=configured_start,
+        )
+    return result
 
 
 def source_cursor_states(root, source_dates):
@@ -2060,9 +2744,13 @@ def source_cursor_states(root, source_dates):
     return states
 
 
-def cumulative(data_root, *, stop_at, clock=time.monotonic, through_date=None):
+def cumulative(
+    data_root, *, stop_at, clock=time.monotonic, through_date=None, from_date=None
+):
     root = namespace(data_root)
-    source_scope = research_source_scope(data_root, through_date=through_date)
+    source_scope = research_source_scope(
+        data_root, through_date=through_date, from_date=from_date
+    )
     cursor_states = source_cursor_states(root, source_scope["source_dates"])
     registry = read_json(root / "fixed_candidates.json", {})
     if registry:
@@ -2156,7 +2844,11 @@ def cumulative(data_root, *, stop_at, clock=time.monotonic, through_date=None):
         ):
             raise ValueError("cumulative_comparison_binding_invalid")
         if (
-            research_source_scope(data_root, through_date=source_scope["through_date"])
+            research_source_scope(
+                data_root,
+                through_date=source_scope["through_date"],
+                from_date=source_scope.get("recovery_from_date"),
+            )
             != source_scope
         ):
             raise Deferred("cumulative_source_inventory_changed_before_seal")
@@ -2287,7 +2979,14 @@ def comparison_current(data_root, comparison):
     scope = comparison.get("source_scope")
     if not isinstance(scope, dict) or not scope.get("through_date"):
         return False
-    if research_source_scope(data_root, through_date=scope["through_date"]) != scope:
+    if (
+        research_source_scope(
+            data_root,
+            through_date=scope["through_date"],
+            from_date=scope.get("recovery_from_date"),
+        )
+        != scope
+    ):
         return False
     if comparison.get("source_cursor_states") != source_cursor_states(
         namespace(data_root), scope["source_dates"]
@@ -2589,17 +3288,17 @@ def selected_optional_code(workspace):
     from src.engine.infrastructure.runtime_release_router import selected_release
 
     selected, _ = selected_release(Path(workspace))
-    names = (
-        "src/engine/scalping/market_weakness_research.py",
-        "src/engine/automation/main_market_weakness_research.py",
-        "src/engine/automation/main_market_weakness_research_notify.py",
-        "deploy/run_main_market_weakness_research_postclose.sh",
-    )
-    if any(
-        not (selected / name).is_file()
-        or (selected / name).read_bytes() != (Path(workspace) / name).read_bytes()
-        for name in names
-    ):
+    executing_root = Path(__file__).resolve().parents[3]
+    wrapper = "deploy/run_main_market_weakness_research_postclose.sh"
+    try:
+        # Canonical workspace owns shared data and cron, not deployed code.
+        # Bind all existing research dependencies and the actual launch wrapper.
+        matches = (code_hash(selected) == code_hash()
+                   and (selected / wrapper).read_bytes()
+                   == (executing_root / wrapper).read_bytes())
+    except (OSError, ValueError):
+        matches = False
+    if not matches:
         raise ValueError("optional_selected_release_code_not_reviewed")
     return str(selected)
 
@@ -2772,16 +3471,70 @@ def select_source_date(data_root, dates, *, night, check_preflight):
     if rotation:
         check_seal(rotation)
     previous = rotation.get("last_" + lane + "_date", "")
-    if dates[-1] in repairs and rotation.get("latest_priority_night") != night:
-        # One latest-source opportunity per night, without moving the backlog
-        # cursor. Failed/crashed reservations cannot monopolize subsequent slots.
-        day = dates[-1]
-        rotation.update(latest_priority_night=night, latest_priority_date=day)
+    latest = dates[-1]
+    cursor = read_json(root / latest / "cursor.json", {})
+
+    def checkpoint():
+        # Read committed progress only. Never open the writer or scan labels.
+        generation = cursor.get("generation", "")
+        if (cursor.get("status") != "in_progress"
+                or not isinstance(generation, str)
+                or not re.fullmatch("[0-9a-f]{64}", generation)
+                or not cursor_current(data_root, cursor)):
+            return None
+        offset = cursor.get("offset", 0)
+        # Native byte offsets and replay [partition, row] offsets are distinct
+        # producer shapes. Normalize their order without discarding progress.
+        offset = [0, offset] if type(offset) is int else offset
+        if not isinstance(offset, list) or len(offset) != 2:
+            return None
+        position = [cursor.get("source_index", 0), *offset,
+                    len(cursor.get("partitions", [])), cursor.get("native_indexed_rows", 0)]
+        if any(type(value) is not int or value < 0 for value in position):
+            return None
+        index = root.resolve() / latest / generation / "label_bindings.sqlite"
+        if index.is_symlink() or index.parent.resolve() != index.parent:
+            return None
+        loaded = 0
+        if index.exists():
+            try:
+                with contextlib.closing(sqlite3.connect(index.as_uri() + "?mode=ro", uri=True, timeout=0)) as db:
+                    loaded = db.execute("SELECT count(*) FROM loaded").fetchone()[0]
+            except sqlite3.Error:
+                return None
+        return dict(generation=generation, position=position + [loaded])
+
+    progress = checkpoint() if latest in repairs else None
+    check_preflight()
+    before = rotation.get("latest_checkpoint_before")
+    if before is not None and (not isinstance(before, dict)
+            or not isinstance(before.get("generation"), str)
+            or not re.fullmatch("[0-9a-f]{64}", before["generation"])
+            or not isinstance(before.get("position"), list)
+            or len(before["position"]) != 6
+            or any(type(value) is not int or value < 0 for value in before["position"])):
+        raise ValueError("source_rotation_checkpoint_invalid")
+    advanced = False
+    if progress is not None and "latest_checkpoint_before" in rotation:
+        if before is None or before.get("generation") != progress["generation"]:
+            advanced = any(progress["position"])
+        else:
+            advanced = progress["position"] > before["position"]
+    resume_latest = (advanced and rotation.get("latest_priority_night") == night
+                     and rotation.get("latest_priority_date") == latest
+                     and rotation.get("last_selected_date") != latest)
+    if latest in repairs and (rotation.get("latest_priority_night") != night or resume_latest):
+        # Keep the first opportunity, then alternate proven progress with
+        # backlog. No-progress/crashed reservations do not gain priority.
+        day = latest
+        rotation.update(latest_priority_night=night, latest_priority_date=day,
+                        latest_checkpoint_before=progress)
     else:
         if lane == "source" and len(candidates) > 1:
             candidates = [d for d in candidates if d != dates[-1]]
         day = next((d for d in candidates if d > previous), candidates[0])
         rotation.update({"last_" + lane + "_date": day})
+    rotation["last_selected_date"] = day
     check_preflight()
     atomic(
         path,
@@ -2797,7 +3550,7 @@ def select_source_date(data_root, dates, *, night, check_preflight):
     return day
 
 
-def scheduled(data_root):
+def scheduled(data_root, *, source_date=None):
     started = time.monotonic()
     root = namespace(data_root)
     config = read_json(root / "installation.json", {})
@@ -2887,9 +3640,18 @@ def scheduled(data_root):
             check_preflight()
             if not dates:
                 return preflight_status("valid_empty", "no_retained_source_date")
-            day = select_source_date(
-                data_root, dates, night=night, check_preflight=check_preflight
-            )
+            if source_date is None:
+                day = select_source_date(
+                    data_root, dates, night=night, check_preflight=check_preflight
+                )
+            else:
+                # An explicit report repair uses the same night reservation,
+                # supervisor and child guards as automatic backlog rotation.
+                if (date.fromisoformat(source_date).isoformat() != source_date
+                        or source_date not in dates or source_date > night):
+                    raise ValueError("repair_source_date_outside_retained_night_scope")
+                day = source_date
+                check_preflight()
             if day is None:
                 return preflight_status("valid_empty", "no_closed_source_date")
         except Deferred as exc:
@@ -3020,12 +3782,15 @@ def main(argv=None):
     parser.add_argument("--worker-date")
     parser.add_argument("--worker-seconds", type=float, default=55)
     parser.add_argument("--scheduled", action="store_true")
+    parser.add_argument("--source-date", help="Repair one retained source date under the night supervisor")
     parser.add_argument("--reservation-id")
     parser.add_argument("--configure-optional-cron", action="store_true")
     parser.add_argument("--workspace", type=Path)
     parser.add_argument("--notify-enabled", action="store_true", default=None)
     parser.add_argument("--cron-user")
     args = parser.parse_args(argv)
+    if args.source_date and (not args.scheduled or args.worker_date or args.configure_optional_cron):
+        parser.error("--source-date requires only --scheduled")
     try:
         if args.worker_date:
             # Workers are entered only from the night supervisor; no bypass CLI.
@@ -3123,7 +3888,7 @@ def main(argv=None):
                 notification_disposition_path=str(notification_path),
             )
         elif args.scheduled:
-            result = scheduled(args.data_root)
+            result = scheduled(args.data_root, source_date=args.source_date)
         elif args.configure_optional_cron:
             if not args.workspace:
                 parser.error("--workspace required for optional cron installation")

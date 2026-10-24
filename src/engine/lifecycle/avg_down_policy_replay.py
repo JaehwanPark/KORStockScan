@@ -54,6 +54,7 @@ IMPLEMENTATION_PATHS = (
     "src/engine/scalping/main_stop_policy.py",
     "src/engine/scalping/position_peak_ledger.py",
     "src/engine/lifecycle/policy_snapshot_reference.py",
+    "src/utils/numeric.py",
 )
 _KST = timezone(timedelta(hours=9))
 
@@ -538,7 +539,9 @@ def _worker_replay(observation: dict, frames: list[dict]) -> dict:
     from src.engine import sniper_state_handlers as handlers
     from src.engine import sniper_execution_receipts as receipts
     from src.engine.lifecycle import neutral_decision_context as ldm
-    from src.engine.scalping.avg_down_replay_capture import AI_STATE_FIELDS
+    from src.engine.scalping.avg_down_replay_capture import (
+        AI_CIRCUIT_FIELDS, ai_policy_state, normalize_ai_policy_state,
+    )
     from src.engine.lifecycle.avg_down_replay import replay_exit_paths
     from src.engine.ai.hot_path_ai_symbol_budget import HotPathAISymbolBudget
     from src.engine.ai_engine_openai import GPTSniperEngine
@@ -962,13 +965,23 @@ def _worker_replay(observation: dict, frames: list[dict]) -> dict:
         ai_engine = ReplayAI(["offline_credential_not_valid"], announce_startup=False,
                              initialize_entry_policy=False)
         ai_engine.services = services
-        ai_state = context.get("ai_engine_state")
-        ai_engine.recorded_state_ready = isinstance(ai_state, dict) and set(
-            ai_state
-        ) == set(AI_STATE_FIELDS)
-        if ai_engine.recorded_state_ready:
-            for name, value in ai_state.items():
-                setattr(ai_engine, name, thaw(value))
+        from src.engine import ai_engine_openai as openai_module
+        try:
+            ai_state = normalize_ai_policy_state(thaw(context.get("ai_engine_state")),
+                                                openai_module.TRADING_RULES)
+        except ValueError:
+            ai_state = None
+        ai_engine.recorded_state_ready = ai_state is not None
+        if ai_state is not None:
+            # This worker owns a frozen configuration; live module state is
+            # never changed and legacy aliases are never attached to the engine.
+            openai_module.TRADING_RULES = Rules(**{
+                **vars(openai_module.TRADING_RULES),
+                **{key: value for key, value in ai_state["role_models"].items()
+                   if key.startswith("OPENAI_")},
+            })
+            for name in AI_CIRCUIT_FIELDS:
+                setattr(ai_engine, name, ai_state[name])
         budget = context.get("ai_budget")
         if not isinstance(budget, dict):
             raise ReplayInputGap("initial_ai_cadence_state_missing")
@@ -1198,9 +1211,7 @@ def _worker_replay(observation: dict, frames: list[dict]) -> dict:
         after["filled_add_qty"] = state["filled_add_qty"]
         after["ldm_promote_counter"] = _json_value(ldm._PROMOTE_COUNTER)
         if ai_engine.recorded_state_ready:
-            after["ai_engine_state"] = {
-                name: _json_value(getattr(ai_engine, name)) for name in AI_STATE_FIELDS
-            }
+            after["ai_engine_state"] = ai_policy_state(ai_engine)
         after["stock"] = _json_value(stock)
         after["globals"] = {
             name: _json_value(getattr(handlers, name)) for name in context["globals"]

@@ -243,3 +243,43 @@ def test_dispatcher_coalesces_endpoint_aliases_after_canonicalization():
     assert duplicate.accepted is False
     assert duplicate.reason == "duplicate_generation_cache_key_coalesced"
     assert results[0].endpoint == "entry_price"
+
+
+def test_completion_queue_keeps_fifo_and_restored_original_order():
+    dispatcher = HotPathAIDispatcher(loaded_key_count=1)
+    first, second = object(), object()
+    try:
+        dispatcher.restore_completed(first, front=False)
+        dispatcher.restore_completed(second, front=False)
+        assert dispatcher.drain_completed() == [first, second]
+        dispatcher.restore_completed(second)
+        dispatcher.restore_completed(first)
+        dispatcher.restore_completed(first)
+        assert dispatcher.drain_completed() == [first, second]
+    finally:
+        dispatcher.shutdown()
+
+
+def test_already_settled_completion_callback_runs_outside_scheduling_lock(monkeypatch):
+    from concurrent.futures import Future
+    dispatcher = HotPathAIDispatcher(loaded_key_count=1)
+    calls = []
+    def immediate(execute, request):
+        future = Future()
+        future.set_result(execute(request))
+        return future
+    monkeypatch.setattr(dispatcher._executor, "submit", immediate)
+    now = time.time()
+    def completed(result):
+        calls.append((dispatcher._lock._is_owned(), result))
+        return True
+    try:
+        request = HotPathAIRequest.create(request_id="immediate", generation_id="g", cache_key="k",
+            endpoint="entry", venue="KRX", submitted_epoch=now, deadline_epoch=now+2,
+            execute=lambda: {"action": "WAIT"}, on_complete=completed)
+        assert dispatcher.submit(request).accepted
+        assert calls[0][0] is False
+        assert calls[0][1].request_id == request.request_id
+        assert dispatcher.drain_completed() == []
+    finally:
+        dispatcher.shutdown()

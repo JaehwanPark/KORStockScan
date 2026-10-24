@@ -45,7 +45,7 @@ def _prepared(tmp_path, monkeypatch):
     assert receipt['prior_cache_generation']==receipt['cache_generation']
     assert receipt['projection']['coverage_started_epoch']==AT.timestamp()
     assert receipt['historical_stage_coverage']=='not_backfilled_before_cache_offset'
-    args['schema_version']=20
+    args['schema_version']=buy.LOSSLESS_EVENT_CACHE_SCHEMA_VERSION
     return raw,args,Path(before['cache_path'])
 
 

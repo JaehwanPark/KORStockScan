@@ -6,6 +6,7 @@ small immutable memberships, masks and aggregates. Daily evaluation cannot
 silently remove an operating policy.
 """
 from __future__ import annotations
+from src.engine.scalping.continuous_reversal_source import iter_normalized_symbols
 import copy
 import gzip
 import json
@@ -13,6 +14,7 @@ import os
 import sys
 import subprocess
 from collections import Counter, defaultdict
+from datetime import date, datetime
 from fractions import Fraction
 from pathlib import Path
 from src.engine.ai import offline_comparison_store as S
@@ -46,17 +48,44 @@ def enabled(data_root):
     return r.get('enabled') is True
 
 
-def active(data_root,day):
+def load_report_parent(data_root,day):
+    """Read an unchanged attested incumbent for an explicit report date.
+
+    Midnight does not advance a postclose report's source date. Runtime readers
+    still require today's handoff; this report-only reader can reuse the exact
+    dated code-refresh parent proof, never an unverified registration parent.
+    """
     from src.engine.scalping import mechanistic_entry_runtime_policy as N
+    day=date.fromisoformat(day).isoformat()
     try:
-        current=N.load_effective(data_root=Path(data_root),target_date=day)
+        return N.load_effective(data_root=Path(data_root),target_date=day)
     except ValueError as exc:
+        code_error=str(exc).startswith((
+            'v4_contract_code_changed:','v5_contract_code_changed:',
+            'v6_contract_code_changed:'))
+        if day < datetime.now(P.KST).date().isoformat() and (
+                code_error or str(exc)=='active_policy_code_reader_root_changed'):
+            from src.engine.infrastructure.runtime_release_router import selected_release
+            from src.engine.scalping import continuous_reversal_policy_v6 as V6
+            data_root=Path(data_root).resolve()
+            selection=data_root/'runtime/runtime_release_selection.json'
+            before=selection.read_bytes()
+            origin,commit=selected_release(data_root.parent)
+            parent=V6._attested_activation_parent(data_root,day,
+                origin_root=origin,origin_commit=commit)
+            if (selection.read_bytes()!=before or
+                    selected_release(data_root.parent)!=(origin,commit)):
+                raise ValueError('postclose_report_parent_selection_changed')
+            return parent
         from src.engine.scalping import reversal_joint_registration as J
         from src.engine.scalping import reversal_cumulative_registration as Q
         owner=Q if Q.pending_path(data_root).exists() else J
-        if not owner.pending_path(data_root).exists() or not str(exc).startswith(
-                ('v4_contract_code_changed:','v5_contract_code_changed:','v6_contract_code_changed:')):raise
-        current=owner.load_offline_parent(data_root,day)
+        if not owner.pending_path(data_root).exists() or not code_error:raise
+        return owner.load_offline_parent(data_root,day)
+
+
+def active(data_root,day):
+    current=load_report_parent(data_root,day)
     if (current or {}).get('continuous_reversal',{}).get('schema') in {V5.SCHEMA,'continuous_reversal_policy_v6'} or (enabled(data_root) and (current or {}).get('continuous_reversal',{}).get('schema')==V4.SCHEMA):
         return current
     return None
@@ -176,7 +205,7 @@ def machine_report(data_root,day,publication,parent,*,source=None,publish_output
                     dest=out/'frozen'/('bars-'+__import__('hashlib').sha256(content).hexdigest()+'.json')
                     if not dest.exists():dest.write_bytes(content)
                     return dest
-                bars[rec['day']]=P.completed_bars(data_root,rec['day'],snapshot_sink=sink)
+                bars[rec['day']]=P.completed_bars(data_root,rec['day'],snapshot_sink=sink,source=source)
                 source_receipts+=bars[rec['day']][1]
             fingerprint=P.digest([rec,manifest['detector_manifest_hash'],configs,code,bars[rec['day']][1],C.LABEL,
                                   P.file_hash(__file__),P.file_hash(A.__file__),P.file_hash(R.__file__)])
@@ -184,9 +213,8 @@ def machine_report(data_root,day,publication,parent,*,source=None,publish_output
             if cache:
                 records=cache['records'];masks=cache['masks'];local_coverage=cache['coverage']
             else:
-                raw=json.loads(gzip.decompress(Path(rec['path']).read_bytes()))['symbols']
                 records=[];masks=[];local_coverage=defaultdict(Counter)
-                for symbol,rows_all in sorted(raw.items()):
+                for symbol,rows_all in iter_normalized_symbols(rec['path']):
                     from src.trading.market.session_contract import market_source_partition_venue as _explicit_item_venue
                     for item in sorted({r[9] for r in rows_all if isinstance(r[9],str) and r[9].split('_',1)[0]==symbol and _explicit_item_venue(r[9])==route}):
                         rows=[r[:] for r in rows_all]

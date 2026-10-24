@@ -381,6 +381,7 @@ def _append_jsonl(path: Path, payload: dict[str, Any]) -> dict[str, float]:
                 existing.st_mtime_ns,
             ):
                 raise OSError(f"trace file changed before append: {generation.logical}")
+            trailing_source_before = os.fstat(descriptor)
             os.fchmod(descriptor, 0o600)
             written = 0
             while written < len(encoded):
@@ -402,6 +403,9 @@ def _append_jsonl(path: Path, payload: dict[str, Any]) -> dict[str, float]:
                 from src.engine.scalping import trace_dedup
                 trace_dedup.appended(path, index_field, payload, descriptor,
                     previous_identity=opened_identity, encoded=encoded)
+            from src.engine.automation.main_trailing_source_store import capture_native_append
+            capture_native_append(path, before=trailing_source_before,
+                after=os.fstat(descriptor), raw=encoded, row=payload)
         finally:
             if descriptor >= 0:
                 os.close(descriptor)
@@ -415,6 +419,11 @@ def prepare_ai_request_capture(target_date: str | None = None) -> dict[str, floa
     if not trace_enabled():
         return {}
     day = target_date or _date_text()
+    payload_path = _payload_path(day)
+    if (payload_path.parent.name == 'ai_decision_payloads'
+            and _trace_path(day).parent.parent == payload_path.parent.parent):
+        from src.engine.automation.main_trailing_source_store import maintain
+        maintain(payload_path.parent.parent, day)
     indexes = ((_SEEN_PAYLOAD_HASHES, _payload_path, "request_envelope_sha256"),
                (_SEEN_PROMPT_HASHES, _prompt_path, "prompt_sha256"),
                (_SEEN_REQUEST_IDS, _request_path, "request_id"),
@@ -596,14 +605,31 @@ def _native_claim_digest_is_public(value: dict, path: tuple[str, ...]) -> bool:
         return False
 
 
+def _sanitize_label(field: str, cache: dict):
+    cached = cache.get(field)
+    if cached is None:
+        safe, redacted = _sanitize_text(field)
+        cached = safe, redacted, _is_sensitive_key(field)
+        if len(cache) < 4096:
+            cache[field] = cached
+    return cached
+
+
 def _sanitize(
     value: Any,
     *,
     key: str = "",
     path: tuple[str, ...] = (),
+    _key_cache: dict | None = None,
 ) -> tuple[Any, bool]:
+    # Field-label work repeats for every quote/feature row. This cache lives
+    # only for one traversal, never retains values, and never caches path-
+    # dependent public-token or native-claim exemptions.
+    if _key_cache is None:
+        _key_cache = {}
     current_path = (*path, str(key)) if key else path
-    if _is_sensitive_key(key) and not _is_non_secret_internal_token(
+    sensitive = _sanitize_label(key, _key_cache)[2] if type(key) is str else _is_sensitive_key(key)
+    if sensitive and not _is_non_secret_internal_token(
         current_path, value
     ):
         return "[REDACTED]", True
@@ -611,7 +637,7 @@ def _sanitize(
         cleaned: dict[str, Any] = {}
         redacted = False
         for index, (child_key, child_value) in enumerate(value.items(), start=1):
-            safe_key, key_redacted = _sanitize_text(str(child_key))
+            safe_key, key_redacted, _ = _sanitize_label(str(child_key), _key_cache)
             if key_redacted:
                 safe_key = f"[REDACTED_KEY_{index}]"
                 safe_value, child_redacted = "[REDACTED]", True
@@ -622,6 +648,7 @@ def _sanitize(
                     child_value,
                     key=str(child_key),
                     path=current_path,
+                    _key_cache=_key_cache,
                 )
             cleaned[safe_key] = safe_value
             redacted = redacted or key_redacted or child_redacted
@@ -633,6 +660,7 @@ def _sanitize(
             safe_value, child_redacted = _sanitize(
                 child_value,
                 path=current_path,
+                _key_cache=_key_cache,
             )
             cleaned_list.append(safe_value)
             redacted = redacted or child_redacted
@@ -1277,7 +1305,11 @@ def capture_machine_observation(
         )
     )
     from src.engine.scalping.entry_machine_source_recovery import quote_label_reference
-    quote_label = quote_label_reference(exact_payload, assessment)
+    # A pre-adjudication rejection retains raw quote provenance, but never
+    # claims that an unperformed calculation supplied an outcome label.
+    quote_label = (None if assessment.get('schema') == 'mechanistic_entry_source_invalid_v1'
+                   and str(assessment.get('action', '')).upper() == 'SOURCE_INVALID'
+                   else quote_label_reference(exact_payload, assessment))
     if quote_label is not None:
         if quote_label['decision_epoch'] > now.timestamp():
             raise ValueError('quote_recovery_label_capture_clock_before_evaluation')

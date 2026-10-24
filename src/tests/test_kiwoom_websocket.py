@@ -13,6 +13,24 @@ from src.engine.kiwoom_websocket import KiwoomWSManager
 _SESSION_ROUTE_REQUIRED = KiwoomWSManager._integrated_aftermarket_route_required
 
 
+def test_delay_depth_reader_copies_only_existing_0d_and_current_transport():
+    manager = KiwoomWSManager('test-token')
+    manager._market_data_transport_epoch = 7
+    class History:
+        def __deepcopy__(self, memo):
+            pytest.fail('delay sampler traversed accumulated history')
+    book = {'asks':[{'price':100,'volume':2}], 'bids':[{'price':99,'volume':2}]}
+    manager.realtime_data['005930'] = dict(price_history=History(),
+        realtime_type_snapshots_by_route={'integrated': {'0D': dict(orderbook=book,
+            item='005930_AL', market_route='KRX_NXT_INTEGRATED', transport_epoch=7,
+            observed_epoch=10.), '0B': {'history': History()}}})
+    value = manager.get_pre_submit_delay_depth('005930')
+    assert value['market_data_transport_epoch'] == 7
+    assert set(value) == {'market_data_transport_epoch','realtime_type_snapshots_by_route'}
+    value['realtime_type_snapshots_by_route']['integrated']['0D']['orderbook']['asks'][0]['price'] = 999
+    assert book['asks'][0]['price'] == 100
+
+
 def test_retired_vcp_and_s15_conditions_are_absent_from_ws_bootstrap():
     keywords = set(kiwoom_websocket.SCALP_CONDITION_KEYWORDS)
     assert not keywords.intersection({
@@ -596,7 +614,7 @@ def test_raw_observation_is_lossless_while_dispatch_keeps_full_latest_history(
     monkeypatch.setattr(
         manager,
         "_observe_micro_reversion_forward",
-        lambda code, data, *, realtime_type: observed.append(
+        lambda code, data, *, realtime_type, snapshot_lock_held=False: observed.append(
             (realtime_type, data["curr"])
         ),
     )
@@ -4272,6 +4290,117 @@ def test_exact_probe_trace_distinguishes_wire_from_normalization_and_freezes_bef
     assert complete['lease']['wire_receipt_count_by_type'] == {'0B':1}
     assert trace['registration']['receipt_count_by_type'] == {}
     assert manager.exact_probe_source_trace('123456_AL','lease')['lease_bound'] is False
+
+
+@pytest.mark.parametrize('kind', ['0B', '0D'])
+@pytest.mark.parametrize('outcome', ['enqueued', 'invalid_depth_snapshot', 'queue_full',
+                                    'disabled', 'exception', 'unavailable', 'unknown'])
+def test_exact_probe_trace_accounts_for_collector_outcomes(kind, outcome):
+    from types import SimpleNamespace
+    from src.engine.scalping.micro_reversion.forward_collector import ProducerCanaryResult
+    manager = _exact_probe_manager()
+    lease = dict(lease_id='lease', epoch=7, interval_started_epoch=99.)
+    manager._exact_probe_item_leases['123456_AL'] = lease
+    manager._market_data_transport_epoch = 7
+    source = dict(item='123456_AL', transport_epoch=7, route_sequence=1,
+                  received_at_ms=100000, market_route='krx_nxt_integrated')
+    data = {'last_realtime_type_item': {kind: '123456_AL'},
+            'last_trade_tick' if kind == '0B' else 'last_depth_tick': source}
+    def observe(*args, **kwargs):
+        if outcome == 'exception':
+            raise RuntimeError('collector failure')
+        return None if outcome == 'unknown' else ProducerCanaryResult(outcome)
+    manager._micro_reversion_forward_collector = (None if outcome == 'unavailable' else
+        SimpleNamespace(observe_kiwoom_0b=observe, observe_kiwoom_0d=observe))
+    manager._observe_micro_reversion_forward('123456', data, realtime_type=kind)
+    result = {'exception': 'callback_error', 'unavailable': 'collector_unavailable',
+              'unknown': 'unobservable_result'}.get(outcome, outcome)
+    trace = manager.exact_probe_source_trace('123456_AL', 'lease')
+    assert trace['lease']['collector_result_counts_by_type'] == {kind: {result: 1}}
+    assert trace['lease']['collector_last_result_by_type'][kind] == dict(
+        result=result, route_sequence=1, received_at_ms=100000)
+    # A detached terminal trace survives native lease cleanup.
+    lease.clear()
+    assert trace['lease']['collector_result_counts_by_type'][kind][result] == 1
+    assert trace['order_authority'] is False
+
+
+@pytest.mark.parametrize('damage', ['epoch', 'item', 'route', 'replacement', 'reconnect',
+                                   'before_registration', 'missing_interval', 'bad_clock', 'lease_id'])
+def test_collector_outcome_never_credits_another_probe_lease(damage):
+    from types import SimpleNamespace
+    from src.engine.scalping.micro_reversion.forward_collector import ProducerCanaryResult
+    manager = _exact_probe_manager()
+    manager._market_data_transport_epoch = 7
+    lease = dict(lease_id='lease', epoch=7, interval_started_epoch=99.)
+    manager._exact_probe_item_leases['123456_AL'] = lease
+    source = dict(item='123456_AL', transport_epoch=7, route_sequence=1,
+                  received_at_ms=100000, market_route='krx_nxt_integrated')
+    if damage == 'epoch': source['transport_epoch'] = 6
+    if damage == 'item': source['item'] = '123456_NX'
+    if damage == 'route': source['market_route'] = 'nxt_only'
+    if damage == 'before_registration': source['received_at_ms'] = 98000
+    if damage == 'missing_interval': lease.pop('interval_started_epoch')
+    if damage == 'bad_clock': source['received_at_ms'] = float('nan')
+    def observe(*args, **kwargs):
+        if damage == 'replacement':
+            manager._exact_probe_item_leases['123456_AL'] = dict(lease_id='new', epoch=7)
+        if damage == 'reconnect': manager._market_data_transport_epoch = 8
+        if damage == 'lease_id': lease['lease_id'] = 'new'
+        return ProducerCanaryResult.ENQUEUED
+    manager._micro_reversion_forward_collector = SimpleNamespace(observe_kiwoom_0d=observe)
+    manager._observe_micro_reversion_forward('123456', {
+        'last_realtime_type_item': {'0D': '123456_AL'}, 'last_depth_tick': source}, realtime_type='0D')
+    assert 'collector_result_counts_by_type' not in lease
+    assert 'collector_result_counts_by_type' not in manager._exact_probe_item_leases['123456_AL']
+
+
+def test_probe_collector_accounting_exceeds_diagnostic_tail_without_growing_keys():
+    from types import SimpleNamespace
+    from src.engine.scalping.micro_reversion.forward_collector import ProducerCanaryResult
+    manager = _exact_probe_manager()
+    manager._market_data_transport_epoch = 7
+    lease = dict(lease_id='lease', epoch=7, interval_started_epoch=99.)
+    manager._exact_probe_item_leases['123456_AL'] = lease
+    manager._micro_reversion_forward_collector = SimpleNamespace(
+        observe_kiwoom_0d=lambda *a, **kw: ProducerCanaryResult.INVALID_DEPTH_SNAPSHOT)
+    source = dict(item='123456_AL', transport_epoch=7, route_sequence=1,
+                  received_at_ms=100000, market_route='krx_nxt_integrated')
+    for sequence in range(1, 201):
+        source['route_sequence'] = sequence
+        manager._observe_micro_reversion_forward('123456', {
+            'last_realtime_type_item': {'0D': '123456_AL'}, 'last_depth_tick': source}, realtime_type='0D')
+    assert lease['collector_result_counts_by_type'] == {'0D': {'invalid_depth_snapshot': 200}}
+    assert lease['collector_first_non_enqueued_by_type']['0D']['route_sequence'] == 1
+    assert lease['collector_last_result_by_type']['0D']['route_sequence'] == 200
+
+
+def test_native_depth_ingress_records_probe_rejection_without_reentering_snapshot_lock(monkeypatch):
+    import threading
+    from types import SimpleNamespace
+    from src.engine.scalping.micro_reversion.forward_collector import ProducerCanaryResult
+    class NoReentry:
+        def __init__(self): self.lock = threading.Lock()
+        def __enter__(self):
+            assert self.lock.acquire(blocking=False), 'snapshot lock reentry'
+        def __exit__(self, *args): self.lock.release()
+    manager = _exact_probe_manager()
+    monkeypatch.setattr(manager, '_maybe_write_dashboard_snapshot', lambda: None)
+    manager.lock = NoReentry()
+    manager.subscribed_codes.add('123456')
+    now = _epoch_at_090010()
+    monkeypatch.setattr(kiwoom_websocket.time, 'time', lambda: now)
+    manager._exact_probe_item_leases['123456_AL'] = dict(
+        lease_id='lease', epoch=8, interval_started_epoch=now-1)
+    manager._micro_reversion_observation_only_items.add('123456_AL')
+    manager._micro_reversion_forward_collector = SimpleNamespace(
+        flags=SimpleNamespace(depth_capture_active=True),
+        observe_kiwoom_0d=lambda *a, **kw: ProducerCanaryResult.INVALID_DEPTH_SNAPSHOT)
+    asyncio.run(manager._handle_message(json.dumps({'trnm': 'REAL', 'data': [{
+        'type': '0D', 'item': '123456_AL', 'values': {
+            '21': '090010', '41': '10110', '61': '100', '51': '10100', '71': '100'}}]})))
+    trace = manager.exact_probe_source_trace('123456_AL', 'lease')
+    assert trace['lease']['collector_result_counts_by_type'] == {'0D': {'invalid_depth_snapshot': 1}}
 
 
 def _fresh_continuity_transfer():

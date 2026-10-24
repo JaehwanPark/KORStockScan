@@ -319,7 +319,7 @@ def test_runtime_collection_uses_one_path_bundle_and_one_vote_is_insufficient(mo
         position_ctx={"buy_price": 100, "curr_price": 99,
                       "profit_rate": -1, "peak_profit": 0,
                       "drawdown_from_peak_pct": 1, "held_sec": 10},
-        holding_context={}, now_ts=10.0, min_interval_sec=1.0,
+        holding_context={"enabled": True}, now_ts=10.0, min_interval_sec=1.0,
     ) == "appended"
     assert calls == [("EXIT_TRAILING_TP", "ADD_REBOUND")]
     assert len(stock["holding_path_vote_ledger"]) == 2
@@ -332,7 +332,7 @@ def test_runtime_collection_uses_one_path_bundle_and_one_vote_is_insufficient(mo
         position_ctx={"buy_price": 100, "curr_price": 99,
                       "profit_rate": -1, "peak_profit": 0,
                       "drawdown_from_peak_pct": 1, "held_sec": 10},
-        holding_context={}, now_ts=10.0, min_interval_sec=1.0,
+        holding_context={"enabled": True}, now_ts=10.0, min_interval_sec=1.0,
     ) == "unchanged_input_skip"
     assert len(calls) == 1
     assert handlers._collect_holding_path_votes(
@@ -344,7 +344,7 @@ def test_runtime_collection_uses_one_path_bundle_and_one_vote_is_insufficient(mo
         position_ctx={"buy_price": 100, "curr_price": 99,
                       "profit_rate": -1, "peak_profit": 0,
                       "drawdown_from_peak_pct": 1, "held_sec": 11},
-        holding_context={}, now_ts=10.0, min_interval_sec=1.0,
+        holding_context={"enabled": True}, now_ts=10.0, min_interval_sec=1.0,
     ) == "duplicate_quote_generation_skip"
     assert len(stock["holding_path_vote_ledger"]) == 2
     snapshot = handlers._holding_path_signal_decision(
@@ -512,7 +512,7 @@ def test_each_path_has_a_complete_projected_input_in_each_market(
         buy_fill_identity=BUY_IDENTITY,
         route="KRX" if market == "REGULAR" else "NXT",
         transport_epoch="1", source_generation="item:1",
-        quote_observed_at=20, holding_context={},
+        quote_observed_at=20, holding_context={"enabled": True},
     )
     assert payload["quote"]["bid_total_depth"] == 1000
     assert payload["quote"]["ask_total_depth"] == 900
@@ -591,6 +591,31 @@ def test_exact_buy_fill_receipt_survives_two_restarts_and_add_leg(tmp_path):
     restored = {key: stock[key] for key in ("id", "code", "buy_time", "buy_price", "buy_qty")}
     assert restore_buy_fill_receipt(restored, tmp_path) == "restored"
     assert buy_fill_identity_from_runtime(restored) == new_identity
+
+
+@pytest.mark.parametrize('fault', [None, 'missing_unit', 'amount', 'price', 'quantity', 'time'])
+def test_restore_buy_identity_from_exact_fractional_fills_after_integer_inventory_sync(tmp_path, fault):
+    stock=dict(id=42,code='403870',buy_time='2026-10-20 09:25:34',buy_price=51188.8889,buy_qty=9,
+        _entry_receipt_filled_by_order_no={'1':4,'2':5},
+        _entry_receipt_executions_by_order_no={
+            '1':{'11':dict(cumulative_qty=4,unit_exec_qty=4,unit_exec_price=51300)},
+            '2':{'22':dict(cumulative_qty=5,unit_exec_qty=5,unit_exec_price=51100)}})
+    identity=persist_buy_fill_receipt(stock,tmp_path)
+    restored={k:stock[k] for k in ('id','code','buy_time','buy_qty')};restored['buy_price']=51188.
+    path=tmp_path/'runtime/holding_buy_fill_receipts/42.json'
+    payload=json.loads(path.read_text())
+    if fault=='missing_unit':payload['receipt_fields']['_entry_receipt_executions_by_order_no']['1']['11'].pop('unit_exec_price')
+    if fault=='amount':payload['receipt_fields']['_entry_receipt_executions_by_order_no']['1']['11']['unit_exec_price']=51301
+    if fault=='price':restored['buy_price']=51189.
+    if fault=='quantity':restored['buy_qty']=10
+    if fault=='time':restored['buy_time']='2026-10-20 09:25:35'
+    path.write_text(json.dumps(payload));before=path.read_bytes()
+    status=restore_buy_fill_receipt(restored,tmp_path)
+    assert status==('restored' if fault is None else 'position_generation_mismatch' if fault in {'quantity','time'} else 'position_price_mismatch')
+    assert path.read_bytes()==before and restored['buy_price']==(51189. if fault=='price' else 51188.)
+    if fault is None:
+        assert buy_fill_identity_from_runtime(restored)==identity
+        assert restored['buy_fill_identity_price_binding']=='exact_fills_with_integer_inventory_display'
 
 
 @pytest.mark.parametrize("clear_owner", ["receipt", "cancel"])

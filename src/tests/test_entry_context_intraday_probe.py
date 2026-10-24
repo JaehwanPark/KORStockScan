@@ -303,11 +303,7 @@ def test_probe_report_reads_existing_adm_and_summarizes_context(tmp_path, monkey
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr(
-        observations,
-        "report_paths",
-        lambda target_date: (report_path, tmp_path / "adm.md"),
-    )
+    assert not hasattr(observations, "report_paths")
     monkeypatch.setattr(
         mod, "load_entry_observations", lambda day: json.loads(report_path.read_text())
     )
@@ -340,11 +336,7 @@ def test_probe_report_can_build_adm_before_sampling(monkeypatch):
     monkeypatch.setattr(
         mod, "load_entry_observations", lambda day: {"rows": [_base_row()]}
     )
-    monkeypatch.setattr(
-        observations,
-        "build_scalp_entry_action_decision_matrix_report",
-        lambda day: pytest.fail("retired ADM builder called"),
-    )
+    assert not hasattr(observations, "build_scalp_entry_action_decision_matrix_report")
     report = mod.build_probe_report("2026-07-13", build_adm=True)
     assert report["status"] == "ok"
     assert report["source"]["build_adm"] is False
@@ -784,7 +776,7 @@ def test_provider_endpoint_compare_runs_bedrock_primary_and_openai_then_restores
             assert keys == ["test-key"]
             assert announce_startup is False
             assert (
-                getattr(openai_module.TRADING_RULES, "GPT_REPORT_MODEL")
+                getattr(openai_module.TRADING_RULES, "OPENAI_HOLDING_FLOW_MODEL")
                 == "gpt-5.4-mini"
             )
             assert (

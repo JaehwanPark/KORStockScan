@@ -711,3 +711,37 @@ def test_malformed_or_dropped_quote_proof_is_a_bounded_value_error(receipt, proo
             R.audit_quote_calculation(assessment, {})
     with pytest.raises(ValueError, match="receipt_missing"):
         R.validate_evaluation_quote_receipt(None, {}, dict(entry_source_quote_recovery={"schema": R.QUOTE_SCHEMA}))
+
+
+@pytest.mark.parametrize('changed', ['event_id', 'entry_ask', 'branch_signals', 'absent'])
+def test_observer_root_rejection_retains_both_roots_without_admitting_or_retrying(monkeypatch, changed):
+    from src.engine.scalping import reversal_source_diagnostics as diagnostics
+    root=dict(symbol='005930',venue='KRX',market='krx_regular',event_id='event',signal_id='signal',
+        epoch=NOW,native_epoch=7,native_sequence=42,source_item='005930',entry_ask=100,
+        registry_generation='c'*64,confirmation_price=100,
+        branch_signals={'G1':{'signal_id':'original'}})
+    observation=dict(schema='entry_source_quote_observer_v1',snapshot=[root,{}],family_sha256='a'*64,
+        observer_pid=123,observer_start_ticks='456',deadline_epoch=NOW+5)
+    current=deepcopy(root)
+    if changed=='event_id':current['event_id']='next'
+    elif changed=='entry_ask':current['entry_ask']=101
+    elif changed=='branch_signals':current['branch_signals']['G1']['signal_id']='new'
+    selection=dict(schema='native_observation_selection_v1',observed_epoch=NOW+.2,
+        reason='native_path_changed' if changed=='absent' else 'ready')
+    monkeypatch.setattr(diagnostics,'observation_binding_valid',lambda *a,**kw:True)
+    monkeypatch.setattr(diagnostics,'observe_snapshot',lambda *a,**kw:
+        (None if changed=='absent' else (current,{}), selection))
+    before=deepcopy(observation)
+    with pytest.raises(ValueError,match='machine_source_quote_observer_native_root_changed') as caught:
+        R.validated_observer_snapshot(observation,now=NOW+.2)
+    receipt=caught.value.reversal_source_receipt
+    assert receipt['original_root']==root
+    assert receipt['current_root']==(None if changed=='absent' else current)
+    assert receipt['native_selection']==selection
+    assert receipt['sha256']==R._digest({k:v for k,v in receipt.items() if k!='sha256'})
+    assert receipt['runtime_effect'] is receipt['allowed_runtime_apply'] is receipt['actual_order_submitted'] is False
+    assert receipt['broker_order_forbidden'] is True
+    assert observation==before
+    from src.engine.scalping.ai_decision_trace import sanitize_ai_trace_value
+    safe, redacted = sanitize_ai_trace_value({'continuous_reversal_rejected_claim_receipt': receipt})
+    assert safe['continuous_reversal_rejected_claim_receipt'] == receipt and not redacted

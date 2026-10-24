@@ -15,6 +15,131 @@ from src.engine.lifecycle.holding_window_generation import byte_generation
 
 MAX_LINE = 6 * 1024 * 1024
 
+# These two modules issue/verify a code handoff or materialize postclose
+# candidates. Neither evaluates a live signal. The resulting native payload,
+# membership, definitions and every other code hash must still match exactly.
+MACHINE_TIMING_NON_EVALUATORS = frozenset({'reversal_code_handoff.py', 'reversal_cumulative_postclose.py'})
+MACHINE_COMPATIBILITY_SCHEMA = 'pre_submit_delay_identical_machine_parents_v1'
+
+
+def machine_timing_shape(family):
+    """Conservative equality, not a replay or a license to change a rule.
+
+    Keep unknown fields and all runtime code. Strip only issuance provenance
+    and selection evidence whose *result* remains in the exact native cells.
+    Auxiliary prompt/model/options/validator identities are not normalized.
+    """
+    import copy
+    value = copy.deepcopy(family)
+    for key in ('source_date', 'publication_date', 'effective_date', 'release_commit',
+                'family_sha256', 'parent_bundle_sha256', 'machine_report_sha256',
+                'auxiliary_report_sha256', 'report_file_sha256', 'source_manifest_sha256',
+                'execution_manifest_hash', 'execution_code_sha256', 'code_refresh'):
+        value.pop(key, None)
+    value['contract_file_sha256'] = {k:v for k,v in value['contract_file_sha256'].items()
+                                    if k not in MACHINE_TIMING_NON_EVALUATORS}
+    native = value.pop('native_parent_bundle', None)
+    if native is not None:
+        value['native_parent_family'] = machine_timing_shape(native['continuous_reversal'])
+    for cell in value['machine_cells'].values():
+        for route in cell['routes'].values():
+            route.pop('scope_execution_hash', None)
+    manifest = value.get('operating_manifest', {})
+    for key in ('effective_date', 'cumulative_selection_receipt'):
+        manifest.pop(key, None)
+    return value
+
+
+def _machine_bundle(path):
+    from src.engine.scalping import mechanistic_entry_runtime_policy as native
+    # Native v6 bundles include their frozen v4 parent; do not scan a directory
+    # or silently increase a budget if that bounded representation changes.
+    path = Path(path)
+    if path.is_symlink() or path.stat().st_size > 8 * 1024 * 1024:
+        raise ValueError('delay_machine_bundle_unbounded_or_linked')
+    before = byte_generation(path)
+    bundle = native._read(path)
+    native.validate(bundle, target_date=bundle['target_date'])
+    if byte_generation(path) != before:
+        raise ValueError('delay_machine_bundle_changed')
+    if path.name != bundle['bundle_sha256'] + '.json':
+        raise ValueError('delay_machine_bundle_filename_invalid')
+    return bundle, dict(path=str(path.resolve()), sha256=before['sha256'],
+                       bundle_sha256=bundle['bundle_sha256'])
+
+
+def prepare_machine_compatibility(root, target_date):
+    """Follow the issued candidate's ancestry, stopping at the first difference.
+
+    Missing/older-policy candidates retain exact-parent behavior. An invalid
+    existing candidate fails rather than authorizing an unverified alias.
+    """
+    from src.engine.scalping import mechanistic_entry_runtime_policy as native
+    base = Path(root) / 'runtime/mechanistic_entry_policy'
+    candidate = base / 'candidates' / ('policy_' + target_date + '.json')
+    if not candidate.exists():
+        return None
+    issued = native._read(candidate)
+    native.validate(issued, target_date=target_date)
+    if issued.get('continuous_reversal', {}).get('schema') != 'continuous_reversal_policy_v6':
+        return None
+    target, ref = _machine_bundle(base/'generations'/(issued['bundle_sha256']+'.json'))
+    if issued != target:
+        raise ValueError('delay_machine_candidate_generation_mismatch')
+    family = target['continuous_reversal']
+    shape = machine_timing_shape(family)
+    chain, seen = [ref], {target['bundle_sha256']}
+    for _ in range(16):
+        identity = family.get('parent_bundle_sha256')
+        if not identity:
+            break
+        if identity in seen:
+            raise ValueError('delay_machine_ancestry_cycle')
+        parent, ref = _machine_bundle(base/'generations'/(identity+'.json'))
+        previous = parent.get('continuous_reversal', {})
+        if (previous.get('schema') != 'continuous_reversal_policy_v6'
+                or machine_timing_shape(previous) != shape):
+            break
+        if parent['target_date'] > target['target_date']:
+            raise ValueError('delay_machine_ancestry_date_invalid')
+        chain.append(ref); seen.add(identity); family = previous
+    else:
+        raise ValueError('delay_machine_ancestry_budget_exceeded')
+    if len(chain) == 1:
+        return None
+    proof = dict(schema=MACHINE_COMPATIBILITY_SCHEMA, target_date=target_date, chain=chain,
+                 semantic_sha256=initial.digest(shape))
+    proof['sha256'] = initial.digest(proof)
+    return proof
+
+
+def machine_parent_mapping(proof, *, target_date):
+    """Verify native generations before rebuilding cells, including cache hits."""
+    if proof is None:
+        return {}
+    if (proof.get('schema') != MACHINE_COMPATIBILITY_SCHEMA or proof.get('target_date') != target_date
+            or proof.get('sha256') != initial.digest({k:v for k,v in proof.items() if k!='sha256'})
+            or not isinstance(proof.get('chain'), list) or not 2 <= len(proof['chain']) <= 16):
+        raise ValueError('delay_machine_compatibility_invalid')
+    mapping, previous, target_parent = {}, None, None
+    seen = set()
+    for ref in proof['chain']:
+        bundle, actual = _machine_bundle(ref['path'])
+        family = bundle.get('continuous_reversal', {})
+        if (actual != ref or bundle['bundle_sha256'] in seen
+                or family.get('schema') != 'continuous_reversal_policy_v6'
+                or initial.digest(machine_timing_shape(family)) != proof['semantic_sha256']
+                or (previous is None and bundle['target_date'] != target_date)
+                or (previous is not None and (previous['parent_bundle_sha256'] != bundle['bundle_sha256']
+                    or bundle['target_date'] > previous['effective_date']))):
+            raise ValueError('delay_machine_compatibility_binding_invalid')
+        seen.add(bundle['bundle_sha256'])
+        parent = family['execution_manifest_hash']
+        target_parent = target_parent or parent
+        mapping[parent] = target_parent
+        previous = family
+    return mapping
+
 
 def prepare(rows, db, root):
     db.execute('CREATE TABLE situation_needed(day TEXT,machine TEXT,attempt TEXT,symbol TEXT,parent TEXT,'

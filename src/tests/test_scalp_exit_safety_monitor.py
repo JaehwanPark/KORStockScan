@@ -16,10 +16,11 @@ from src.engine.scalping.trailing_operational_replay import (
 
 
 @pytest.fixture(autouse=True)
-def _isolate_active_targets(monkeypatch):
+def _isolate_active_targets(monkeypatch, tmp_path):
     """Each cancellation case must use only the positions it constructs."""
 
     monkeypatch.setattr(handlers, "ACTIVE_TARGETS", [])
+    monkeypatch.setenv("KORSTOCKSCAN_ORDER_OWNER_REGISTRY_PATH", str(tmp_path / "owner-registry.jsonl"))
 
 
 def test_trailing_transition_keeps_type_specific_and_rest_source_clocks(monkeypatch):
@@ -27,7 +28,7 @@ def test_trailing_transition_keeps_type_specific_and_rest_source_clocks(monkeypa
     monkeypatch.setattr(
         handlers,
         "_log_holding_pipeline",
-        lambda stock, code, stage, **fields: events.append((stage, fields)),
+        lambda stock, code, stage, **fields: events.append((stage, fields)) or True,
     )
     stock = {"id": 123, "code": "123456"}
     snapshot = {
@@ -91,7 +92,7 @@ def test_trailing_transition_keeps_type_specific_and_rest_source_clocks(monkeypa
 
 
 @pytest.mark.parametrize('failure', [None, 'false_return', 'exception'])
-def test_native_first_crossing_survives_grid_cap_and_retries_frozen_receipt(monkeypatch, failure):
+def test_native_first_crossing_survives_legacy_grid_gap_and_retries_frozen_receipt(monkeypatch, failure):
     from src.engine import holding_exit_sentinel as sentinel
     from src.engine.scalping.holding_profit_exit_semantics import audit_profit_exit_flow
     from src.engine.scalping.trailing_mechanical_policy import baseline_receipt
@@ -109,9 +110,12 @@ def test_native_first_crossing_survives_grid_cap_and_retries_frozen_receipt(monk
         peak_profit_pct=1., start_pct=.4, strong=False, weak_limit_pct=.4, strong_limit_pct=.8)
     decision = handlers._scalp_trailing_latch_first_crossing(stock, '123456', decision,
         observed_at=at, mechanical_fields=mechanical, market='REGULAR')
-    calls=[]; accepted=[]
+    calls=[]; accepted=[]; observations=[]
 
     def emit(stock, code, stage, **fields):
+        if stage == "scalp_trailing_input_transition":
+            observations.append(fields)
+            return True
         calls.append((stage, fields))
         if failure and len(calls)==1:
             if failure=='exception':raise OSError('full queue')
@@ -131,7 +135,8 @@ def test_native_first_crossing_survives_grid_cap_and_retries_frozen_receipt(monk
         handlers._observe_scalp_trailing_input_transition(stock, '123456', now_ts=at+1.1, **args)
         assert calls[0][1]['first_crossing_source']==calls[1][1]['first_crossing_source']
     handlers._observe_scalp_trailing_input_transition(stock, '123456', now_ts=at+2, **args)
-    assert stock['scalp_trailing_observation_sequence']==256
+    assert stock['scalp_trailing_observation_sequence']>256
+    assert observations and all(row['observation_telemetry_gap'] for row in observations)
     assert len(accepted)==1 and accepted[0][0]=='scalp_trailing_first_crossing_transition'
     source=json.loads(accepted[0][1]['first_crossing_source'])
     assert source['first_crossing']['at_epoch']==at and len(accepted[0][1]['first_crossing_source'])<8192
@@ -169,11 +174,42 @@ def test_first_crossing_receipt_never_backfills_old_latch_or_retries_without_bou
     assert stock.get('scalp_trailing_first_crossing') is None
 
 
+@pytest.mark.parametrize('hour', [8, 10, 16])
+def test_trailing_observation_continues_beyond_256_and_keeps_admission_loss(monkeypatch, hour):
+    from src.engine.ai import holding_vote_replay_source
+    monkeypatch.setattr(holding_vote_replay_source, 'runtime_source', lambda *a, **k: {})
+    monkeypatch.setattr(handlers, 'buy_fill_identity_from_runtime', lambda s: 'a'*64)
+    stock = dict(id=7, code='123456', buy_price=10000, buy_qty=1)
+    seen = []
+    def emit(stock, code, stage, **fields):
+        if stage == 'scalp_trailing_input_transition':
+            seen.append(fields)
+            return dict(status='unavailable' if len(seen) == 280 else 'queued',
+                        structured_append_succeeded=False)
+        return True
+    monkeypatch.setattr(handlers, '_log_holding_pipeline', emit)
+    decision = handlers.evaluate_trailing_take_profit(peak_price=10000, executable_bid=10000,
+        peak_profit_pct=0., start_pct=.4, strong=False, weak_limit_pct=.4, strong_limit_pct=.8)
+    at = datetime(2026, 10, 23, hour, 10, tzinfo=ZoneInfo('Asia/Seoul')).timestamp()
+    common = dict(ws_data={}, decision=decision, peak_price=10000, executable_bid=10000,
+        bid_source='missing', strong=False, ai_score=0., ai_usable=False, start_pct=.4,
+        evaluator='fast', mechanical_fields={'classifier_new_event_count':1})
+    for i in range(320):
+        handlers._observe_scalp_trailing_input_transition(stock, '123456', now_ts=at+i*.1, **common)
+    assert [r['event_sequence'] for r in seen] == list(range(1,321))
+    assert not any(r['observation_coverage_exhausted'] for r in seen)
+    assert not seen[279]['observation_telemetry_gap']
+    assert all(r['observation_telemetry_gap'] for r in seen[280:])
+    stock['id'] = 8
+    handlers._observe_scalp_trailing_input_transition(stock, '123456', now_ts=at+33, **common)
+    assert seen[-1]['event_sequence'] == 1 and not seen[-1]['observation_telemetry_gap']
+
+
 def test_trailing_grid_heartbeat_exposes_evaluation_gap(monkeypatch):
     events = []
     monkeypatch.setattr(
         handlers, "_log_holding_pipeline",
-        lambda stock, code, stage, **fields: events.append((stage, fields)),
+        lambda stock, code, stage, **fields: events.append((stage, fields)) or True,
     )
     stock = {"id": 123, "code": "123456"}
     decision = handlers.evaluate_trailing_take_profit(
@@ -207,7 +243,7 @@ def test_trailing_grid_uses_exact_route_depth_without_top_level_qty(monkeypatch)
     events = []
     monkeypatch.setattr(
         handlers, "_log_holding_pipeline",
-        lambda stock, code, stage, **fields: events.append((stage, fields)),
+        lambda stock, code, stage, **fields: events.append((stage, fields)) or True,
     )
     at = datetime(2026, 9, 25, 10, tzinfo=ZoneInfo("Asia/Seoul")).timestamp()
     depth = {
@@ -2481,6 +2517,25 @@ def test_sell_cancel_exact_success_releases_generation_after_db_commit(monkeypat
     assert not receipts._sell_pending_submit_path(stock["id"]).exists()
     assert db.updates[0]["status"] == "HOLDING"
     assert generation
+
+    # Exact cancellation releases the old owner; the ordinary dispatcher may
+    # now create a different generation through the same custody boundary.
+    stock.update(strategy="SCALPING", buy_price=10000)
+    monkeypatch.setattr(handlers, "DB", db)
+    monkeypatch.setattr(handlers, "_confirm_cancel_or_reload_remaining",
+                        sniper_trade_utils.confirm_cancel_or_reload_remaining)
+    monkeypatch.setattr(handlers, "_sell_side_open_time_block_fields", lambda **kwargs: {})
+    sends = []
+    monkeypatch.setattr(handlers, "_send_exit_best_ioc", lambda *a, **k:
+                        sends.append((a, k)) or {"return_code": "0", "ord_no": "0000009"})
+    handlers._dispatch_scalp_preset_exit(stock=stock, code=stock["code"],
+        now_ts=handlers.time.time(), curr_p=9800, buy_p=10000, profit_rate=-2,
+        peak_profit=0, strategy="SCALPING", sell_reason_type="LOSS",
+        reason="after exact cancellation", exit_rule="scalp_preset_hard_stop_pct")
+    assert len(sends) == 1
+    assert stock["sell_submit_generation"] != generation
+    assert stock["buy_qty"] == stock["sell_submit_requested_qty"] == 7
+    assert receipts._sell_pending_submit_path(stock["id"]).exists()
 
 
 def test_sell_cancel_ack_is_durable_and_reused_until_terminal_absence(monkeypatch):

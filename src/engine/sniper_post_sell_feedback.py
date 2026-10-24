@@ -484,20 +484,25 @@ def _post_sell_execution_route_contract(
         if sell_dt.tzinfo is None
         else sell_dt
     )
-    from src.trading.market.execution_venue import execution_venue_fields
+    from src.trading.market.execution_venue import (
+        execution_venue_fields, broker_route_fields, market_defaults_active,
+        MARKET_DEFAULT_AUTHORITY,
+    )
     assignment = execution_venue_fields(source, observed_at=resolved_sell_dt)
     context = resolve_market_session(resolved_sell_dt)
-    broker_route = str(
-        source.get("last_sell_execution_broker_route_requested")
-        or source.get("broker_route_requested")
-        or source.get("last_sell_execution_broker_route")
-        or source.get("last_exit_broker_route")
-        or source.get("fast_exit_broker_route")
-        or source.get("entry_execution_broker_route")
-        or source.get("broker_route")
-        or source.get("dmst_stex_tp")
-        or ""
-    ).strip().upper()
+    from src.trading.market.execution_venue import UNRESOLVED_MARKET_VALUES
+    broker_route = ""
+    for key in ("last_sell_execution_broker_route_requested", "broker_route_requested",
+                "last_sell_execution_broker_route", "last_exit_broker_route", "fast_exit_broker_route",
+                "entry_execution_broker_route", "broker_route", "dmst_stex_tp"):
+        value = str(source.get(key) or "").strip().upper()
+        if not broker_route:
+            broker_route = value
+        if value not in UNRESOLVED_MARKET_VALUES:
+            broker_route = value
+            break
+    route_fields = broker_route_fields(broker_route, observed_at=resolved_sell_dt, recorded=source)
+    broker_route = route_fields["broker_route_requested"]
     market_data_route = str(
         source.get("last_sell_execution_market_data_route")
         or source.get("market_data_route")
@@ -507,10 +512,13 @@ def _post_sell_execution_route_contract(
     ).strip().lower()
     route_resolution = "explicit_market_data_route"
     if market_data_route in {"", "unknown", "-"}:
-        market_data_route = str(
-            context.preferred_market_data_route or ""
-        ).strip().lower()
-        route_resolution = "market_session_contract_preferred_data_route"
+        if market_defaults_active(resolved_sell_dt):
+            market_data_route = {"SOR": "krx_nxt_integrated", "KRX": "krx_only",
+                                 "NXT": "nxt_only"}.get(broker_route, "unknown")
+            route_resolution = MARKET_DEFAULT_AUTHORITY
+        else:
+            market_data_route = str(context.preferred_market_data_route or "").strip().lower()
+            route_resolution = "market_session_contract_preferred_data_route"
     if broker_route not in {"KRX", "NXT", "SOR"} or market_data_route not in {
         "krx_only",
         "nxt_only",
@@ -554,13 +562,10 @@ def _post_sell_execution_route_contract(
     ).strip()
     if venue == "UNKNOWN":
         venue_source = "official_exchange_fields_ambiguous_or_missing"
-    if assignment["execution_venue_override"]:
+    if assignment["actual_execution_venue"] in {"KRX", "NXT"}:
         venue = assignment["actual_execution_venue"]
         venue_source = assignment["actual_execution_venue_source"]
 
-    expected_session_route = str(
-        context.preferred_market_data_route or ""
-    ).strip().lower()
     legacy_session_matches = bool(
         context.contract_version == "market_session_contract_v1"
         and (
@@ -578,16 +583,12 @@ def _post_sell_execution_route_contract(
         )
     )
     session_matches = bool(
-        session == context.session_regime or legacy_session_matches
+        session.lower() == context.session_regime.lower() or legacy_session_matches
     )
-    if (
-        expected_session_route in {"krx_only", "nxt_only", "krx_nxt_integrated"}
-        and market_data_route != expected_session_route
-    ) or (
-        venue != "UNKNOWN"
-        and context.open_venues
-        and venue not in context.open_venues
-    ) or not session_matches:
+    # Preferred decision data route/open execution venues are not an exact
+    # collection-route contract. Preserve the explicit source route and native
+    # fill attribution separately; actual quote admission remains with 0D.
+    if not session_matches or context.blocker:
         return {
             "status": "route_source_quality_blocked",
             "reason": "venue_session_route_contract_mismatch",
@@ -599,8 +600,10 @@ def _post_sell_execution_route_contract(
             "actual_execution_venue_verified": assignment["actual_execution_venue_verified"],
             "execution_venue_override": assignment["execution_venue_override"],
         }
+    quote_scope = {"nxt_only": "NXT", "krx_nxt_integrated": "SOR", "krx_only": "KRX"}[market_data_route]
     return {
         "status": "route_contract_ready",
+        "quote_observer_scope": quote_scope,
         "reason": route_resolution,
         "broker_route": broker_route,
         "expected_market_route": market_data_route,
@@ -610,6 +613,7 @@ def _post_sell_execution_route_contract(
         "market_session_regime": session,
         "market_data_route": market_data_route,
         "broker_route_requested": broker_route,
+        **route_fields,
         "actual_execution_venue": venue,
         "actual_execution_venue_source": venue_source,
         "actual_execution_venue_verified": assignment["actual_execution_venue_verified"],
@@ -705,6 +709,7 @@ def _register_post_sell_executable_bbo_observer(
             "expected_market_route": route["expected_market_route"],
             "broker_route": route["broker_route"],
             "venue": route["venue"],
+            "quote_observer_scope": route["quote_observer_scope"],
             "session": route["session"],
             "route_reason": route["reason"],
             "session_contract_version": route["session_contract_version"],
@@ -715,6 +720,8 @@ def _register_post_sell_executable_bbo_observer(
             "actual_execution_venue_source": route[
                 "actual_execution_venue_source"
             ],
+            "actual_execution_venue_verified": route["actual_execution_venue_verified"],
+            "broker_actual_execution_venue": stock.get("broker_actual_execution_venue", "UNKNOWN"),
             "pending_horizons_sec": list(POST_SELL_EXECUTABLE_BBO_HORIZONS_SEC),
             "fresh_sample_count": 0,
             "first_fresh_quote_epoch": 0.0,
@@ -729,6 +736,7 @@ def _register_post_sell_executable_bbo_observer(
         **base,
         "post_sell_executable_bbo_observer_registered": True,
         "post_sell_executable_bbo_observer_status": "registered",
+        "post_sell_executable_bbo_quote_observer_scope": route["quote_observer_scope"],
         "post_sell_executable_bbo_registration_key": registration_key,
         "post_sell_executable_bbo_route_reason": route["reason"],
         "post_sell_executable_bbo_expected_market_route": route[
@@ -1012,6 +1020,8 @@ def record_post_sell_candidate(
             "market_session_regime": receipt_route.get("session", "unknown"),
             "market_data_route": receipt_route.get("expected_market_route", "-"),
             "broker_route_requested": receipt_route.get("broker_route", "-"),
+            "broker_route_requested_raw": receipt_route.get("broker_route_requested_raw"),
+            "broker_route_override": receipt_route.get("broker_route_override"),
             "actual_execution_venue": receipt_route.get("venue", "UNKNOWN"),
             "actual_execution_venue_source": receipt_route.get(
                 "actual_execution_venue_source",

@@ -1,11 +1,27 @@
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
 import logging
+import sys
+from types import ModuleType
+from unittest.mock import patch
 import pytest
 
 from src.database.db_manager import DBManager
 from src.database.models import Base
-from src.utils import kiwoom_utils, update_kospi
+from src.utils import kiwoom_utils
+import src.model as model_package
+import src.notify as notify_package
+
+# These source/storage tests do not execute feature calculation or messaging.
+# Isolate import-time writers as well as the calls mocked by each fixture.
+_features = ModuleType('src.model.common_v2')
+_features.calculate_all_features = lambda *a, **k: pytest.fail('unexpected feature calculation')
+_telegram = ModuleType('src.notify.telegram_manager')
+with patch.dict(sys.modules, {'src.model.common_v2': _features,
+                             'src.notify.telegram_manager': _telegram}), \
+        patch.object(model_package, 'common_v2', _features, create=True), \
+        patch.object(notify_package, 'telegram_manager', _telegram, create=True):
+    from src.utils import update_kospi
 
 
 KST = ZoneInfo("Asia/Seoul")
@@ -410,3 +426,54 @@ def test_eod_normalization_never_collapses_instrument_namespaces():
     assert update_kospi._normalize_stock_code('A005930_AL') == '005930'
     assert update_kospi._normalize_stock_code('005930_NX') == '005930'
     assert update_kospi._normalize_stock_code('1234567') == '1234567'
+
+
+@pytest.mark.parametrize('feed', ['fdr', 'db'])
+@pytest.mark.parametrize('new_gap', [False, True])
+def test_operator_removed_master_symbols_never_reenter_eod_collection(monkeypatch, feed, new_gap):
+    import pandas as pd
+    from sqlalchemy import create_engine, text
+    from types import SimpleNamespace
+    from contextlib import nullcontext
+    from src.engine.infrastructure.market_eligibility_source import REMOVED_MASTER_SYMBOLS
+
+    codes = sorted(REMOVED_MASTER_SYMBOLS) + ['005930'] + (['000660'] if new_gap else [])
+    engine = create_engine('sqlite://')
+    Base.metadata.create_all(engine)
+    with engine.begin() as conn:
+        conn.execute(text('INSERT INTO daily_stock_quotes (quote_date,stock_code,close_price) '
+                          'VALUES (:day,:code,1)'), [dict(day='2026-10-22',code=c) for c in codes])
+    monkeypatch.setattr(update_kospi, 'DBManager', lambda: SimpleNamespace(
+        engine=engine, init_db=lambda: None, get_session=lambda: nullcontext()))
+    monkeypatch.setattr(update_kospi, 'EventBus', lambda: SimpleNamespace(publish=lambda *a: None))
+    monkeypatch.setattr(update_kospi.kiwoom_utils, 'is_trading_day', lambda: (True, 'fixture'))
+    monkeypatch.setattr(update_kospi.kiwoom_utils, 'get_kiwoom_token', lambda: 'fixture-token')
+    def listings(*args):
+        if feed == 'db': raise ValueError('offline listing failure')
+        return pd.DataFrame([dict(Market='KOSDAQ',Code=c) for c in codes])
+    monkeypatch.setattr(update_kospi.fdr, 'StockListing', listings)
+    expected = sorted(set(codes)-REMOVED_MASTER_SYMBOLS)
+    def eligibility(db, session, *, token, stock_codes, **kwargs):
+        assert stock_codes == expected
+        return {}, dict(status='pass',stored_count=len(stock_codes))
+    monkeypatch.setattr(update_kospi, '_collect_and_store_market_eligibility', eligibility)
+    monkeypatch.setattr(update_kospi, '_today_str', lambda: '2026-10-23')
+    monkeypatch.setattr(update_kospi.time, 'sleep', lambda *a: None)
+    calls = []
+    def received(code, *args, **kwargs):
+        calls.append(code)
+        if code == '000660': return pd.DataFrame()
+        return pd.DataFrame([dict(quote_date=date(2026,10,23),stock_code=code,close_price=2)])
+    monkeypatch.setattr(update_kospi, 'process_and_save_stock', received)
+    result = update_kospi.update_kospi_data()
+    assert calls == expected
+    assert result['total_count'] == len(expected)
+    assert result['status'] == ('completed_with_warnings' if new_gap else 'completed')
+    assert result['missing_target_date_codes'] == (['000660'] if new_gap else [])
+    assert {r['canonical_code'] for r in result['excluded_symbol_identities']
+            if r['reason'] == 'operator_removed_from_master'} == REMOVED_MASTER_SYMBOLS
+    with engine.connect() as conn:
+        rows = conn.execute(text('SELECT stock_code,close_price FROM daily_stock_quotes '
+                                 "WHERE quote_date='2026-10-22' ORDER BY stock_code")).all()
+        assert rows == [(c,1.0) for c in sorted(codes)]
+    engine.dispose()

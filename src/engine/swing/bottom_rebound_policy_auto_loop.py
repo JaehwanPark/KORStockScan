@@ -35,9 +35,7 @@ REPORT_TYPE = "swing_bottom_rebound_policy_auto_loop"
 SCHEMA_VERSION = "swing_bottom_rebound_policy_auto_loop_v1"
 DECISION_AUTHORITY = "swing_bottom_rebound_sim_policy_auto_approval"
 AI_REVIEW_SCHEMA_NAME = "swing_bottom_rebound_policy_ai_review_v1"
-AI_REVIEW_MODEL = str(
-    getattr(TRADING_RULES, "GPT_REPORT_MODEL", "gpt-5.4-mini") or "gpt-5.4-mini"
-)
+AI_REVIEW_MODEL = "gpt-5.4-mini"
 REPORT_DIR = Path(DATA_DIR) / "report" / REPORT_TYPE
 EV_REPORT_DIR = Path(DATA_DIR) / "report" / "swing_strategy_discovery_ev"
 FORBIDDEN_USES = [

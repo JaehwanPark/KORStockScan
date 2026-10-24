@@ -22,6 +22,13 @@ def _sealed(path, body):
 
 @pytest.fixture
 def source_pair(tmp_path, monkeypatch):
+    # Preparation precedes activation. Same-day successor tests install their
+    # own target-day clock and active pointer explicitly.
+    class PreparationClock(real_datetime):
+        @classmethod
+        def now(cls, zone):
+            return real_datetime(2026, 10, 18, 20, 0, tzinfo=zone)
+    monkeypatch.setattr(gate, 'datetime', PreparationClock)
     data = tmp_path / 'data'
     old = tmp_path / 'old' / Path(reader.__file__).name
     old.parent.mkdir()
@@ -493,7 +500,7 @@ PROJECT_DIR="$(cd .. && pwd)"
 export_runtime_source_provenance() { :; }
 record_threshold_runtime_env_pid_handoff() { :; }
 korstockscan_nproc() { echo 1; }
-''' + source[start:end]
+''' + (Path(__file__).parents[1] / 'engine/infrastructure/main_policy_environment.sh').read_text() + '\n' + source[start:end]
     marker = tmp_path / 'child-spawned'
     result = subprocess.run(['bash', '-c', script], cwd=tmp_path / 'src',
                             env={**os.environ, 'AUXILIARY_TEST_GATE_EXIT': str(gate_exit),

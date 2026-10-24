@@ -96,6 +96,45 @@ def _generation_gzip(source: Path) -> Path:
     return matches[0]
 
 
+@pytest.mark.parametrize("unreadable_source", [False, True])
+def test_cache_census_preserves_evidence_and_rejects_source_read_failure(tmp_path, unreadable_source):
+    if os.geteuid() == 0:
+        pytest.skip("Permission semantics require an unprivileged cleanup owner")
+    project = tmp_path / "project"
+    (project / "logs").mkdir(parents=True)
+    disposable = project / "src/package/__pycache__"
+    disposable.mkdir(parents=True)
+    (disposable / "module.pyc").write_bytes(b"disposable")
+    preserved = []
+    for root in (".venv", ".git", "data", "logs", "tmp", "docs"):
+        cache = project / root / "sealed/__pycache__"
+        cache.mkdir(parents=True)
+        (cache / "evidence.pyc").write_bytes(b"sealed evidence")
+        preserved.append(cache)
+    blocked = project / ("src/unreadable" if unreadable_source else "data/report/deployment/work")
+    blocked.mkdir(parents=True)
+    blocked.chmod(0)
+    try:
+        result = subprocess.run(
+            ["bash", "deploy/run_logs_rotation_cleanup_cron.sh", "30"],
+            cwd=Path(__file__).resolve().parents[2],
+            env={**os.environ, "PROJECT_DIR": str(project), "TARGET_DATE": "2026-10-16"},
+            text=True, capture_output=True, timeout=40,
+        )
+        assert blocked.stat().st_mode & 0o777 == 0
+        assert all((p / "evidence.pyc").read_bytes() == b"sealed evidence" for p in preserved)
+        if unreadable_source:
+            assert result.returncode == 1, result.stdout + result.stderr
+            assert "[CLEANUP_ENUMERATION_FAIL] lane=cache_retention_census" in result.stdout
+            assert disposable.exists()  # A partial enumeration cannot delete.
+        else:
+            assert result.returncode == 0, result.stdout + result.stderr
+            assert "Permission denied" not in result.stderr
+            assert not disposable.exists()
+    finally:
+        blocked.chmod(0o700)
+
+
 @pytest.mark.parametrize(
     "defect", [None, "generic_failure", "missing_field", "latest_start", "stale"]
 )

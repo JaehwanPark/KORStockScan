@@ -6361,3 +6361,46 @@ def test_streamed_execution_projection_rejects_source_change(monkeypatch,tmp_pat
     assert source['streamed_native_rows'] and list(rows)==[event]
     path.write_text(json.dumps({**event,'fields':dict(stock_code='000660')})+'\n')
     with pytest.raises(ValueError,match='changed_during_read'):list(rows)
+
+
+def test_streamed_projection_reuses_only_verified_selected_lines_and_rejects_restored_mtime(monkeypatch,tmp_path):
+    import os,gc
+    from src.engine.lifecycle import research_input_budget as budget
+    monkeypatch.setattr(split_plan,'DATA_DIR',tmp_path)
+    monkeypatch.setattr(split_plan,'EXECUTION_PROJECTION_MAX_DECODED_BYTES',1)
+    day='2026-10-07';folder=tmp_path/'threshold_cycle'/f'date={day}'/'family=dynamic_entry_price_resolver'
+    folder.mkdir(parents=True);path=folder/'part-1.jsonl'
+    event=dict(stage='entry_execution_sizing_plan',emitted_date=day,fields=dict(stock_code='005930'))
+    path.write_text(json.dumps(dict(stage='unrelated',payload='x'*100000))+'\n'+json.dumps(event)+'\n')
+    calls=[];original=split_plan.open_text_auto
+    def counted(path,*args,**kwargs):
+        calls.append(str(path));return original(path,*args,**kwargs)
+    monkeypatch.setattr(split_plan,'open_text_auto',counted)
+    used=budget.health()['used_bytes']
+    rows,proof=split_plan._bounded_execution_projection(day)
+    assert list(rows)==[event]
+    reads=len(calls)
+    for _ in range(5):assert list(rows)==[event]
+    assert len(calls)==reads and proof['streamed_native_rows'] is True
+    assert budget.health()['used_bytes']>used
+    # Returned objects cannot mutate the immutable cached source lines.
+    list(rows)[0]['fields']['stock_code']='000660'
+    assert list(rows)==[event]
+    before=path.stat();raw=path.read_text();path.write_text(raw.replace('005930','000660'))
+    os.utime(path,ns=(before.st_atime_ns,before.st_mtime_ns))
+    with pytest.raises(ValueError,match='changed_during_read'):list(rows)
+    del rows;gc.collect()
+    assert budget.health()['used_bytes']==used
+
+
+def test_streamed_projection_optional_cache_never_widens_resident_budget(monkeypatch,tmp_path):
+    from src.engine.lifecycle import research_input_budget as budget
+    monkeypatch.setattr(split_plan,'DATA_DIR',tmp_path)
+    monkeypatch.setattr(split_plan,'EXECUTION_PROJECTION_MAX_DECODED_BYTES',1)
+    monkeypatch.setattr(budget,'LIMIT_BYTES',budget.health()['used_bytes'])
+    day='2026-10-07';folder=tmp_path/'threshold_cycle'/f'date={day}'/'family=dynamic_entry_price_resolver'
+    folder.mkdir(parents=True);path=folder/'part-1.jsonl'
+    event=dict(stage='entry_execution_sizing_plan',emitted_date=day,fields=dict(stock_code='005930'))
+    path.write_text(json.dumps(event)+'\n')
+    rows,_=split_plan._bounded_execution_projection(day)
+    assert list(rows)==list(rows)==[event] and rows._cached_lines is None

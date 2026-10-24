@@ -41,7 +41,12 @@ def native_stage_runner(command, *, env, cwd):
 
 def verify_report(path, *, target_date, parent_sha256=None):
     from src.engine.lifecycle.research_input_budget import Claim
-    with Claim(0) as memo_budget:
+    from .main_trailing_all_scope_research import _sealed
+    from .main_trailing_source_reuse import replay_session
+    report = _sealed(Path(path))
+    manifest_path = Path(report['input_manifest_path'])
+    manifest = _sealed(manifest_path)
+    with replay_session(manifest, manifest_path.parent), Claim(0) as memo_budget:
         return _verify_report(path,target_date=target_date,parent_sha256=parent_sha256,memo_budget=memo_budget)
 
 
@@ -62,12 +67,16 @@ def _verify_report(path, *, target_date, parent_sha256, memo_budget):
     if manifest['target_date']!=target_date or manifest['source_date']!=report['source_date']:
         raise ValueError('main_trailing_research_dates_invalid')
     data_root=Path(manifest['source_data_root']).resolve()
-    window=capture_window(data_root,manifest['consumed_dates'])
+    window=capture_window(data_root,manifest['consumed_dates'],allow_cost_revision=True)
     if window['input_window_generation_sha256']!=report['input_window_generation_sha256']:
         raise ValueError('main_trailing_research_cost_window_changed')
+    from src.engine.lifecycle.holding_research_cost import inventory as cost_inventory
+    cost_paths={p.resolve() for p in cost_inventory(
+        manifest.get('holding_research_cost_data_root') or data_root,manifest['consumed_dates'])}
     for source in storage.iter_tree(root,manifest['source_generations_ref']):
         p=Path(source['path'])
-        if not p.resolve().is_relative_to(data_root) or byte_generation(p)!=source['generation']:
+        from .main_trailing_source_assembler import source_generation_matches
+        if (not p.resolve().is_relative_to(data_root) and p.resolve() not in cost_paths) or not source_generation_matches(data_root,manifest['source_date'],p,source['generation']):
             raise ValueError('main_trailing_research_source_changed')
     checked_paths=set()
     for part in storage.iter_tree(root,manifest['partitions_ref']):

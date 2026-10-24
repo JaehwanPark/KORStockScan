@@ -52,9 +52,11 @@ from src.engine.lifecycle.avg_down_replay import (
     policy_fingerprint as avg_down_policy_fingerprint,
 )
 from src.utils import kiwoom_utils
+from src.utils.numeric import safe_float as _safe_float
 from src.utils.constants import DATA_DIR
 from src.utils.jsonl_io import existing_or_gzip_path
 from src.utils.logger import log_error, log_info
+from src.utils import pipeline_event_logger as pipeline_observation
 from src.utils.pipeline_event_logger import emit_pipeline_event
 from src.engine.monitoring.entry_attempt_identity import (
     bind_submit_attempt_machine_lineage,
@@ -62,6 +64,7 @@ from src.engine.monitoring.entry_attempt_identity import (
     submit_attempt_lineage_rejection,
     mark_submit_attempt_broker_accepted,
     observe_submit_attempt,
+    record_submit_attempt_terminal,
     submit_attempt_fields,
     submit_attempt_machine_lineage,
 )
@@ -75,7 +78,7 @@ from src.engine.sniper_time import (
     is_scalping_buy_time_allowed,
     scalping_buy_time_block_reason,
 )
-from src.engine.sniper_condition_handlers_big_bite import (
+from src.engine.sniper_condition_handlers import (
     build_tick_data_from_ws,
     arm_big_bite_if_triggered,
     confirm_big_bite_follow_through,
@@ -392,7 +395,6 @@ from src.engine.scalping.trailing_operational_replay import (
 )
 from src.engine.scalping.trailing_threshold_policy import (
     GRID_VERSION as SCALP_TRAILING_GRID_VERSION,
-    MAX_POSITION_SAMPLES as SCALP_TRAILING_MAX_POSITION_SAMPLES,
     START_GRID_PCT as SCALP_TRAILING_START_GRID_PCT,
     closed_exit_gap as scalp_trailing_closed_exit_gap,
     market_type_at as scalp_trailing_market_type_at,
@@ -474,11 +476,6 @@ _FIRST_TOUCH_RUNTIME_PRIOR_REPORT_DIR = (
 )
 _FIRST_TOUCH_RUNTIME_PRIOR_MAX_AGE_SEC = 600
 _FIRST_TOUCH_RUNTIME_PRIOR_CACHE: dict[tuple[str, int, int], dict[str, Any]] = {}
-_PYRAMID_RUNTIME_PRIOR_REPORT_DIR = (
-    Path(DATA_DIR) / "report" / "scalping_pyramid_intraday_feedback"
-)
-_PYRAMID_RUNTIME_PRIOR_MAX_AGE_SEC = 600
-_PYRAMID_RUNTIME_PRIOR_CACHE: dict[tuple[str, int, int], dict[str, Any]] = {}
 _KST = timezone(timedelta(hours=9))
 _MAX_SCALE_IN_EXECUTIONS_PER_TYPE = 1
 _SCALE_IN_INITIAL_QTY_CAP_NUMERATOR = 3
@@ -2777,28 +2774,6 @@ def _attach_scalp_sim_bucket_identity(
     return _scalp_sim_bucket_policy_fields(stock)
 
 
-def _safe_float(value, default=0.0):
-    try:
-        if value is None:
-            return default
-        if isinstance(value, str) and value.strip().lower() in {
-            "",
-            "nan",
-            "nat",
-            "none",
-            "inf",
-            "+inf",
-            "-inf",
-        }:
-            return default
-        numeric = float(value)
-        if not math.isfinite(numeric):
-            return default
-        return numeric
-    except Exception:
-        return default
-
-
 def _runtime_action_now_ts(runtime: dict | None = None) -> float:
     """Return a wall-clock timestamp that cannot trail the loop snapshot.
 
@@ -3660,24 +3635,6 @@ def _general_entry_margin_budget_log_fields(
     }
 
 
-ZERO_CONTEXT_FORBIDDEN_USES = (
-    "threshold_mutation,provider_route_change,order_price_relaxation,"
-    "quantity_or_cap_change,broker_guard_bypass,stale_quote_bypass,"
-    "hard_safety_guard_bypass,real_execution_quality_approval"
-)
-
-
-def _zero_context_value_missing(value) -> bool:
-    if value is None:
-        return True
-    text = str(value).strip().lower()
-    return (
-        text == ""
-        or text in {"-", "none", "null", "nan", "nat", "not_evaluated"}
-        or text.startswith("not_applicable")
-    )
-
-
 def _zero_context_value_state(
     value,
     *,
@@ -3693,39 +3650,11 @@ def _zero_context_value_state(
         return "not_applicable_zero"
     if stale:
         return "stale_defaulted_zero"
-    if _zero_context_value_missing(value):
+    if pipeline_observation.zero_context_value_missing(value):
         return "missing_defaulted_zero"
     if guard_intended:
         return "guard_intended_zero"
     return "actual_zero"
-
-
-def _zero_context_observation_fields(
-    *, domain: str, blocker: str, states: dict
-) -> dict:
-    zero_states = {str(key): str(value) for key, value in (states or {}).items()}
-    blocking_states = [
-        value
-        for value in zero_states.values()
-        if value in {"missing_defaulted_zero", "stale_defaulted_zero"}
-    ]
-    return {
-        "zero_context_observed": bool(zero_states),
-        "zero_context_domain": str(domain or "unknown"),
-        "zero_context_blocker": str(blocker or "unknown"),
-        "zero_context_primary_state": (
-            blocking_states[0]
-            if blocking_states
-            else (
-                next(iter(zero_states.values()))
-                if zero_states
-                else "not_applicable_zero"
-            )
-        ),
-        "zero_context_defaulted_zero_field_count": len(blocking_states),
-        "zero_context_forbidden_uses": ZERO_CONTEXT_FORBIDDEN_USES,
-        **{f"zero_context_{key}_state": value for key, value in zero_states.items()},
-    }
 
 
 def _scanner_watch_zero_context_fields(
@@ -3747,7 +3676,7 @@ def _scanner_watch_zero_context_fields(
         if missing_or_zero and _safe_int(strength_history_count, 0) <= 0
         else strength_history_count
     )
-    return _zero_context_observation_fields(
+    return pipeline_observation.zero_context_observation_fields(
         domain="ws_quote",
         blocker=reason_text,
         states={
@@ -3755,19 +3684,21 @@ def _scanner_watch_zero_context_fields(
                 (ws_data or {}).get("curr"),
                 stale=stale,
                 not_applicable=not missing_or_zero
-                and _zero_context_value_missing((ws_data or {}).get("curr")),
+                and pipeline_observation.zero_context_value_missing(
+                    (ws_data or {}).get("curr")
+                ),
             ),
             "ws_received_type_count": _zero_context_value_state(
                 received_type_value,
                 stale=stale,
                 not_applicable=not missing_or_zero
-                and _zero_context_value_missing(received_type_value),
+                and pipeline_observation.zero_context_value_missing(received_type_value),
             ),
             "ws_strength_history_count": _zero_context_value_state(
                 strength_history_value,
                 stale=stale,
                 not_applicable=not missing_or_zero
-                and _zero_context_value_missing(strength_history_value),
+                and pipeline_observation.zero_context_value_missing(strength_history_value),
             ),
         },
     )
@@ -3783,7 +3714,7 @@ def _strength_momentum_zero_context_fields(
         or "stale" in reason_text
     )
     missing_context = reason_text == "insufficient_history"
-    return _zero_context_observation_fields(
+    return pipeline_observation.zero_context_observation_fields(
         domain="strength_momentum",
         blocker=reason_text or "risk_context_only",
         states={
@@ -3801,13 +3732,15 @@ def _strength_momentum_zero_context_fields(
                 gate.get("window_buy_ratio"),
                 stale=stale,
                 not_applicable=missing_context
-                and _zero_context_value_missing(gate.get("window_buy_ratio")),
+                and pipeline_observation.zero_context_value_missing(
+                    gate.get("window_buy_ratio")
+                ),
             ),
             "sample_count": _zero_context_value_state(
                 gate.get("tick_window_sample_count", gate.get("sample_count")),
                 stale=stale,
                 not_applicable=missing_context
-                and _zero_context_value_missing(
+                and pipeline_observation.zero_context_value_missing(
                     gate.get("tick_window_sample_count", gate.get("sample_count"))
                 ),
             ),
@@ -3827,7 +3760,7 @@ def _quantity_zero_context_fields(
     guard_intended: bool = False,
 ) -> dict:
     cap_not_applicable = str(cap_qty or "").strip().lower().startswith("not_applicable")
-    return _zero_context_observation_fields(
+    return pipeline_observation.zero_context_observation_fields(
         domain=domain,
         blocker=blocker,
         states={
@@ -4748,257 +4681,6 @@ def _real_stop_line_avg_down_ai_score_submit_authority(
         "reason": "evaluated_score_above_sentinel",
         "sentinel_score_max": sentinel_score_max,
     }
-
-
-def _pyramid_runtime_prior_default(status: str, reason: str) -> dict[str, Any]:
-    return {
-        "status": status,
-        "sample_count": 0,
-        "recovered_or_extended_rate": 0.0,
-        "reversal_or_flat_rate": 0.0,
-        "blocked_then_recovered_rate": 0.0,
-        "submitted_then_profit_rate": 0.0,
-        "signal": "neutral",
-        "reason": reason,
-    }
-
-
-def _pyramid_runtime_prior_report_date(now_ts: float) -> str:
-    try:
-        return datetime.fromtimestamp(float(now_ts), tz=_KST).strftime("%Y-%m-%d")
-    except (OSError, OverflowError, ValueError, TypeError):
-        return datetime.now(_KST).strftime("%Y-%m-%d")
-
-
-def _load_pyramid_runtime_prior_payload(
-    path: Path,
-) -> tuple[dict[str, Any] | None, str]:
-    try:
-        stat = path.stat()
-    except OSError:
-        return None, "missing"
-    key = (
-        str(path),
-        int(getattr(stat, "st_mtime_ns", int(stat.st_mtime * 1_000_000_000))),
-        int(stat.st_size),
-    )
-    cached = _PYRAMID_RUNTIME_PRIOR_CACHE.get(key)
-    if cached is not None:
-        return cached, "loaded"
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None, "unreadable"
-    if not isinstance(payload, dict):
-        return None, "invalid_payload"
-    _PYRAMID_RUNTIME_PRIOR_CACHE.clear()
-    _PYRAMID_RUNTIME_PRIOR_CACHE[key] = payload
-    return payload, "loaded"
-
-
-def _pyramid_runtime_prior_is_stale(
-    path: Path, payload: dict[str, Any], now_ts: float
-) -> bool:
-    try:
-        now_dt = datetime.fromtimestamp(float(now_ts), tz=_KST)
-    except (OSError, OverflowError, ValueError, TypeError):
-        now_dt = datetime.now(_KST)
-    generated_at = _parse_first_touch_prior_dt(payload.get("generated_at"))
-    if generated_at is not None:
-        if generated_at.tzinfo is None:
-            generated_at = generated_at.replace(tzinfo=now_dt.tzinfo)
-        return (
-            now_dt - generated_at.astimezone(now_dt.tzinfo)
-        ).total_seconds() > _PYRAMID_RUNTIME_PRIOR_MAX_AGE_SEC
-    try:
-        mtime_dt = datetime.fromtimestamp(path.stat().st_mtime, tz=now_dt.tzinfo)
-    except OSError:
-        return True
-    return (now_dt - mtime_dt).total_seconds() > _PYRAMID_RUNTIME_PRIOR_MAX_AGE_SEC
-
-
-def _pyramid_prior_rows_stats(
-    rows: list[dict[str, Any]], *, exact: bool = False
-) -> dict[str, Any]:
-    closed_labels = {
-        "pyramid_would_have_helped",
-        "pyramid_correctly_blocked",
-        "pyramid_overheat_or_reversal_risk",
-    }
-    closed_rows = [
-        row
-        for row in rows
-        if str(row.get("pyramid_feedback_label") or "") in closed_labels
-    ]
-    sample_count = len(closed_rows)
-    recovered = sum(
-        1
-        for row in closed_rows
-        if row.get("pyramid_feedback_label") == "pyramid_would_have_helped"
-    )
-    reversal = sum(
-        1
-        for row in closed_rows
-        if row.get("pyramid_feedback_label") == "pyramid_overheat_or_reversal_risk"
-    )
-    blocked_then_recovered = sum(
-        1
-        for row in closed_rows
-        if row.get("pyramid_feedback_label") == "pyramid_would_have_helped"
-        and str(row.get("scale_in_blocker_reason") or "")
-    )
-    submitted_profit = sum(
-        1
-        for row in closed_rows
-        if bool(row.get("actual_order_submitted"))
-        and _safe_float(row.get("final_profit_rate"), 0.0) > 0
-    )
-    recovered_rate = recovered / sample_count if sample_count else 0.0
-    reversal_rate = reversal / sample_count if sample_count else 0.0
-    blocked_then_recovered_rate = (
-        blocked_then_recovered / sample_count if sample_count else 0.0
-    )
-    submitted_then_profit_rate = (
-        submitted_profit / sample_count if sample_count else 0.0
-    )
-    exact_label = (
-        str(rows[0].get("pyramid_feedback_label") or "") if exact and rows else ""
-    )
-    signal = "neutral"
-    reason = "prior_neutral"
-    if exact_label == "pyramid_overheat_or_reversal_risk":
-        signal = "risk"
-        reason = "exact_prior_reversal_or_loss_cluster"
-    elif exact_label == "pyramid_would_have_helped":
-        signal = "support"
-        reason = "exact_prior_recovered_or_extended"
-    elif sample_count >= 3 and reversal_rate >= 0.67:
-        signal = "risk"
-        reason = "aggregate_reversal_or_flat_rate_ge_0_67"
-    elif sample_count >= 3 and recovered_rate >= 0.67:
-        signal = "support"
-        reason = "aggregate_recovered_or_extended_rate_ge_0_67"
-    elif sample_count < 3:
-        reason = "insufficient_closed_pyramid_sample"
-    return {
-        "sample_count": sample_count if not exact or sample_count else len(rows),
-        "recovered_or_extended_rate": recovered_rate,
-        "reversal_or_flat_rate": reversal_rate,
-        "blocked_then_recovered_rate": blocked_then_recovered_rate,
-        "submitted_then_profit_rate": submitted_then_profit_rate,
-        "signal": signal,
-        "reason": reason,
-    }
-
-
-def _pyramid_runtime_prior_context(
-    stock: dict | None,
-    code: str,
-    now_ts: float,
-    *,
-    probe: dict | None = None,
-) -> dict:
-    report_date = _pyramid_runtime_prior_report_date(now_ts)
-    path = (
-        _PYRAMID_RUNTIME_PRIOR_REPORT_DIR
-        / f"scalping_pyramid_intraday_feedback_{report_date}.json"
-    )
-    payload, load_status = _load_pyramid_runtime_prior_payload(path)
-    if payload is None:
-        return {
-            "pyramid_runtime_prior_context": _pyramid_runtime_prior_default(
-                "missing", f"prior_report_{load_status}"
-            )
-        }
-    if _pyramid_runtime_prior_is_stale(path, payload, now_ts):
-        return {
-            "pyramid_runtime_prior_context": _pyramid_runtime_prior_default(
-                "stale", "prior_report_stale_gt_10m"
-            )
-        }
-    source_quality_block_reason = _runtime_prior_source_quality_block_reason(payload)
-    if source_quality_block_reason:
-        return {
-            "pyramid_runtime_prior_context": _pyramid_runtime_prior_default(
-                "source_quality_blocked",
-                source_quality_block_reason,
-            )
-        }
-
-    rows = payload.get("pyramid_feedback_rows") or payload.get("rows")
-    rows = (
-        [row for row in rows if isinstance(row, dict)] if isinstance(rows, list) else []
-    )
-    if not rows:
-        return {
-            "pyramid_runtime_prior_context": _pyramid_runtime_prior_default(
-                "missing", "prior_rows_missing"
-            )
-        }
-
-    stock = stock if isinstance(stock, dict) else {}
-    record_id = str(stock.get("record_id") or stock.get("id") or "").strip()
-    exact_rows = [
-        row
-        for row in rows
-        if record_id and str(row.get("record_id") or "").strip() == record_id
-    ]
-    if exact_rows:
-        return {
-            "pyramid_runtime_prior_context": {
-                "status": "matched",
-                **_pyramid_prior_rows_stats(exact_rows[:1], exact=True),
-            }
-        }
-
-    source_signature = str(stock.get("source_signature") or "").strip()
-    position_tag = str(
-        stock.get("position_tag") or stock.get("entry_position_tag") or ""
-    ).strip()
-    stock_rows = [
-        row
-        for row in rows
-        if str(row.get("stock_code") or "").strip() == str(code or "").strip()
-        and (
-            not source_signature
-            or str(row.get("source_signature") or "").strip() == source_signature
-        )
-        and (
-            not position_tag
-            or str(row.get("position_tag") or "").strip() == position_tag
-        )
-    ]
-    if stock_rows:
-        stats = _pyramid_prior_rows_stats(stock_rows)
-        status = (
-            "aggregate"
-            if int(stats.get("sample_count") or 0) >= 3
-            else "insufficient_sample"
-        )
-        return {"pyramid_runtime_prior_context": {"status": status, **stats}}
-
-    blocker = str((probe or {}).get("reason") or "").strip()
-    blocker_rows = [
-        row
-        for row in rows
-        if blocker and str(row.get("scale_in_blocker_reason") or "").strip() == blocker
-    ]
-    if blocker_rows:
-        stats = _pyramid_prior_rows_stats(blocker_rows)
-        status = (
-            "aggregate"
-            if int(stats.get("sample_count") or 0) >= 3
-            else "insufficient_sample"
-        )
-        return {"pyramid_runtime_prior_context": {"status": status, **stats}}
-
-    stats = _pyramid_prior_rows_stats(rows)
-    status = (
-        "aggregate"
-        if int(stats.get("sample_count") or 0) >= 3
-        else "insufficient_sample"
-    )
-    return {"pyramid_runtime_prior_context": {"status": status, **stats}}
 
 
 def _evaluate_first_touch_avgdown_decision_gate(
@@ -12218,7 +11900,7 @@ def _observe_initial_quantity_cap_following_tick(
     stock: dict, code: str, ws_data: dict | None, *, now_ts: float,
 ) -> None:
     """Record a bounded source-only 0B print for later cap fill research."""
-    if not isinstance(stock, dict) or not isinstance(ws_data, dict):
+    if not isinstance(stock, dict):
         return
     trace = stock.get("_initial_quantity_cap_trace")
     if not isinstance(trace, dict):
@@ -12226,6 +11908,11 @@ def _observe_initial_quantity_cap_following_tick(
     from src.engine.scalping.initial_quantity_cap_observation import trace_metadata_valid
     if not trace_metadata_valid(trace):
         trace['capture_clock_status']='capture_metadata_invalid'
+        return
+    from src.engine.scalping.initial_quantity_cap_observation import capture_active
+    native_identity = trace.get('capture_lifecycle_identity')
+    if isinstance(native_identity, dict) and not capture_active(native_identity.get('capture_id')):
+        _mutate_stock_state(stock, pop_fields=('_initial_quantity_cap_trace',))
         return
     if type(now_ts) not in (int, float) or not math.isfinite(now_ts) or now_ts<=0:
         # Retain the gap until a real clock value can durably record it.
@@ -12269,6 +11956,8 @@ def _observe_initial_quantity_cap_following_tick(
             # normal observation pass retries the same terminal source only.
             trace['capture_terminal_pending']=True
             trace['queue_rejected_count']=trace.get('queue_rejected_count',0)+1
+        return
+    if not isinstance(ws_data, dict):
         return
     tick = ws_data.get("last_trade_tick")
     if not isinstance(tick, dict) or tick.get("aggressor_source") != (
@@ -12780,6 +12469,13 @@ def _log_entry_pipeline(stock, code, stage, **fields):
             **submit_attempt_fields(stock, code),
         }
     )
+    # A revived fixed watch deliberately has no inherited runtime source.
+    # Bind this observation to its new native admission without mutating stock.
+    if (stage == "main_fixed_watch_observation_wait" and fixed_watch_fields
+            and not merged_fields.get("source_signature")):
+        admission = fixed_watch_fields.get("watch_admission_id")
+        if isinstance(admission, str) and admission:
+            merged_fields["source_signature"] = "MAIN_FIXED_WATCH:" + admission
     if scout_attribution_fields:
         parent_trace_id = str(
             scout_attribution_fields.get("scout_ai_parent_decision_trace_id") or ""
@@ -20454,12 +20150,9 @@ def _exit_signal_submission_fields(stock: dict, code: str, fields: dict) -> dict
 
 
 def _log_holding_pipeline(stock, code, stage, **fields):
-    if stage=='sell_completed' and isinstance(stock.get('_initial_quantity_cap_trace'),dict):
-        from src.engine.scalping.initial_quantity_cap_observation import interrupt
-        trace=stock['_initial_quantity_cap_trace']
-        if interrupt(code=code,name=stock.get('name'),record_id=stock.get('id'),trace=trace,
-                reason='position_completed_before_capture_horizon'):
-            _mutate_stock_state(stock,pop_fields=('_initial_quantity_cap_trace',))
+    if stage == 'sell_completed':
+        from src.engine.scalping.trailing_entry_research_source import clear as clear_trailing_plan
+        clear_trailing_plan(stock)
     if (stage in {"exit_signal", "sell_order_sent", "sell_completed"} | EXIT_WAIT_STAGES
             and str(fields.get("exit_rule") or stock.get("last_exit_rule") or "")
                 == "scalp_trailing_take_profit"):
@@ -20552,6 +20245,9 @@ def _log_holding_pipeline(stock, code, stage, **fields):
     )
     observe_candidate_transition_safe(stock, code, stage, fields)
     record_id = stock.get("id")
+    if stage == 'scalp_trailing_input_transition':
+        from src.utils.pipeline_event_logger import enqueue_trailing_observation
+        return enqueue_trailing_observation(stock.get('name'), code, record_id, fields)
     return emit_pipeline_event(
         "HOLDING_PIPELINE",
         stock.get("name"),
@@ -22179,75 +21875,6 @@ def _scale_in_arm_from_context(profit_rate=0.0, action=None, rejected_actions=No
     # postclose replay and makes its denominator larger than the real gate
     # population.
     return "NONE"
-
-
-def _pyramid_scale_in_decision_lineage(
-    stock: dict, code: str, action: dict | None, *, now_ts: float
-) -> dict[str, str]:
-    """Mint source-only identity for one exact real PYRAMID evaluation.
-
-    The identity is attached only after the existing runtime selector chooses
-    PYRAMID. It has no order, quantity, threshold, or provider authority.
-    """
-    if not isinstance(stock, dict) or not isinstance(action, dict):
-        return {}
-    if str(action.get("add_type") or "").strip().upper() != "PYRAMID":
-        return {}
-    context = stock.get("_pyramid_lifecycle_context") or {}
-    if (context.get("code") == code and context.get("position_basis") == [stock.get("buy_price"), stock.get("buy_qty")]
-            and 0 <= now_ts - float(context.get("observed_at") or 0) <= 2.0
-            and context.get("current_should_add") is True):
-        return {"pyramid_decision_lineage_schema": "pyramid_scale_in_decision_lineage_v1",
-                "position_episode_id": context["episode"], "scale_in_decision_id": context["decision"],
-                "pyramid_evaluation_id": "pyr-eval-" + context["decision"].removeprefix("pyr-decision-")}
-    normalized_code = str(code or "").strip().upper()
-    if normalized_code.startswith("A"):
-        normalized_code = normalized_code[1:]
-    normalized_code = normalized_code[:6]
-    attempt_id = str(
-        stock.get("scanner_promotion_id") or stock.get("scanner_generation_id") or ""
-    ).strip()
-    try:
-        position_episode_id = mint_main_lifecycle_id(
-            record_id=stock.get("id"),
-            stock_code=normalized_code,
-            attempt_id=attempt_id,
-        )
-    except (TypeError, ValueError):
-        return {}
-    decision_material = {
-        "schema": "pyramid_scale_in_decision_lineage_v1",
-        "position_episode_id": position_episode_id,
-        "record_id": stock.get("id"),
-        "stock_code": normalized_code,
-        "attempt_id": attempt_id,
-        "observed_at_epoch": round(float(now_ts), 6),
-        "position_basis": {
-            "buy_price": stock.get("buy_price"),
-            "buy_qty": stock.get("buy_qty"),
-        },
-        "action": {
-            "reason": action.get("reason"),
-            "configured_min_profit_pct": action.get("configured_min_profit_pct"),
-            "effective_min_profit_pct": action.get("effective_min_profit_pct"),
-            "runtime_family": action.get("runtime_family"),
-        },
-    }
-    digest = hashlib.sha256(
-        json.dumps(
-            decision_material,
-            ensure_ascii=True,
-            sort_keys=True,
-            separators=(",", ":"),
-            default=str,
-        ).encode("utf-8")
-    ).hexdigest()
-    return {
-        "pyramid_decision_lineage_schema": "pyramid_scale_in_decision_lineage_v1",
-        "position_episode_id": position_episode_id,
-        "scale_in_decision_id": f"pyr-decision-{digest[:32]}",
-        "pyramid_evaluation_id": f"pyr-eval-{digest[:32]}",
-    }
 
 
 def _ensure_scale_in_action_receipt(
@@ -26058,11 +25685,16 @@ def _build_holding_ai_decision_context(
     ws = ws_data if isinstance(ws_data, dict) else {}
     session = resolve_entry_candle_session(now_ts=now_ts)
     venue = resolve_entry_candle_venue(ws, session=session)
+    if decision_kind == "holding_path_vote":
+        venue = resolve_entry_candle_venue(ws, venue=venue, session=session)
+    vote_policy = ({"vote_policy_receipt": _HOLDING_PATH_POLICY_RECEIPT}
+                   if decision_kind == "holding_path_vote" else {})
     context_enabled = holding_decision_context_enabled(
         venue=venue,
         session=session,
         decision_kind=decision_kind,
         now_ts=now_ts,
+        **vote_policy,
     )
     if not context_enabled and not include_disabled_forensics:
         return None
@@ -26070,7 +25702,7 @@ def _build_holding_ai_decision_context(
     combined.update(position_ctx or {})
     try:
         context = build_holding_decision_context(
-            KIWOOM_TOKEN,
+            None if decision_kind == "holding_path_vote" else KIWOOM_TOKEN,
             code,
             ws,
             combined,
@@ -26083,7 +25715,8 @@ def _build_holding_ai_decision_context(
             recent_candles=recent_candles or [],
             candle_meta=candle_meta or {},
             recent_ticks=recent_ticks or [],
-            include_investor_source=context_enabled,
+            include_investor_source=context_enabled and decision_kind != "holding_path_vote",
+            **vote_policy,
         )
         if not context_enabled:
             context = dict(context or {})
@@ -26149,6 +25782,8 @@ def _resolve_holding_context_request_code(
         position=position_ctx,
         decision_kind=decision_kind,
         now_ts=now_ts,
+        **({"vote_policy_receipt": _HOLDING_PATH_POLICY_RECEIPT}
+           if decision_kind == "holding_path_vote" else {}),
     )
 
 
@@ -26169,6 +25804,8 @@ def _get_holding_minute_candles_with_meta(
         session=session,
         decision_kind=decision_kind,
         now_ts=now_ts,
+        **({"vote_policy_receipt": _HOLDING_PATH_POLICY_RECEIPT}
+           if decision_kind == "holding_path_vote" else {}),
     )
     if not context_enabled:
         try:
@@ -26191,12 +25828,13 @@ def _get_holding_minute_candles_with_meta(
         candles, metadata = kiwoom_utils.get_minute_candles_ka10080_with_meta(
             KIWOOM_TOKEN,
             request_code,
-            limit=max(int(limit), SOURCE_BAR_LIMIT),
+            limit=(max(1, int(limit)) if decision_kind == "holding_path_vote"
+                   else max(int(limit), SOURCE_BAR_LIMIT)),
             explicit_request_code=True,
         )
         resolved_metadata = dict(metadata or {})
         resolved_metadata["holding_context_request_code"] = request_code
-        resolved_metadata["multi_timeframe_auxiliary_fetch"] = True
+        resolved_metadata["multi_timeframe_auxiliary_fetch"] = decision_kind != "holding_path_vote"
         return list(candles or []), resolved_metadata
     except Exception as exc:
         return [], {
@@ -26287,49 +25925,6 @@ def _holding_context_prohibited_exit_candidate(
             )
         )
     )
-
-
-def _recent_exit_candidate_pyramid_block_context(
-    stock: dict | None,
-    *,
-    strategy: str | None,
-    add_type: str | None,
-    now_ts: float,
-) -> dict | None:
-    if _scale_in_quality_runtime_skipped():
-        return None
-    if not _rule_bool("RECENT_EXIT_CANDIDATE_PYRAMID_BLOCK_ENABLED", False):
-        return None
-    if not _is_scalp_strategy(strategy) or str(add_type or "").upper() != "PYRAMID":
-        return None
-    if _is_scalp_simulated_position(stock, strategy) or _has_sim_probe_provenance(
-        stock
-    ):
-        return None
-    candidate_ts = _safe_float(
-        (stock or {}).get("recent_scale_in_exit_candidate_ts"), 0.0
-    )
-    if candidate_ts <= 0:
-        return None
-    block_sec = max(1, _rule_int("RECENT_EXIT_CANDIDATE_PYRAMID_BLOCK_SEC", 180))
-    elapsed_sec = max(0, int(float(now_ts or time.time()) - candidate_ts))
-    if elapsed_sec > block_sec:
-        return None
-    exit_rule = (
-        str((stock or {}).get("recent_scale_in_exit_candidate_rule") or "-").strip()
-        or "-"
-    )
-    return {
-        "blocked": True,
-        "exit_rule": exit_rule,
-        "source_stage": str(
-            (stock or {}).get("recent_scale_in_exit_candidate_stage") or "-"
-        )
-        or "-",
-        "elapsed_sec": elapsed_sec,
-        "block_sec": block_sec,
-        "reason": f"recent_exit_candidate:{exit_rule}",
-    }
 
 
 def _pending_scale_in_revalidation_context(
@@ -28280,6 +27875,53 @@ def _fast_exit_execution_route_fields(
     }
 
 
+def _main_stop_normal_exit_fields(stock, code, *, at, mark_price, exit_rule, evaluator='normal'):
+    """Observe either native normal-exit path without changing its disposition."""
+    if exit_rule not in {'scalp_trailing_take_profit', 'daily_limit_up_immediate_exit'}:
+        return {}
+    try:
+        from src.engine.scalping.main_stop_policy import normal_exit_decision_source, digest
+        from src.engine.scalping.main_stop_runtime_source import observation_view, bounded_observation_copy, ensure_observation_epoch
+        _main_stop_values(stock, at)
+        with ENTRY_LOCK:
+            ensure_observation_epoch(stock)
+            view = observation_view(stock)
+            context = (stock.get('_main_stop_quote_context_by_evaluator') or {}).get(evaluator)
+            if not isinstance(context, dict) or context.get('at') != at:
+                context = stock.get('_main_stop_current_quote_context')
+            context = bounded_observation_copy(context)
+            cached = bounded_observation_copy(stock.get('_main_stop_normal_exit_observation'))
+        allowed_evaluators = {'normal', 'normal_rest_recovery'} if evaluator == 'normal' else {'fast', 'fast_rest_confirmed'}
+        if (not isinstance(context, dict) or context.get('at') != at or not context.get('complete')
+                or context.get('evaluator') not in allowed_evaluators
+                or _is_scalp_simulated_position(view, view.get('strategy'))):
+            raise ValueError('stop_normal_exit_exact_quote_source_gap')
+        # Build from the entry view so the existing manual/quantity/pin checks
+        # also apply to reuse. Only an already observed identical decision may
+        # survive its own subsequent exit claim; never fabricate a new quote.
+        receipt = normal_exit_decision_source(view, at=at,
+            price=context['bid'] if exit_rule == 'scalp_trailing_take_profit' else mark_price,
+            executable_bid=context['bid'], mark_price=mark_price, exit_rule=exit_rule)
+        key = (view['_main_stop_observation_epoch'], evaluator, at, exit_rule,
+               digest(context), receipt['source_sha256'])
+        if not (isinstance(cached, dict) and cached.get('key') == key
+                and cached.get('receipt') == receipt):
+            if not _capture_main_stop_observation(stock, code, context, force=True, source_view=view):
+                raise ValueError('stop_normal_exit_exact_quote_source_gap')
+            with ENTRY_LOCK:
+                if (stock.get('_main_stop_observation_epoch') == view['_main_stop_observation_epoch']
+                        and (stock.get('main_stop_policy_pin') or {}).get('pin_sha256') == receipt['pin_sha256']
+                        and stock.get('buy_qty') == view.get('buy_qty') and stock.get('buy_price') == view.get('buy_price')):
+                    current = stock.get('_main_stop_normal_exit_observation') or {}
+                    current_at = (current.get('receipt') or {}).get('decision_at', 0)
+                    if current_at <= at:
+                        stock['_main_stop_normal_exit_observation'] = dict(key=key,receipt=receipt)
+        return {'main_stop_normal_exit_decision':json.dumps(
+            receipt, sort_keys=True, separators=(',', ':'), allow_nan=False)}
+    except Exception as exc:
+        return {'main_stop_normal_exit_decision_gap':type(exc).__name__ + ':' + str(exc)}
+
+
 def _dispatch_scalp_preset_exit(
     *,
     stock,
@@ -28312,6 +27954,41 @@ def _dispatch_scalp_preset_exit(
     fast_exit_broker_route = (
         str(stock.get("fast_exit_broker_route") or "").strip().upper()
     )
+    dispatch_exit_token = str(stock.get("exit_token") or "").strip()
+    dispatch_sell_generation = str(stock.get("sell_submit_generation") or "").strip()
+
+    def _dispatch_owner_current(*, allow_pending_cancel: bool = False) -> bool:
+        # Called only under ENTRY_LOCK. An earlier holding precheck is not
+        # ownership: the fast evaluator can claim while quote/account work runs.
+        current_token = str(stock.get("exit_token") or "").strip()
+        current_generation = str(stock.get("sell_submit_generation") or "").strip()
+        pending_fields = _active_sell_order_pending_fields(stock)
+        # Preserve the existing exact-cancel reconciliation entry. Its native
+        # owner must release the old generation before a replacement can pass
+        # the final check below; a positive inventory result cannot release it.
+        pending_cancel = bool(
+            allow_pending_cancel
+            and str(orig_ord_no or "").strip()
+            and dispatch_sell_generation
+            and current_generation == dispatch_sell_generation
+            and str(stock.get("preset_tp_ord_no") or "").strip() == str(orig_ord_no).strip()
+            and all(field in {"sell_odno", "sell_ord_no"}
+                    and str(stock.get(field) or "").strip() == str(orig_ord_no).strip()
+                    for field in pending_fields)
+        )
+        return bool(
+            not stock.get("manual_control_hard_stop_handoff_inflight")
+            and not stock.get("manual_control_exclusion_blocked")
+            and str(stock.get("status") or "").strip().upper() == "HOLDING"
+            and _safe_int(stock.get("buy_qty"), 0) == expected_qty
+            and (pending_cancel or (not stock.get("sell_submit_pending")
+                                    and not current_generation and not pending_fields))
+            and (
+                bool(dispatch_exit_token) and current_token == dispatch_exit_token
+                if fast_exit
+                else not current_token and not stock.get("exit_requested")
+            )
+        )
 
     def _defer_fast_exit_retry(
         retry_reason: str,
@@ -28322,16 +27999,19 @@ def _dispatch_scalp_preset_exit(
         if not fast_exit:
             return False
         retry_at = float(now_ts) + max(0.25, float(retry_delay_sec))
-        _mutate_stock_state(
-            stock,
-            set_fields={
-                "status": "HOLDING",
-                "exit_requested": False,
-                "fast_exit_retry_pending": True,
-                "fast_exit_retry_reason": retry_reason,
-                "fast_exit_retry_at": retry_at,
-            },
-        )
+        with ENTRY_LOCK:
+            if not _dispatch_owner_current(allow_pending_cancel=True):
+                return False
+            _mutate_stock_state(
+                stock,
+                set_fields={
+                    "status": "HOLDING",
+                    "exit_requested": False,
+                    "fast_exit_retry_pending": True,
+                    "fast_exit_retry_reason": retry_reason,
+                    "fast_exit_retry_at": retry_at,
+                },
+            )
         _log_holding_pipeline(
             stock,
             code,
@@ -28358,16 +28038,23 @@ def _dispatch_scalp_preset_exit(
         )
         return True
 
-    _remember_exit_context(
-        stock=stock,
-        exit_rule=exit_rule,
-        reason=reason,
-        peak_profit=peak_profit,
-        held_sec=preset_held_sec,
-        current_ai_score=preset_ai_score,
-    )
-    stock["last_exit_reason"] = reason
-    exit_decision_source = str(stock.get("last_exit_decision_source") or "MANUAL")
+    with ENTRY_LOCK:
+        if not _dispatch_owner_current(allow_pending_cancel=True):
+            return False
+        _remember_exit_context(
+            stock=stock,
+            exit_rule=exit_rule,
+            reason=reason,
+            peak_profit=peak_profit,
+            held_sec=preset_held_sec,
+            current_ai_score=preset_ai_score,
+        )
+        stock["last_exit_reason"] = reason
+        exit_decision_source = str(stock.get("last_exit_decision_source") or "MANUAL")
+    exit_fields = dict(extra_fields or {})
+    exit_fields.pop('main_stop_normal_exit_decision', None)
+    exit_fields.update(_main_stop_normal_exit_fields(stock, code, at=now_ts,
+        mark_price=curr_p, exit_rule=exit_rule, evaluator='fast' if fast_exit else 'normal'))
     _log_holding_pipeline(
         stock,
         code,
@@ -28383,7 +28070,7 @@ def _dispatch_scalp_preset_exit(
         curr_price=curr_p,
         buy_price=buy_p,
         buy_qty=expected_qty,
-        **(extra_fields or {}),
+        **exit_fields,
     )
 
     if _is_scalp_simulated_position(stock, strategy):
@@ -28403,19 +28090,22 @@ def _dispatch_scalp_preset_exit(
         str(orig_ord_no or "").strip()
         and not str(stock.get("sell_submit_generation") or "").strip()
     ):
-        _mutate_stock_state(
-            stock,
-            set_fields={
-                "status": "SELL_ORDERED",
-                "exit_requested": True,
-                "sell_cancel_reconciliation_required": True,
-                "sell_cancel_reconciliation_source": (
-                    "legacy_preset_tp_missing_exact_pending_generation"
-                ),
-                "fast_exit_retry_pending": bool(fast_exit),
-                "fast_exit_retry_reason": "legacy_preset_tp_custody_interlock",
-            },
-        )
+        with ENTRY_LOCK:
+            if not _dispatch_owner_current(allow_pending_cancel=True):
+                return False
+            _mutate_stock_state(
+                stock,
+                set_fields={
+                    "status": "SELL_ORDERED",
+                    "exit_requested": True,
+                    "sell_cancel_reconciliation_required": True,
+                    "sell_cancel_reconciliation_source": (
+                        "legacy_preset_tp_missing_exact_pending_generation"
+                    ),
+                    "fast_exit_retry_pending": bool(fast_exit),
+                    "fast_exit_retry_reason": "legacy_preset_tp_custody_interlock",
+                },
+            )
         _log_holding_pipeline(
             stock,
             code,
@@ -28593,36 +28283,39 @@ def _dispatch_scalp_preset_exit(
             1.0,
             _safe_float(_rule_int("SELL_ORDER_FAILURE_RETRY_BACKOFF_SEC", 30), 30.0),
         )
-        unresolved_sell_exposure = bool(
-            str(orig_ord_no or "").strip()
-            or stock.get("sell_submit_pending") is True
-            or str(stock.get("status") or "").strip().upper() == "SELL_ORDERED"
-        )
-        preserved_status = "SELL_ORDERED" if unresolved_sell_exposure else "HOLDING"
-        _mutate_stock_state(
-            stock,
-            set_fields={
-                "status": preserved_status,
-                "exit_requested": bool(unresolved_sell_exposure),
-                "sell_cancel_reconciliation_required": True,
-                "sell_cancel_reconciliation_source": remaining_confirmation_source,
-                "sell_cancel_reconciliation_retry_at": retry_at,
-                "fast_exit_retry_pending": bool(fast_exit),
-                "fast_exit_retry_reason": "cancel_inventory_confirmation_unknown",
-                "fast_exit_retry_at": retry_at,
-            },
-        )
-        if target_id and DB is not None:
-            try:
-                with DB.get_session() as session:
-                    session.query(RecommendationHistory).filter_by(id=target_id).update(
-                        {"status": preserved_status}
+        with ENTRY_LOCK:
+            if not _dispatch_owner_current(allow_pending_cancel=True):
+                return False
+            unresolved_sell_exposure = bool(
+                str(orig_ord_no or "").strip()
+                or stock.get("sell_submit_pending") is True
+                or str(stock.get("status") or "").strip().upper() == "SELL_ORDERED"
+            )
+            preserved_status = "SELL_ORDERED" if unresolved_sell_exposure else "HOLDING"
+            _mutate_stock_state(
+                stock,
+                set_fields={
+                    "status": preserved_status,
+                    "exit_requested": bool(unresolved_sell_exposure),
+                    "sell_cancel_reconciliation_required": True,
+                    "sell_cancel_reconciliation_source": remaining_confirmation_source,
+                    "sell_cancel_reconciliation_retry_at": retry_at,
+                    "fast_exit_retry_pending": bool(fast_exit),
+                    "fast_exit_retry_reason": "cancel_inventory_confirmation_unknown",
+                    "fast_exit_retry_at": retry_at,
+                },
+            )
+            if target_id and DB is not None:
+                try:
+                    with DB.get_session() as session:
+                        session.query(RecommendationHistory).filter_by(id=target_id).update(
+                            {"status": preserved_status}
+                        )
+                except Exception as exc:
+                    log_error(
+                        f"[SELL_CANCEL_RECONCILIATION] {stock.get('name')}({code}) "
+                        f"DB HOLDING preserve failed: {exc}"
                     )
-            except Exception as exc:
-                log_error(
-                    f"[SELL_CANCEL_RECONCILIATION] {stock.get('name')}({code}) "
-                    f"DB HOLDING preserve failed: {exc}"
-                )
         _log_holding_pipeline(
             stock,
             code,
@@ -28644,28 +28337,31 @@ def _dispatch_scalp_preset_exit(
         )
         return
     if remaining_confirmation_state == "verified_zero":
-        set_fields = {
-            "status": "SELL_ORDERED",
-            "exit_requested": True,
-            "sell_cancel_reconciliation_required": True,
-            "sell_cancel_reconciliation_source": remaining_confirmation_source,
-            "sell_cancel_reconciliation_retry_at": float(now_ts)
-            + max(1, _rule_int("SELL_ORDER_FAILURE_RETRY_BACKOFF_SEC", 30)),
-        }
-        if orig_ord_no:
-            set_fields["sell_odno"] = str(orig_ord_no)
-        _mutate_stock_state(stock, set_fields=set_fields)
-        if target_id and DB is not None:
-            try:
-                with DB.get_session() as session:
-                    session.query(RecommendationHistory).filter_by(id=target_id).update(
-                        {"status": "SELL_ORDERED"}
+        with ENTRY_LOCK:
+            if not _dispatch_owner_current(allow_pending_cancel=True):
+                return False
+            set_fields = {
+                "status": "SELL_ORDERED",
+                "exit_requested": True,
+                "sell_cancel_reconciliation_required": True,
+                "sell_cancel_reconciliation_source": remaining_confirmation_source,
+                "sell_cancel_reconciliation_retry_at": float(now_ts)
+                + max(1, _rule_int("SELL_ORDER_FAILURE_RETRY_BACKOFF_SEC", 30)),
+            }
+            if orig_ord_no:
+                set_fields["sell_odno"] = str(orig_ord_no)
+            _mutate_stock_state(stock, set_fields=set_fields)
+            if target_id and DB is not None:
+                try:
+                    with DB.get_session() as session:
+                        session.query(RecommendationHistory).filter_by(id=target_id).update(
+                            {"status": "SELL_ORDERED"}
+                        )
+                except Exception as exc:
+                    log_error(
+                        f"[SELL_CANCEL_ZERO_INVENTORY] {stock.get('name')}({code}) "
+                        f"DB reconciliation state failed: {exc}"
                     )
-            except Exception as exc:
-                log_error(
-                    f"[SELL_CANCEL_ZERO_INVENTORY] {stock.get('name')}({code}) "
-                    f"DB reconciliation state failed: {exc}"
-                )
         _log_holding_pipeline(
             stock,
             code,
@@ -28749,29 +28445,29 @@ def _dispatch_scalp_preset_exit(
             .strip()
             .upper()
         )
-        sell_submit_context_fields = _new_sell_submit_context_fields(
-            stock,
-            code,
-            requested_qty=rem_qty,
-            started_at=exit_order_sent_at,
-            intended_route=intended_sell_route,
-            intended_effective_venue=_holding_sell_execution_cohort(
-                exit_order_sent_at,
-                intended_sell_route,
-            ),
-            intended_session_bucket=_holding_sell_execution_session_bucket(
-                exit_order_sent_at
-            ),
-        )
-        sell_submit_generation = str(
-            sell_submit_context_fields["sell_submit_generation"]
-        )
-        sell_submit_context_sha256 = str(
-            sell_submit_context_fields["sell_submit_context_sha256"]
-        )
         with ENTRY_LOCK:
-            if stock.get("manual_control_hard_stop_handoff_inflight") or stock.get("manual_control_exclusion_blocked"):
+            if not _dispatch_owner_current():
                 return False
+            sell_submit_context_fields = _new_sell_submit_context_fields(
+                stock,
+                code,
+                requested_qty=rem_qty,
+                started_at=exit_order_sent_at,
+                intended_route=intended_sell_route,
+                intended_effective_venue=_holding_sell_execution_cohort(
+                    exit_order_sent_at,
+                    intended_sell_route,
+                ),
+                intended_session_bucket=_holding_sell_execution_session_bucket(
+                    exit_order_sent_at
+                ),
+            )
+            sell_submit_generation = str(
+                sell_submit_context_fields["sell_submit_generation"]
+            )
+            sell_submit_context_sha256 = str(
+                sell_submit_context_fields["sell_submit_context_sha256"]
+            )
             _mutate_stock_state(
                 stock,
                 set_fields={
@@ -29332,6 +29028,474 @@ def _observe_scalp_trailing_first_crossing(stock, code, *, mechanical_fields,
             state['inflight'] = False
 
 
+def _main_stop_quote_context(stock, code, *, snapshot, quote_receipt, executable_bid,
+        bid_source, rest_snapshot, quality, nxt_quality, quote_received_at, bid_received_at,
+        market_type, exit_allowed_by_clock, price_usable, now_ts, evaluator,
+        holding_profit_rate_at_eval):
+    """Share exact existing quote/depth validation across native exit branches."""
+    depth_receipt = quote_receipt.get("depth_receipt")
+    depth_receipt = depth_receipt if isinstance(depth_receipt, dict) else {}
+    depth_row = None
+    route_records = snapshot.get("realtime_type_snapshots_by_route")
+    if isinstance(route_records, dict):
+        for records in route_records.values():
+            row = records.get("0D") if isinstance(records, dict) else None
+            if (isinstance(row, dict)
+                    and all(row.get(key) == depth_receipt.get(key)
+                            for key in ("item", "market_route",
+                                        "transport_epoch", "observed_epoch"))
+                    and row.get("item") and row.get("observed_epoch") is not None):
+                depth_row = row
+                break
+    def exact_bid_depth(source: dict, bid: int) -> int:
+        book = source.get("orderbook")
+        bids = book.get("bids") if isinstance(book, dict) else None
+        level = bids[0] if isinstance(bids, list) and bids else None
+        if isinstance(level, dict):
+            if _safe_int(level.get("price"), 0) != bid:
+                return 0
+            raw = level.get("volume") if "volume" in level else level.get("qty")
+        elif _safe_int(source.get("best_bid"), 0) == bid:
+            raw = source.get("best_bid_qty")
+        else:
+            return 0
+        amount = _safe_float(raw, None)
+        return int(amount) if amount is not None and amount > 0 and amount.is_integer() else 0
+    if bid_source == "fresh_rest_executable_bid":
+        executable_bid_qty = exact_bid_depth(rest_snapshot or {}, executable_bid)
+    elif depth_row is not None:
+        executable_bid_qty = exact_bid_depth(depth_row, executable_bid)
+    else:
+        executable_bid_qty = 0
+    quote_state_for_tuning = str(
+        quality.get("quote_consistency_state") or ""
+    ).lower()
+    if bid_source == "fresh_rest_executable_bid":
+        bid_identity_proven = bool(
+            (rest_snapshot or {}).get("source") == "ka10004_rest_orderbook"
+            and str((rest_snapshot or {}).get("stock_code") or "").strip()[:6]
+            == str(code or "").strip()[:6]
+            and (rest_snapshot or {}).get("request_code")
+        )
+    elif bid_source == "fresh_nxt_0d_executable_bid":
+        bid_identity_proven = bool(
+            nxt_quality.get("nxt_trailing_bid_guard_applied") is True
+            and depth_row is not None
+            and _safe_int(depth_row.get("best_bid"), executable_bid)
+                == executable_bid
+            and _safe_float(depth_row.get("observed_epoch"), 0.0)
+                == quote_received_at
+            and str(depth_row.get("item") or "")
+                == str(nxt_quality.get("nxt_trailing_bid_guard_ws_0d_item") or "")
+            and str(depth_row.get("market_route") or "")
+                == str(nxt_quality.get("nxt_trailing_bid_guard_ws_0d_route") or "")
+        )
+    else:
+        bid_identity_proven = bool(
+            quote_receipt.get("source_type") in {"0B", "0D"}
+            and quote_receipt.get("item")
+            and quote_receipt.get("market_route")
+            and quote_receipt.get("transport_epoch") is not None
+            and _safe_int(quote_receipt.get("best_bid"), 0) == executable_bid
+            and depth_receipt.get("item") == quote_receipt.get("item")
+            and depth_receipt.get("market_route") == quote_receipt.get("market_route")
+            and depth_receipt.get("transport_epoch")
+                == quote_receipt.get("transport_epoch")
+            and _safe_float(depth_receipt.get("observed_epoch"), 0.0)
+                == _safe_float(quote_receipt.get("observed_epoch"), -1.0)
+            and depth_row is not None
+        )
+    config = QuoteConsistencyConfig.from_env()
+    quote_max_age_sec = (config.max_rest_age_ms if bid_source == 'fresh_rest_executable_bid'
+                         else config.max_ws_age_ms) / 1000.0
+    grid_source_complete = bool(
+        market_type and exit_allowed_by_clock and bid_received_at is not None
+        and 0 <= now_ts - bid_received_at <= quote_max_age_sec
+        and price_usable and executable_bid_qty > 0
+        and bid_identity_proven
+        and not stock.get("scalp_trailing_arm_persist_gap")
+        and quote_state_for_tuning not in {
+            "", "missing", "diverged", "blocked", "stale", "conflict",
+            "invalid", "unavailable",
+        }
+        and not _truthy_log_value(quality.get("quote_consistency_entry_blocked"))
+    )
+    # Retain only the current validated evaluation context. A normal exit may
+    # capture this exact quote once even inside the regular one-second cadence.
+    from src.engine.scalping.position_peak_ledger import position_cycle_id
+    stop_context = dict(at=now_ts, bid=executable_bid, bid_qty=executable_bid_qty,
+        quote=quote_receipt, complete=grid_source_complete, market=market_type,
+        evaluator=evaluator, decision_profit_pct=holding_profit_rate_at_eval,
+        position_key=position_cycle_id(stock), quantity=stock.get('buy_qty'),
+        buy_price=stock.get('buy_price'), pending_exit=bool(stock.get('exit_requested')),
+        quote_max_age_sec=quote_max_age_sec)
+    stop_context.update(bid_identity_proven=bid_identity_proven,
+        quote_state_for_tuning=quote_state_for_tuning,
+        operational_ws_0d_best_bid=_safe_int(depth_row.get('best_bid'), 0) if depth_row else None,
+        operational_ws_0d_best_bid_qty=exact_bid_depth(depth_row, _safe_int(depth_row.get('best_bid'), 0)) if depth_row else None,
+        operational_rest_best_bid_qty=exact_bid_depth(rest_snapshot, _safe_int(rest_snapshot.get('best_bid'), 0)) if rest_snapshot else None)
+    return stop_context
+
+
+def _prepare_main_stop_limit_up_quote(stock, code, *, ws_data, quote_fields, now_ts, profit_rate):
+    """Observe the already evaluated quote before early normal limit-up exits."""
+    try:
+        bid, source = _trusted_scalp_trailing_bid(ws_data, code=code,
+            quote_fields=quote_fields, now_ts=now_ts)
+        times = ws_data.get('last_realtime_type_ts')
+        received_at = _safe_float(times.get('0D') if isinstance(times, dict)
+            else ws_data.get('last_ws_update_ts'), None)
+        if received_at is not None and not 0 < received_at <= now_ts:
+            received_at = None
+        session = session_contract.resolve_market_session(datetime.fromtimestamp(float(now_ts), tz=_KST))
+        context = _main_stop_quote_context(stock, code, snapshot=ws_data,
+            quote_receipt=ws_quote_source_receipt(ws_data, now_ts=now_ts), executable_bid=bid,
+            bid_source=source, rest_snapshot=None, quality=quote_fields, nxt_quality={},
+            quote_received_at=received_at,
+            bid_received_at=received_at if source == 'fresh_ws_executable_bid' else None,
+            market_type=scalp_trailing_market_type_at(now_ts),
+            exit_allowed_by_clock=not session.blocker and session.exit_allowed_by_clock,
+            price_usable=bid > 0, now_ts=now_ts, evaluator='normal',
+            holding_profit_rate_at_eval=profit_rate)
+        _store_main_stop_quote_context(stock, context)
+    except Exception as exc:
+        with ENTRY_LOCK:
+            slots = dict(stock.get('_main_stop_quote_context_by_evaluator') or {})
+            slots.pop('normal', None)
+            stock['_main_stop_quote_context_by_evaluator'] = slots
+            current = stock.get('_main_stop_current_quote_context')
+            if not isinstance(current, dict) or current.get('evaluator') in {'normal', 'normal_rest_recovery'}:
+                stock.pop('_main_stop_current_quote_context', None)
+            stock['main_stop_source_gap'] = 'limit_up_quote:' + type(exc).__name__
+
+
+def _store_main_stop_quote_context(stock, context):
+    """Retain at most one exact context per native evaluator, never a timeline."""
+    from src.engine.scalping.main_stop_runtime_source import bounded_observation_copy
+    evaluator = context.get('evaluator')
+    slot = {'normal': 'normal', 'normal_rest_recovery': 'normal',
+            'fast': 'fast', 'fast_rest_confirmed': 'fast', 'fast_prearm': 'fast_prearm'}.get(evaluator)
+    if slot is None:
+        raise ValueError('native_quote_context_evaluator_invalid')
+    frozen = bounded_observation_copy(context)
+    with ENTRY_LOCK:
+        slots = stock.get('_main_stop_quote_context_by_evaluator') or {}
+        slots = {key: value for key, value in slots.items() if key in {'normal', 'fast', 'fast_prearm'}}
+        slots[slot] = frozen
+        stock['_main_stop_quote_context_by_evaluator'] = slots
+        stock['_main_stop_current_quote_context'] = frozen
+    return frozen
+
+
+def _record_main_stop_observation_failure(stock, view, reason, *, evaluation=False):
+    """Keep old-lifecycle source failure visible without censoring a new BUY."""
+    with ENTRY_LOCK:
+        epoch = view.get('_main_stop_observation_epoch') if isinstance(view, dict) else None
+        if epoch is not None and stock.get('_main_stop_observation_epoch') != epoch:
+            key = 'main_stop_source_superseded_rejected_count'
+            stock[key] = stock.get(key, 0) + 1
+            stock['main_stop_source_superseded_rejection'] = dict(
+                record_id=view.get('id'), source_lifecycle_epoch=epoch,
+                kind='evaluation' if evaluation else 'quote', reason=str(reason)[:160])
+            return
+        if evaluation:
+            stock['main_stop_evaluation_source_gap'] = str(reason)[:160]
+            key = 'main_stop_evaluation_rejected_count'
+            stock[key] = stock.get(key, 0) + 1
+        else:
+            stock['main_stop_source_gap'] = str(reason)[:160]
+            if reason == 'observation_queue_rejected':
+                key = 'main_stop_source_rejected_count'
+                stock[key] = stock.get(key, 0) + 1
+
+
+def _capture_main_stop_observation(stock, code, context, *, force=False, decision_capture=False,
+                                   source_view=None, return_source=False, source_reserved=False):
+    """Build from this evaluator's view; publish only bounded immutable sources.
+
+    Disk-backed first-pin recovery precedes the short snapshot/counter lock.
+    Builders, hashes and queue admission run outside the trading state lock.
+    """
+    from src.engine.scalping.position_peak_ledger import position_cycle_id
+    from src.engine.scalping.main_stop_runtime_source import (
+        observation_view, bounded_observation_copy, reserve_observation_generations, ensure_observation_epoch,
+        observation_source_identity)
+    if not isinstance(context, dict):
+        return False
+    now_ts = context['at']
+    view = None
+    try:
+        if source_view is None:
+            _main_stop_values(stock, now_ts)
+        with ENTRY_LOCK:
+            ensure_observation_epoch(stock)
+            view = source_view if source_view is not None else dict(id=stock.get('id'),
+                _main_stop_observation_epoch=stock['_main_stop_observation_epoch'])
+            if source_view is None:
+                view = observation_view(stock)
+            context = bounded_observation_copy(context)
+            quote = context['quote']
+            automatic = not bool(view.get('manual_control_exclusion_blocked')
+                or view.get('manual_control_hard_stop_handoff_pending')
+                or view.get('manual_control_hard_stop_handoff_inflight'))
+            key = (now_ts, context['bid'], context['position_key'], context['quantity'], context['buy_price'],
+                   (view.get('main_stop_policy_pin') or {}).get('pin_sha256'), context['complete'],
+                   quote.get('item'), quote.get('market_route'), quote.get('transport_epoch'), quote.get('observed_epoch'),
+                   bool(view.get('exit_requested')), bool(view.get('manual_control_exclusion_blocked')), automatic,
+                   view.get('add_count', 0), bool(view.get('pending_add_qty') or view.get('pending_add_ord_no') or view.get('pending_add_ord_nos')),
+                   view.get('trailing_stop_price'))
+            if (context['position_key'] != position_cycle_id(view)
+                    or context['quantity'] != view.get('buy_qty') or context['buy_price'] != view.get('buy_price')):
+                return False
+            if (stock.get('_main_stop_observation_epoch') != view.get('_main_stop_observation_epoch')
+                    or position_cycle_id(stock) != position_cycle_id(view)
+                    or (stock.get('main_stop_policy_pin') or {}).get('pin_sha256')
+                        != (view.get('main_stop_policy_pin') or {}).get('pin_sha256')):
+                raise ValueError('native_observation_position_generation_changed')
+            if not source_reserved and stock.get('_main_stop_last_captured_quote') == key:
+                previous = stock.get('_main_stop_last_quote_source')
+                return bounded_observation_copy(previous) if return_source else True
+            previous_key = stock.get('_main_stop_last_captured_quote')
+            if force:
+                if previous_key and (previous_key[0] > now_ts or (previous_key[0] == now_ts and not decision_capture)):
+                    # A different evaluator's newer quote cannot invalidate an
+                    # actually reached older stage with its own original input.
+                    if not decision_capture:
+                        return False
+            if (view.get('strategy') != 'SCALPING' or _safe_int(view.get('buy_qty'), 0) <= 0
+                    or _is_scalp_simulated_position(view, 'SCALPING')
+                    or (force and not decision_capture and (not context['complete'] or context['pending_exit'] or view.get('exit_requested')))
+                    or (not force and now_ts - _safe_float(stock.get('main_stop_source_at'), 0) < 1.0)):
+                return False
+            if not source_reserved:
+                reserve_observation_generations(stock, view, quote=True)
+            else:
+                ticket = view.pop('_main_stop_quote_reservation', None)
+                keys = ('_main_stop_quote_generation', '_main_stop_source_observation_generation')
+                if (type(ticket) is not tuple or len(ticket) != 2
+                        or any(type(value) is not int or value <= 0 for value in ticket)
+                        or any(view.get(key) != value - 1 or type(view.get(key)) is not int
+                               or type(stock.get(key)) is not int or stock[key] < value
+                               for key, value in zip(keys, ticket))):
+                    raise ValueError('native_observation_reservation_invalid')
+            stock['main_stop_source_at'] = max(now_ts, _safe_float(stock.get('main_stop_source_at'), 0))
+        if force:
+            from src.engine.scalping.main_stop_policy import pin_values
+            pin_values(view.get('main_stop_policy_pin'), context['position_key'])
+        executable_bid, executable_bid_qty = context['bid'], context['bid_qty']
+        quote_receipt, grid_source_complete = context['quote'], context['complete']
+        market_type, evaluator = context['market'], context['evaluator']
+        holding_profit_rate_at_eval = context['decision_profit_pct']
+        from src.engine.scalping.main_stop_policy import source_row, enqueue_source, digest
+        from src.engine.ai.holding_vote_replay_source import runtime_source
+        vote_source = runtime_source(view,
+            position_key=_scalp_holding_source_position_key(view, code),
+            buy_fill_identity=buy_fill_identity_from_runtime(view),
+            market=market_type, now=now_ts,
+            policy=_holding_path_policy_for("EXIT_SOFT_STOP", market_type),
+            data_root=DATA_DIR, model=str(getattr(TRADING_RULES,"OPENAI_HOLDING_EXIT_VOTE_MODEL","gpt-5.4-nano")),
+            path_id="EXIT_SOFT_STOP")
+        post_add_vote_source = runtime_source(view,
+            position_key=_scalp_holding_source_position_key(view, code),
+            buy_fill_identity=buy_fill_identity_from_runtime(view),
+            market=market_type, now=now_ts,
+            policy=_holding_path_policy_for('EXIT_POST_ADD_FAIL', market_type),
+            data_root=DATA_DIR, model=vote_source['model'], path_id='EXIT_POST_ADD_FAIL')
+        features=view.get('last_reversal_features') or {}
+        post_add_inputs=dict(active=view.get('reversal_add_state')=='POST_ADD_EVAL',
+            executed_at=view.get('reversal_add_executed_at'),
+            floor=float(view.get('reversal_add_profit_floor',-1.0)),
+            eval_sec=_rule_int('REVERSAL_ADD_POST_EVAL_SEC',25),
+            feature_usable=not bool(reversal_feature_source_quality(features).get('reversal_feature_stale')) if features else True,
+            large_sell_print=features.get('large_sell_print_detected',False),
+            tick_acceleration=features.get('tick_acceleration_ratio',1.0))
+        row = source_row(view, at=now_ts, bid=executable_bid, bid_qty=executable_bid_qty,
+            quote=quote_receipt, coverage_complete=grid_source_complete,
+            cost_model=view.get("_trailing_entry_cost_model"), vote_source=vote_source,seal=False,
+            native_decision_required=True, capture_evaluator=evaluator,
+            post_add_vote_source=post_add_vote_source, post_add_inputs=post_add_inputs,
+            preset_stop=_main_stop_preset_observation(view, now_ts=now_ts, evaluator=evaluator),
+            decision_profit_pct=holding_profit_rate_at_eval,
+            automatic_management_allowed=not bool(view.get("manual_control_exclusion_blocked")
+                or view.get("manual_control_hard_stop_handoff_pending")
+                or view.get("manual_control_hard_stop_handoff_inflight")),
+            runtime_flags=dict(
+                grace_enabled=_rule_bool("SCALP_SOFT_STOP_MICRO_GRACE_ENABLED", True)
+                    and not bool(view.get("main_stop_pin_persistence") or view.get("main_stop_clock_unobserved")),
+                protect_enabled=_env_or_rule_bool("SCALP_PROTECT_TRAILING_SMOOTH_ENABLED", True),
+                handoff_enabled=_env_or_rule_bool("HARD_STOP_MANUAL_HANDOFF_ENABLED", False),
+                vote_max_worsen_pct=_rule("HOLDING_FLOW_OVERRIDE_WORSEN_PCT", 0.8)))
+        row = copy.deepcopy(row)
+        row['state_snapshot_basis'] = 'actual_evaluator_entry' if source_view is not None else 'quote_capture_entry'
+        row.update(observation_source_identity(view))
+        accepted = enqueue_source(stock, code, row)
+        sealed = dict(row, source_sha256=digest(row))
+        with ENTRY_LOCK:
+            if not accepted:
+                _record_main_stop_observation_failure(stock, view, 'observation_queue_rejected')
+            elif (stock.get('_main_stop_observation_epoch') == view['_main_stop_observation_epoch']
+                    and position_cycle_id(stock) == row['position_key']
+                    and (stock.get('main_stop_policy_pin') or {}).get('pin_sha256') == row['pin_sha256']):
+                # This cache is bound to the immutable pin, independent of the
+                # mutable quote. Preserve the pre-existing allocation/hash reuse.
+                stock['_main_stop_source_values'] = view['_main_stop_source_values']
+                current = stock.get('_main_stop_last_quote_source') or {}
+                if current.get('quote_generation', 0) <= row['quote_generation']:
+                    stock['_main_stop_last_captured_quote'] = key
+                    stock['_main_stop_last_quote_source'] = sealed
+        return sealed if accepted and return_source else accepted
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        _record_main_stop_observation_failure(stock, view, type(exc).__name__)
+    return False
+
+
+
+def _observe_main_stop_evaluation(stock, code, *, at, evaluator, stage, decision_price,
+        decision_price_basis, decision_profit_pct, priority_status='reached', preset_stop=None,
+        preset_predecessor=None, legacy_broker_recovered=False, decision_inputs=None):
+    """Capture an actually reached native stage without changing its disposition.
+
+    A normal call owns its own receipt even when fast already captured this
+    quote inside the shared one-second observation cadence. No new quote/IO.
+    """
+    view = None
+    try:
+        from src.engine.scalping.main_stop_runtime_source import (evaluation_source, evaluation_reference,
+            observation_view, bounded_observation_copy, reserve_observation_generations, ensure_observation_epoch,
+            observation_source_identity, reserve_evaluation_lane)
+        from src.engine.scalping.main_stop_policy import enqueue_source, digest
+        from src.engine.scalping.position_peak_ledger import position_cycle_id
+        _main_stop_values(stock, at)
+        with ENTRY_LOCK:
+            ensure_observation_epoch(stock)
+            view = dict(id=stock.get('id'), _main_stop_observation_epoch=stock['_main_stop_observation_epoch'])
+            view = observation_view(stock)
+            slots = stock.get('_main_stop_quote_context_by_evaluator') or {}
+            context = slots.get(evaluator)
+            if not isinstance(context, dict) or context.get('at') != at:
+                context = stock.get('_main_stop_current_quote_context')
+            context = bounded_observation_copy(context)
+            previous = bounded_observation_copy(stock.get('_main_stop_last_quote_source'))
+            decision_inputs = bounded_observation_copy(decision_inputs)
+            preset_stop = bounded_observation_copy(preset_stop)
+            preset_predecessor = bounded_observation_copy(preset_predecessor)
+            if (not isinstance(context, dict) or context.get('at') != at or context.get('evaluator') != evaluator):
+                context = dict(at=at, evaluator=evaluator, quote={}, bid=None, bid_qty=None,
+                    complete=False, market=(view.get('main_stop_policy_pin') or {}).get('market'),
+                    position_key=position_cycle_id(view), quantity=view.get('buy_qty'),
+                    buy_price=view.get('buy_price'), pending_exit=bool(view.get('exit_requested')),
+                    decision_profit_pct=decision_profit_pct,
+                    quote_max_age_sec=QuoteConsistencyConfig.from_env().max_ws_age_ms / 1000.0)
+            # Only quote/position facts are shared. Actual stage, clock, price basis
+            # and predecessor are always freshly supplied by the native caller.
+            shared = isinstance(previous, dict) and previous.get('at', float('inf')) <= at and all((
+                all(previous.get(key) == value for key,value in observation_source_identity(view).items()),
+                previous.get('position_key') == context['position_key'],
+                previous.get('quantity') == context['quantity'],
+                previous.get('buy_basis_krw') == context['quantity'] * context['buy_price'],
+                previous.get('pin_sha256') == (view.get('main_stop_policy_pin') or {}).get('pin_sha256'),
+                previous.get('bid') == context['bid'], previous.get('bid_qty') == context['bid_qty'],
+                previous.get('coverage_complete') is context['complete'],
+                previous.get('item') == context['quote'].get('item'),
+                previous.get('route') == context['quote'].get('market_route'),
+                previous.get('transport_epoch') == context['quote'].get('transport_epoch'),
+                previous.get('quote_at') == context['quote'].get('observed_epoch'),
+                previous.get('pending_exit') == bool(view.get('exit_requested')),
+                previous.get('manual') == bool(view.get('manual_control_exclusion_blocked')),
+                previous.get('automatic_management_allowed') == (not bool(view.get('manual_control_exclusion_blocked')
+                    or view.get('manual_control_hard_stop_handoff_pending') or view.get('manual_control_hard_stop_handoff_inflight'))),
+                previous.get('add_count') == view.get('add_count', 0),
+                previous.get('pending_add') == bool(view.get('pending_add_qty') or view.get('pending_add_ord_no') or view.get('pending_add_ord_nos')),
+                previous.get('protect_line') == view.get('trailing_stop_price'),
+            ))
+            quote_reservation = None
+            if not shared:
+                quote_reservation = reserve_observation_generations(stock, view, quote=True)
+            evaluation_reservation = reserve_observation_generations(stock, view, evaluation=True,
+                minimum=(quote_reservation['_main_stop_source_observation_generation']
+                         if quote_reservation else previous.get('source_observation_generation', 0)))
+            evaluation_lane = reserve_evaluation_lane(stock, view, evaluator)
+            if quote_reservation:
+                for key, value in quote_reservation.items():
+                    view[key] = value - 1
+                view['_main_stop_quote_reservation'] = (quote_reservation['_main_stop_quote_generation'],
+                    quote_reservation['_main_stop_source_observation_generation'])
+        if not shared:
+            previous = _capture_main_stop_observation(stock, code, context, force=True,
+                decision_capture=True, source_view=view, return_source=True, source_reserved=True)
+            if not isinstance(previous, dict):
+                raise ValueError('native_evaluation_quote_capture_gap')
+        # Bind the actual gate to its entry view, not the later live custody
+        # after another evaluator has claimed/submitted the same position.
+        if (previous.get('manual') != bool(view.get('manual_control_exclusion_blocked'))
+                or previous.get('pending_exit') != bool(view.get('exit_requested'))
+                or previous.get('automatic_management_allowed') != (not bool(view.get('manual_control_exclusion_blocked')
+                    or view.get('manual_control_hard_stop_handoff_pending') or view.get('manual_control_hard_stop_handoff_inflight')))):
+            raise ValueError('native_evaluation_custody_snapshot_unbound')
+        if stage == 'common_soft':
+            from src.engine.ai.holding_vote_replay_source import runtime_source
+            decision_inputs = dict(decision_inputs or {})
+            vote = runtime_source(view,
+                position_key=_scalp_holding_source_position_key(view, code),
+                buy_fill_identity=buy_fill_identity_from_runtime(view), market=context['market'], now=at,
+                policy=_holding_path_policy_for('EXIT_SOFT_STOP', context['market']),
+                data_root=DATA_DIR, model=str(getattr(TRADING_RULES, 'OPENAI_HOLDING_EXIT_VOTE_MODEL', 'gpt-5.4-nano')),
+                path_id='EXIT_SOFT_STOP')
+            decision_inputs.update(holding_vote_source=vote, holding_ai_required=True,
+                cost_model=view.get('_trailing_entry_cost_model'))
+        with ENTRY_LOCK:
+            if (stock.get('_main_stop_observation_epoch') != view.get('_main_stop_observation_epoch')
+                    or position_cycle_id(stock) != position_cycle_id(view)
+                    or (stock.get('main_stop_policy_pin') or {}).get('pin_sha256')
+                        != (view.get('main_stop_policy_pin') or {}).get('pin_sha256')):
+                raise ValueError('native_observation_position_generation_changed')
+            for key, value in evaluation_reservation.items():
+                view[key] = value - 1
+        receipt = evaluation_source(view, quote_source=previous, at=at, evaluator=evaluator,
+            stage=stage, decision_price=decision_price, decision_price_basis=decision_price_basis,
+            decision_profit_pct=decision_profit_pct, priority_status=priority_status,
+            preset_stop=preset_stop, preset_predecessor=preset_predecessor,
+            legacy_broker_recovered=legacy_broker_recovered,
+            quote_max_age_sec=context['quote_max_age_sec'], decision_inputs=decision_inputs, seal=False)
+        receipt['state_snapshot_basis'] = 'actual_evaluator_entry'
+        receipt.update(evaluation_lane)
+        if not enqueue_source(stock, code, receipt):
+            raise ValueError('native_evaluation_queue_rejected')
+        sealed = dict(receipt, source_sha256=digest(receipt))
+        if stage == 'preset_safety' and evaluator == 'normal':
+            reference = evaluation_reference(sealed)
+            with ENTRY_LOCK:
+                current = stock.get('_main_stop_normal_preset_evaluation')
+                if (stock.get('_main_stop_observation_epoch') == view['_main_stop_observation_epoch']
+                        and position_cycle_id(stock) == receipt['position_key']
+                        and (stock.get('main_stop_policy_pin') or {}).get('pin_sha256') == receipt['pin_sha256']
+                        and (not isinstance(current, dict) or current.get('at', 0) <= at)):
+                    stock['_main_stop_normal_preset_evaluation'] = reference
+        return sealed
+    except Exception as exc:
+        _record_main_stop_observation_failure(stock, view, str(exc), evaluation=True)
+        return None
+
+
+def _observe_main_stop_preset_evaluation(stock, code, *, at, evaluator, decision_price,
+        decision_price_basis, profit_rate, hard_pct, emergency_pct, grace_sec, held_sec,
+        legacy=False, handoff_enabled=None):
+    try:
+        from src.engine.scalping.main_stop_policy import preset_stop_receipt
+        preset = preset_stop_receipt(stock, at=at, evaluator=evaluator, hard_pct=hard_pct,
+            emergency_pct=emergency_pct, grace_sec=grace_sec, held_sec=held_sec, enabled=not legacy)
+        return _observe_main_stop_evaluation(stock, code, at=at, evaluator=evaluator,
+            stage='preset_safety', decision_price=decision_price, decision_price_basis=decision_price_basis,
+            decision_profit_pct=profit_rate, priority_status='blocked_legacy' if legacy else 'reached',
+            preset_stop=preset, legacy_broker_recovered=bool(legacy),
+            decision_inputs=dict(handoff_enabled=(
+                _env_or_rule_bool('HARD_STOP_MANUAL_HANDOFF_ENABLED', False)
+                if handoff_enabled is None else handoff_enabled)))
+    except Exception as exc:
+        stock['main_stop_evaluation_source_gap'] = type(exc).__name__
+        return None
+
+
 def _observe_scalp_trailing_input_transition(
     stock: dict,
     code: str,
@@ -29526,141 +29690,19 @@ def _observe_scalp_trailing_input_transition(
     except Exception as exc:
         stock['tp_first_crossing_source_gap'] = type(exc).__name__
         log_error(f'[TP_FIRST_CROSSING_SOURCE] {code} {type(exc).__name__}')
-    depth_receipt = quote_receipt.get("depth_receipt")
-    depth_receipt = depth_receipt if isinstance(depth_receipt, dict) else {}
-    depth_row = None
-    route_records = snapshot.get("realtime_type_snapshots_by_route")
-    if isinstance(route_records, dict):
-        for records in route_records.values():
-            row = records.get("0D") if isinstance(records, dict) else None
-            if (isinstance(row, dict)
-                    and all(row.get(key) == depth_receipt.get(key)
-                            for key in ("item", "market_route",
-                                        "transport_epoch", "observed_epoch"))
-                    and row.get("item") and row.get("observed_epoch") is not None):
-                depth_row = row
-                break
-    def exact_bid_depth(source: dict, bid: int) -> int:
-        book = source.get("orderbook")
-        bids = book.get("bids") if isinstance(book, dict) else None
-        level = bids[0] if isinstance(bids, list) and bids else None
-        if isinstance(level, dict):
-            if _safe_int(level.get("price"), 0) != bid:
-                return 0
-            raw = level.get("volume") if "volume" in level else level.get("qty")
-        elif _safe_int(source.get("best_bid"), 0) == bid:
-            raw = source.get("best_bid_qty")
-        else:
-            return 0
-        amount = _safe_float(raw, None)
-        return int(amount) if amount is not None and amount > 0 and amount.is_integer() else 0
-    if bid_source == "fresh_rest_executable_bid":
-        executable_bid_qty = exact_bid_depth(rest_snapshot or {}, executable_bid)
-    elif depth_row is not None:
-        executable_bid_qty = exact_bid_depth(depth_row, executable_bid)
-    else:
-        executable_bid_qty = 0
-    quote_state_for_tuning = str(
-        quality.get("quote_consistency_state") or ""
-    ).lower()
-    if bid_source == "fresh_rest_executable_bid":
-        bid_identity_proven = bool(
-            (rest_snapshot or {}).get("source") == "ka10004_rest_orderbook"
-            and str((rest_snapshot or {}).get("stock_code") or "").strip()[:6]
-            == str(code or "").strip()[:6]
-            and (rest_snapshot or {}).get("request_code")
-        )
-    elif bid_source == "fresh_nxt_0d_executable_bid":
-        bid_identity_proven = bool(
-            nxt_quality.get("nxt_trailing_bid_guard_applied") is True
-            and depth_row is not None
-            and _safe_int(depth_row.get("best_bid"), executable_bid)
-                == executable_bid
-            and _safe_float(depth_row.get("observed_epoch"), 0.0)
-                == quote_received_at
-            and str(depth_row.get("item") or "")
-                == str(nxt_quality.get("nxt_trailing_bid_guard_ws_0d_item") or "")
-            and str(depth_row.get("market_route") or "")
-                == str(nxt_quality.get("nxt_trailing_bid_guard_ws_0d_route") or "")
-        )
-    else:
-        bid_identity_proven = bool(
-            quote_receipt.get("source_type") in {"0B", "0D"}
-            and quote_receipt.get("item")
-            and quote_receipt.get("market_route")
-            and quote_receipt.get("transport_epoch") is not None
-            and _safe_int(quote_receipt.get("best_bid"), 0) == executable_bid
-            and depth_receipt.get("item") == quote_receipt.get("item")
-            and depth_receipt.get("market_route") == quote_receipt.get("market_route")
-            and depth_receipt.get("transport_epoch")
-                == quote_receipt.get("transport_epoch")
-            and _safe_float(depth_receipt.get("observed_epoch"), 0.0)
-                == _safe_float(quote_receipt.get("observed_epoch"), -1.0)
-            and depth_row is not None
-        )
-    grid_source_complete = bool(
-        market_type and exit_allowed_by_clock and bid_received_at is not None
-        and decision.price_usable and executable_bid_qty > 0
-        and bid_identity_proven
-        and not stock.get("scalp_trailing_arm_persist_gap")
-        and quote_state_for_tuning not in {
-            "", "missing", "diverged", "blocked", "stale", "conflict",
-            "invalid", "unavailable",
-        }
-        and not _truthy_log_value(quality.get("quote_consistency_entry_blocked"))
-    )
-    # Reuse the same validated quote. One source receipt per second per position
-    # bounds telemetry; missing cadence remains explicit in the causal replay.
-    if (stock.get("strategy") == "SCALPING" and _safe_int(stock.get("buy_qty"), 0) > 0
-            and not _is_scalp_simulated_position(stock, "SCALPING")
-            and now_ts - _safe_float(stock.get("main_stop_source_at"), 0) >= 1.0):
-        stock['main_stop_source_at'] = now_ts
-        try:
-            from src.engine.scalping.main_stop_policy import source_row, enqueue_source
-            from src.engine.ai.holding_vote_replay_source import runtime_source
-            _main_stop_values(stock, now_ts)
-            vote_source = runtime_source(stock,
-                position_key=_scalp_holding_source_position_key(stock, code),
-                buy_fill_identity=buy_fill_identity_from_runtime(stock),
-                market=market_type, now=now_ts,
-                policy=_holding_path_policy_for("EXIT_SOFT_STOP", market_type),
-                data_root=DATA_DIR, model=str(getattr(TRADING_RULES,"OPENAI_HOLDING_EXIT_VOTE_MODEL","gpt-5.4-nano")),
-                path_id="EXIT_SOFT_STOP")
-            post_add_vote_source = runtime_source(stock,
-                position_key=_scalp_holding_source_position_key(stock, code),
-                buy_fill_identity=buy_fill_identity_from_runtime(stock),
-                market=market_type, now=now_ts,
-                policy=_holding_path_policy_for('EXIT_POST_ADD_FAIL', market_type),
-                data_root=DATA_DIR, model=vote_source['model'], path_id='EXIT_POST_ADD_FAIL')
-            features=stock.get('last_reversal_features') or {}
-            post_add_inputs=dict(active=stock.get('reversal_add_state')=='POST_ADD_EVAL',
-                executed_at=stock.get('reversal_add_executed_at'),
-                floor=float(stock.get('reversal_add_profit_floor',-1.0)),
-                eval_sec=_rule_int('REVERSAL_ADD_POST_EVAL_SEC',25),
-                feature_usable=not bool(reversal_feature_source_quality(features).get('reversal_feature_stale')) if features else True,
-                large_sell_print=features.get('large_sell_print_detected',False),
-                tick_acceleration=features.get('tick_acceleration_ratio',1.0))
-            row = source_row(stock, at=now_ts, bid=executable_bid, bid_qty=executable_bid_qty,
-                quote=quote_receipt, coverage_complete=grid_source_complete,
-                cost_model=stock.get("_trailing_entry_cost_model"), vote_source=vote_source,seal=False,
-                post_add_vote_source=post_add_vote_source, post_add_inputs=post_add_inputs,
-                preset_stop=_main_stop_preset_observation(stock, now_ts=now_ts, evaluator=evaluator),
-                decision_profit_pct=holding_profit_rate_at_eval,
-                automatic_management_allowed=not bool(stock.get("manual_control_exclusion_blocked")
-                    or stock.get("manual_control_hard_stop_handoff_pending")
-                    or stock.get("manual_control_hard_stop_handoff_inflight")),
-                runtime_flags=dict(
-                    grace_enabled=_rule_bool("SCALP_SOFT_STOP_MICRO_GRACE_ENABLED", True)
-                        and not bool(stock.get("main_stop_pin_persistence") or stock.get("main_stop_clock_unobserved")),
-                    protect_enabled=_env_or_rule_bool("SCALP_PROTECT_TRAILING_SMOOTH_ENABLED", True),
-                    handoff_enabled=_env_or_rule_bool("HARD_STOP_MANUAL_HANDOFF_ENABLED", False),
-                    vote_max_worsen_pct=_rule("HOLDING_FLOW_OVERRIDE_WORSEN_PCT", 0.8)))
-            if not enqueue_source(stock,code,row):
-                stock['main_stop_source_gap']='observation_queue_rejected'
-                stock['main_stop_source_rejected_count']=stock.get('main_stop_source_rejected_count',0)+1
-            stock["main_stop_source_at"] = now_ts
-        except (OSError, ValueError, KeyError, TypeError) as exc:
-            stock['main_stop_source_gap'] = type(exc).__name__
+    stop_context = _main_stop_quote_context(stock, code, snapshot=snapshot,
+        quote_receipt=quote_receipt, executable_bid=executable_bid, bid_source=bid_source,
+        rest_snapshot=rest_snapshot, quality=quality, nxt_quality=nxt_quality,
+        quote_received_at=quote_received_at, bid_received_at=bid_received_at,
+        market_type=market_type, exit_allowed_by_clock=exit_allowed_by_clock,
+        price_usable=decision.price_usable, now_ts=now_ts, evaluator=evaluator,
+        holding_profit_rate_at_eval=holding_profit_rate_at_eval)
+    executable_bid_qty = stop_context['bid_qty']
+    grid_source_complete = stop_context['complete']
+    bid_identity_proven = stop_context['bid_identity_proven']
+    quote_state_for_tuning = stop_context['quote_state_for_tuning']
+    _store_main_stop_quote_context(stock, stop_context)
+    _capture_main_stop_observation(stock, code, stop_context)
     grid_decisions = {
         str(candidate): evaluate_trailing_take_profit(
             peak_price=peak_price,
@@ -29817,6 +29859,7 @@ def _observe_scalp_trailing_input_transition(
         if previous_key != position_key:
             previous_count = 0
             stock["scalp_trailing_observation_coverage_exhausted"] = False
+            stock.pop('scalp_trailing_observation_admission_failure', None)
             if stock.get("scalp_trailing_observation_source_gap_position_key") != position_key:
                 stock["scalp_trailing_observation_source_gap"] = False
             stock["scalp_trailing_grid_first_arm"] = {}
@@ -29832,15 +29875,16 @@ def _observe_scalp_trailing_input_transition(
             if candidate.triggered and key not in first_triggers:
                 first_triggers[key] = float(now_ts)
                 new_triggers.append(key)
-        if previous_count >= SCALP_TRAILING_MAX_POSITION_SAMPLES:
-            if stock.get("scalp_trailing_observation_coverage_exhausted"):
-                return
-            stock["scalp_trailing_observation_coverage_exhausted"] = True
-            coverage_exhausted = True
-            sequence = previous_count + 1
-        else:
-            coverage_exhausted = False
-            sequence = previous_count + 1
+        from src.engine.scalping.universal_trailing_replay import OBSERVATION_STREAM
+        # Bound pending work, never the lifetime of a held position. Legacy
+        # exhaustion remains a gap for that position, not a reason to stop.
+        if stock.get('scalp_trailing_observation_coverage_exhausted'):
+            stock['scalp_trailing_observation_source_gap'] = True
+        coverage_exhausted = False
+        sequence = previous_count + 1
+        stock['scalp_trailing_observation_stream_contract'] = OBSERVATION_STREAM
+        if previous_key != position_key or not stock.get('scalp_trailing_observation_buy_fill_identity'):
+            stock['scalp_trailing_observation_buy_fill_identity'] = holding_generation
         stock["scalp_trailing_observation_sequence"] = sequence
         stock["scalp_trailing_grid_last_logged_at"] = now_ts
         stock["scalp_trailing_grid_max_gap_since_event"] = 0.0
@@ -29887,12 +29931,23 @@ def _observe_scalp_trailing_input_transition(
     from src.engine.scalping.universal_trailing_replay import quote_source_digest
     if universal_quote.get('kind') == 'QUOTE':
         universal_quote['source_sha256'] = quote_source_digest(universal_quote)
+    from src.engine.scalping.trailing_entry_research_source import holding_link as trailing_holding_link, runtime_account_scope
+    trailing_link = trailing_holding_link(stock, position_key=position_key,
+        buy_fill_identity=holding_generation, known_at=now_ts,
+        account_scope_sha256=runtime_account_scope(),
+        automatic_management_allowed=not bool(stock.get('manual_control_exclusion_blocked')
+            or stock.get('manual_control_hard_stop_handoff_pending')
+            or stock.get('manual_control_hard_stop_handoff_inflight')
+            or stock.get('manual_control_auto_open_loss_blocked')
+            or stock.get('manual_control_auto_hard_stop_blocked')))
     try:
-        _log_holding_pipeline(
+        append_result = _log_holding_pipeline(
             stock,
             code,
             "scalp_trailing_input_transition",
-            universal_trailing_quote=json.dumps(universal_quote, sort_keys=True, separators=(',', ':')),
+            universal_trailing_quote=universal_quote,
+            trailing_entry_plan_receipt_sha256=stock.get('_trailing_entry_plan_receipt_sha256'),
+            trailing_entry_plan_holding_link=json.dumps(trailing_link, sort_keys=True, separators=(',', ':')),
             trailing_entry_context=json.dumps(stock.get('trailing_entry_context'), sort_keys=True, separators=(',', ':')),
             classification_origin_hash=(stock.get('trailing_situation_pin') or {}).get('classification_origin_hash'),
             trailing_situation_pin=json.dumps(stock.get('trailing_situation_pin'), sort_keys=True, separators=(',', ':')),
@@ -29904,7 +29959,9 @@ def _observe_scalp_trailing_input_transition(
             observation_telemetry_gap=bool(
                 stock.get("scalp_trailing_observation_source_gap")
             ),
-            observation_max_samples=SCALP_TRAILING_MAX_POSITION_SAMPLES,
+            observation_admission_failure=stock.get('scalp_trailing_observation_admission_failure'),
+            observation_stream_contract=OBSERVATION_STREAM,
+            observation_buy_fill_identity=stock.get('scalp_trailing_observation_buy_fill_identity'),
             evaluation_at_epoch=now_ts,
             tuning_market_type=market_type or "-",
             tuning_exit_allowed_by_clock=exit_allowed_by_clock,
@@ -30042,18 +30099,10 @@ def _observe_scalp_trailing_input_transition(
             nxt_trailing_bid_guard_ws_0d_route=nxt_quality.get(
                 "nxt_trailing_bid_guard_ws_0d_route"
             ),
-            operational_ws_0d_best_bid=(
-                _safe_int(depth_row.get("best_bid"), 0) if depth_row else None
-            ),
-            operational_ws_0d_best_bid_qty=(
-                exact_bid_depth(depth_row, _safe_int(depth_row.get("best_bid"), 0))
-                if depth_row else None
-            ),
+            operational_ws_0d_best_bid=stop_context['operational_ws_0d_best_bid'],
+            operational_ws_0d_best_bid_qty=stop_context['operational_ws_0d_best_bid_qty'],
             operational_rest_best_bid=(rest_snapshot or {}).get("best_bid"),
-            operational_rest_best_bid_qty=exact_bid_depth(
-                rest_snapshot or {},
-                _safe_int((rest_snapshot or {}).get("best_bid"), 0),
-            ) if rest_snapshot else None,
+            operational_rest_best_bid_qty=stop_context['operational_rest_best_bid_qty'],
             operational_executable_spread_bps=spread_bps,
             operational_quote_warn_tick_floor_bps=quote_warn_tick_floor_bps,
             operational_mark_to_bid_gap_bps=operational_shadow_row[
@@ -30086,6 +30135,16 @@ def _observe_scalp_trailing_input_transition(
             actual_order_submitted=False,
             runtime_effect=False,
         )
+        if not (append_result is True or (isinstance(append_result, dict)
+                and (append_result.get('status') == 'queued'
+                     or append_result.get('structured_append_succeeded') is True))):
+            # Expected backpressure is retained in the next row/terminal and
+            # queue counters; never perform synchronous fallback/log I/O here.
+            stock['scalp_trailing_observation_source_gap'] = True
+            stock['scalp_trailing_observation_source_gap_position_key'] = position_key
+            stock['scalp_trailing_observation_admission_failure'] = (
+                str(append_result.get('reason') or 'append_unconfirmed')[:96]
+                if isinstance(append_result, dict) else 'append_unconfirmed')
     except Exception as exc:
         stock["scalp_trailing_observation_source_gap"] = True
         stock["scalp_trailing_observation_source_gap_position_key"] = position_key
@@ -30470,10 +30529,17 @@ def _evaluate_and_dispatch_fast_scalp_exit(
     if hard_stop_pct is None:
         hard_stop_pct = _main_stop_values(stock, observed_at).hard_stop_pct
     held_sec = _resolve_holding_elapsed_sec(stock, now_ts=observed_at)
+    stop_handoff_enabled = _env_or_rule_bool("HARD_STOP_MANUAL_HANDOFF_ENABLED", False)
     safety = safety_decision(profit_pct=profit_rate, hard_pct=hard_stop_pct,
         emergency_pct=emergency_pct, protect_pct=protect_pct,
         held_sec=held_sec, preset_grace_sec=_safe_float(stock.get("hard_stop_grace_sec"), 0),
-        handoff_enabled=_env_or_rule_bool("HARD_STOP_MANUAL_HANDOFF_ENABLED", False))
+        handoff_enabled=stop_handoff_enabled)
+    if fast_stop_enabled:
+        _observe_main_stop_preset_evaluation(stock, code, at=observed_at, evaluator='fast',
+            decision_price=decision_price, decision_price_basis=('executable_bid' if trusted_bid > 0 and decision_price == trusted_bid else 'mark_price'), profit_rate=profit_rate,
+            hard_pct=hard_stop_pct, emergency_pct=emergency_pct,
+            grace_sec=_safe_float(stock.get("hard_stop_grace_sec"), 0), held_sec=held_sec,
+            handoff_enabled=stop_handoff_enabled)
     if fast_stop_enabled and safety.disposition in {"exit_candidate", "manual_handoff"}:
         exit_rule = safety.rule
         trigger_kind = {"scalp_hard_stop_emergency": "emergency_stop", "scalp_protect_profit_stop": "protect_stop"}.get(exit_rule, "hard_stop")
@@ -30716,6 +30782,11 @@ def _evaluate_and_dispatch_fast_scalp_exit(
         buy_price=buy_price, now_ts=observed_at, source_stage="fast_stop"):
         return False
 
+    # Capture the exact already validated normal-exit quote before the claim
+    # turns pending_exit on. This has no effect on the claim/order result.
+    if exit_rule == 'scalp_trailing_take_profit' and not retry_pending:
+        _main_stop_normal_exit_fields(stock, code, at=observed_at,
+            mark_price=mark_price, exit_rule=exit_rule, evaluator='fast')
     exit_token = existing_exit_token or uuid4().hex
     with ENTRY_LOCK:
         if stock.get("manual_control_hard_stop_handoff_inflight") or stock.get("manual_control_exclusion_blocked"):
@@ -37657,6 +37728,9 @@ def _risky_micro_route_scoped_0d_bbo(
         normalized = session.strip().lower()
         if normalized == "krx_regular":
             return datetime_time(9, 0) <= local_time <= TIME_15_30
+        if normalized in {"krx_nxt_aftermarket", "krx_nxt_aftermarket_close_only",
+                           "krx_nxt_aftermarket_terminal_exit"}:
+            return datetime_time(16, 0) <= local_time < TIME_20_00
         if normalized in {"krx_like_premarket", "premarket_krx_like", "nxt_premarket"}:
             return datetime_time(8, 0) <= local_time < datetime_time(8, 50)
         if normalized in {"nxt", "nxt_regular_overlap"}:
@@ -37678,16 +37752,19 @@ def _risky_micro_route_scoped_0d_bbo(
 
     route_snapshots = ws_data.get("realtime_type_snapshots_by_route")
     route_snapshots = route_snapshots if isinstance(route_snapshots, dict) else {}
-    premarket_cohort = venue == "PREMARKET_KRX_LIKE"
+    premarket_cohort = venue == "PREMARKET_KRX_LIKE" or (venue == "SOR"
+        and session.lower() in {"krx_like_premarket", "premarket_krx_like", "nxt_premarket"})
     required_route = (
-        "krx_regular"
+        "krx_only"
         if venue == "KRX"
-        else "krx_nxt_integrated" if premarket_cohort else "nxt_only"
+        else "krx_nxt_integrated" if premarket_cohort or venue == "SOR" else "nxt_only"
     )
     candidate_route = str(expected_market_route or required_route).strip().lower()
+    candidate_route = "krx_only" if candidate_route == "krx_regular" else candidate_route
     matches: list[tuple[dict[str, Any], str, str, str, dict[str, Any]]] = []
     exact_route_outside_session = False
     integrated_route_depth_proof_invalid = False
+    transport_epoch_mismatch = False
     for route_snapshot in route_snapshots.values():
         if not isinstance(route_snapshot, dict):
             continue
@@ -37696,9 +37773,16 @@ def _risky_micro_route_scoped_0d_bbo(
             continue
         observed_venue = str(snapshot.get("effective_venue") or "").strip().upper()
         observed_route = str(snapshot.get("market_route") or "").strip()
+        observed_route_key = "krx_only" if observed_route.lower() == "krx_regular" else observed_route.lower()
         observed_item = str(snapshot.get("item") or "").strip().upper()
         observed_code = observed_item.split("_", 1)[0][-6:]
         if observed_code != code:
+            continue
+        current_epoch = ws_data.get("market_data_transport_epoch")
+        if current_epoch is not None and (
+                type(current_epoch) is not int or type(snapshot.get("transport_epoch")) is not int
+                or snapshot["transport_epoch"] != current_epoch):
+            transport_epoch_mismatch = True
             continue
         route_scope_status = "exact_0d_route_snapshot"
         observed_venue_resolution = "subscription_item_exact_venue"
@@ -37707,14 +37791,14 @@ def _risky_micro_route_scoped_0d_bbo(
         if premarket_cohort:
             if (
                 candidate_route == "nxt_only"
-                and observed_route.lower() == "nxt_only"
+                and observed_route_key == "nxt_only"
                 and observed_venue == "NXT"
                 and observed_item == f"{code}_NX"
             ):
                 pass
             elif (
                 candidate_route == "krx_nxt_integrated"
-                and observed_route.lower() == "krx_nxt_integrated"
+                and observed_route_key == "krx_nxt_integrated"
                 and not observed_venue
                 and observed_item == f"{code}_AL"
             ):
@@ -37731,9 +37815,9 @@ def _risky_micro_route_scoped_0d_bbo(
             else:
                 continue
         elif (
-            venue == "KRX"
+            venue in {"KRX", "SOR"}
             and candidate_route == "krx_nxt_integrated"
-            and observed_route.lower() == candidate_route
+            and observed_route_key == candidate_route
             and observed_venue in {"", "SOR"}
             and observed_item == f"{code}_AL"
         ):
@@ -37748,7 +37832,7 @@ def _risky_micro_route_scoped_0d_bbo(
             depth_proof_status = "not_required_integrated_sor_execution"
         elif (
             observed_venue != venue
-            or observed_route.lower() != candidate_route
+            or observed_route_key != candidate_route
             or (venue == "KRX" and observed_item != code)
             or (venue == "NXT" and observed_item != f"{code}_NX")
         ):
@@ -37772,6 +37856,8 @@ def _risky_micro_route_scoped_0d_bbo(
     if not matches:
         if exact_route_outside_session:
             status = "exact_0d_route_snapshot_outside_candidate_session"
+        elif transport_epoch_mismatch:
+            status = "exact_0d_route_snapshot_transport_epoch_mismatch"
         elif integrated_route_depth_proof_invalid:
             status = "integrated_0d_route_depth_proof_missing_or_invalid"
         else:
@@ -38110,7 +38196,8 @@ def _post_sell_exact_route_subscription_snapshot(
         exact_route_present = bool(
             base_subscription_present
             and expected_market_route
-            and expected_market_route in registered_routes
+            and ("krx_only" if expected_market_route == "krx_regular" else expected_market_route)
+                in {"krx_only" if route == "krx_regular" else route for route in registered_routes}
         )
         if exact_route_present:
             resolution = "exact_registered_market_route_present"
@@ -38150,6 +38237,7 @@ def _post_sell_exact_route_subscription_item(
     if len(normalized) != 6 or not normalized.isdigit():
         return ""
     return {
+        "krx_only": normalized,
         "krx_regular": normalized,
         "nxt_only": f"{normalized}_NX",
         "krx_nxt_integrated": f"{normalized}_AL",
@@ -38301,6 +38389,8 @@ def _post_sell_executable_bbo_gap_reason(
     market_fields: dict[str, Any],
     bid: int,
     ask: int,
+    bid_qty: int,
+    bid_qty_source_valid: bool,
     quote_epoch: float,
     sell_epoch: float,
     quote_age_ms: float | None,
@@ -38333,6 +38423,8 @@ def _post_sell_executable_bbo_gap_reason(
         return "route_scoped_ws_price_missing"
     if bid <= 0 or ask < bid:
         return "route_scoped_bbo_missing_or_invalid"
+    if bid_qty <= 0 or not bid_qty_source_valid:
+        return "route_scoped_bid_depth_missing_or_invalid"
     if quote_epoch <= 0:
         return "route_scoped_quote_epoch_missing"
     if quote_epoch <= sell_epoch:
@@ -38391,7 +38483,7 @@ def observe_post_sell_executable_bbo_horizons(
             scoped_ws, route_scope_fields = _risky_micro_route_scoped_0d_bbo(
                 ws_data,
                 code=code,
-                venue=str(registration.get("venue") or "").strip().upper(),
+                venue=str(registration.get("quote_observer_scope") or registration.get("venue") or "").strip().upper(),
                 session=str(registration.get("session") or "").strip(),
                 expected_market_route=str(
                     registration.get("expected_market_route") or ""
@@ -38414,6 +38506,8 @@ def observe_post_sell_executable_bbo_horizons(
                 market_fields=market_fields,
                 bid=bid,
                 ask=ask,
+                bid_qty=_safe_int(scoped_ws.get("best_bid_qty"), 0),
+                bid_qty_source_valid=scoped_ws.get("best_bid_qty_source_valid") is True,
                 quote_epoch=quote_epoch,
                 sell_epoch=sell_epoch,
                 quote_age_ms=quote_age_ms,
@@ -38523,6 +38617,11 @@ def observe_post_sell_executable_bbo_horizons(
                     "post_sell_executable_bbo_broker_route": (
                         registration.get("broker_route") or "-"
                     ),
+                    "post_sell_executable_bbo_quote_observer_scope": registration.get("quote_observer_scope") or registration.get("venue"),
+                    "post_sell_executable_bbo_execution_venue_verified": registration.get("actual_execution_venue_verified") is True,
+                    "post_sell_executable_bbo_execution_venue_source": registration.get("actual_execution_venue_source") or "unknown",
+                    "post_sell_executable_bbo_broker_actual_execution_venue": registration.get("broker_actual_execution_venue") or "UNKNOWN",
+                    "post_sell_executable_bbo_best_bid_qty": _safe_int(scoped_ws.get("best_bid_qty"), 0),
                     "post_sell_executable_bbo_venue": (
                         registration.get("venue") or "UNKNOWN"
                     ),
@@ -41576,7 +41675,7 @@ def _retry_entry_ai_submit_authority_before_block(
                 retry_ws_data,
                 limit=40,
                 now_ts=now_ts,
-                broker_route=(fixed_source_route or {}).get("broker_route"),
+                broker_route=(fixed_source_route or {}).get("broker_route") or stock.get("broker_route"),
                 allow_integrated_sor_execution_view=True,
             )
             fields["pre_submit_entry_ai_authority_retry_history_ready_elapsed_ms"] = (
@@ -41607,7 +41706,7 @@ def _retry_entry_ai_submit_authority_before_block(
                 now_ts=retry_context_now_ts,
                 recent_candles=recent_candles,
                 source_meta=candle_source_meta,
-                broker_route=(fixed_source_route or {}).get("broker_route"),
+                broker_route=(fixed_source_route or {}).get("broker_route") or stock.get("broker_route"),
                 include_investor_source=True,
             )
             fields["pre_submit_entry_ai_authority_retry_context_build_elapsed_ms"] = (
@@ -46474,6 +46573,11 @@ def _finalize_entry_split_probe_partial_position(
         filled_qty = max(0, _safe_int(stock.get("buy_qty"), 0))
         if not 0 < filled_qty < requested_qty:
             return False
+        try:
+            from src.engine.scalping.main_stop_quantity_source import retain_quantity_source
+            retain_quantity_source(stock, at=time.time())
+        except Exception as exc:
+            stock['main_stop_quantity_source_gap'] = type(exc).__name__
         move_orders_to_terminal(stock, reason="entry_split_probe_partial_complete")
         _mutate_stock_state(
             stock,
@@ -47228,6 +47332,7 @@ def _apply_entry_ai_price_canary(
             venue=candle_venue,
             session=candle_session,
             limit=fetch_candle_limit,
+            broker_route=stock.get("broker_route"),
             allow_integrated_sor_execution_view=True,
         )
     except Exception as exc:
@@ -47306,7 +47411,7 @@ def _apply_entry_ai_price_canary(
             now_ts=time.time(),
             recent_candles=recent_candles,
             source_meta=candle_source_meta,
-            broker_route=(fixed_source_route or {}).get("broker_route"),
+            broker_route=(fixed_source_route or {}).get("broker_route") or stock.get("broker_route"),
             include_investor_source=True,
         )
         # Auxiliary context preparation may outlive the market snapshot taken
@@ -52317,7 +52422,8 @@ def _build_tick_source_quality_log_fields(feature_probe):
     tick_source_quality_fields_sent = bool(out)
     _copy_ai_preflight_log_fields(payload, out)
     out.update(
-        {key: value for key, value in payload.items() if str(key).startswith("entry_ai_final_")}
+        {key: value for key, value in payload.items()
+         if str(key).startswith("entry_ai_final_") or key == "entry_ai_quote_time_policy_receipt"}
     )
     if tick_source_quality_fields_sent:
         out["tick_source_quality_fields_sent"] = True
@@ -61313,6 +61419,7 @@ def _record_async_disposition(result, disposition, reason, **facts):
 
 def _set_async_terminal(stock, reason, **facts):
     """Direct return-site facts, never the last arbitrary diagnostic message."""
+    record_submit_attempt_terminal(stock, reason)
     guard = stock.get('_async_consumption_guard') if isinstance(stock, dict) else None
     if isinstance(guard, dict):
         guard.setdefault('reason', str(reason))
@@ -61463,13 +61570,8 @@ def _main_initial_physical_send_context(
                          for branch in surviving_snapshot[0]["branch_signals"]}
             if not remaining.intersection(assessment["matched_policy_refs"]):
                 raise ValueError("reversal_all_requested_signals_invalidated")
-        from src.engine.scalping.reversal_auxiliary_intraday import validate_submit
-        validate_submit(DATA_DIR, current, now=time.time())
-        bundle_hash = current.get("machine_bundle_sha256") or current.get("policy_bundle_hash")
-        if bundle_hash:
-            from src.engine.scalping.mechanistic_entry_runtime_policy import validate_attempt_generation
-            if not validate_attempt_generation(bundle_hash, data_root=DATA_DIR)["allowed"]:
-                raise ValueError("initial_send_policy_generation_changed")
+        from src.engine.scalping.reversal_evaluation_context import validate_submit
+        validate_submit(DATA_DIR, current, now=time.time(), check_generation=True)
         return (canonical_binding({"machine": projected,
                                    "ai_decision_trace_id": stock.get("last_watching_ai_decision_trace_id")}),
                 canonical_binding(_entry_quote_time_policy().active_contract_dict()))
@@ -61869,6 +61971,9 @@ def _resolve_scanner_async_entry_ai(
         budget.require()
         stock_snapshot = thaw_scanner_async_value(async_context.stock_snapshot)
         prepared_ws = thaw_scanner_async_value(async_context.ws_snapshot)
+        # Preserve the attach owner's explicit route before generic defaults.
+        # In premarket a known NXT source must not become unresolved SOR.
+        entry_broker_route = stock_snapshot.get("broker_route")
         for key, value in _scanner_promotion_correlation_fields(stock_snapshot).items():
             prepared_ws.setdefault(key, value)
         prepared_reentry = stock_snapshot.get(
@@ -61895,7 +62000,7 @@ def _resolve_scanner_async_entry_ai(
                 None,
             ),
             ws_data=prepared_ws,
-            broker_route=kiwoom_orders.resolve_order_dmst_stex_tp(),
+            broker_route=entry_broker_route or kiwoom_orders.resolve_order_dmst_stex_tp(),
         ))
         from src.trading.market.entry_ws_source import select_trade_history
         source_started = time.perf_counter()
@@ -61911,6 +62016,7 @@ def _resolve_scanner_async_entry_ai(
             code,
             prepared_ws,
             venue=generation.venue,
+            broker_route=entry_broker_route,
             limit=40,
             now_ts=time.time(),
             allow_integrated_sor_execution_view=True,
@@ -61947,6 +62053,7 @@ def _resolve_scanner_async_entry_ai(
             code,
             prepared_ws,
             venue=generation.venue,
+            broker_route=entry_broker_route,
             session=None,
             limit=40,
             model_bar_limit=20,
@@ -62851,6 +62958,10 @@ def _handle_watching_strategy_branch(
                                 not opening_rotation_handoff_defers_baseline
                                 and strength_baseline_would_block
                             ):
+                                if source_quality_block_reason:
+                                    from src.engine.monitoring.runtime_performance import record_native_preclaim_guard
+                                    record_native_preclaim_guard(stock=stock, code=code, ws_data=ws_data,
+                                        reason=source_quality_block_reason, now=time.time())
                                 return False
                             if (
                                 opening_rotation_handoff_defers_baseline
@@ -63343,7 +63454,7 @@ def _handle_watching_strategy_branch(
                                 venue=stock.get("effective_venue") or stock.get("venue"),
                                 limit=40,
                                 now_ts=now_ts,
-                                broker_route=(fixed_source_route or {}).get("broker_route"),
+                                broker_route=(fixed_source_route or {}).get("broker_route") or stock.get("broker_route"),
                                 allow_integrated_sor_execution_view=True,
                                 reduced_inputs=True,
                             )
@@ -63382,7 +63493,7 @@ def _handle_watching_strategy_branch(
                                 now_ts=entry_context_now_ts,
                                 recent_candles=recent_candles,
                                 source_meta=candle_source_meta,
-                                broker_route=(fixed_source_route or {}).get("broker_route"),
+                                broker_route=(fixed_source_route or {}).get("broker_route") or stock.get("broker_route"),
                                 include_investor_source=False,
                             )
                             stock.pop("ai_wait_rebound_recheck_pending", None)
@@ -65228,7 +65339,7 @@ def _handle_watching_strategy_branch(
                                     ws_data,
                                     limit=40,
                                     now_ts=now_ts,
-                                    broker_route=(fixed_source_route or {}).get("broker_route"),
+                                    broker_route=(fixed_source_route or {}).get("broker_route") or stock.get("broker_route"),
                                     allow_integrated_sor_execution_view=True,
                                 )
                             )
@@ -65244,7 +65355,7 @@ def _handle_watching_strategy_branch(
                                 now_ts=gatekeeper_context_now_ts,
                                 recent_candles=gatekeeper_candles,
                                 source_meta=gatekeeper_candle_meta,
-                                broker_route=(fixed_source_route or {}).get("broker_route"),
+                                broker_route=(fixed_source_route or {}).get("broker_route") or stock.get("broker_route"),
                                 include_investor_source=True,
                             )
                             gatekeeper_snapshot_ws = dict(ws_data or {})
@@ -65804,6 +65915,7 @@ def _observe_entry_submit_finished(stock, code, outcome):
         async_entry_submit_attempt_id=attempt_fields.get('entry_submit_attempt_id'),
         async_entry_broker_accepted=bool(attempt_fields.get('entry_submit_attempt_broker_accepted')),
         async_entry_submit_outcome=outcome)
+    attempt_fields = submit_attempt_fields(stock, code)
     delayed = stock.pop("_pre_submit_delay_due", None) if isinstance(stock, dict) else None
     zero_intent = stock.pop("_pre_submit_delay_zero_intent", None) if isinstance(stock, dict) else None
     delay_intent = delayed if isinstance(delayed, dict) else zero_intent
@@ -65819,7 +65931,7 @@ def _observe_entry_submit_finished(stock, code, outcome):
             committed_at_epoch=delay_intent["committed_at_epoch"],
             submit_finished_at_epoch=time.time(),
             original_machine_observation_sha256=delay_intent.get("machine_observation_sha256"),
-            terminal_reason=str((stock.get('_async_consumption_guard') or {}).get('reason')
+            terminal_reason=str(attempt_fields.get('entry_submit_attempt_terminal_reason')
                                 or ('submit_call_returned_true' if outcome is True else
                                     'submit_call_returned_false' if outcome is False else outcome)),
             submit_call_outcome=outcome,
@@ -66197,6 +66309,9 @@ def observe_pre_submit_delay_quote(stock, code, ws_data, *, now_ts=None):
 @probe_submission_scope()
 @observe_submit_attempt(on_finish=_observe_entry_submit_finished)
 def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
+    if _safe_int(stock.get('buy_qty'), 0) <= 0:
+        from src.engine.scalping.trailing_entry_research_source import clear as clear_trailing_plan
+        clear_trailing_plan(stock)
     if isinstance(stock.get("initial_quantity_bundle"), dict):
         # The legacy loop submits every planned order in one invocation. Until
         # its replacement has durable per-leg intent and terminal recovery,
@@ -70440,6 +70555,9 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 effective_venue=stock.get("effective_venue"),
                 delay_decision_type=json.dumps(decision_type, sort_keys=True, separators=(",", ":")),
                 delay_policy_status=delay_policy["status"],
+                delay_selection_basis=delay_policy.get("selection_basis"),
+                delay_evidence_verdict=delay_policy.get("evidence_verdict", "indeterminate"),
+                delay_selected_cell_key=delay_policy.get("selected_cell_key"),
                 actual_order_submitted=False, broker_order_forbidden=True,
                 runtime_effect=False,
                 decision_authority="source_only_pre_submit_delay_observation")
@@ -70511,6 +70629,9 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 effective_venue=stock.get("effective_venue"),
                 delay_decision_type=json.dumps(decision_type, sort_keys=True, separators=(",", ":")),
                 delay_policy_status=delay_policy["status"],
+                delay_selection_basis=delay_policy.get("selection_basis"),
+                delay_evidence_verdict=delay_policy.get("evidence_verdict", "indeterminate"),
+                delay_selected_cell_key=delay_policy.get("selected_cell_key"),
                 actual_order_submitted=False, broker_order_forbidden=True,
                 runtime_effect=False, decision_authority="source_only_pre_submit_delay_observation")
             try:
@@ -70531,12 +70652,14 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         confirmed_epoch = _safe_float(stock.get("last_watching_ai_confirmed_at"), 0.0)
         final_ai_age = time.time() - confirmed_epoch if confirmed_epoch > 0 else None
         try:
-            from src.engine.scalping.reversal_auxiliary_intraday import validate_submit
+            from src.engine.scalping.reversal_evaluation_context import validate_submit
             from src.engine.monitoring.runtime_performance import mark_signal, machine_signal_id
             mark_signal(machine_signal_id(stock.get('last_watching_ai_machine_primary_fields')), 'pre_submit')
             validate_submit(DATA_DIR, stock.get("last_watching_ai_machine_primary_fields") or {}, now=time.time())
         except (OSError, ValueError, KeyError, TypeError) as exc:
             _log_entry_pipeline(stock, code, "auxiliary_binding_submit_recheck", reason=str(exc),
+                entry_submit_revalidation=json.dumps(getattr(exc, 'entry_submit_revalidation', {}),
+                    sort_keys=True, separators=(',', ':')),
                 actual_order_submitted=False, broker_order_forbidden=True)
             _set_async_terminal(stock, 'auxiliary_binding_submit_recheck')
             return False
@@ -70595,6 +70718,15 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 ),
             },
         )
+        # Bind before sequential legs and immutable sizing/price hashes are
+        # created. A final-request-only repair would leave a different plan.
+        if any(not _bind_main_entry_order_request(stock, order) for order in planned_orders):
+            _log_entry_pipeline(
+                stock, code, "main_entry_order_route_invalid",
+                actual_order_submitted=False, broker_order_forbidden=True,
+            )
+            _set_async_terminal(stock, "main_entry_order_route_invalid")
+            return False
         try:
             sequential_plan = _initial_quantity_sequential_plan(
                 stock, planned_orders, requested_qty, entry_split_fields)
@@ -70748,11 +70880,26 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         cap_source = _initial_quantity_cap_research_context(
             sizing_context, sizing_decision, ws_data=ws_data,
             now_ts=cap_observed_at)
+        trailing_plan_source = None
+        if _safe_int(stock.get('buy_qty'), 0) <= 0:
+            from src.engine.scalping.trailing_entry_research_source import capture as capture_trailing_plan, runtime_account_scope
+            trailing_plan_source = capture_trailing_plan(
+                symbol=code, position_key=_scalp_holding_source_position_key(stock, code),
+                action_receipt=machine_action_receipt or {},
+                sizing_fields=entry_execution_sizing_fields, cap_context=cap_source,
+                cost_model=stock.get('_trailing_entry_cost_model'),
+                entry_context=stock.get('trailing_entry_context'), known_at=cap_observed_at,
+                account_scope_sha256=runtime_account_scope())
+            # This pointer is diagnostic only. A failed capture clears the
+            # previous attempt instead of attributing a later holding to it.
+            from src.engine.scalping.trailing_entry_research_source import install as install_trailing_plan
+            install_trailing_plan(stock, trailing_plan_source)
         _log_entry_pipeline(
             stock,
             code,
             "entry_execution_sizing_plan",
             requested_qty=requested_qty,
+            trailing_entry_plan_receipt=json.dumps(trailing_plan_source, sort_keys=True, separators=(',', ':')),
             initial_quantity_cap_research_context=cap_source,
             actual_order_submitted=False,
             broker_order_forbidden=False,
@@ -71202,9 +71349,9 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             default_order_type_code=order_type_code,
             default_price=final_price,
         )
-        if not _bind_zero_base_order_request(stock, request):
+        if not _bind_main_entry_order_request(stock, request):
             _log_entry_pipeline(
-                stock, code, "zero_base_order_route_invalid",
+                stock, code, "main_entry_order_route_invalid",
                 actual_order_submitted=False, broker_order_forbidden=True,
             )
             continue
@@ -72306,12 +72453,6 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 "effective_order_type": order_resolution["effective_order_type"],
                 "order_type_remapped": order_resolution["order_type_remapped"],
                 "order_type_remap_reason": order_resolution["order_type_remap_reason"],
-                "aftermarket_sor_canary_approval_id": res.get(
-                    "aftermarket_sor_canary_approval_id"
-                ),
-                "aftermarket_sor_canary_approval_valid": res.get(
-                    "aftermarket_sor_canary_approval_valid"
-                ),
                 "order_type_preflight_effective_type": res.get(
                     "order_type_preflight_effective_type"
                 ),
@@ -72798,14 +72939,6 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         best_bid=best_bid_at_submit,
         best_ask=best_ask_at_submit,
     )
-    aftermarket_canary = next(
-        (
-            order
-            for order in successful_orders
-            if str(order.get("aftermarket_sor_canary_approval_id") or "").strip()
-        ),
-        {},
-    )
     try:
         from src.engine.monitoring.runtime_performance import mark_signal, machine_signal_id
         performance_signal = machine_signal_id(stock.get('last_watching_ai_machine_primary_fields'))
@@ -72889,13 +73022,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         broker_route=bundle_broker_route,
         broker_route_resolution=bundle_route_resolution,
         effective_dmst_stex_tp=bundle_broker_route,
-        aftermarket_sor_canary_approval_id=aftermarket_canary.get(
-            "aftermarket_sor_canary_approval_id"
-        ),
-        aftermarket_sor_canary_approval_valid=aftermarket_canary.get(
-            "aftermarket_sor_canary_approval_valid"
-        ),
-        order_type_preflight_effective_type=aftermarket_canary.get(
+        order_type_preflight_effective_type=successful_orders[0].get(
             "order_type_preflight_effective_type"
         ),
         effective_venue=bundle_execution_cohort,
@@ -73368,6 +73495,11 @@ def _clear_pending_entry_meta(stock, *, preserve_probe_runtime=False):
                 reason='entry_attempt_cleared_without_position'):
             _mutate_stock_state(stock,pop_fields=('_initial_quantity_cap_trace',))
     with ENTRY_LOCK:
+        try:
+            from src.engine.scalping.main_stop_quantity_source import retain_quantity_source
+            retain_quantity_source(stock, at=time.time())
+        except Exception as exc:
+            stock['main_stop_quantity_source_gap'] = type(exc).__name__
         move_orders_to_terminal(stock, reason="pending_entry_meta_cleared")
         clear_keys = [
             "pending_entry_orders",
@@ -77083,6 +77215,7 @@ def _holding_sell_nullable_flag(stock: dict, *keys: str) -> tuple[bool | None, s
 
 
 def _holding_sell_recorded_route(stock: dict) -> tuple[str, str]:
+    from src.trading.market.execution_venue import UNRESOLVED_MARKET_VALUES
     for key in (
         "sell_submit_intended_route",
         "sell_pending_order_broker_route",
@@ -77090,7 +77223,7 @@ def _holding_sell_recorded_route(stock: dict) -> tuple[str, str]:
         "approved_exit_route",
     ):
         route = str(stock.get(key) or "").strip().upper()
-        if route:
+        if route not in UNRESOLVED_MARKET_VALUES:
             return route, f"stock.{key}"
     return "", "recorded_route_missing"
 
@@ -77219,6 +77352,18 @@ def _resolve_holding_sell_dmst_stex_tp(
         }
         if eligible_routes:
             if eligible_routes == {"KRX", "NXT"}:
+                from src.trading.market.execution_venue import broker_route_fields
+                assigned = broker_route_fields(None, observed_at=observed_at)
+                if assigned["broker_route_override"]:
+                    return {
+                        "blocked": False, "dmst_stex_tp": assigned["broker_route_requested"],
+                        "nxt_enabled": is_nxt_enabled, "nxt_flag_source": source,
+                        "krx_aftermarket_enabled": krx_aftermarket_enabled,
+                        "krx_aftermarket_flag_source": krx_source,
+                        "market_session_regime": session.session_regime,
+                        "route_source": assigned["broker_route_override"],
+                        "reason": assigned["broker_route_override"],
+                    }
                 return {
                     "blocked": True,
                     "dmst_stex_tp": "UNKNOWN",
@@ -77242,16 +77387,19 @@ def _resolve_holding_sell_dmst_stex_tp(
                 "route_source": "exact_symbol_aftermarket_eligibility",
                 "reason": "holding_sell_exact_eligibility_route",
             }
+        from src.trading.market.execution_venue import broker_route_fields
+        assigned = broker_route_fields(None, observed_at=observed_at)
         return {
             "blocked": True,
-            "dmst_stex_tp": "UNKNOWN",
+            "dmst_stex_tp": assigned["broker_route_requested"],
             "nxt_enabled": is_nxt_enabled,
             "nxt_flag_source": source,
             "krx_aftermarket_enabled": krx_aftermarket_enabled,
             "krx_aftermarket_flag_source": krx_source,
             "market_session_regime": session.session_regime,
             "route_source": route_source,
-            "reason": "holding_sell_route_authority_missing",
+            "reason": ("holding_sell_route_eligibility_missing" if assigned["broker_route_override"]
+                       else "holding_sell_route_authority_missing"),
         }
 
     krx_regular = _holding_sell_krx_regular_session(current_t)
@@ -81844,10 +81992,9 @@ def _finalize_buy_order_submission(
 def _entry_order_venue_eligibility(code: str, *, now=None):
     """Bind a canonical local listing snapshot to one aftermarket entry.
 
-    Only a complete NXT axis may retain the source's unknown KRX axis. Missing,
-    stale, conflicting, future or otherwise partial evidence stays unknown.
-    This does not fetch a provider, infer eligibility from quotes, or grant the
-    independent SOR operator approval enforced by the order adapter.
+    Preserve each venue axis and the source blockers for the order adapter's
+    route-specific preflight. This read never fetches a provider or derives
+    listing permission from a quote. Session preflight owns date/source checks.
     """
     now_kst = now if now is not None else datetime.now(_KST)
     context = session_contract.resolve_market_session(now_kst)
@@ -81859,33 +82006,53 @@ def _entry_order_venue_eligibility(code: str, *, now=None):
         )
         snapshot = DB.get_security_market_eligibility(code, context.trade_date)
         evidence = resolve_symbol_venue_eligibility(code, context.trade_date, snapshot)
-        observed = evidence.observed_at_kst
-        complete_nxt_axis = (
-            evidence.quality_state == "PARTIAL"
-            and set(evidence.blockers) == {"krx_aftermarket_eligibility_unknown"}
-            and evidence.krx_regular_eligible is True
-            and evidence.krx_aftermarket_eligible is None
-            and isinstance(evidence.nxt_eligible, bool)
-        )
-        if ((not complete_nxt_axis and (
-                evidence.quality_state != "VALID" or evidence.blockers))
-                or observed is None or observed.date() != context.trade_date
-                or observed.timestamp() > now_kst.timestamp()):
-            return None
         return session_contract.resolve_symbol_venue_eligibility(
             evidence.stock_code, context.trade_date,
-            {**snapshot, "observed_at_kst": observed,
+            {**snapshot, "observed_at_kst": evidence.observed_at_kst,
              "quality_state": evidence.quality_state,
+             "blocked_reasons_json": list(evidence.blockers),
              "source_id": evidence.source_api_id})
     except (AttributeError, OSError, ValueError, TypeError):
         return None
 
 
-def _bind_zero_base_order_request(stock: dict, request: dict) -> bool:
-    """Bind zero-base orders to the exact observed session route."""
-    if not str(stock.get("source_signature") or "").startswith("ZERO_BASE_DISCOVERY:"):
+def _bind_main_entry_order_request(stock: dict, request: dict, *, now_ts=None) -> bool:
+    """Preserve the observed Main route; never overwrite a conflicting plan."""
+    explicit = {
+        str(request[key]).strip().upper()
+        for key in ("dmst_stex_tp", "domestic_exchange_type", "exchange", "stex_tp", "broker_route")
+        if request.get(key) not in (None, "")
+    }
+    if len(explicit) > 1 or explicit - {"KRX", "NXT", "SOR"}:
+        return False
+    fixed = main_fixed_watch.is_fixed_watch(stock)
+    zero_base = str(stock.get("source_signature") or "").startswith("ZERO_BASE_DISCOVERY:")
+    if not fixed and not zero_base:
         return True
-    now_kst = datetime.now(_KST)
+    decision_source = stock.get("last_watching_ai_machine_primary_fields") or {}
+    if not isinstance(decision_source, dict):
+        return False
+    decision_route = decision_source.get("ai_trace_broker_route")
+    now_kst = datetime.now(_KST) if now_ts is None else datetime.fromtimestamp(now_ts, _KST)
+    if fixed:
+        try:
+            route = _fixed_watch_entry_source_route(stock, now_kst.timestamp())
+        except ValueError:
+            return False
+        if route is None or not is_scalping_buy_time_allowed(now_kst.time()):
+            return False
+        canonical = main_fixed_watch.session_route(now_kst.timestamp(), str(stock.get("code") or "")[:6])
+        if (stock.get("market_data_route") != canonical["route"]
+                or stock.get("effective_venue") != canonical["venue"]
+                or str(stock.get("market_session_bucket") or "").upper() != canonical["bucket"].upper()):
+            return False
+        broker = route["broker_route"]
+        if decision_route and decision_route != broker:
+            return False
+        if explicit and explicit != {broker}:
+            return False
+        request["dmst_stex_tp"] = broker
+        return True
     context = session_contract.resolve_market_session(now_kst)
     if not is_scalping_buy_time_allowed(now_kst.time()):
         return False
@@ -81910,6 +82077,10 @@ def _bind_zero_base_order_request(stock: dict, request: dict) -> bool:
             return False
     else:
         return False
+    if decision_route and decision_route != broker:
+        return False
+    if explicit and explicit != {broker}:
+        return False
     request["dmst_stex_tp"] = broker
     return True
 
@@ -81917,6 +82088,14 @@ def _bind_zero_base_order_request(stock: dict, request: dict) -> bool:
 def _resolve_live_entry_order_request(
     strategy, planned_order, default_order_type_code, default_price
 ):
+    route_fields = {
+        key: planned_order[key]
+        for key in ("dmst_stex_tp", "domestic_exchange_type", "exchange", "stex_tp", "broker_route")
+        if planned_order.get(key) not in (None, "")
+    }
+    aliases = ("dmst_stex_tp", "domestic_exchange_type", "exchange", "stex_tp")
+    if not any(key in route_fields for key in aliases) and "broker_route" in route_fields:
+        route_fields["dmst_stex_tp"] = route_fields["broker_route"]
     tif = str(planned_order.get("tif", "DAY") or "DAY").upper()
     tag = str(planned_order.get("tag", "normal") or "normal")
     qty = int(planned_order.get("qty", 0) or 0)
@@ -81924,6 +82103,7 @@ def _resolve_live_entry_order_request(
 
     if strategy == "SCALPING" and planned_order.get("initial_quantity_probe_market") is True:
         return {
+            **route_fields,
             "qty": qty, "price": 0, "guard_price": price,
             "order_type_code": "3", "tif": "DAY", "tag": tag,
         }
@@ -81949,6 +82129,7 @@ def _resolve_live_entry_order_request(
             or 0
         )
         return {
+            **route_fields,
             "qty": qty,
             "price": 0,
             "guard_price": guard_price,
@@ -81959,6 +82140,7 @@ def _resolve_live_entry_order_request(
 
     if tif == "IOC":
         return {
+            **route_fields,
             "qty": qty,
             "price": 0,
             "guard_price": price,
@@ -81969,6 +82151,7 @@ def _resolve_live_entry_order_request(
 
     if strategy == "SCALPING":
         return {
+            **route_fields,
             "qty": qty,
             "price": price,
             "guard_price": price,
@@ -81978,6 +82161,7 @@ def _resolve_live_entry_order_request(
         }
 
     return {
+        **route_fields,
         "qty": qty,
         "price": int(default_price or 0),
         "guard_price": int(default_price or 0),
@@ -83927,7 +84111,7 @@ def handle_watching_state(
                         except Exception as exc:
                             from src.engine.monitoring.runtime_performance import failure
                             failure('async_native_ack', type(exc).__name__, emit_log=False)
-                    if (claim and result.generation_kind == 'fixed_watch'
+                    if (claim and result.generation_kind in {'fixed_watch', 'scanner'}
                             and stock.get('status') == 'WATCHING'
                             and stock.get('_scanner_scheduler_lane') != 'COMMIT'
                             and not stock.get('_fixed_watch_async_claim')
@@ -86371,6 +86555,10 @@ def handle_holding_state(
         )
         return
 
+    if daily_limit_up_triggered and strategy == "SCALPING":
+        _prepare_main_stop_limit_up_quote(stock, code, ws_data=ws_data,
+            quote_fields=holding_quote_fields, now_ts=now_ts, profit_rate=profit_rate)
+
     if stock.get("exit_mode") == "SCALP_PRESET_TP":
         if daily_limit_up_triggered:
             log_info(
@@ -86429,6 +86617,13 @@ def handle_holding_state(
         )
         preset_held_sec = _resolve_holding_elapsed_sec(stock, now_ts=now_ts)
         preset_ai_score = float(stock.get("rt_ai_prob", 0.5) or 0.5) * 100
+        _prepare_main_stop_limit_up_quote(stock, code, ws_data=ws_data,
+            quote_fields=holding_quote_fields, now_ts=now_ts, profit_rate=profit_rate)
+        _observe_main_stop_preset_evaluation(stock, code, at=now_ts, evaluator='normal',
+            decision_price=curr_p, decision_price_basis='mark_price', profit_rate=profit_rate,
+            hard_pct=preset_hard_stop_pct, emergency_pct=preset_hard_stop_emergency_pct,
+            grace_sec=preset_hard_stop_grace_sec, held_sec=preset_held_sec,
+            legacy=legacy_broker_recovered)
 
         if legacy_broker_recovered:
             _mutate_stock_state(
@@ -86765,7 +86960,7 @@ def handle_holding_state(
                         _begin_holding_vote_coverage(stock,time.time())
                         request_code = _resolve_holding_context_request_code(
                             code, ws_data=ws_data, position_ctx=stock,
-                            decision_kind="holding_score", now_ts=now_ts,
+                            decision_kind="holding_path_vote", now_ts=now_ts,
                         )
                         recent_ticks = kiwoom_utils.get_tick_history_ka10003(
                             KIWOOM_TOKEN, request_code, limit=10,
@@ -86777,7 +86972,7 @@ def handle_holding_state(
                         recent_candles, recent_candle_meta = (
                             _get_holding_minute_candles_with_meta(
                                 code, limit=60, legacy_limit=40, ws_data=ws_data,
-                                position_ctx=stock, decision_kind="holding_score",
+                                position_ctx=stock, decision_kind="holding_path_vote",
                                 now_ts=now_ts,
                             )
                         )
@@ -87175,6 +87370,22 @@ def handle_holding_state(
             )
             exit_rule = "scalp_hard_stop_pct"
 
+        if not is_sell_signal:
+            predecessor = stock.get('_main_stop_normal_preset_evaluation')
+            if not isinstance(predecessor, dict) or predecessor.get('at') != now_ts:
+                predecessor = None
+            _observe_main_stop_evaluation(stock, code, at=now_ts, evaluator='normal',
+                stage='common_soft', decision_price=curr_p, decision_price_basis='mark_price',
+                decision_profit_pct=profit_rate, preset_predecessor=predecessor,
+                legacy_broker_recovered=bool(legacy_broker_recovered),
+                decision_inputs=dict(
+                    grace_enabled=_rule_bool('SCALP_SOFT_STOP_MICRO_GRACE_ENABLED', True)
+                        and not bool(stock.get('main_stop_pin_persistence') or stock.get('main_stop_clock_unobserved')),
+                    after_add=bool(stock.get('reversal_add_used')) or stock.get('reversal_add_state') == 'POST_ADD_EVAL',
+                    handoff_enabled=_env_or_rule_bool('HARD_STOP_MANUAL_HANDOFF_ENABLED', False),
+                    protect_enabled=_env_or_rule_bool('SCALP_PROTECT_TRAILING_SMOOTH_ENABLED', True),
+                    vote_max_worsen_pct=_rule('HOLDING_FLOW_OVERRIDE_WORSEN_PCT', 0.8),
+                    soft_stop_micro_grace_started_at=stock.get('soft_stop_micro_grace_started_at')))
         if not is_sell_signal and profit_rate <= dynamic_stop_pct:
             from src.engine.scalping.main_stop_policy import soft_decision
             stop_values = _main_stop_values(stock, now_ts)
@@ -87667,6 +87878,8 @@ def handle_holding_state(
         )
         _mutate_stock_state(stock, set_fields={"last_exit_reason": reason})
         exit_decision_source = str(stock.get("last_exit_decision_source") or "MANUAL")
+        exit_extra_fields.update(_main_stop_normal_exit_fields(stock, code, at=now_ts,
+            mark_price=curr_p, exit_rule=exit_rule))
         _log_holding_pipeline(
             stock,
             code,
@@ -89304,9 +89517,12 @@ def handle_holding_state(
             scale_in_gate=gate, scale_in_action=action, reason="shared_main_rebound_entry", force=True)
         _process_scale_in_action(stock, code, ws_data, action, admin_id)
     elif now_ts - float(stock.get("last_add_block_log_ts", 0) or 0) >= 30:
-        assessment = (stock.get("_main_rebound_entry_assessment") or {}) if gate.get("allowed") else {}
+        assessment = stock.get("_main_rebound_entry_assessment") or {}
         _log_holding_pipeline(stock, code, "avg_down_shared_rebound_blocked",
             reason=gate.get("reason") if not gate.get("allowed") else assessment.get("reason", "shared_main_rebound_source_unavailable"),
+            last_assessment_reason=(stock.get("_main_rebound_entry_assessment") or {}).get("reason"),
+            last_assessment_at=stock.get("_main_rebound_entry_assessed_at"),
+            assessment_scope="current_evaluation" if gate.get("allowed") and stock.get("_main_rebound_entry_assessed_at") == now_ts else "prior_evaluation_diagnostic",
             machine_action=assessment.get("machine_action"),
             structure_phase_family=assessment.get("structure_phase_family"),
             source_signal_id=assessment.get("source_signal_id"),
@@ -90242,6 +90458,8 @@ def _evaluate_scale_in_signal(
         return None
     if curr_price <= 0 or curr_price >= _safe_float(stock.get("buy_price"), 0):
         return None
+    now_ts = time.time() if now_ts is None else float(now_ts)
+    stock["_main_rebound_entry_assessed_at"] = now_ts
     stop_guard_pct = (_rule_float("SCALP_STOP", -1.5) if stop_guard_pct is None
         else _safe_float(stop_guard_pct, float("nan")))
     if (not math.isfinite(stop_guard_pct)
@@ -90249,7 +90467,6 @@ def _evaluate_scale_in_signal(
                 <= max(stop_guard_pct, _rule_float("SCALP_HARD_STOP", -2.5))):
         stock["_main_rebound_entry_assessment"] = {"reason": "common_stop_has_priority"}
         return None
-    now_ts = time.time() if now_ts is None else float(now_ts)
     stock["_main_rebound_entry_assessment"] = {"reason": "shared_main_rebound_source_unavailable"}
     source = stock.get("_main_rebound_entry_source") or {}
     if (source.get("code") != code
@@ -93000,6 +93217,11 @@ def handle_buy_ordered_state(stock, code):
         orig_ord_no = stock.get("odno")
 
         if not orig_ord_no:
+            if (stock.get("broker_symbol_allocation_conflict")
+                    or stock.get("sell_cancel_reconciliation_required")):
+                # Missing local identity cannot erase unresolved native custody.
+                # The existing account/registry reconciliation owns recovery.
+                return
             _mutate_stock_state(
                 stock,
                 set_fields={"status": "WATCHING"},
@@ -93451,6 +93673,12 @@ def _sell_cancel_reconciliation_blocks_holding(
 
     if not bool(stock.get("sell_cancel_reconciliation_required")):
         return False
+    # An allocation gap is not evidence of a submitted SELL. Keep the
+    # inventory interlock without inventing a cancel generation or order.
+    if stock.get("broker_symbol_allocation_conflict") and not any(stock.get(key)
+            for key in ("sell_odno", "sell_ord_no", "sell_submit_pending",
+                        "sell_submit_generation", "_sell_execution_receipt_state")):
+        return True
     retry_at = _safe_float(stock.get("sell_cancel_reconciliation_retry_at"), 0.0)
     if retry_at > now_ts:
         return True

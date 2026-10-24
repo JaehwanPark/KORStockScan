@@ -205,3 +205,36 @@ def test_replacement_mode_has_no_incumbent_success_preservation_requirement(monk
     monkeypatch.setattr(F.S,'rebuild',lambda *a:(setup,{},dict(effective_thresholds=dict(micro_confirmation_recipe=0))))
     monkeypatch.setattr(F.E,'entry_action_counterweight_bindings',lambda s:dict(bindings=[]))
     assert F.evaluate(setup,{},source_receipt=proof,admission_mode='replace')['proposed_action']==expected
+
+
+def test_projection_reader_keeps_rows_on_disk_and_preserves_digest(tmp_path):
+    import gzip
+    import json
+    from pathlib import Path
+    from src.engine.scalping import ai_action_outcome_calibration as owner
+    from src.engine.scalping import compact_auxiliary_paired_replay as compact
+    from src.engine.scalping.postclose_entry_validation import FrozenRows
+    path = tmp_path / 'projection.json'
+    original = compact.sealed({'contract': {'kernels': {'v': '1'}}, 'rows': [{'id': str(i)} for i in range(1000)]})
+    Path(str(path) + '.gz').write_bytes(gzip.compress(json.dumps(original).encode()))
+    result = owner._read_machine_projection(path, kernels={'v': '1'})
+    assert isinstance(result['rows'], FrozenRows)
+    assert result['rows'] == original['rows']
+    assert compact.valid(result)
+
+
+@pytest.mark.parametrize('damage', ['wrong_kernel', 'bad_hash', 'truncated_gzip', 'logical_limit', 'non_object'])
+def test_partitioned_projection_keeps_rejection_contract(tmp_path, monkeypatch, damage):
+    import gzip
+    import json
+    from src.engine.scalping import ai_action_outcome_calibration as owner
+    from src.engine.scalping import compact_auxiliary_paired_replay as compact
+    path = tmp_path / 'projection.json'
+    archive = tmp_path / 'projection.json.gz'
+    body = compact.sealed({'contract': {'kernels': {'v': '1'}}, 'rows': [{'id': 'x'}]})
+    if damage == 'bad_hash':body['rows'][0]['id'] = 'changed'
+    if damage == 'non_object':body = []
+    data = gzip.compress(json.dumps(body).encode())
+    archive.write_bytes(data[:-4] if damage == 'truncated_gzip' else data)
+    if damage == 'logical_limit':monkeypatch.setattr(owner, 'MACHINE_PROJECTION_MAX_BYTES', 4)
+    assert owner._read_machine_projection(path, kernels={'v': '2' if damage == 'wrong_kernel' else '1'}) == {}

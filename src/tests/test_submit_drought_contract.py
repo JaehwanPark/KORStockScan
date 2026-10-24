@@ -925,6 +925,8 @@ def test_live_submit_guard_and_logger_share_call_id_without_order_io(monkeypatch
         for _, fields in emitted
     )
     assert emitted[1][1]["submit_call_outcome"] == "returned_false"
+    assert emitted[1][1]["entry_submit_attempt_terminal_schema"] == "call_local_terminal_v1"
+    assert emitted[1][1]["entry_submit_attempt_terminal_reason"] == "entry_submit_identity_reconciliation_blocked"
     assert all(fields["evaluation_attempt_id"] == "eval-P" for _, fields in emitted)
     from src.engine import observation_source_quality_audit as audit
 
@@ -1235,3 +1237,98 @@ def test_integrated_submit_lineage_remains_frozen_across_watched_refresh():
     assert captured[0]["scanner_promotion_id"] == "promotion-original"
     assert captured[0]["entry_submit_attempt_broker_accepted"] is False
     assert submit_attempt_fields(stock, "031330") == {}
+
+
+@pytest.mark.parametrize('parent', ['', 'c'*64, None, 'missing'])
+def test_submit_terminal_keeps_revision_parent_presence_and_exact_value(parent):
+    from src.engine.monitoring.entry_attempt_identity import observe_submit_attempt,bind_submit_attempt_machine_lineage,submit_attempt_fields
+    stock={'id':1,'scanner_promotion_id':'promotion'}
+    source=dict(entry_primary_decision_owner='mechanistic_entry_adjudicator',evaluation_attempt_id='attempt',
+        scanner_promotion_id='promotion',effective_venue='KRX',market_session_bucket='krx_regular',
+        policy_bundle_hash='b'*64,entry_mechanistic_action='ENTER_NOW',entry_ai_screen_status='pass',
+        entry_ai_screen_pass=True,machine_revision_schema='exact_machine_revision_v1',machine_observation_sha256='a'*64)
+    if parent!='missing':source['machine_revision_parent_sha256']=parent
+    @observe_submit_attempt
+    def run(stock,code):
+        assert bind_submit_attempt_machine_lineage(stock,code,source)
+        return submit_attempt_fields(stock,code)
+    fields=run(stock,'000001')
+    assert ('machine_revision_parent_sha256' in fields)==(parent!='missing')
+    if parent!='missing':assert fields['machine_revision_parent_sha256']==parent
+    if parent in ('','missing'):
+        prior={**source,'machine_revision_parent_sha256':''}
+        _,status,issues=sentinel._machine_revision_rows(events(('ai_confirmed',prior),('entry_submit_attempt_finished',fields)))
+        assert bool(issues)==(parent=='missing')
+        assert status==('invalid' if parent=='missing' else 'single_revision')
+
+
+@pytest.mark.parametrize('terminal', ['order_bundle_submitted','pre_submit_liquidity_guard_block'])
+@pytest.mark.parametrize('damage', [None,'missing_parent','wrong_parent','digest','owner','action','screen','foreign_attempt'])
+def test_producer_cache_funnel_preserves_submit_and_guard_terminal(terminal,damage):
+    from src.engine.monitoring.entry_attempt_identity import observe_submit_attempt,bind_submit_attempt_machine_lineage,submit_attempt_fields
+    stock={'id':1,'scanner_promotion_id':'promotion'}
+    source=dict(entry_primary_decision_owner='mechanistic_entry_adjudicator',evaluation_attempt_id='attempt',
+        scanner_promotion_id='promotion',effective_venue='KRX',market_session_bucket='krx_regular',
+        policy_bundle_hash='b'*64,entry_mechanistic_action='ENTER_NOW',entry_ai_screen_status='pass',
+        entry_ai_screen_pass=True,machine_revision_schema='exact_machine_revision_v1',machine_observation_sha256='a'*64,
+        machine_revision_parent_sha256='')
+    @observe_submit_attempt
+    def run(stock,code):
+        assert bind_submit_attempt_machine_lineage(stock,code,source)
+        return submit_attempt_fields(stock,code)
+    fields=run(stock,'000001')
+    if damage=='missing_parent':fields.pop('machine_revision_parent_sha256')
+    elif damage=='wrong_parent':fields['machine_revision_parent_sha256']='c'*64
+    elif damage=='digest':fields['machine_observation_sha256']='bad'
+    elif damage=='owner':fields['entry_primary_decision_owner']='auxiliary'
+    elif damage=='action':fields['entry_mechanistic_action']='BLOCK'
+    elif damage=='screen':fields['entry_ai_screen_status']='veto'
+    elif damage=='foreign_attempt':fields['evaluation_attempt_id']='foreign'
+    guard={**source,'block_reason':'below_min_liquidity','liquidity_value':172922880,'min_liquidity':350000000}
+    if terminal=='order_bundle_submitted':guard['broker_order_no']='broker-native'
+    rows=events(('ai_confirmed',source),(terminal,guard),('entry_submit_attempt_finished',fields))
+    cached=[]
+    for row in rows:
+        payload=dict(event_type='pipeline_event',emitted_at=row.emitted_at.isoformat(),pipeline=row.pipeline,
+            stage=row.stage,stock_code=row.stock_code,record_id=row.record_id,fields=row.fields)
+        projection=sentinel._payload_to_cache_row(payload,exclude_summary_stages=True)
+        assert projection is not None
+        cached.append(sentinel._event_from_cache_row(projection))
+    result=sentinel._machine_primary_entry_funnel(cached)
+    ledger=result['evaluation_ledger']
+    if damage=='foreign_attempt':assert len(ledger)==2
+    elif damage:assert ledger[0]['final_state']=='identity_or_contract_gap'
+    else:
+        expected='submit_pipeline_reached' if terminal=='order_bundle_submitted' else 'final_guard_blocked'
+        assert ledger[0]['final_state']==expected
+        assert ledger[0]['revision_chain_status']=='single_revision'
+        assert result['ai_pass_terminal_conservation']['difference']==0
+        if terminal=='pre_submit_liquidity_guard_block':
+            assert sentinel._submit_drought_axis_for_event(cached[1])=='UPSTREAM_GATE'
+            assert ledger[0]['broker_acceptance_observed'] is False
+
+
+def test_submit_terminal_reason_is_call_local_not_stock_or_prior_call(monkeypatch):
+    from src.engine import sniper_state_handlers as sh
+    from src.engine.monitoring.entry_attempt_identity import observe_submit_attempt, submit_attempt_fields
+    stock = {"id": 1, "code": "005930"}
+    observed = []
+    monkeypatch.setattr(sh, "_log_entry_pipeline", lambda *a, **kw: observed.append(submit_attempt_fields(a[0], a[1])))
+    @observe_submit_attempt(on_finish=sh._observe_entry_submit_finished)
+    def run(stock, code, reason=None, nested=False):
+        sh._set_async_terminal(dict(stock), "foreign_stock")
+        assert "entry_submit_attempt_terminal_reason" not in submit_attempt_fields(stock, code)
+        if reason:
+            sh._set_async_terminal(stock, reason)
+            sh._set_async_terminal(stock, "later_diagnostic")
+        if nested:
+            run(stock, code)
+            assert submit_attempt_fields(stock, code)["entry_submit_attempt_terminal_reason"] == reason
+        return False
+    assert run(stock, "005930", "blocked_pause", nested=True) is False
+    assert observed[-1]["entry_submit_attempt_terminal_reason"] == "blocked_pause"
+    assert run(stock, "005930") is False
+    assert observed[-1]["entry_submit_attempt_terminal_reason"] == "entry_path_returned_without_terminal_evidence"
+    assert observed[-1]["entry_submit_attempt_id"] != observed[-2]["entry_submit_attempt_id"]
+    assert stock == {"id": 1, "code": "005930"}
+    assert submit_attempt_fields(stock, "005930") == {}

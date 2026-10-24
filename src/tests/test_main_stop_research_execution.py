@@ -1,0 +1,488 @@
+"""Native source publication through bounded, strictly offline stop research."""
+from collections import Counter
+from dataclasses import asdict
+import hashlib
+import json
+import math
+from pathlib import Path
+import time
+
+import pytest
+
+from src.engine.automation import main_stop_postclose as post
+from src.engine.automation import main_stop_research_execution as run
+from src.engine.lifecycle import main_stop_research_cost as cost
+from src.engine.lifecycle import research_storage as storage
+from src.engine.scalping import main_stop_policy as policy
+from src.engine.scalping.main_stop_experiment import validate_experiment_v2
+from src.tests.test_main_stop_policy import baseline, publication, rows
+from src.tests.test_main_stop_runtime_source import evaluation_stream
+
+
+class EconomicSource:
+    source_reference = {'status': 'fixture_adapter_boundary'}
+    cost_generation = {'fixture': 'sealed_test_source'}
+    closed = False
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.closed = True
+
+    def validate_unchanged(self):
+        pass
+
+
+def economic_boundary(monkeypatch, *, eligible=False, grade='exact_execution'):
+    """Only substitute the separately integration-tested cost adapter boundary."""
+    prepared = EconomicSource()
+    monkeypatch.setattr(cost, 'prepare_economic_source', lambda *args, **kwargs: prepared)
+
+    def record(value, **kwargs):
+        result = dict(schema='main_stop_research_cost_v1', economics_scope='main_stop_research_only',
+            record_id=str(value['id']), status='eligible' if eligible else 'source_gap',
+            reason=None if eligible else 'native_completion_missing', evidence_grade=grade,
+            quantity_basis=dict(buy_qty=10, sell_qty=10, residual_qty=0),
+            manual_exit=False, runtime_effect=False, custody_status='verified_registry_fill_census',
+            fill_state='fully_closed', canonical_pnl_mutated=False, actual_execution_cost=grade=='exact_execution',
+            actual_position_cost=grade=='exact_position_total', main_exit_source=dict(status='verified_native_decision_submit_chain'),
+            terminal_observation=dict(code='005930',terminal_fill_time='2026-10-12 23:59:00',
+                buy_fill_legs=[dict(order_no='0000123',execution_no='E1',qty=10,at='2026-10-12 09:00:00')]),
+            allowed_runtime_apply=False)
+        result['artifact_sha256'] = policy.digest(result)
+        return result
+
+    monkeypatch.setattr(cost, 'prepare_economic_record', record)
+    return prepared
+
+
+def fixture(tmp_path, monkeypatch, *, eligible=False, count=4):
+    data = tmp_path/'data'
+    _, native, parent, source = publication(data)
+    if count != 4:
+        population = (row for index in range(count)
+                      for row in rows(1791766800.+index*100, index+1))
+        source.write_text(''.join(json.dumps(dict(stage='main_stop_source',
+            fields={'main_stop_source': row}))+'\n' for row in evaluation_stream(population)))
+        parents = {f'{role}|{market}': baseline() for role in policy.ROLES for market in policy.MARKETS}
+        _, native = post.publish(data, '2026-10-12', '2026-10-13', parents=parents,
+            parent_receipt=parent, snapshot_receipt=native['snapshot_receipt'],
+            source_paths=[source], experiments={}, completed=[], economic_sources={})
+    economic_boundary(monkeypatch, eligible=eligible)
+    args = dict(data_root=data, output_root=tmp_path/'research', source_date='2026-10-12',
+        target_date='2026-10-13', input_report=post.report_path(data, '2026-10-12'))
+    return args, native
+
+
+def tree_bytes(root):
+    return {str(path.relative_to(root)): hashlib.sha256(path.read_bytes()).hexdigest()
+            for path in root.rglob('*') if path.is_file()}
+
+
+def large_source_fixture(tmp_path,monkeypatch):
+    """Real native source exceeding the unchanged digest-session byte floor."""
+    args,native=fixture(tmp_path,monkeypatch)
+    source=Path(next(iter(native['source_inventory'])))
+    with source.open('a') as handle:
+        for _ in range(300):
+            handle.write(json.dumps(dict(stage='unrelated_test_observation',fields={'padding':'x'*4096}))+'\n')
+    parents={f'{role}|{market}':baseline() for role in policy.ROLES for market in policy.MARKETS}
+    post.publish(args['data_root'],args['source_date'],args['target_date'],parents=parents,
+        parent_receipt=native['parent_receipt'],snapshot_receipt=native['snapshot_receipt'],
+        source_paths=[source],experiments={},completed=[],economic_sources={})
+    return args,source
+
+
+def test_full_invocation_shares_source_digest_through_finalization_and_measures_cleanup(tmp_path,monkeypatch):
+    from src.engine.infrastructure import validation_digest_session as digest_session
+    args,source=large_source_fixture(tmp_path,monkeypatch)
+    prepared=economic_boundary(monkeypatch)
+    original=digest_session.DigestSession.digest
+    observations=[]
+    def measured(session,path):
+        before=session.stats['full_reads']
+        result=original(session,path)
+        if Path(path)==source:
+            observations.append((id(session),session.stats['full_reads']-before))
+        return result
+    monkeypatch.setattr(digest_session.DigestSession,'digest',measured)
+    writer=run._bounded_write
+    def after_cleanup(path,value):
+        if value.get('schema')=='main_stop_execution_terminal_v1':
+            assert prepared.closed and digest_session.ACTIVE.get() is None
+        return writer(path,value)
+    monkeypatch.setattr(run,'_bounded_write',after_cleanup)
+    report=run.run_research(**args)
+    assert report['historical_experiment'] is not None
+    assert len(observations)>=3 and len({session for session,_ in observations})==1
+    assert sum(full for _,full in observations)==1
+    terminals=list(args['output_root'].glob('execution_terminal_*.json'))
+    assert len(terminals)==1
+    terminal=json.loads(terminals[0].read_text())
+    assert terminal['receipt_sha256']==policy.digest({k:v for k,v in terminal.items() if k!='receipt_sha256'})
+    assert terminal['report_sha256']==report['report_sha256']
+    assert terminal['report_reference']['sha256']==hashlib.sha256((args['output_root']/'report.json').read_bytes()).hexdigest()
+    stats=terminal['metrics']['digest_session']
+    assert stats['session_complete'] and stats['full_reads']==1 and stats['full_bytes']==source.stat().st_size
+    assert stats['wall_seconds']>0 and stats['thread_io_delta'] is not None
+    phase=json.loads(Path(report['performance_path']).read_text())
+    assert not phase['metrics']['digest_session']['session_complete']
+    assert 'before_experiment_finalization' in phase['metrics']['total']['scope']
+    whole=terminal['metrics']['end_to_end']
+    assert whole['wall_seconds']>=phase['metrics']['total']['wall_seconds']
+    assert whole['cpu_seconds']>=phase['metrics']['total']['cpu_seconds']
+    assert whole['io_delta']['rchar']>=phase['metrics']['total']['io_delta']['rchar']
+    assert terminal['allowed_runtime_apply'] is False and terminal['policy_mutated'] is False
+
+
+def test_shared_digest_still_rejects_source_mutated_at_finalization(tmp_path,monkeypatch):
+    from src.engine.scalping import main_stop_experiment as experiment
+    from src.engine.infrastructure import validation_digest_session as digest_session
+    args,source=large_source_fixture(tmp_path,monkeypatch)
+    original=experiment.finalize_experiment
+    def changed(*values,**kwargs):
+        with source.open('a') as handle:handle.write('\n')
+        return original(*values,**kwargs)
+    monkeypatch.setattr(experiment,'finalize_experiment',changed)
+    with pytest.raises(ValueError,match='source_generation_changed'):
+        run.run_research(**args)
+    assert digest_session.ACTIVE.get() is None
+    assert not (args['output_root']/'report.json').exists()
+    assert not list(args['output_root'].glob('execution_terminal_*.json'))
+    assert json.loads((args['output_root']/'progress.json').read_text())['status']=='incomplete'
+
+
+def test_native_roundtrip_streams_all_opportunities_and_keeps_policy_bytes(tmp_path, monkeypatch):
+    args, _ = fixture(tmp_path, monkeypatch, eligible=True, count=20)
+    before = tree_bytes(args['data_root'])
+    report = run.run_research(**args)
+    output = args['output_root']
+    assert tree_bytes(args['data_root']) == before
+    assert report['status'] == 'completed_report_only'
+    assert report['position_count'] == 20 and len(report['examples']) == run.MAX_EXAMPLES
+    assert 'positions' not in report
+    evidence = list(storage.iter_tree(output, report['position_evidence']))
+    assert len(evidence) == 20 and len({row['position_key'] for row in evidence}) == 20
+    assert report['selected_policy'] is None
+    assert all(report[key] is False for key in ('policy_mutated', 'actual_order_submitted',
+        'actual_profit_verified', 'allowed_runtime_apply'))
+    cell = report['cells']['SCANNER|REGULAR']
+    assert cell['eligible_paired'] == 20
+    metrics = cell['paired_metrics']['exact_execution']
+    assert metrics and all(v['n'] == 20 for v in metrics.values())
+    assert all(math.isfinite(v['equal_weight_avg_paired_delta_krw']) for v in metrics.values())
+    assert all(v['n'] == 0 and v['mean_delta_bps'] is None
+               for v in cell['paired_metrics']['broker_total_allocated'].values())
+    performance = json.loads(Path(report['performance_path']).read_text())
+    assert performance['status'] == 'measured'
+    assert performance['unresolved_findings'] == ['live_capture_latency_not_measured']
+    assert performance['metrics']['stages']['source_index_initial']['raw_decode_calls'] == 1
+    assert performance['metrics']['stages']['source_index_warm']['raw_decode_calls'] == 0
+    experiment = report['historical_experiment']
+    assert experiment['cell'] == 'SCANNER|REGULAR'
+    assert experiment['mode'] == 'historical_report_only' and experiment['allowed_runtime_apply'] is False
+    assert experiment['frozen_at'] > experiment['source_end_at']
+    with pytest.raises(ValueError, match='historical'):
+        validate_experiment_v2(experiment, parent_sha=experiment['parent_sha256'],
+            source_sha=experiment['source_sha256'], code_sha=experiment['code_sha256'])
+    finalized = tree_bytes(output)
+    with pytest.raises(ValueError, match='already_sealed'):
+        run.run_research(**args)
+    assert tree_bytes(output) == finalized
+
+
+def test_source_gap_metrics_are_null_and_not_zero_edge(tmp_path, monkeypatch):
+    args, _ = fixture(tmp_path, monkeypatch)
+    report = run.run_research(**args)
+    cell = report['cells']['SCANNER|REGULAR']
+    assert cell['opportunities'] == 4 and cell['eligible_paired'] == 0
+    assert cell['economic'] == {'source_gap': 4}
+    for grades in cell['paired_metrics'].values():
+        for metric in grades.values():
+            assert metric['n'] == 0 and metric['delta_sum_krw'] is None
+            assert metric['equal_weight_avg_paired_delta_krw'] is None
+            assert metric['unavailable_reason'] == 'no_eligible_common_denominator'
+
+
+@pytest.mark.parametrize('interruption',[ValueError,KeyboardInterrupt])
+def test_interruption_retains_failure_and_reuses_native_index_and_replay(tmp_path, monkeypatch, interruption):
+    args, _ = fixture(tmp_path, monkeypatch)
+    prepared = economic_boundary(monkeypatch)
+    source_bytes = tree_bytes(args['data_root'])
+    deadline = post._DEADLINE.get()
+    original = run._position_outcomes
+    calls = 0
+
+    def fail_second(*values, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise interruption('test_bounded_interruption')
+        return original(*values, **kwargs)
+
+    monkeypatch.setattr(run, '_position_outcomes', fail_second)
+    with pytest.raises(interruption, match='bounded_interruption'):
+        run.run_research(**args)
+    assert prepared.closed and post._DEADLINE.get() == deadline
+    assert tree_bytes(args['data_root']) == source_bytes
+    output = args['output_root']
+    failures = tree_bytes(output/'failures')
+    progress = json.loads((output/'progress.json').read_text())
+    assert progress['status'] == 'incomplete'
+    assert progress['reason'] == interruption.__name__+':test_bounded_interruption'
+    assert progress['receipt_sha256'] == policy.digest({k:v for k,v in progress.items() if k!='receipt_sha256'})
+    assert progress['positions_completed'] == 1 and not (output/'report.json').exists()
+    monkeypatch.setattr(run, '_position_outcomes', original)
+    result = run.run_research(**args)
+    assert tree_bytes(output/'failures') == failures
+    performance = json.loads(Path(result['performance_path']).read_text())
+    assert performance['metrics']['replay_cache_hits'] == 1
+    initial = performance['metrics']['stages']['source_index_initial']
+    assert initial['raw_decode_calls'] == 0 and initial['cache_state'] == 'cache_reused'
+    assert result['position_count'] == 4
+    assert tree_bytes(args['data_root']) == source_bytes
+
+
+@pytest.mark.parametrize('location', ['inside_data', 'ancestor_data', 'symlink'])
+def test_output_cannot_alias_source_or_policy(tmp_path, monkeypatch, location):
+    args, _ = fixture(tmp_path, monkeypatch)
+    if location == 'inside_data':
+        args['output_root'] = args['data_root']/'report/research'
+    elif location == 'ancestor_data':
+        args['output_root'] = tmp_path
+    else:
+        alias = tmp_path/'alias'
+        alias.symlink_to(args['data_root'], target_is_directory=True)
+        args['output_root'] = alias/'research'
+    before = tree_bytes(args['data_root'])
+    with pytest.raises(ValueError, match='output_(must_not|symlink)'):
+        run.run_research(**args)
+    assert tree_bytes(args['data_root']) == before
+
+
+def test_input_report_change_is_not_published(tmp_path, monkeypatch):
+    args, _ = fixture(tmp_path, monkeypatch)
+    prepared = economic_boundary(monkeypatch)
+
+    def mutate():
+        path = args['input_report']
+        body = json.loads(path.read_text())
+        body['test_revision'] = 'changed_during_execution'
+        path.write_text(json.dumps(body))
+
+    prepared.validate_unchanged = mutate
+    with pytest.raises(ValueError, match='original_report_changed'):
+        run.run_research(**args)
+    assert prepared.closed
+    assert not (args['output_root']/'report.json').exists()
+    assert len(list((args['output_root']/'failures').glob('*.json'))) == 1
+
+
+def test_external_cold_producer_receipt_is_bound_and_cache_reuse_is_not_cold(tmp_path, monkeypatch):
+    args, native = fixture(tmp_path, monkeypatch)
+    output = args['output_root']; output.mkdir()
+    census = Counter()
+    start, cpu, io = time.perf_counter(), time.process_time(), run._io()
+    run.source_index.prepare(output, native['source_inventory'], post.source_events, census)
+    measured = run._measurement(start, cpu, io)
+    decoder_files = [Path(post.__file__), Path(run.source_index.__file__),
+                     Path(run.source_index.__file__).with_name('main_stop_source_projection.py')]
+    receipt = dict(schema='main_stop_cold_index_measurement_v1', status='completed',
+        source_sha256=native['source_sha256'], source_inventory=native['source_inventory'],
+        decoder_files={path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in decoder_files},
+        census=dict(census), digest_session={}, allowed_runtime_apply=False, policy_mutated=False,
+        **{key: measured[key] for key in ('wall_seconds', 'cpu_seconds', 'peak_rss_kib')})
+    receipt['receipt_sha256'] = policy.digest(receipt)
+    (output/'cold_index_measurement.json').write_text(json.dumps(receipt))
+    before = (output/'cold_index_measurement.json').read_bytes()
+    report = run.run_research(**args)
+    performance = json.loads(Path(report['performance_path']).read_text())
+    assert performance['metrics']['external_cold_index']['wall_seconds'] == receipt['wall_seconds']
+    assert performance['metrics']['stages']['source_index_initial']['raw_decode_calls'] == 0
+    assert (output/'cold_index_measurement.json').read_bytes() == before
+
+
+@pytest.mark.parametrize('damage', ['replay_cache', 'input_receipt'])
+def test_resumed_dependency_or_cache_damage_is_rejected(tmp_path, monkeypatch, damage):
+    args, _ = fixture(tmp_path, monkeypatch)
+    original = run._position_outcomes
+    calls = 0
+
+    def interrupt(*values, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise ValueError('test_interrupt')
+        return original(*values, **kwargs)
+
+    monkeypatch.setattr(run, '_position_outcomes', interrupt)
+    with pytest.raises(ValueError, match='test_interrupt'):
+        run.run_research(**args)
+    output = args['output_root']
+    path = next((output/'replay_cache').glob('*.json')) if damage == 'replay_cache' else output/'input_receipt.json'
+    body = json.loads(path.read_text()); body['tampered'] = True
+    path.write_text(json.dumps(body))
+    monkeypatch.setattr(run, '_position_outcomes', original)
+    with pytest.raises(ValueError, match='replay_cache_invalid|resume_dependency_changed'):
+        run.run_research(**args)
+    assert not (output/'report.json').exists()
+    assert len(list((output/'failures').glob('*.json'))) == 2
+
+
+def test_exact_position_total_is_separate_and_unsealed_costs_cannot_enter():
+    source = dict(record_id='1', quantity=10, item='005930_AL')
+    economic = dict(schema='main_stop_research_cost_v1', economics_scope='main_stop_research_only',
+        status='eligible', record_id='1', evidence_grade='exact_position_total',
+        runtime_effect=False, allowed_runtime_apply=False, manual_exit=False,
+        custody_status='verified_registry_fill_census', fill_state='fully_closed',
+        main_exit_source=dict(status='verified_native_decision_submit_chain'),
+        quantity_basis=dict(buy_qty=10, sell_qty=10, residual_qty=0), terminal_observation=dict(code='005930'))
+    economic['artifact_sha256'] = policy.digest(economic)
+    # A sealed aggregate alone does not identify the original BUY generation.
+    assert not run._economic_matches_position(economic, source)
+    economic['quantity_basis']['sell_qty'] = 9
+    assert not run._economic_matches_position(economic, source)
+
+
+@pytest.mark.parametrize('missing_exact_row',[False,True])
+def test_native_normal_exit_prefix_preserves_postdecision_tail_without_interpolation(tmp_path,missing_exact_row):
+    from src.tests.test_main_stop_research_replay import native_terminal_case
+    from src.tests.test_main_stop_research_cost import DAY
+    from src.tests.test_main_stop_policy import seal
+    stock, native_rows, _ = native_terminal_case(tmp_path)
+    data, costs = tmp_path/'native', tmp_path/'costs'
+    original_last=native_rows[-1]
+    emitted=list(native_rows[:-1] if missing_exact_row else native_rows)
+    stock['exit_requested']=True
+    for offset in (1,2):
+        at=original_last['at']+offset
+        emitted.append(policy.source_row(stock,at=at,bid=10050.,bid_qty=2,
+            quote=dict(market_route='SOR',item='005930',transport_epoch=1,observed_epoch=at),
+            coverage_complete=True,automatic_management_allowed=True,decision_profit_pct=.5,
+            cost_model=original_last['cost_model'],vote_source=None,
+            runtime_flags={key:original_last[key] for key in
+                ('grace_enabled','protect_enabled','handoff_enabled','vote_max_worsen_pct')}))
+    source=data/'pipeline_events'/f'pipeline_events_{DAY}.jsonl';source.parent.mkdir(parents=True)
+    source.write_text(''.join(json.dumps(dict(stage='main_stop_source',fields={'main_stop_source':row}))+'\n'
+                              for row in evaluation_stream(emitted)))
+    parent=seal(data/'parent.json',{'values':asdict(baseline())})
+    snapshot=seal(data/'snapshot.json',{'date':DAY})
+    parents={f'{role}|{market}':baseline() for role in policy.ROLES for market in policy.MARKETS}
+    post.publish(data,DAY,'2026-10-19',parents=parents,parent_receipt=parent,
+        snapshot_receipt=snapshot,source_paths=[source],experiments={},completed=[],economic_sources={})
+    before=tree_bytes(data);cost_before=tree_bytes(costs)
+    output=tmp_path/'research'
+    report=run.run_research(data_root=data,cost_data_root=costs,output_root=output,
+        source_date=DAY,target_date='2026-10-19',input_report=post.report_path(data,DAY))
+    assert tree_bytes(data)==before and tree_bytes(costs)==cost_before
+    evidence=list(storage.iter_tree(output,report['position_evidence']))
+    assert len(evidence)==1
+    row=evidence[0]
+    if missing_exact_row:
+        assert row['terminal_source_gap']=='stop_terminal_exact_original_decision_row_missing'
+        assert row['replay_window']['kind']=='complete_native_position'
+        assert row['outcomes']['parent']['modeled_net_krw'] is None
+    else:
+        assert row['terminal_source_gap'] is None
+        assert row['replay_window']['kind']=='verified_normal_exit_prefix'
+        assert row['replay_window']['end_at']==original_last['at']
+        assert row['replay_window']['excluded_tail']['observations']==5
+        assert row['replay_window']['source_evidence_preserved'] is True
+        assert row['outcomes']['parent']['modeled_net_krw']>0
+        assert row['outcomes']['grace_sec:0']['modeled_net_krw']<0
+        assert row['common_modeled'] and row['economic_position_match']
+        assert row['diagnostics']['counts']['observations']==12
+
+
+def test_offline_cost_owner_code_change_invalidates_research_even_when_runtime_family_matches(tmp_path,monkeypatch):
+    args,_=fixture(tmp_path,monkeypatch)
+    prepared=economic_boundary(monkeypatch)
+    original=Path.read_bytes
+    changed=False
+    def read(path):
+        body=original(path)
+        return body+b'\n# changed economic owner\n' if changed and path.name=='main_stop_research_cost.py' else body
+    def invalidate():
+        nonlocal changed
+        changed=True
+    monkeypatch.setattr(Path,'read_bytes',read)
+    prepared.validate_unchanged=invalidate
+    with pytest.raises(ValueError,match='code_changed_during_execution'):
+        run.run_research(**args)
+    assert not (args['output_root']/'report.json').exists()
+    assert prepared.closed
+
+
+def test_metrics_keep_common_denominator_grades_and_correct_standard_error():
+    cell = dict(mixed_parent_values=False)
+    source = dict(buy_basis_krw=10000.)
+    def sample(delta):
+        return {'parent': dict(modeled_net_krw=0., mae_pct=-1., exposure_sec=10.,quantity_status='full_fill'),
+                'grace_sec:0': dict(modeled_net_krw=delta, mae_pct=-2., exposure_sec=5.,quantity_status='full_fill')}
+    for delta in (1., 3., 5., 7.):
+        run._paired_metrics(cell, sample(delta), source, {'evidence_grade': 'exact_execution'}, True)
+    run._paired_metrics(cell, sample(999.), source, {'evidence_grade': 'broker_total_allocated'}, True)
+    run._paired_metrics(cell, sample(-999.), source, {'evidence_grade': 'exact_execution'}, False)
+    run._finish_paired_metrics({'SCANNER|REGULAR': cell})
+    stat = cell['paired_metrics']['exact_execution']['grace_sec:0']
+    assert stat['n'] == 4 and stat['equal_weight_avg_paired_delta_krw'] == 4.
+    assert stat['standard_error_krw'] == pytest.approx(math.sqrt(20/3/4))
+    assert stat['mean_delta_bps'] == 4. and stat['mae_worse_count'] == 4
+    assert cell['paired_metrics']['broker_total_allocated']['grace_sec:0']['n'] == 1
+
+
+def test_historical_census_revalidates_selected_rows_without_rehash_or_cost(tmp_path,monkeypatch):
+    args,_=fixture(tmp_path,monkeypatch)
+    prior=run.run_research(**args)
+    old=tree_bytes(args['output_root']);source_before=tree_bytes(args['data_root'])
+    source_paths=set(json.loads((args['output_root']/'input_receipt.json').read_text())['source_inventory'])
+    original_generation=run.byte_generation
+    def guarded(path):
+        assert str(path) not in source_paths,'historical census must not claim a fresh full raw hash'
+        return original_generation(path)
+    monkeypatch.setattr(run,'byte_generation',guarded)
+    monkeypatch.setattr(cost,'prepare_economic_source',lambda *a,**k:pytest.fail('cost overlay forbidden in support census'))
+    output=tmp_path/'support'
+    result=run.historical_support_census(data_root=args['data_root'],output_root=output,
+        input_report=args['output_root']/'report.json',source_date=args['source_date'],target_date=args['target_date'])
+    assert result['position_count']==prior['position_count']==4
+    assert result['supported_decisions']==36
+    assert result['economics_evaluated'] is False and result['selected_row_bytes_revalidated'] is True
+    assert result['full_current_raw_generation_rehashed'] is False
+    assert result['historical_index_byte_hash_previously_pinned'] is False
+    assert tree_bytes(args['output_root'])==old and tree_bytes(args['data_root'])==source_before
+    assert len(list(storage.iter_tree(output,result['position_evidence'])))==4
+    with pytest.raises(ValueError,match='already_sealed'):
+        run.historical_support_census(data_root=args['data_root'],output_root=output,
+            input_report=args['output_root']/'report.json',source_date=args['source_date'],target_date=args['target_date'])
+
+
+@pytest.mark.parametrize('fault',['raw','index','input','report'])
+def test_historical_census_rejects_changed_source_binding_and_preserves_failure(tmp_path,monkeypatch,fault):
+    args,_=fixture(tmp_path,monkeypatch);run.run_research(**args)
+    if fault=='raw':
+        inventory=json.loads((args['output_root']/'input_receipt.json').read_text())['source_inventory']
+        path=Path(next(iter(inventory)))
+        body=path.read_text();path.write_text(body.replace('9990','9991',1))
+    else:
+        path=(next((args['output_root']/'source_index').glob('*/index.json')) if fault=='index'
+            else args['output_root']/('input_receipt.json' if fault=='input' else 'report.json'))
+        body=json.loads(path.read_text());body['changed']=True;path.write_text(json.dumps(body))
+    output=tmp_path/'support'
+    with pytest.raises(ValueError):
+        run.historical_support_census(data_root=args['data_root'],output_root=output,
+            input_report=args['output_root']/'report.json',source_date=args['source_date'],target_date=args['target_date'])
+    assert not (output/'report.json').exists()
+    assert len(list((output/'failures').glob('*.json')))==1
+
+
+def test_metrics_keep_settled_partial_out_of_full_quantity_cohort():
+    cell=dict(mixed_parent_values=False)
+    outcomes={name:dict(quantity_status='settled_partial',modeled_net_krw=value,mae_pct=-1.,exposure_sec=2.)
+        for name,value in [('parent',1.),('candidate',2.)]}
+    run._paired_metrics(cell,outcomes,{'buy_basis_krw':10000.},{'evidence_grade':'exact_execution'},True)
+    run._finish_paired_metrics({'cell':cell})
+    assert 'paired_metrics' not in cell
+    assert cell['settled_partial_paired_metrics']['exact_execution']['candidate']['n']==1
+    assert cell['settled_partial_paired_metrics']['exact_execution']['candidate']['quantity_cohort']=='settled_partial'

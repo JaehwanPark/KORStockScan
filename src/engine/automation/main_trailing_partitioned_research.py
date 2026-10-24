@@ -19,7 +19,10 @@ from src.engine.scalping.trailing_mechanical_policy import classifier_hash
 from src.engine.scalping.trailing_mechanical_strength import StrengthDecision
 from src.engine.scalping.trailing_situation_policy import initial_bundle
 from .main_trailing_situation_aggregation import research as research_registered_grid
-from src.engine.scalping.universal_trailing_replay import PreparedPath, PreparedVariants, summarize_partitions
+from src.engine.scalping.universal_trailing_replay import (
+    PreparedPath, PreparedVariants, summarize_partitions,
+    research_entry_window_start, apply_research_entry_window,
+)
 from .main_trailing_path_projection import EventSequence, stream_pairs
 from .main_trailing_population_aggregation import aggregate
 from src.engine.lifecycle.research_disk_budget import use, reclaim_missing
@@ -95,15 +98,18 @@ def run(manifest_path,*,input_root,output_root=None,dry_run=True,resume=False):
     if manifest.get('schema')!='main_all_scope_exit_input_manifest_v2': raise ValueError('all_scope_input_manifest_invalid')
     with Claim(len(storage.encoded(manifest))*8),Claim(0) as scope_budget:
         scope=owner.preflight_header(manifest,root,scope_budget=scope_budget)
-        from .main_trailing_source_assembler import verify_inventory
+        from .main_trailing_source_assembler import verify_inventory, source_generation_matches
         verify_inventory(manifest,root)
         data_root=Path(manifest['source_data_root']).resolve()
-        window=capture_window(data_root,manifest['consumed_dates'])
+        window=capture_window(data_root,manifest['consumed_dates'],allow_cost_revision=True)
         if window['input_window_generation_sha256']!=manifest['input_window_generation_sha256']:
             raise ValueError('all_scope_cost_window_changed_reassemble_required')
+        from src.engine.lifecycle.holding_research_cost import inventory as cost_inventory
+        cost_paths={p.resolve() for p in cost_inventory(
+            manifest.get('holding_research_cost_data_root') or data_root,manifest['consumed_dates'])}
         for source in storage.iter_tree(root,manifest['source_generations_ref']):
             path=Path(source['path']);generation=source['generation']
-            if not path.resolve().is_relative_to(data_root) or byte_generation(path)!=generation:
+            if (not path.resolve().is_relative_to(data_root) and path.resolve() not in cost_paths) or not source_generation_matches(data_root,manifest['source_date'],path,generation):
                 raise ValueError('all_scope_automatic_source_generation_invalid')
         if output_root is None:
             # Full inventory validation is still bounded and source-only.
@@ -125,6 +131,7 @@ def run(manifest_path,*,input_root,output_root=None,dry_run=True,resume=False):
 
 def _run(manifest,root,out,scope,window,data_root,*,resume,owner,manifest_path,manifest_generation):
     counters=Counter();parent=manifest['approved_parent_receipt'];candidates=manifest.get('candidates',{})
+    entry_window_start=research_entry_window_start(manifest['consumed_dates'])
     contract=owner.code_contract()
     report_path=out/f"research_{manifest['source_date']}.json"
     if resume and report_path.exists():
@@ -149,7 +156,8 @@ def _run(manifest,root,out,scope,window,data_root,*,resume,owner,manifest_path,m
     def result_refs():
         for part in storage.iter_tree(root,manifest['partitions_ref']):
             path=owner._source_path(root,part['path']);generation=byte_generation(path)
-            key=digest([part,generation,window['input_window_generation_sha256'],parent,candidates,contract,manifest['as_of']])
+            key=digest([part,generation,window['input_window_generation_sha256'],parent,candidates,contract,
+                        manifest['as_of'],entry_window_start])
             cache=out/'partitions'/f'{key}.json'
             if resume and cache.exists():
                 try:
@@ -188,7 +196,17 @@ def _run(manifest,root,out,scope,window,data_root,*,resume,owner,manifest_path,m
                             variants[sha]=_prepared(factory,config,count=count,end=end,last_add=last_add,cache_root=Path(scratch),
                                 quota=quota,counters=counters)
                     paths[identity]=PreparedVariants(variants)
-                positions=payload['positions']
+                from src.engine.scalping.universal_trailing_replay import actual_cost_available_epoch
+                positions=[apply_research_entry_window(p,window_start_at=entry_window_start)
+                           for p in payload['positions']]
+                entry_window_excluded=sum(bool(p.get('research_entry_window_exclusion')) for p in positions)
+                if entry_window_excluded:
+                    counters['entry_before_research_window']+=entry_window_excluded
+                positions = [{**p, 'actual_cost_reconciliation':{}}
+                    if p.get('evidence_kind') == 'actual_completed' and (
+                        actual_cost_available_epoch(p.get('actual_cost_reconciliation') or {}) is None
+                        or actual_cost_available_epoch(p.get('actual_cost_reconciliation') or {}) > manifest['as_of'])
+                    else p for p in positions]
                 if payload.get('cost_generations')!={d:window['dependencies'][d]['cost_generation'] for d in part['consumed_dates']}:
                     positions=[{**p,'actual_cost_reconciliation':{}} if p.get('evidence_kind')=='actual_completed' else p for p in positions]
                 # Retain one position's results. All numeric candidates share
@@ -241,10 +259,10 @@ def _run(manifest,root,out,scope,window,data_root,*,resume,owner,manifest_path,m
         source_date=manifest['source_date'],target_date=manifest['target_date'],
         parent_classifier_parameters=parent['classifier_parameters'],classifier=type_research.get('classifier'))
     verify_window(data_root,window)
-    from .main_trailing_source_assembler import verify_inventory
+    from .main_trailing_source_assembler import verify_inventory, source_generation_matches
     verify_inventory(manifest,root)
     for source in storage.iter_tree(root,manifest['source_generations_ref']):
-        if byte_generation(Path(source['path']))!=source['generation']:
+        if not source_generation_matches(data_root,manifest['source_date'],source['path'],source['generation']):
             raise ValueError('all_scope_source_changed_before_publication')
     if byte_generation(manifest_path)!=manifest_generation:
         raise ValueError('all_scope_manifest_changed_during_research')

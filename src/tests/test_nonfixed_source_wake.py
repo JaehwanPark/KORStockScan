@@ -247,7 +247,7 @@ def test_source_lease_receipt_tracks_same_transport_reg_and_probe_custody(monkey
     assert manager._source_recovery_lease_locked(ITEM)["registration_sent_at_epoch"] is None
 
 
-@pytest.mark.parametrize("second_preflight_allowed", [True, False])
+@pytest.mark.parametrize("second_preflight_allowed", [True, False, None])
 def test_actual_probe_engine_recalculates_once_after_quote_only_preflight_failure(monkeypatch, second_preflight_allowed):
     """The real probe and AI preflight reach a new observer-role calculation."""
     from concurrent.futures import Future
@@ -324,10 +324,15 @@ def test_actual_probe_engine_recalculates_once_after_quote_only_preflight_failur
     )]}
     initial_tape = deepcopy(typed["0B"])
     calls = []
+    issued_observers = []
 
     analyze_target = engine.analyze_target
     def record_analysis(*args, **kwargs):
         calls.append(clock[0])
+        issued_observers.append(deepcopy(kwargs['entry_source_recovery_observation']))
+        if second_preflight_allowed is None:
+            return dict(machine_evaluation_status='assessment_contract_invalid', provider_called=False,
+                machine_contract_error='machine_source_quote_observer_native_root_changed')
         if len(calls) == 1:
             clock[0] += .2
         return analyze_target(*args, **kwargs)
@@ -379,6 +384,13 @@ def test_actual_probe_engine_recalculates_once_after_quote_only_preflight_failur
             "rest_received_ts_ms": int(clock[0] * 1000)}), context_builder=context_builder,
         tick_fetcher=lambda *_a, **_k: pytest.fail("probe refetched unchanged tape"),
     )
+    if second_preflight_allowed is None:
+        assert len(calls) == 1 and result['result'] == 'policy_unavailable'
+        expected = {k: v for k, v in issued_observers[0].items() if k != 'snapshot'}
+        assert result['native_observation'] == expected
+        assert result['actual_order_submitted'] is False
+        assert result['machine_contract_error'] == 'machine_source_quote_observer_native_root_changed'
+        return
     assert len(calls) == 2
     assert result["quote_recovery_retry_attempt_count"] == 1
     records = [record for record in records if record.get("schema") == "mechanistic_entry_observation_v1"]

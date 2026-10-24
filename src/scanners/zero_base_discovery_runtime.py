@@ -17,7 +17,7 @@ from math import isfinite
 from src.trading.market import session_contract
 
 from src.scanners.zero_base_discovery_queue import ACTIONS, DiscoveryQueue, RESULTS
-from src.scanners.zero_base_discovery_source import fetch_discovery_panels
+from src.scanners.zero_base_discovery_source import fetch_discovery_panels, discovery_product_filter
 
 
 PROBE_REQUEST_EVENT = "ZERO_BASE_PROBE_REQUESTED"
@@ -283,6 +283,8 @@ class ZeroBaseDiscoveryRuntime:
             eligible_routes=eligible_routes,
             residence_requirements=residence_requirements,
             deferred_active_codes=active_codes,
+            product_check=discovery_product_filter(self.queue.session_date),
+            borrow_idle_short_slot=True,
             activity_claims_per_gainer=(
                 7 if regime == session_contract.MARKET_SESSION_REGIME_KRX_NXT_AFTERMARKET
                 else 3
@@ -307,6 +309,9 @@ class ZeroBaseDiscoveryRuntime:
                         "zero_base_route": claim.get("route"),
                         "zero_base_claim_count": claim.get("claim_count"),
                         "zero_base_claim_observed_epoch": claim.get("observed_epoch"),
+                        "zero_base_discovery_volume": claim.get("discovery_volume"),
+                        "zero_base_source_kind": claim.get("source_kind"),
+                        "physical_probe_lease_id": claim.get("physical_probe_lease_id"),
                     },
                 )
             attempted = self.event_bus.publish_with_dispatch_count(

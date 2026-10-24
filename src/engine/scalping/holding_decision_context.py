@@ -39,6 +39,7 @@ from src.engine.scalping.market_data_enrichment import (
     rest_signed_tape_tick_freshness,
 )
 from src.engine.scalping.multi_timeframe_context import promotion_activation_state
+from src.engine.scalping.holding_vote_exit_models import cost_known_epoch
 
 SCHEMA = "holding_decision_context_v1"
 KST = ZoneInfo("Asia/Seoul")
@@ -154,10 +155,15 @@ def holding_decision_context_enabled(
     session: str,
     decision_kind: str,
     now_ts: Any = None,
+    vote_policy_receipt: dict | None = None,
 ) -> bool:
     if str(decision_kind or "").strip().lower().startswith("overnight"):
         return False
     now = _now_kst(now_ts)
+    if str(decision_kind or "").lower() == "holding_path_vote":
+        from .holding_path_vote_policy import runtime_vote_input_enabled
+        if runtime_vote_input_enabled(vote_policy_receipt, active_date=now.date().isoformat()):
+            return True
     activation = promotion_activation_state(now)
     if activation.get("activation_source") == "atomic_promotion_artifact":
         return True
@@ -268,6 +274,55 @@ def _best_levels(ws_data: dict[str, Any]) -> dict[str, int]:
             )
         ),
     }
+
+
+def _observed_exit_costs(position, ws, *, levels, fresh, average, quantity, now):
+    """Model full-quantity execution from the frozen fee source and visible bids.
+
+    This is configured-cost/current-book arithmetic, never broker cost or a
+    promised fill. Missing depth, malformed levels and unknown fees stay null.
+    Consume normalized book rows only; no request, parser or fallback price.
+    """
+    cost = position.get("_trailing_entry_cost_model")
+    if not fresh or average <= 0 or quantity <= 0 or type(cost) is not dict:
+        return None
+    rate = cost.get("sell_cost_rate")
+    known = cost_known_epoch(cost.get("known_at"))
+    sha = cost.get("source_sha256")
+    if (type(rate) not in (int, float) or not math.isfinite(rate) or not 0 <= rate < .05
+            or known is None or known > now
+            or type(cost.get("buy_cost_krw")) not in (int, float) or cost["buy_cost_krw"] != 0
+            or cost.get("actual_broker_cost") is not False
+            or cost.get("allocation") != "frozen_configured_round_trip_rate_on_sell_model_only"
+            or type(sha) is not str or len(sha) != 64 or any(c not in "0123456789abcdef" for c in sha)):
+        return None
+    bids = (ws.get("orderbook") or {}).get("bids") if type(ws.get("orderbook")) is dict else None
+    if type(bids) is not list or not bids:
+        return None
+    left, proceeds, previous = quantity, 0., None
+    for index, row in enumerate(bids[:10]):
+        if type(row) is not dict:
+            return None
+        price, volume = row.get("price"), row.get("qty", row.get("volume"))
+        if (type(price) not in (int, float) or not math.isfinite(price) or price <= 0
+                or type(volume) is not int or volume <= 0
+                or (previous is not None and price >= previous)
+                or (index == 0 and (price != levels["best_bid"] or volume != levels["best_bid_qty"]))):
+            return None
+        take = min(left, volume)
+        proceeds += take * price
+        left -= take
+        previous = price
+        if left == 0:
+            basis = quantity * average
+            return dict(fee_tax_pct=proceeds * rate / basis * 100.,
+                slippage_bps=(levels["best_bid"] * quantity - proceeds) / basis * 10000.,
+                source="frozen_configured_cost_and_visible_bid_depth_model",
+                cost_source_sha256=sha, cost_known_at=known, observed_at=now,
+                depth_levels=index + 1, quantity=quantity, modeled_vwap=proceeds / quantity,
+                percent_basis="average_entry_notional", actual_broker_cost=False,
+                actual_fill=False)
+    return None
 
 
 def _request_suffix(request_code: str) -> str:
@@ -700,17 +755,21 @@ def resolve_holding_context_request_code(
     position: dict[str, Any] | None,
     decision_kind: str,
     now_ts: Any,
+    vote_policy_receipt: dict | None = None,
 ) -> str:
     """Resolve REST symbol from the same holding execution-view owner."""
 
     now = _now_kst(now_ts)
     session = resolve_entry_candle_session(now_ts=now)
     venue = resolve_entry_candle_venue(ws_data or {}, session=session)
+    if decision_kind == "holding_path_vote":
+        venue = resolve_entry_candle_venue(ws_data or {}, venue=venue, session=session)
     if not holding_decision_context_enabled(
         venue=venue,
         session=session,
         decision_kind=decision_kind,
         now_ts=now,
+        vote_policy_receipt=vote_policy_receipt,
     ):
         return code
     broker_route, _source, _authority = _holding_execution_route(
@@ -745,6 +804,7 @@ def build_holding_decision_context(
     recent_ticks: list[dict[str, Any]] | None = None,
     rest_signed_ticks: list[dict[str, Any]] | None = None,
     include_investor_source: bool = False,
+    vote_policy_receipt: dict | None = None,
 ) -> dict[str, Any]:
     started = time.perf_counter()
     now = _now_kst(now_ts)
@@ -822,6 +882,7 @@ def build_holding_decision_context(
         session=str(candle.get("session") or ""),
         decision_kind=decision_kind,
         now_ts=now,
+        vote_policy_receipt=vote_policy_receipt,
     )
     request_suffix = _request_suffix(str(candle.get("request_code") or ""))
     ws_suffix = str(candle.get("ws_suffix") or "").upper()
@@ -996,6 +1057,19 @@ def build_holding_decision_context(
         not math.isfinite(estimated_slippage_bps) or estimated_slippage_bps < 0
     ):
         estimated_slippage_bps = None
+    modeled_costs = _observed_exit_costs(position, ws, levels=levels, fresh=bbo_fresh,
+        average=avg_price, quantity=memory_qty, now=now_epoch)
+    # Explicit invalid inputs remain gaps. Only absent fields can be supplied
+    # by the existing frozen cost source plus full visible-quantity coverage.
+    if modeled_costs is not None:
+        applied = []
+        if "estimated_fee_tax_pct" not in position:
+            estimated_fee_tax_pct = modeled_costs["fee_tax_pct"]
+            applied.append("estimated_fee_tax_pct")
+        if "estimated_slippage_bps" not in position:
+            estimated_slippage_bps = modeled_costs["slippage_bps"]
+            applied.append("estimated_slippage_bps")
+        modeled_costs = dict(modeled_costs, applied_components=applied) if applied else None
     estimated_net_executable_pnl_pct = (
         round(
             executable_pnl_pct
@@ -1180,6 +1254,7 @@ def build_holding_decision_context(
             "estimated_fee_tax_pct": estimated_fee_tax_pct,
             "spread_cost_bps": spread_bps,
             "estimated_slippage_bps": estimated_slippage_bps,
+            "cost_estimate_source": modeled_costs,
             "estimated_net_executable_pnl_pct": (estimated_net_executable_pnl_pct),
             "remaining_qty": memory_qty,
             "best_bid_qty": levels["best_bid_qty"],
@@ -1385,6 +1460,12 @@ def build_holding_decision_context(
         and not active_exit_token
         and not order_conflict
     )
+    if str(decision_kind or "").lower() == "holding_path_vote":
+        from .holding_path_vote_policy import runtime_vote_input_enabled
+        if runtime_vote_input_enabled(vote_policy_receipt, active_date=now.date().isoformat()):
+            context["vote_input_policy"] = dict(vote_policy_receipt)
+            # A mandatory voter input cannot acquire ordinary HOLD deferral.
+            context["source_quality"]["hold_defer_allowed"] = False
     context["flow_signature"] = _flow_signature(context)
     return context
 
@@ -1456,6 +1537,7 @@ def holding_decision_context_model_payload(
             "schema",
             "enabled",
             "decision_kind",
+            "vote_input_policy",
             "venue",
             "session",
             "market_data_route",
@@ -1512,6 +1594,7 @@ def holding_decision_context_model_payload(
                     "estimated_fee_tax_pct",
                     "spread_cost_bps",
                     "estimated_slippage_bps",
+                    "cost_estimate_source",
                     "estimated_net_executable_pnl_pct",
                     "remaining_qty",
                     "best_bid_qty",

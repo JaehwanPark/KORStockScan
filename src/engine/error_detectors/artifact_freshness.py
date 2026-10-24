@@ -12,13 +12,13 @@ import re
 import time
 import stat
 import zlib
-from contextlib import contextmanager
 from collections import Counter
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from src.engine.monitoring import observer_artifact_io as observer_io
 from src.utils.constants import PROJECT_ROOT
 from src.utils.jsonl_io import existing_or_gzip_path
 from src.utils.market_day import is_krx_trading_day
@@ -41,72 +41,20 @@ def _today_kst_str(now_kst: datetime | None = None) -> str:
 
 
 
-def _observer_file_signature(info):
-    return tuple(getattr(info, "st_" + field) for field in (
-        "dev", "ino", "mode", "nlink", "uid", "gid", "size", "mtime_ns", "ctime_ns"))
 
 
-@contextmanager
-def _observer_regular_fd(path, *, max_bytes=None):
-    """Never block opening special files or follow a replacement symlink."""
-    path = Path(path)
-    before = path.lstat()
-    if not stat.S_ISREG(before.st_mode): raise ValueError("observer_regular_file_required")
-    if max_bytes is not None and before.st_size > max_bytes:
-        raise ValueError("observer_file_size_limit")
-    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
-    try:
-        opened = os.fstat(fd)
-        if not stat.S_ISREG(opened.st_mode): raise ValueError("observer_regular_file_required")
-        if _observer_file_signature(opened) != _observer_file_signature(before):
-            raise ValueError("observer_file_changed_before_read")
-        yield fd
-        if (_observer_file_signature(os.fstat(fd)) != _observer_file_signature(opened)
-                or _observer_file_signature(path.lstat()) != _observer_file_signature(opened)):
-            raise ValueError("observer_file_changed_during_read")
-    finally:
-        os.close(fd)
-
-
-def _observer_regular_bytes(path, *, limit):
-    with _observer_regular_fd(path, max_bytes=limit) as fd:
-        chunks, total = [], 0
-        while True:
-            chunk = os.read(fd, min(128 * 1024, limit + 1 - total))
-            if not chunk: break
-            chunks.append(chunk); total += len(chunk)
-            if total > limit: raise ValueError("observer_file_size_limit")
-        return b"".join(chunks)
-
-
-def _observer_json_object(encoded):
-    def pairs(values):
-        result = {}
-        for key, value in values:
-            if key in result: raise ValueError("observer_json_duplicate_key")
-            result[key] = value
-        return result
-    def number(value):
-        result = float(value)
-        if not math.isfinite(result): raise ValueError("observer_json_nonfinite")
-        return result
-    def invalid_constant(value):
-        raise ValueError("observer_json_nonfinite")
-    value = json.loads(encoded, object_pairs_hook=pairs, parse_float=number, parse_constant=invalid_constant)
-    if not isinstance(value, dict): raise ValueError("observer_json_object_required")
-    return value
 
 
 def _observer_small_object(path, *, limit=1024 * 1024, hash_only=False):
-    encoded = _observer_regular_bytes(path, limit=limit)
-    return ({} if hash_only else _observer_json_object(encoded), hashlib.sha256(encoded).hexdigest())
+    encoded = observer_io.regular_bytes(path, limit=limit)
+    return ({} if hash_only else observer_io.json_object(encoded), hashlib.sha256(encoded).hexdigest())
 
 
 def _submission_observer_snapshot(path):
     """Reuse one strict bounded report read, only while its exact inode is stable."""
-    before = _observer_file_signature(path.lstat())
+    before = observer_io.file_signature(path.lstat())
     payload, sha = _observer_small_object(path, limit=8 * 1024 * 1024)
-    if _observer_file_signature(path.lstat()) != before:
+    if observer_io.file_signature(path.lstat()) != before:
         raise ValueError('observer_report_changed_during_snapshot')
     return payload, sha, before
 
@@ -119,10 +67,17 @@ def _submission_observer_input_identity(path, root):
             ('report', report),
             ('selection', Path(root) / 'data/runtime/runtime_release_selection.json')):
         try:
-            identity = _observer_file_signature(candidate.lstat())
+            identity = observer_io.file_signature(candidate.lstat())
         except OSError as exc:
             identity = (type(exc).__name__, exc.errno)
         result[name] = dict(path=str(candidate), signature=identity)
+    try:
+        heartbeat, _ = _observer_small_object(Path(root)/'tmp/error_detector_heartbeat.json')
+        terminal = (heartbeat.get('threads') or {}).get('sniper_engine') or {}
+        result['engine_terminal'] = dict(pid=(heartbeat.get('main_loop') or {}).get('pid'),
+            terminal=terminal if terminal.get('alive') is False else None)
+    except (OSError, ValueError, TypeError, AttributeError) as exc:
+        result['engine_terminal'] = dict(unavailable=type(exc).__name__)
     return result
 
 
@@ -233,7 +188,7 @@ def _submission_observer_transition_pending(root, artifact_path, now, *, max_sta
             return None
         snapshot = report_snapshot or _submission_observer_snapshot(Path(artifact_path))
         report, report_sha, report_signature = snapshot
-        if _observer_file_signature(Path(artifact_path).lstat()) != report_signature: return None
+        if observer_io.file_signature(Path(artifact_path).lstat()) != report_signature: return None
         report_mtime = report_signature[7] / 1_000_000_000
         age = now.timestamp() - report_mtime
         if age < 0: return None
@@ -397,10 +352,19 @@ def _submission_observer_actor_issue(payload):
     if lineage is not None and (not isinstance(lineage, dict)
             or lineage.get('exact_pid_filter') != [str(receipt['pid']), receipt['start_ticks']]):
         return 'observer_current_main_lineage_mismatch'
+    closed = None
     try:
         if _observer_live_identity(receipt['pid']) != dict(pid=receipt['pid'], start_ticks=receipt['start_ticks'],
                                                         cwd=receipt['process_cwd']):
             return 'observer_current_main_identity_changed'
+    except FileNotFoundError:
+        try:
+            from src.engine.automation.intraday_release_handoff import closed_consumption_observation
+            closed = closed_consumption_observation(payload['date'])
+            if closed['pid_identity'] != dict(pid=receipt['pid'], start_ticks=receipt['start_ticks'], cwd=receipt['process_cwd']):
+                return 'observer_current_main_identity_changed'
+        except (OSError, ValueError, TypeError, KeyError):
+            return 'observer_current_main_not_running'
     except (OSError, ValueError, TypeError, KeyError, IndexError):
         return 'observer_current_main_not_running'
     # A report may bound its health window by this exact process lifetime only
@@ -416,7 +380,14 @@ def _submission_observer_actor_issue(payload):
         try:
             from src.engine.monitoring.submission_bottleneck_monitor import _attest_health_actor_birth
             at = datetime.fromisoformat(str(payload.get('as_of')))
-            native = _attest_health_actor_birth(generation, at)
+            if closed:
+                # The consumed start ticks remain sealed after exit. The boot
+                # epoch and tick rate still require an independent kernel read.
+                boot = observer_io.regular_bytes(Path('/proc/stat'), limit=256*1024).decode()
+                epoch = int(next((line.split()[1] for line in boot.splitlines() if line.startswith('btime ')), None))
+                native = dict(declared, boot_epoch=epoch, clock_ticks_per_second=os.sysconf('SC_CLK_TCK'))
+            else:
+                native = _attest_health_actor_birth(generation, at)
             if (not isinstance(declared, dict) or declared.get('status') != 'verified'
                     or native.get('status') != 'verified' or native != declared
                     or any(value != declared for value in cohort_proofs)):
@@ -510,6 +481,14 @@ def _holding_profit_exit_semantics(root: Path, source_date: str, *, now: datetim
     except (OSError, ValueError, TypeError, AttributeError) as exc:
         return dict(meta, **_semantic_failure(exc))
     status = semantics["status"]
+    try:
+        from src.engine.scalping.holding_profit_exit_semantics import read_historical_resolution
+        resolution = read_historical_resolution(report, report_path=path,
+            report_sha256=raw_sha, data_root=(root/'data').resolve(), now=now)
+    except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+        return dict(meta, **_semantic_failure(exc))
+    if resolution is not None:
+        status = 'historical_diagnostic'
     from src.engine.monitoring.semantic_incident_contract import holding_gap_identity
     return {
         **meta, "native_validated": True, "observation_complete": True,
@@ -531,6 +510,7 @@ def _holding_profit_exit_semantics(root: Path, source_date: str, *, now: datetim
         "lifecycle_counts": dict(Counter(row.get("lifecycle_state") for row in semantics.get("lifecycle", []))),
         "economics_status": semantics.get("economics_status", "unavailable"),
         "lifecycle_verified": semantics.get("schema") == "holding_profit_exit_semantics_v2",
+        "historical_source_resolution": resolution,
     }
 
 
@@ -560,11 +540,10 @@ def _main_stop_semantics(root, source_date, *, now):
         trailing = dict(status='not_observed', findings=[])
         holding_path = data_root/'report/monitor_snapshots'/f'holding_exit_observation_{source_date}.json'
         if holding_path.exists():
-            from src.engine.automation.main_trailing_research_handoff import observe_extension
+            from src.engine.monitoring.main_trailing_currentness import observe
             try:
                 holding, _ = _semantic_object(holding_path, limit=4*1024*1024)
-                trailing = observe_extension(holding, target_date=bundle['target_date'],
-                    required=(holding.get('meta') or {}).get('snapshot_profile') == 'postclose_exit')
+                trailing = observe(data_root, holding, target_date=bundle['target_date'])
             except (OSError, ValueError, TypeError, KeyError) as exc:
                 trailing = dict(status='source_invalid', findings=[str(exc)])
         findings = list(consumed['findings']) + [
@@ -1089,21 +1068,9 @@ def _initial_quantity_semantics_native(
         "full_source_revalidation_performed": False,
     }
     output_dir = root / 'data/report/initial_entry_quantity_type_policy' / f'refresh_postclose_{source_date}'
-    stage_expected_sha = None
     try:
-        pointer = output_dir / 'committed_stage.json'
-        if pointer.exists() or pointer.is_symlink():
-            ref = read(pointer, limit=65536)
-            stage_path = Path(ref['stage_path'])
-            stage_expected_sha = ref['stage_sha256']
-            if (ref.get('schema') != 'initial_quantity_stage_reference_v2'
-                    or ref.get('source_date') != source_date or not stage_path.is_absolute()
-                    or stage_path.is_symlink()
-                    or not stage_path.resolve().is_relative_to(output_dir.resolve() / 'generations')
-                    or re.fullmatch(r'[0-9a-f]{64}', str(stage_expected_sha)) is None):
-                raise ValueError('quantity_stage_reference_invalid')
-        else:
-            stage_path = output_dir / f'initial_quantity_refresh_stage_{source_date}.json'
+        from src.engine.scalping.initial_quantity_policy import committed_refresh_stage_path
+        stage_path = committed_refresh_stage_path(output_dir, source_date, read=read)
     except (OSError, ValueError, KeyError, TypeError):
         details["findings"].append("initial_quantity_stage_reference_invalid")
         details['status'] = 'source_invalid'
@@ -1113,7 +1080,7 @@ def _initial_quantity_semantics_native(
         try:
             if stage_path.is_symlink() or stage_path.stat().st_size > 1024 * 1024:
                 raise ValueError("stage_untrusted_or_oversize")
-            stage = read(stage_path, expected_sha=stage_expected_sha)
+            stage = read(stage_path)
             observed = _quantity_stage_observation(stage, source_date, read, stage_path=stage_path,
                                                    data_root=(root/'data').resolve())
             observation = (dict(observed['monitor_projection_observation'])
@@ -1299,7 +1266,7 @@ def _initial_quantity_semantics(root: Path, source_date: str, *, now_epoch=None)
         if not path.is_absolute() or actual.is_symlink():
             raise ValueError('quantity_semantic_path_invalid')
         metadata = actual.stat()
-        before = _observer_file_signature(metadata)
+        before = observer_io.file_signature(metadata)
         if metadata.st_size > limit:
             raise ValueError('semantic_artifact_untrusted_path_or_size')
         key = (str(path), str(actual), before)
@@ -1320,7 +1287,7 @@ def _initial_quantity_semantics(root: Path, source_date: str, *, now_epoch=None)
         if read_bytes > 32 * 1024 * 1024:
             raise ValueError('semantic_read_budget_oversize')
         if (existing_or_gzip_path(path) != actual
-                or _observer_file_signature(actual.stat()) != before):
+                or observer_io.file_signature(actual.stat()) != before):
             raise ValueError('semantic_generation_changed_during_read')
         if expected_sha is not None and sha != expected_sha:
             raise ValueError('quantity_semantic_bound_generation_changed')
@@ -1335,7 +1302,7 @@ def _initial_quantity_semantics(root: Path, source_date: str, *, now_epoch=None)
     try:
         for logical, actual, sha, before in references:
             st = actual.stat()
-            if existing_or_gzip_path(logical) != actual or before != _observer_file_signature(st):
+            if existing_or_gzip_path(logical) != actual or before != observer_io.file_signature(st):
                 raise ValueError("semantic_generation_changed_during_read")
         complete = not any("oversize" in x for x in result.get("findings", []))
         valid_contract = complete and result.get('status') != 'source_invalid'
@@ -1356,13 +1323,47 @@ def _initial_quantity_semantics(root: Path, source_date: str, *, now_epoch=None)
 
 def _semantic_object(path: Path, *, limit: int = 64 * 1024 * 1024,
                      hash_only: bool = False, observation: dict | None = None) -> tuple[dict, str]:
+    """Reuse small decoded inputs only within the current validation invocation.
+
+    Validator decisions and external dependencies are always evaluated again.
+    Large objects retain the bounded streaming/hash path rather than a cache.
+    """
+    from copy import deepcopy
+    from src.engine.infrastructure.validation_digest_session import ACTIVE, MAX_ENTRIES, identity
+    session = ACTIVE.get()
+    if session is None or session.invocation_pid != os.getpid():
+        return _read_semantic_object(path, limit=limit, hash_only=hash_only, observation=observation)
+    actual = existing_or_gzip_path(path)
+    before = identity(actual)
+    key = (str(actual.absolute()), limit, hash_only)
+    entry = session.semantic_objects.get(key)
+    if entry and entry[0] == before and time.monotonic() - entry[2] <= session.ttl:
+        if observation is not None: observation['logical_bytes'] = entry[3]
+        session.stats['semantic_reused_reads'] += 1
+        return deepcopy(entry[1])
+    details = {}
+    result = _read_semantic_object(path, limit=limit, hash_only=hash_only, observation=details)
+    if identity(actual) != before:
+        raise ValueError('semantic_generation_changed_during_read')
+    size = details['logical_bytes']
+    if observation is not None: observation.update(details)
+    if size <= 1024 * 1024:
+        if session.semantic_bytes + size > 4 * 1024 * 1024 or len(session.semantic_objects) >= MAX_ENTRIES:
+            session.semantic_objects.clear();session.semantic_bytes = 0
+        session.semantic_objects[key] = (before, deepcopy(result), time.monotonic(), size)
+        session.semantic_bytes += size
+    return result
+
+
+def _read_semantic_object(path: Path, *, limit: int = 64 * 1024 * 1024,
+                     hash_only: bool = False, observation: dict | None = None) -> tuple[dict, str]:
     """Read one bounded, stable generation without following file symlinks."""
     actual = existing_or_gzip_path(path)
     if actual.is_symlink() or actual.stat().st_size > limit:
         raise ValueError("semantic_artifact_untrusted_path_or_size")
     before = actual.stat()
     try:
-        with _observer_regular_fd(actual, max_bytes=limit) as fd:
+        with observer_io.regular_fd(actual, max_bytes=limit) as fd:
             with os.fdopen(os.dup(fd), 'rb') as physical:
                 handle = gzip.GzipFile(fileobj=physical, mode='rb') if actual.suffix == '.gz' else physical
                 try:
@@ -1431,7 +1432,7 @@ def _semantic_stage_binding(root, day, stage, *, artifact=None, artifact_sha=Non
     return {"status": value.get("status"), "receipt_sha256": digest, 'off_reason': value.get('off_reason')}
 
 
-def _continuous_reversal_result_semantics(root, source_date, component):
+def _continuous_reversal_result_semantics(root, source_date, component, *, now=None):
     """Consume the native reversal contract, without legacy economics gates."""
     report_path = root / 'data/report/continuous_reversal' / source_date / (component + '.json')
     if not report_path.exists() and not report_path.is_symlink():
@@ -1465,6 +1466,13 @@ def _continuous_reversal_result_semantics(root, source_date, component):
             stage = _semantic_stage_binding(root, source_date, required)
             if stage['status'] in {'pending', 'running'}:
                 return dict(status='unobservable', findings=[], stage_id=stage_id, execution=stage)
+            if stage['status'] == 'not_assessed':
+                owner = next(item for item in ARTIFACT_REGISTRY if item['id'] == 'threshold_postclose_status')
+                parent = root / owner['path_template'].format(date=source_date)
+                if ArtifactFreshnessDetector._is_bounded_postclose_running(
+                        owner, parent, source_date, now or datetime.now(ZoneInfo('Asia/Seoul')), root=root):
+                    return dict(status='unobservable', findings=[], stage_id=stage_id, execution=stage,
+                                reason='native_postclose_stage_not_started')
             if stage['status'] != 'succeeded':
                 raise ValueError('continuous_reversal_execution_not_completed:' + required)
         if component == 'machine':
@@ -1879,8 +1887,8 @@ def _compact_diagnostic_price_path_semantics(root: Path, source_date: str) -> di
         if (labels.get("target_date") != source_date
                 or not owner.validate_compact_diagnostic_price_path(projection, labels, source_file_sha256=source_sha)):
             raise ValueError("compact_diagnostic_projection_contract_invalid")
-        if (_observer_file_signature(source_before) != _observer_file_signature(actual.stat())
-                or _observer_file_signature(projection_before) != _observer_file_signature(path.stat())
+        if (observer_io.file_signature(source_before) != observer_io.file_signature(actual.stat())
+                or observer_io.file_signature(projection_before) != observer_io.file_signature(path.stat())
                 or existing_or_gzip_path(logical) != actual):
             raise ValueError("compact_diagnostic_projection_generation_changed")
         return dict(status="observed", findings=[], status_counts=projection["status_counts"],
@@ -2393,46 +2401,6 @@ def _entry_cancel_wait_result_semantics(root, source_date, now=None, *, data_roo
 
 
 
-def _samsung_forward_semantics(root, source_date, *, current_main=False):
-    path = root / 'data/report/samsung_tick_transition_forward_validation' / source_date / 'latest.json'
-    if source_date < '2026-10-06':
-        return {'status': 'not_assessed', 'findings': [], 'source_date': source_date}
-    if not path.exists() and not path.is_symlink():
-        return dict(status='waiting_producer', findings=[], source_date=source_date,
-                    artifact=str(path), consumption='not_observed')
-    try:
-        from src.engine.scalping import samsung_tick_transition_forward_validation as native
-        index, sha = _semantic_object(path, limit=1024 * 1024)
-        if (index != native.A.seal(index) or index.get('schema') != 'samsung_frozen_postclose_index_v1'
-            or index.get('source_date') != source_date or index.get('candidate_id') != native.CANDIDATE
-            or index.get('runtime_effect') is not False or index.get('policy_publication') is not False
-            or index.get('actual_order_submitted') is not False
-            or index.get('owner') != 'SamsungFrozenCandidateValidation1006'
-            or index.get('decision_authority') != 'report_only'):
-            raise ValueError('samsung_forward_index_invalid')
-        result_path = Path(index['result_path'])
-        if (result_path.resolve().parent.parent != path.parent.resolve()
-            or result_path.parent.name != index.get('generation')
-            or (index.get('status') != 'failed' and native.S.digest(index.get('identity')) != index.get('generation'))):
-            raise ValueError('samsung_forward_result_path_invalid')
-        result, result_sha = _semantic_object(result_path)
-        if (result != native.A.seal(result) or result_sha != index['result_file_sha256']
-            or result.get('schema') != 'samsung_tick_transition_forward_result_v1'
-            or result.get('candidate_id') != native.CANDIDATE
-            or any(type(result.get(k)) is not type(v) or result.get(k) != v for k, v in native.AUTHORITY.items())
-            or result.get('day') != source_date or result.get('status') != index.get('status')
-            or index.get('status') not in {'failed', 'waiting_new_source_date', 'evaluated', 'valid_empty', 'source_quality_excluded_all'}):
-            raise ValueError('samsung_forward_result_invalid')
-        findings = ['samsung_forward_execution_failed'] if index['status'] == 'failed' else []
-        return dict(status='historical_diagnostic' if current_main else index['status'],
-            findings=[] if current_main else findings, historical_findings=findings if current_main else [], source_date=source_date,
-            artifact=str(path), report_sha256=sha, comparison=result.get('comparisons'),
-            source_quality=result.get('source_quality'), missing_source_paths=result.get('missing_source_paths'),
-            decision_authority='report_only')
-    except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
-        return dict(_semantic_failure(exc), source_date=source_date, artifact=str(path))
-
-
 def _semantic_due_target(now):
     from src.engine.automation import next_preopen_readiness as readiness
     current = now.replace(tzinfo=ZoneInfo('Asia/Seoul')) if now.tzinfo is None else now.astimezone(ZoneInfo('Asia/Seoul'))
@@ -2459,15 +2427,14 @@ def _completed_semantic_source(root, now):
             day = path.stem[-10:]
             if day > as_of:
                 continue
-            result['artifact'] = str(path)
+            result.update(artifact=str(path), source_date=day)
             value, sha = _semantic_object(path, limit=4 * 1024 * 1024)
             if (value.get('date') != day or value.get('report_type') != 'postclose_done_controller'
                 or value.get('schema_version') != 2):
                 raise ValueError('completed_semantic_controller_date_invalid')
-            if value.get('status') not in {'done', 'failed', 'blocked'}:
-                continue
             result.update(status='receipt_selected', source_date=day,
-                          artifact=str(path), generation=sha)
+                          artifact=str(path), generation=sha,
+                          controller_status=value.get('status'))
             break
         index = root / 'data/runtime/policy_bootstrap/prepared' / target / 'latest.json'
         if index.exists() or index.is_symlink():
@@ -2521,16 +2488,22 @@ def _postclose_handoff_semantics(root, source_date, now):
         if controller_path.exists() or controller_path.is_symlink():
             controller, controller_sha = _semantic_object(controller_path)
             result["status"] = controller.get("status", "source_invalid")
-            if controller.get("status") in {"failed", "blocked"}:
+            state = controller.get('status')
+            if state in {"failed", "blocked", "blocked_predecessor_not_succeeded",
+                         "blocked_independent_producer", "blocked_direct_evidence_gap"}:
                 result["findings"].append("postclose_handoff_execution_failed")
+            elif state == 'summary_verified':
+                result.update(status='unobservable', reason='whole_native_chain_pending')
+            elif state != 'done':
+                result['findings'].append('postclose_handoff_contract_invalid')
             if controller.get("status") == "done":
                 errors = done_terminal_receipt_issues(controller_path, source_date, started_after_ns=0,
                                                      generation_only=True)
                 result["validation_scope"] = "sealed_generation_not_new_full_chain_verification"
                 if 'strict_checklist_generation_stale' in errors:
-                    from src.engine.automation.intraday_release_handoff import historical_checklist_for_observer
+                    from src.engine.automation.postclose_finalization_generation import strict_bound_checklist_for_observer
                     try:
-                        preserved = historical_checklist_for_observer(root, source_date, now=now)
+                        preserved = strict_bound_checklist_for_observer(root, source_date, now=now)
                         errors = done_terminal_receipt_issues(
                             controller_path, source_date, started_after_ns=0, generation_only=True,
                             checklist_snapshot=Path(preserved['path']))
@@ -2616,13 +2589,18 @@ def _optional_weakness_semantics(root, now):
             return result
         result['installed_calendar_valid'] = native.verify_installed_calendar(config)
         if not result['installed_calendar_valid']:
-            result['findings'].append('optional_research_calendar_unverified')
+            installed_code = config.get('installation_code_sha256')
+            result['findings'].append('optional_research_code_binding_unverified'
+                if installed_code and installed_code != native.code_hash()
+                else 'optional_research_calendar_unverified')
         attempt, completed, cumulative = (objects.get(k,{}) for k in ('attempt','completed','cumulative'))
         latest = attempt.get('latest_attempt', attempt)
         result.update(status='unobservable', latest_attempt=latest,
             last_completed_computation={k:completed.get(k) for k in (
                 'source_date','night_id','cumulative_generation','artifact_content_sha256')},
             source_date=latest.get('source_date') or completed.get('source_date'),
+            source_date_role=('latest_attempt_source' if latest.get('source_date')
+                              else 'last_completed_work_source'),
             source_scope=cumulative.get('source_scope'),
             pending_source_dates=cumulative.get('pending_source_dates'),
             invalidated_source_dates=cumulative.get('invalidated_source_dates'),
@@ -2749,7 +2727,6 @@ def _project_semantic_owner(alert, current_owners, as_of_date):
         'main_auxiliary_policy': 'DirectFamilySourceRepairCompactAuxiliary',
         'postclose_handoff': 'DirectFamilyPreopenPolicyHandoff',
         'entry_cancel_wait_tuning': 'DirectFamilySourceRepairEntryCancelWait',
-        'samsung_frozen_validation': 'SemanticMonitorProducerConsumerRefresh1007',
         'legacy_machine_report': 'DirectFamilySourceRepairMainMechanisticEntry',
         'holding_profit_exit': 'HoldingProfitExitSourceContractRepair',
         'initial_quantity': 'InitialQuantityProducerConsumerRepair1010',
@@ -2757,7 +2734,8 @@ def _project_semantic_owner(alert, current_owners, as_of_date):
         'main_market_weakness_research': 'MainMarketWeaknessPostcloseObservation1008',
     }
     owner = mapping.get(alert['stage'])
-    if (alert['stage'] == 'main_stop_confirmation' and owner not in current_owners
+    if (alert['stage'] in {'main_stop_confirmation', 'main_machine_policy',
+                          'main_auxiliary_policy', 'legacy_machine_report'} and owner not in current_owners
             and 'DirectFamilyPreopenPolicyHandoff' in current_owners):
         owner = 'DirectFamilyPreopenPolicyHandoff'
     if (alert['stage']=='main_market_weakness_research' and owner not in current_owners
@@ -2766,6 +2744,9 @@ def _project_semantic_owner(alert, current_owners, as_of_date):
     if alert['stage']=='policy_generation':
         from src.engine.monitoring.policy_generation_contract import OWNERS
         owner=OWNERS.get(alert.get('scope'))
+        if (alert.get('scope')=='holding_vote' and owner not in current_owners
+                and 'DirectFamilyPreopenPolicyHandoff' in current_owners):
+            owner='DirectFamilyPreopenPolicyHandoff'
     alert.update(producer_owner=alert['owner'], historical_owner=alert['owner'],
                      owner=owner if owner in current_owners else 'UNRESOLVED_CURRENT_OWNER:' + str(owner),
                      owner_status='current_open' if owner in current_owners else 'unresolved',
@@ -2790,18 +2771,16 @@ def _semantic_alert_candidates(name, semantics, source_date):
             observation_generation=semantics.get("observation_generation"),
             policy_hash=semantics.get("policy_file_sha256"),
             owner="holding_exit_sentinel" if name == "holding_profit_exit" else name,
+            **(dict(source_date_role=semantics.get('source_date_role'),
+                latest_attempt_source_date=(semantics.get('latest_attempt') or {}).get('source_date'),
+                last_completed_source_date=(semantics.get('last_completed_computation') or {}).get('source_date'),
+                research_through_date=(semantics.get('source_scope') or {}).get('through_date'),
+                research_source_date_count=(len(semantics['source_scope']['source_dates'])
+                    if isinstance((semantics.get('source_scope') or {}).get('source_dates'), list)
+                    else None)) if name == 'main_market_weakness_research' else {}),
             closure_test="native_complete_exact_date_scope_binding_and_original_reason_resolved")
             for reason in sorted(set(semantics.get("findings") or []))
             if reason != "economics_null"]
-    if name == 'samsung_frozen_validation':
-        if semantics.get('status') in {'not_assessed', 'unobservable', 'waiting_producer', 'future_due'}:
-            return []
-        return [dict(source_date=source_date, target_date=semantics.get('target_date'),
-            stage=name, scope='report', reason=reason, status=semantics['status'],
-            artifact=semantics.get('artifact'), generation=semantics.get('report_sha256'),
-            owner='SamsungFrozenCandidateValidation1006',
-            closure_test='exact_family_date_generation_source_policy_and_native_validator')
-            for reason in semantics.get('findings', [])]
     if name == "entry_cancel_wait_tuning":
         if semantics.get("status") != "source_invalid":
             return []
@@ -3541,6 +3520,51 @@ def _postclose_main_absent():
         return False
 
 
+def _submission_observer_closed_window(payload, root, now, signature, *, window_end, max_staleness_sec):
+    """Retain a close-time observation; never turn it into current/full coverage."""
+    try:
+        from src.engine.error_detectors.process_health import _is_expected_thread_terminal
+        if now.tzinfo is None: now = now.replace(tzinfo=ZoneInfo('Asia/Seoul'))
+        now = now.astimezone(ZoneInfo('Asia/Seoul'))
+        close = now.replace(hour=window_end[0], minute=window_end[1], second=0, microsecond=0)
+        generation = payload.get('observer_generation') or {}
+        receipt = generation.get('selector_reported_pid_receipt') or {}
+        state, _ = _observer_small_object(Path(root)/'tmp/error_detector_heartbeat.json')
+        main = state.get('main_loop') or {}
+        terminal = (state.get('threads') or {}).get('sniper_engine') or {}
+        beat, ended = _observer_clock(main.get('last_beat')), _observer_clock(terminal.get('last_beat'))
+        started, completed = _observer_clock(payload.get('as_of')), _observer_clock(generation.get('completed_at'))
+        mtime = signature[7]/1_000_000_000
+        closed = None
+        if _postclose_main_absent():
+            from src.engine.automation.intraday_release_handoff import closed_consumption_observation
+            closed = closed_consumption_observation(payload.get('date'), now=now)
+            if closed['pid_identity'] != dict(pid=receipt.get('pid'), start_ticks=receipt.get('start_ticks'),
+                                               cwd=receipt.get('process_cwd')):
+                return None
+        anchor = max(ended.timestamp(), completed.timestamp(), mtime) if ended and completed else None
+        if (payload.get('date') != now.date().isoformat() or now < close
+                or type(receipt.get('pid')) is not int or main.get('pid') != receipt['pid']
+                or terminal.get('alive') is not False or type(terminal.get('unresolved_scalping_count')) is not int
+                or terminal['unresolved_scalping_count'] != 0 or terminal.get('unresolved_scalping_codes') != ''
+                or not _is_expected_thread_terminal('sniper_engine', terminal, now_ts=now.timestamp())
+                or any(at is None for at in (beat, ended, started, completed))
+                or not close <= ended <= beat <= now
+                or closed is None and not 0 <= (now-beat).total_seconds() <= max_staleness_sec
+                or not started <= completed <= now or mtime > now.timestamp()
+                or abs((started-ended).total_seconds()) > max_staleness_sec
+                or not 0 <= anchor-completed.timestamp() <= anchor-started.timestamp() <= max_staleness_sec
+                or not 0 <= anchor-mtime <= max_staleness_sec):
+            return None
+        return dict(status='native_market_close_observed', terminal_at=ended.isoformat(),
+            main_state='closed_consumption_verified' if closed else 'live',
+            report_age_at_close_sec=ended.timestamp()-mtime, as_of_age_at_close_sec=(ended-started).total_seconds(),
+            assessment='retained_close_time_observation', current_observation_verified=False,
+            full_coverage_proven=False, runtime_effect=False, allowed_runtime_apply=False)
+    except (OSError, ValueError, TypeError, KeyError, AttributeError, IndexError):
+        return None
+
+
 def _closed_submission_observer_evidence(payload, root, source_day, current_day):
     """Attest a closed day's retained observation without claiming current coverage."""
     if (not source_day or source_day > current_day or payload.get('date') != source_day
@@ -3554,7 +3578,12 @@ def _closed_submission_observer_evidence(payload, root, source_day, current_day)
             selected,selected_sha=_observer_small_object(selected_path,limit=1024*1024)
             eod_path=Path(root)/'data/runtime/update_kospi_status'/f'update_kospi_{source_day}.json'
             eod,eod_sha=_observer_small_object(eod_path,limit=1024*1024)
-            finished=_observer_clock(eod.get('finished_at'))
+            # update_kospi._now_iso emits native local KST without an offset.
+            # Observer/selector clocks retain their stricter aware contract.
+            finished=datetime.fromisoformat(str(eod.get('finished_at')))
+            if finished.tzinfo is None:
+                finished=finished.replace(tzinfo=ZoneInfo('Asia/Seoul'))
+            finished=finished.astimezone(ZoneInfo('Asia/Seoul'))
             selected_at=_observer_clock(selected.get('selected_at_kst'))
             next_day=selected.get('next_operating_date')
             if not isinstance(next_day,str) or date.fromisoformat(next_day).isoformat()!=next_day:
@@ -3634,6 +3663,17 @@ class ArtifactFreshnessDetector(BaseDetector):
                 artifact_day = today
                 artifact_now_total = now_total
                 artifact_past_source_day = past_source_day
+                artifact_trading_day = trading_day
+                if aid == observer_id and past_source_day:
+                    # A closed postclose source date cannot own live PID
+                    # observation. Validate today's producer after consumption;
+                    # all frozen research/controller inputs retain source_day.
+                    artifact_day = sweep_day
+                    artifact_past_source_day = False
+                    artifact_now_total = now_h * 60 + now_m
+                    artifact_trading_day = is_krx_trading_day(date.fromisoformat(sweep_day))
+                    details[f'{aid}_historical_source_date'] = today
+                    details[f'{aid}_live_observation_date'] = sweep_day
                 if aid == "runtime_policy_bootstrap" and past_source_day:
                     prepared = os.environ.get("POSTCLOSE_PREPARED_EFFECTIVE_DATE", "")
                     try:
@@ -3661,7 +3701,7 @@ class ArtifactFreshnessDetector(BaseDetector):
                 ws = artifact.get("window_start")
                 we = artifact.get("window_end")
 
-                if trading_day_only and not trading_day:
+                if trading_day_only and not artifact_trading_day:
                     details[f"{aid}_status"] = "skip_non_trading_day"
                     continue
 
@@ -3791,6 +3831,11 @@ class ArtifactFreshnessDetector(BaseDetector):
                             as_of_age_sec=body_age, completed_age_sec=completed_age,
                             max_staleness_sec=max_stale, clock='detector_wall_clock')
                         details[f'{aid}_observation_dimensions'] = dimensions
+                        if past_window_end:
+                            closed = _submission_observer_closed_window(observer_snapshot[0], PROJECT_ROOT,
+                                now_dt, observer_snapshot[2], window_end=we, max_staleness_sec=max_stale)
+                            if closed is not None:
+                                dimensions['closed_window'] = closed
                         json_error = ""
                     except (OSError, ValueError, TypeError) as exc:
                         json_error = str(exc)
@@ -3811,7 +3856,7 @@ class ArtifactFreshnessDetector(BaseDetector):
                         source_day or today, _today_kst_str(now_dt))
                     if historical is not None:
                         try:
-                            unchanged = _observer_file_signature(artifact_path.lstat()) == observer_snapshot[2]
+                            unchanged = observer_io.file_signature(artifact_path.lstat()) == observer_snapshot[2]
                         except OSError:
                             unchanged = False
                         if unchanged:
@@ -3843,6 +3888,81 @@ class ArtifactFreshnessDetector(BaseDetector):
                     continue
                 if status_warning:
                     observation_health = details.get(f'{aid}_observation_health') or {}
+                    # An operator-accepted native guard/empty-window exception
+                    # is operationally expected only while every strict health
+                    # predicate, current actor and exact report still verify.
+                    # Preserve partial/UNKNOWN/source-gap facts and never use
+                    # the broader bounded-source-quality WARNING path here.
+                    if (aid == observer_id and 0 <= age_sec <= max_stale
+                            and not dimensions.get('closed_window')
+                            and observation_health.get('status') == 'warning_pending'
+                            and observation_health.get('reason') in {
+                                'recorded_guard_or_cohort_pending', 'bounded_no_applicable_observations'}
+                            and observation_health.get('unmet_conditions') == []
+                            and details.get(f'{aid}_observation_health_projection_match') is True
+                            and dimensions.get('generation', {}).get('current_generation_verified') is True
+                            and dimensions.get('current_main_actor', {}).get('status') == 'verified'
+                            and dimensions.get('freshness', {}).get('body_clock', {}).get('status') == 'fresh'):
+                        details[f'{aid}_status'] = 'pass_verified_observation_wait'
+                        details[f'{aid}_current_observation_verified'] = False
+                        details[f'{aid}_observation_exception'] = dict(
+                            disposition='accepted_verified_native_wait',
+                            owner='MainEntrySourceTerminalRepair1022', reason=observation_health['reason'],
+                            report_sha256=observer_snapshot[1], run_id=observer_snapshot[0]['run_id'],
+                            assessment_actor=observation_health['assessment_actor'],
+                            assessment_window_seconds=observation_health['assessment_window_seconds'],
+                            removal_trigger='report_generation_actor_or_health_condition_changed',
+                            current_observation_verified=False, full_coverage_proven=False,
+                            runtime_effect=False, allowed_runtime_apply=False)
+                        continue
+                    retained_scanner_input = False
+                    if (aid == observer_id and dimensions.get('closed_window')
+                            and observation_health.get('reason') == 'bounded_source_quality_observation'
+                            and observation_health.get('unmet_conditions') == ['current_input_provenance_invalid']
+                            and details.get(f'{aid}_observation_health_projection_match') is True):
+                        from src.engine.monitoring.submission_bottleneck_monitor import observation_health_projection
+                        payload = observer_snapshot[0]
+                        provenance = payload.get('input_provenance') or {}
+                        cohorts = [(payload.get(name) or {}).get('current_health_cohort') or {}
+                            for name in ('source_gap_semantics', 'machine_semantics')]
+                        views = [cohort.get('view') or {} for cohort in cohorts]
+                        age = provenance.get('latest_event_age_seconds')
+                        window = observation_health.get('assessment_window_seconds')
+                        # A retained scanner population is not the current actor
+                        # population. Keep its exact bounded diagnostic only when
+                        # both native current cohorts prove no applicable input.
+                        retained_scanner_input = (
+                            payload.get('evaluation_cohort') == 'scanner_promotions'
+                            and payload.get('status') == 'unobservable' and payload.get('scopes') == {}
+                            and payload.get('blocker') == 'missing_stale_or_noncurrent_sentinel_evidence'
+                            and type(provenance.get('row_count')) is int and provenance['row_count'] > 0
+                            and provenance.get('latest_event_status') == 'observed_recent_event'
+                            and type(age) in (int, float) and type(window) is int and age > window
+                            and all(cohort.get('schema') == 'submission_monitor_current_health_cohort_v1'
+                                    and cohort.get('actor') == observation_health.get('assessment_actor')
+                                    for cohort in cohorts)
+                            and views[0].get('status') == 'unobservable'
+                            and isinstance(views[0].get('observed'), dict)
+                            and all(type(value) is int and value == 0 for value in views[0]['observed'].values())
+                            and type(views[1].get('observation_count')) is int
+                            and views[1]['observation_count'] == 0
+                            # Reuse the native projection to prove that only the
+                            # retained row population prevents quiet coverage.
+                            # Never rewrite the report or its declared health.
+                            and observation_health_projection({**payload, 'input_provenance':
+                                {**provenance, 'row_count': 0}})['unmet_conditions'] == [])
+                    if (aid == observer_id and dimensions.get('closed_window')
+                            and ((observation_health.get('reason') == 'bounded_no_applicable_observations'
+                                  and observation_health.get('unmet_conditions') == []) or retained_scanner_input)
+                            and observation_health.get('status') == 'warning_pending'
+                            and details.get(f'{aid}_observation_health_projection_match') is True):
+                        details[f'{aid}_status'] = 'closed_window_observation_only'
+                        details[f'{aid}_current_observation_verified'] = False
+                        warnings.append(f'{aid}: native market close; bounded '
+                            + ('noncurrent scanner population' if retained_scanner_input else 'empty observation')
+                            + ' retained; '
+                            'partial validation and historical source gaps remain unverified')
+                        continue
                     if (aid == 'submission_bottleneck_monitor' and 0 <= age_sec <= max_stale
                             and observation_health.get('status') == 'warning_pending'
                             and details.get(f'{aid}_observation_health_projection_match') is True):
@@ -3972,8 +4092,6 @@ class ArtifactFreshnessDetector(BaseDetector):
             if not trading_day or semantic_day != today:
                 family_results.append(('initial_quantity', _initial_quantity_semantics(
                     PROJECT_ROOT, semantic_day, now_epoch=now_ts)))
-            family_results.append(('samsung_frozen_validation', _samsung_forward_semantics(
-                PROJECT_ROOT, semantic_day, current_main=machine_semantics.get('selection_metric') == 'cumulative_raw_win_fraction')))
             for name, result in family_results:
                 details[name + '_semantics'] = result
                 if result['findings']:
@@ -4057,7 +4175,7 @@ class ArtifactFreshnessDetector(BaseDetector):
                     break
                 now_h, now_m = _kst_time_tuple(now_dt)
                 now_total = 24 * 60 if past_source_day else now_h * 60 + now_m
-                observer_path = PROJECT_ROOT / observer_artifact['path_template'].replace('{date}', today)
+                observer_path = PROJECT_ROOT / observer_artifact['path_template'].replace('{date}', sweep_day if past_source_day else today)
                 before = _submission_observer_input_identity(observer_path, PROJECT_ROOT)
                 check_registered_artifacts([observer_artifact])
                 after = _submission_observer_input_identity(observer_path, PROJECT_ROOT)
@@ -4087,6 +4205,8 @@ class ArtifactFreshnessDetector(BaseDetector):
                 runtime_effect=False, allowed_runtime_apply=False)
 
         severity, summary = self._classify(issues, warnings)
+        if severity == 'pass' and details.get(f'{observer_id}_observation_exception'):
+            summary = 'Required artifact contracts satisfied; verified observation wait exception retained; decision coverage remains partial.'
         if (severity == "warning" and not issues and len(warnings) == 1
                 and details.get("submission_bottleneck_monitor_status") in {
                     "pending_first_current_observer", "pending_no_applicable_observations", "pending_bounded_observation"}):
@@ -4114,9 +4234,8 @@ class ArtifactFreshnessDetector(BaseDetector):
         if not log_path.exists():
             return None
         try:
-            lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()[
-                -5000:
-            ]
+            from src.engine.log_archive_service import tail_log_lines
+            lines = tail_log_lines(log_path, 5000)
         except OSError:
             return None
         step_token = f"step={contract['step']}"
@@ -4151,7 +4270,7 @@ class ArtifactFreshnessDetector(BaseDetector):
 
     @staticmethod
     def _is_bounded_postclose_running(
-        artifact: dict[str, Any], artifact_path: Path, today: str, now: datetime
+        artifact: dict[str, Any], artifact_path: Path, today: str, now: datetime, *, root=None
     ) -> bool:
         # Only the postclose owner can be pending here, never a failed status,
         # a prior-day recovery, a generic live process, or an unbounded wait.
@@ -4167,7 +4286,7 @@ class ArtifactFreshnessDetector(BaseDetector):
             if (
                 not isinstance(payload, dict)
                 or type(payload.get("schema_version")) is not int
-                or payload.get("schema_version") != 1
+                or payload.get("schema_version") not in {1, 2}
                 or payload.get("report_type") != "threshold_cycle_postclose_status"
                 or payload.get("runtime_effect") is not False
                 or payload.get("status") != "running"
@@ -4176,6 +4295,10 @@ class ArtifactFreshnessDetector(BaseDetector):
                 or type(payload.get("exit_code")) is not int
                 or payload["exit_code"] != 0
             ):
+                return False
+            if payload['schema_version'] == 2 and (
+                    not re.fullmatch(r'[0-9a-f]{32}', str(payload.get('run_id') or ''))
+                    or not re.fullmatch(r'[0-9a-f]{40}', str(payload.get('code_commit') or ''))):
                 return False
             started = datetime.fromisoformat(payload["started_at"])
             if (
@@ -4190,7 +4313,7 @@ class ArtifactFreshnessDetector(BaseDetector):
             return False
         # A live PID alone must not hide a newer FAIL/DONE or another date.
         markers = CronCompletionDetector._read_once_markers(
-            PROJECT_ROOT / config["log"], today
+            (root or PROJECT_ROOT) / config["log"], today
         )
         if not (
             ("[START]" in markers.upper() or "[BEGIN]" in markers.upper())
@@ -4356,7 +4479,7 @@ class ArtifactFreshnessDetector(BaseDetector):
             if aid == 'submission_bottleneck_monitor':
                 snapshot = observer_snapshot or _submission_observer_snapshot(artifact_path)
                 payload, report_sha, signature = snapshot
-                if _observer_file_signature(artifact_path.lstat()) != signature:
+                if observer_io.file_signature(artifact_path.lstat()) != signature:
                     raise ValueError('observer_report_changed_after_snapshot')
             else:
                 payload = json.loads(artifact_path.read_text(encoding="utf-8"))
@@ -4377,7 +4500,7 @@ class ArtifactFreshnessDetector(BaseDetector):
             if generation_issue is None and payload.get('observer_generation') is None:
                 dimensions['generation'] = dict(status='legacy_generation_unverified', current_generation_verified=False)
             try:
-                report_unchanged = _observer_file_signature(artifact_path.lstat()) == signature
+                report_unchanged = observer_io.file_signature(artifact_path.lstat()) == signature
             except OSError:
                 report_unchanged = False
             if not report_unchanged:
@@ -4392,14 +4515,15 @@ class ArtifactFreshnessDetector(BaseDetector):
                 return f'{aid}: observer execution incomplete or invalid'
             if payload.get('semantic_status') == 'partial':
                 # This pure projection never grants full validation. Recompute
-                # from the exact report; only the fresh/current caller may
-                # classify its narrowly proven empty observation as pending.
+                # from the exact report. A current report can retain its
+                # close-time empty observation only with the native terminal.
                 freshness = dimensions.get('freshness') or {}
-                if freshness.get('status') == 'fresh' and (freshness.get('body_clock') or {}).get('status') != 'fresh':
+                closed = bool(dimensions.get('closed_window'))
+                if not closed and freshness.get('status') == 'fresh' and (freshness.get('body_clock') or {}).get('status') != 'fresh':
                     return f'{aid}: observer_report_body_clock_not_current'
                 if (dimensions['generation'].get('current_generation_verified') is True
-                        and freshness.get('status') == 'fresh'
-                        and 0 <= freshness.get('age_sec', -1) <= freshness.get('max_staleness_sec', -1)):
+                        and (closed or freshness.get('status') == 'fresh'
+                        and 0 <= freshness.get('age_sec', -1) <= freshness.get('max_staleness_sec', -1))):
                     from src.engine.monitoring.submission_bottleneck_monitor import observation_health_projection
                     assessment = observation_health_projection(payload)
                     details[f'{aid}_observation_health'] = assessment
@@ -4420,7 +4544,7 @@ class ArtifactFreshnessDetector(BaseDetector):
                                     limit=1024 * 1024, hash_only=True)
                                 if selection_sha != payload['observer_generation']['final_selection_sha256']:
                                     actor_issue = 'observer_generation_changed_after_assessment'
-                                elif _observer_file_signature(artifact_path.lstat()) != signature:
+                                elif observer_io.file_signature(artifact_path.lstat()) != signature:
                                     actor_issue = 'observer_report_changed_after_snapshot'
                             except (OSError, ValueError, TypeError, KeyError):
                                 actor_issue = 'observer_assessment_snapshot_unavailable'

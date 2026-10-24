@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import json
 import os
+import sqlite3
 import time
 import subprocess
 import uuid
@@ -86,7 +87,9 @@ def iter_daemon_alert_events(results, state, *, target_date):
             if previous is None or previous["identity"] != identity:
                 yield "alert", result
                 state[did] = {"identity": identity, "target_date": target_date}
-        elif result.severity == "pass" and previous is not None:
+        elif (result.severity == "pass" and previous is not None
+                and not (did == 'artifact_freshness' and (result.details or {}).get(
+                    'submission_bottleneck_monitor_observation_exception'))):
             kind = ("recovered" if previous["target_date"] == target_date
                     else "current_date_pass")
             yield kind, result
@@ -211,12 +214,20 @@ class ErrorDetectionEngine:
             try:
                 result = detector.check()
             except Exception as e:
+                details={"error":str(e),"error_type":type(e).__name__}
+                if isinstance(e,sqlite3.Error):
+                    details.update(sqlite_errorcode=getattr(e,'sqlite_errorcode',None),
+                        sqlite_errorname=getattr(e,'sqlite_errorname',None))
+                    context=getattr(e,'sqlite_context',None)
+                    if isinstance(context,dict):
+                        details.update({key:context[key] for key in ('database','database_phase')
+                            if isinstance(context.get(key),str)})
                 result = DetectionResult(
                     detector_id=detector.id,
                     category=detector.category,
                     severity="fail",
                     summary=f"Detector {detector.id} raised exception: {e}",
-                    details={"error": str(e)},
+                    details=details,
                 )
             results.append(result)
         if self.postclose_source_date:

@@ -97,10 +97,581 @@ def native_capture():
     return body, t
 
 
+def native_path_sources(tmp_path, monkeypatch, mutation=None):
+    from src.tests.test_main_market_weakness_research_automation import setup_sources
+
+    data, trace_path, _ = setup_sources(tmp_path, monkeypatch)
+    body, trace_row = native_capture()
+    assessment = body["source"]["assessment"]
+    event = assessment["event"]
+    event["event_id"] = f"{DAY}:SOR:SOR_REGULAR:005930:3:7"
+    assessment["event_id"] = event["event_id"]
+    native = body["runtime_consumption"]["continuous_reversal"]
+    native.update(
+        event_id=event["event_id"], assessment_sha256=R.native_digest(assessment)
+    )
+    body["machine_observation_sha256"] = R.native_digest(
+        {k: v for k, v in body.items() if k != "machine_observation_sha256"}
+    )
+    trace_row.update(machine_observation_sha256=body["machine_observation_sha256"])
+    trace_path.write_text(json.dumps(trace_row) + "\n")
+    payload = data / "ai_decision_payloads" / f"ai_decision_payloads_{DAY}.jsonl"
+    payload.parent.mkdir()
+    payload.write_text(json.dumps(body) + "\n")
+    monkeypatch.setattr(A, "scope_contract", lambda *a, **k: {})
+    at = event["epoch"]
+    rows = [
+        [
+            at + i,
+            999,
+            i + 1,
+            100 + i,
+            99,
+            100,
+            1,
+            1,
+            1,
+            "005930_AL",
+            0,
+            3,
+            7 + i,
+            "SOR_REGULAR",
+            "SOR_REGULAR",
+        ]
+        for i in range(3)
+    ]
+    if mutation == "native_epoch":
+        rows[0][11] = 4
+    elif mutation == "native_sequence":
+        rows[0][12] = 8
+    elif mutation == "item":
+        rows[0][9] = "005930"
+    elif mutation == "ask":
+        rows[0][5] = 101
+    elif mutation == "excluded":
+        rows[0][8] = 0
+    elif mutation == "sequence_gap":
+        rows[1][2] = 4
+    elif mutation == "clock":
+        rows[0][0] += 0.001
+    elif mutation == "boolean":
+        rows[0][11] = True
+    elif mutation == "duplicate":
+        rows.insert(1, list(rows[0]))
+    normalized = data / "normalized.json.gz"
+    write_gzip(
+        normalized,
+        json.dumps(
+            dict(
+                day=DAY,
+                venue="SOR",
+                session="SOR_REGULAR",
+                runtime_effect=False,
+                columns=[
+                    "receive_epoch",
+                    "transport_epoch",
+                    "series_sequence",
+                    "trade_price",
+                    "bid",
+                    "ask",
+                    "qty",
+                    "side",
+                    "valid",
+                    "source_item",
+                    "quote_age_ms",
+                    "native_transport_epoch",
+                    "native_route_sequence",
+                    "native_receive_session",
+                    "exchange_session",
+                ],
+                namespace_contract=dict(
+                    transport_epoch_column="collector_sequence_epoch",
+                    native_transport_epoch="ws_native_epoch",
+                    native_route_sequence="ws_native_route_sequence",
+                ),
+                symbols={"005930": rows},
+            )
+        ).encode(),
+    )
+    if mutation == "legacy":
+        content = json.loads(gzip.decompress(normalized.read_bytes()))
+        content["columns"] = content["columns"][:11]
+        content.pop("namespace_contract")
+        content["symbols"]["005930"] = [point[:11] for point in rows]
+        write_gzip(normalized, json.dumps(content).encode())
+    report = R.seal(
+        dict(
+            schema="continuous_reversal_operating_comparison_v1",
+            source_date=DAY,
+            status="completed",
+            label_contract=R.LABEL,
+            parent_bundle_sha256="b" * 64,
+            partitions=[
+                dict(
+                    normalized_source=dict(
+                        day=DAY,
+                        venue="SOR",
+                        session="SOR_REGULAR",
+                        path=str(normalized),
+                        sha256=A.file_hash(normalized),
+                        issues={},
+                    ),
+                    records_object=1,
+                    records_sha256=R.digest([]),
+                )
+            ],
+        )
+    )
+    A.atomic(
+        data / "report/continuous_reversal_operating" / DAY / "machine-comparison.json",
+        report,
+    )
+
+    class Reader:
+        receipts = {}
+
+        def __init__(self, *a):
+            pass
+
+        def get(self, oid):
+            return []
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(A, "ReadObjects", Reader)
+    return data, trace_path, payload, normalized
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        None,
+        "native_epoch",
+        "native_sequence",
+        "item",
+        "ask",
+        "excluded",
+        "sequence_gap",
+        "clock",
+        "boolean",
+        "duplicate",
+        "legacy",
+    ],
+)
+def test_actual_native_label_uses_ws_identity_without_replay_confirmation(
+    tmp_path, monkeypatch, mutation
+):
+    data, trace_path, payload, _ = native_path_sources(tmp_path, monkeypatch, mutation)
+    original = [trace_path.read_bytes(), payload.read_bytes()]
+    A.process_date(data, DAY, stop_at=time.monotonic() + 15)
+    cursor = A.read_json(A.namespace(data) / DAY / "cursor.json")
+    rows = list(A.projection_rows(cursor["partitions"]))
+    assert len(rows) == 1 and rows[0]["native_binding_status"] == "verified"
+    assert rows[0]["outcome"] == ("W" if mutation is None else "U")
+    if mutation is None:
+        assert rows[0]["label_binding"] == "exact_event_time_actual_ask"
+        assert rows[0]["label_binding_ref"]["point_index"] == 0
+        assert rows[0]["label_binding_ref"]["label_contract"] == R.LABEL
+    assert [trace_path.read_bytes(), payload.read_bytes()] == original
+    assert A.cursor_current(data, cursor)
+    assert A.process_date(data, DAY, stop_at=time.monotonic() + 5)["delta"] == 0
+
+def test_native_path_label_index_reuses_complete_partitions(tmp_path, monkeypatch):
+    from src.engine.scalping import continuous_reversal_source as source
+
+    data, _, _, _ = native_path_sources(tmp_path, monkeypatch)
+    A.process_date(data, DAY, stop_at=time.monotonic() + 15)
+    root = A.namespace(data)
+    cursor = A.read_json(root / DAY / "cursor.json")
+    monkeypatch.setattr(
+        source,
+        "iter_normalized_symbols",
+        lambda *a: pytest.fail("unchanged source rescanned"),
+    )
+    db = A.label_index(root, cursor, data_root=data, stop_at=time.monotonic() + 5)
+    db.close()
+
+
+@pytest.mark.parametrize('failure',['interrupt','corrupt'])
+def test_label_index_commits_verified_partitions_before_later_failure(tmp_path,monkeypatch,failure):
+    root=tmp_path/'research'
+    parts=[A.write_partition(root,[dict(row(identity=name,origin='confirmation_replay'),auxiliary_hash=None)])
+        for name in ('first','second')]
+    cursor=dict(source_date=DAY,generation='a'*64,partitions=parts)
+    original=A.projection_rows
+    reads=[]
+    def interrupted(selected):
+        reads.append(selected[0]['sha256'])
+        if selected[0]==parts[1]:
+            if failure=='interrupt':raise KeyboardInterrupt()
+            raise ValueError('projection_reference_changed')
+        yield from original(selected)
+    monkeypatch.setattr(A,'projection_rows',interrupted)
+    with pytest.raises(KeyboardInterrupt if failure=='interrupt' else ValueError):
+        A.label_index(root,cursor)
+    path=root/DAY/cursor['generation']/'label_bindings.sqlite'
+    with sqlite3.connect(path) as db:
+        assert db.execute('SELECT partition FROM loaded').fetchall()==[(parts[0]['sha256'],)]
+        assert db.execute('SELECT count(*) FROM labels').fetchone()[0]>0
+    reads.clear()
+    def resumed(selected):
+        reads.append(selected[0]['sha256'])
+        yield from original(selected)
+    monkeypatch.setattr(A,'projection_rows',resumed)
+    db=A.label_index(root,cursor)
+    assert reads==[parts[1]['sha256']]
+    assert db.execute('SELECT count(*) FROM loaded').fetchone()[0]==2
+    db.close()
+
+
+def test_label_index_stops_at_budget_and_resumes_without_rescanning(tmp_path,monkeypatch):
+    root=tmp_path/'research'
+    parts=[A.write_partition(root,[dict(row(identity=name,origin='confirmation_replay'),auxiliary_hash=None)])
+        for name in ('first','second')]
+    cursor=dict(source_date=DAY,generation='a'*64,partitions=parts)
+    clock=[0]
+    monkeypatch.setattr(A.time,'monotonic',lambda:clock[0])
+    original=A._index_label
+    def indexed(db,value):
+        original(db,value)
+        clock[0]=5
+    monkeypatch.setattr(A,'_index_label',indexed)
+    with pytest.raises(A.Deferred,match='label_projection_wall_budget'):
+        A.label_index(root,cursor,stop_at=4)
+    clock[0]=0
+    monkeypatch.setattr(A,'_index_label',original)
+    db=A.label_index(root,cursor,stop_at=4)
+    assert db.execute('SELECT count(*) FROM loaded').fetchone()[0]==2
+    db.close()
+
+@pytest.mark.parametrize("failure", ["crc", "changed", "header"])
+@pytest.mark.parametrize("compressed", [False, True])
+def test_native_label_dependency_failure_preserves_trace_population(
+    tmp_path, monkeypatch, failure, compressed
+):
+    from src.engine.scalping import continuous_reversal_source as source
+
+    data, trace_path, _, normalized = native_path_sources(tmp_path, monkeypatch)
+    if compressed:
+        write_gzip(Path(str(trace_path) + ".gz"), trace_path.read_bytes())
+        trace_path.unlink()
+    if failure in {"crc", "header"}:
+        if failure == "crc":
+            content = bytearray(normalized.read_bytes())
+            content[-5] ^= 1
+            normalized.write_bytes(content)
+        else:
+            content = json.loads(gzip.decompress(normalized.read_bytes()))
+            content["namespace_contract"]["native_transport_epoch"] = "collector_epoch"
+            write_gzip(normalized, json.dumps(content).encode())
+        path = (
+            data
+            / "report/continuous_reversal_operating"
+            / DAY
+            / "machine-comparison.json"
+        )
+        report = A.read_json(path)
+        report["partitions"][0]["normalized_source"]["sha256"] = A.file_hash(normalized)
+        A.atomic(path, R.seal(report))
+    else:
+        original = source.iter_normalized_symbols
+
+        def changed(path, **kwargs):
+            yield from original(path, **kwargs)
+            with Path(path).open("ab") as handle:
+                handle.write(b"changed")
+
+        monkeypatch.setattr(source, "iter_normalized_symbols", changed)
+    with pytest.raises(A.Deferred, match="native_label_source"):
+        A.process_date(data, DAY, stop_at=time.monotonic() + 15)
+    cursor = A.read_json(A.namespace(data) / DAY / "cursor.json")
+    assert cursor["status"] == "in_progress"
+    assert (
+        cursor["source_descriptor"]["sources"][cursor["source_index"]]["kind"]
+        == "natural_trace"
+    )
+    assert not cursor.get("terminal_path")
+    assert not any(p["rows"] for p in cursor["partitions"])
+    path = A.namespace(data) / DAY / cursor["generation"] / "label_bindings.sqlite"
+    with sqlite3.connect(path) as db:
+        assert (
+            db.execute(
+                "SELECT count(*) FROM labels WHERE id LIKE 'native-label:%'"
+            ).fetchone()[0]
+            == 0
+        )
+
+
+def test_native_path_labels_cover_multiple_captured_events(tmp_path, monkeypatch):
+    data, trace_path, payload_path, _ = native_path_sources(tmp_path, monkeypatch)
+    body = json.loads(payload_path.read_text())
+    trace_row = json.loads(trace_path.read_text())
+    assessment = body["source"]["assessment"]
+    event = assessment["event"]
+    at = datetime.fromisoformat(event["at"]) + timedelta(seconds=1)
+    event.update(
+        at=at.isoformat(),
+        epoch=at.timestamp(),
+        native_sequence=8,
+        event_id=f"{DAY}:SOR:SOR_REGULAR:005930:3:8",
+        canonical_opportunity_id="canonical2",
+    )
+    assessment.update(event_id=event["event_id"], opportunity_key="canonical2")
+    body["label_context"]["evaluation_attempt_id"] = "attempt2"
+    body["source"]["exact_payload"]["evaluation_attempt_id"] = "attempt2"
+    body["captured_at"] = (at + timedelta(seconds=1)).isoformat()
+    native = body["runtime_consumption"]["continuous_reversal"]
+    native.update(
+        captured_at=body["captured_at"],
+        event_id=event["event_id"],
+        snapshot_read_at=at.timestamp() + 0.5,
+        exact_payload_sha256=R.native_digest(body["source"]["exact_payload"]),
+        assessment_sha256=R.native_digest(assessment),
+    )
+    body["machine_observation_sha256"] = R.native_digest(
+        {k: v for k, v in body.items() if k != "machine_observation_sha256"}
+    )
+    trace_row.update(
+        evaluation_attempt_id="attempt2",
+        decision_ts=(at + timedelta(seconds=2)).isoformat(),
+        continuous_reversal_consumption=native,
+        machine_observation_sha256=body["machine_observation_sha256"],
+    )
+    with payload_path.open("a") as handle:
+        handle.write(json.dumps(body) + "\n")
+    with trace_path.open("a") as handle:
+        handle.write(json.dumps(trace_row) + "\n")
+    A.process_date(data, DAY, stop_at=time.monotonic() + 15)
+    cursor = A.read_json(A.namespace(data) / DAY / "cursor.json")
+    rows = list(A.projection_rows(cursor["partitions"]))
+    assert len(rows) == 2 and all(row["outcome"] == "W" for row in rows)
+    assert {row["label_binding_ref"]["point_index"] for row in rows} == {0, 1}
+
+
+def test_legacy_missing_ws_namespace_never_labels_new_native_source(
+    tmp_path, monkeypatch
+):
+    from src.engine.scalping.continuous_reversal_source import iter_normalized_symbols
+
+    _, _, _, path = native_path_sources(tmp_path, monkeypatch)
+    content = json.loads(gzip.decompress(path.read_bytes()))
+    expected = {
+        k: content[k]
+        for k in (
+            "day",
+            "venue",
+            "session",
+            "runtime_effect",
+            "columns",
+            "namespace_contract",
+        )
+    }
+    content["columns"] = content["columns"][:11]
+    content.pop("namespace_contract")
+    content["symbols"]["005930"] = [
+        point[:11] for point in content["symbols"]["005930"]
+    ]
+    write_gzip(path, json.dumps(content).encode())
+    assert (
+        list(
+            iter_normalized_symbols(
+                path, expected_metadata=expected, legacy_native_columns=True
+            )
+        )
+        == []
+    )
+    with pytest.raises(ValueError, match="namespace_contract_invalid"):
+        list(iter_normalized_symbols(path, expected_metadata=expected))
+
+
+def test_native_label_hard_interruption_replays_compressed_trace(tmp_path, monkeypatch):
+    data, trace_path, _, _ = native_path_sources(tmp_path, monkeypatch)
+    write_gzip(Path(str(trace_path) + ".gz"), trace_path.read_bytes())
+    trace_path.unlink()
+    original = A.index_native_path_labels
+
+    def interrupt(*args, **kwargs):
+        raise KeyboardInterrupt()
+
+    monkeypatch.setattr(A, "index_native_path_labels", interrupt)
+    with pytest.raises(KeyboardInterrupt):
+        A.process_date(data, DAY, stop_at=time.monotonic() + 15)
+    cursor = A.read_json(A.namespace(data) / DAY / "cursor.json")
+    assert cursor["compressed_in_progress"]["label_dependency_pending"] is True
+    monkeypatch.setattr(A, "index_native_path_labels", original)
+    A.process_date(data, DAY, stop_at=time.monotonic() + 15)
+    cursor = A.read_json(A.namespace(data) / DAY / "cursor.json")
+    rows = list(A.projection_rows(cursor["partitions"]))
+    assert len(rows) == 1 and rows[0]["outcome"] == "W"
+
+
+def test_native_label_uses_zero_eligible_census_without_decoding_excluded_paths(
+    tmp_path, monkeypatch
+):
+    from src.engine.scalping import continuous_reversal_source as source
+
+    data, _, _, path = native_path_sources(tmp_path, monkeypatch)
+    content = json.loads(gzip.decompress(path.read_bytes()))
+    for point in content["symbols"]["005930"]:
+        point[8] = 0
+    write_gzip(path, json.dumps(content).encode())
+    report_path = (
+        data / "report/continuous_reversal_operating" / DAY / "machine-comparison.json"
+    )
+    report = A.read_json(report_path)
+    part = report["partitions"][0]
+    part["normalized_source"].update(
+        sha256=A.file_hash(path), rows=3, issues={"source_epoch_unverified": 3}
+    )
+    part["points"] = 0
+    A.atomic(report_path, R.seal(report))
+    monkeypatch.setattr(
+        source,
+        "iter_normalized_symbols",
+        lambda *a, **k: pytest.fail("excluded source decoded"),
+    )
+    A.process_date(data, DAY, stop_at=time.monotonic() + 15)
+    cursor = A.read_json(A.namespace(data) / DAY / "cursor.json")
+    rows = list(A.projection_rows(cursor["partitions"]))
+    assert len(rows) == 1 and rows[0]["outcome"] == "U"
+    assert cursor["gaps"]["replay_upstream_source_epoch_unverified"] == 3
+
+
+def test_native_path_window_keeps_original_index_and_quiet_horizon_boundary(
+    tmp_path, monkeypatch
+):
+    data, _, _, path = native_path_sources(tmp_path, monkeypatch)
+    content = json.loads(gzip.decompress(path.read_bytes()))
+    rows = content["symbols"]["005930"]
+    start = rows[0][0]
+    for point in rows:
+        point[3] = 100
+    prior = list(rows[0])
+    prior[0] = start - 10000
+    prior[2] = 0
+    prior[12] = 6
+    boundary = list(rows[-1])
+    boundary[0] = start + 5000
+    boundary[2] = 4
+    boundary[12] = 10
+    content["symbols"]["005930"] = [prior, *rows, boundary]
+    write_gzip(path, json.dumps(content).encode())
+    report_path = (
+        data / "report/continuous_reversal_operating" / DAY / "machine-comparison.json"
+    )
+    report = A.read_json(report_path)
+    report["partitions"][0]["normalized_source"]["sha256"] = A.file_hash(path)
+    A.atomic(report_path, R.seal(report))
+    A.process_date(data, DAY, stop_at=time.monotonic() + 15)
+    cursor = A.read_json(A.namespace(data) / DAY / "cursor.json")
+    row = list(A.projection_rows(cursor["partitions"]))[0]
+    assert row["outcome"] == "F" and row["label_binding_ref"]["point_index"] == 1
+
+
 def write_gzip(path, value):
     path.parent.mkdir(parents=True, exist_ok=True)
     with gzip.open(path, "wb") as handle:
         handle.write(value)
+
+
+@pytest.mark.parametrize("native", [False, True])
+def test_compression_rebind_preserves_projections_before_cumulative(tmp_path, monkeypatch, native):
+    from src.tests.test_main_market_weakness_research_automation import setup_sources
+    data, trace_path, _ = setup_sources(tmp_path, monkeypatch)
+    paths = [trace_path]
+    if native:
+        body, t = native_capture()
+        trace_path.write_text(json.dumps(t) + "\n")
+        p = data / "ai_decision_payloads" / ("ai_decision_payloads_" + DAY + ".jsonl")
+        p.parent.mkdir(); p.write_text(json.dumps(body) + "\n"); paths.append(p)
+        monkeypatch.setattr(A, "scope_contract", lambda *a, **k: {})
+    A.process_date(data, DAY, stop_at=time.monotonic() + 10)
+    old = A.read_json(A.namespace(data) / DAY / "cursor.json")
+    original = {k: Path(old[k]).read_bytes() for k in ("manifest_path", "daily_path", "terminal_path")}
+    before = A.cumulative(data, stop_at=time.monotonic() + 10)
+    for p in paths:
+        write_gzip(Path(str(p) + ".gz"), p.read_bytes()); p.unlink()
+    assert not A.comparison_current(data, before)
+    monkeypatch.setattr(A, "gzip_trace_records", lambda *a, **k: pytest.fail("trace replayed"))
+    monkeypatch.setattr(A, "native_records", lambda *a, **k: pytest.fail("native replayed"))
+    A.process_date(data, DAY, stop_at=time.monotonic() + 10)
+    new = A.read_json(A.namespace(data) / DAY / "cursor.json")
+    assert new["representation_parent"]["generation"] == old["generation"]
+    assert new["generation"] != old["generation"]
+    assert new["partitions"] == old["partitions"]
+    assert new["gaps"] == old["gaps"] and new["source_census"] == old["source_census"]
+    assert all(Path(old[k]).read_bytes() == raw for k, raw in original.items())
+    assert not A.comparison_current(data, before)
+    after = A.cumulative(data, stop_at=time.monotonic() + 10)
+    assert A.comparison_current(data, after)
+    assert A.process_date(data, DAY, stop_at=time.monotonic() + 5)["delta"] == 0
+
+
+@pytest.mark.parametrize("damage", ["content", "extra", "ranges", "code", "listing", "dependency", "census"])
+def test_compression_rebind_rejects_changed_or_incomplete_evidence(tmp_path, monkeypatch, damage):
+    from src.tests.test_main_market_weakness_research_automation import setup_sources
+    data, p, _ = setup_sources(tmp_path, monkeypatch)
+    A.process_date(data, DAY, stop_at=time.monotonic() + 10)
+    prior = A.read_json(A.namespace(data) / DAY / "cursor.json")
+    raw = p.read_bytes()
+    write_gzip(Path(str(p) + ".gz"), raw.replace(b"BLOCK", b"WAIT_") if damage == "content"
+               else raw + b"{}\n" if damage == "extra" else raw)
+    p.unlink()
+    descriptor = copy.deepcopy(prior["source_descriptor"])
+    descriptor["sources"] = A.source_plan(data, DAY)
+    if damage == "ranges": prior["source_ranges"] = []
+    elif damage == "code": descriptor["code"] = "new-code"
+    elif damage == "listing": descriptor["listing"] = {"semantic_sha256": "changed"}
+    elif damage == "dependency": descriptor["dependencies"] = [{"status": "missing"}]
+    elif damage == "census": prior["source_census"] = {"natural_trace": 999}
+    assert A.rebind_compressed_sources(A.namespace(data), prior, descriptor,
+                                       stop_at=time.monotonic() + 5) is None
+
+
+def test_listing_compression_rebind_checks_native_semantic_hash(tmp_path, monkeypatch):
+    from src.tests.test_main_market_weakness_research_automation import setup_sources
+    data, _, _ = setup_sources(tmp_path, monkeypatch)
+    p = data / "master.json"; p.write_text('{"listing":"KOSPI"}')
+    monkeypatch.setattr(A, "listing_lookup", lambda *a: (lambda _: "KOSPI", A.read_source_json(p)[1]))
+    A.process_date(data, DAY, stop_at=time.monotonic() + 10)
+    old = A.read_json(A.namespace(data) / DAY / "cursor.json")
+    write_gzip(Path(str(p) + ".gz"), p.read_bytes()); p.unlink()
+    A.process_date(data, DAY, stop_at=time.monotonic() + 10)
+    new = A.read_json(A.namespace(data) / DAY / "cursor.json")
+    assert new["representation_parent"]["generation"] == old["generation"]
+    assert A.cursor_current(data, new)
+    write_gzip(Path(str(p) + ".gz"), b'{"listing":"KOSDAQ"}')
+    assert not A.cursor_current(data, new)
+
+
+def test_rebind_cache_avoids_second_read_and_refuses_new_physical_generation(tmp_path, monkeypatch):
+    from src.tests.test_main_market_weakness_research_automation import setup_sources
+    data, p, _ = setup_sources(tmp_path, monkeypatch)
+    A.process_date(data, DAY, stop_at=time.monotonic() + 10)
+    prior = A.read_json(A.namespace(data) / DAY / "cursor.json")
+    archive = Path(str(p) + ".gz")
+    write_gzip(archive, p.read_bytes()); p.unlink()
+    descriptor = dict(prior["source_descriptor"], sources=A.source_plan(data, DAY))
+    first = A.rebind_compressed_sources(A.namespace(data), prior, descriptor, stop_at=time.monotonic() + 5)
+    monkeypatch.setattr(A, "source_handle", lambda *a: pytest.fail("verified archive reread"))
+    assert A.rebind_compressed_sources(A.namespace(data), prior, descriptor, stop_at=time.monotonic() + 5) == first
+    archive.write_bytes(archive.read_bytes()[:-4])
+    with pytest.raises(A.Deferred, match="source_changed"):
+        A.rebind_compressed_sources(A.namespace(data), prior, descriptor, stop_at=time.monotonic() + 5)
+
+
+def test_compression_crc_failure_cannot_publish_successor(tmp_path, monkeypatch):
+    from src.tests.test_main_market_weakness_research_automation import setup_sources
+    data, p, _ = setup_sources(tmp_path, monkeypatch)
+    A.process_date(data, DAY, stop_at=time.monotonic() + 10)
+    cursor = A.namespace(data) / DAY / "cursor.json"
+    original = cursor.read_bytes()
+    archive = Path(str(p) + ".gz")
+    write_gzip(archive, p.read_bytes()); p.unlink()
+    archive.write_bytes(archive.read_bytes()[:-4])
+    with pytest.raises(EOFError):
+        A.process_date(data, DAY, stop_at=time.monotonic() + 5)
+    assert cursor.read_bytes() == original
 
 
 def test_gzip_only_day_discovery_and_reader_without_operating_directory(
@@ -1589,7 +2160,7 @@ def test_frozen_observer_contract_damage_is_explicit(tmp_path, field, value):
         A.observations(data, DAY, observer_snapshot=A.stat_receipt(path))
 
 
-@pytest.mark.parametrize("mode", ["missing", "resolved", "mixed"])
+@pytest.mark.parametrize("mode", ["missing", "resolved", "mixed", "partial", "invalid_issues"])
 def test_retained_replay_label_chain_reports_epoch_gap_without_inventing_outcome(
     tmp_path, monkeypatch, mode
 ):
@@ -1613,6 +2184,9 @@ def test_retained_replay_label_chain_reports_epoch_gap_without_inventing_outcome
         if resolved
         else []
     )
+    if mode == "partial":
+        records = records * 3
+        monkeypatch.setattr(A, "CHUNK_ROWS", 1)
     normalized = data / "normalized.json"
     normalized.write_text("retained source")
     report = R.seal(
@@ -1628,7 +2202,9 @@ def test_retained_replay_label_chain_reports_epoch_gap_without_inventing_outcome
                         day=DAY,
                         path=str(normalized),
                         sha256=A.file_hash(normalized),
-                        issues={} if resolved else dict(source_epoch_unverified=25),
+                        issues=([] if mode == "invalid_issues" else
+                            {} if mode in {"resolved", "mixed"} else
+                            dict(source_epoch_unverified=25, zero=0, negative=-1, boolean=True, text="3")),
                     ),
                     records_object=1,
                     records_sha256=R.digest(records),
@@ -1679,6 +2255,11 @@ def test_retained_replay_label_chain_reports_epoch_gap_without_inventing_outcome
         data / "ai_decision_trace" / f"ai_decision_trace_{DAY}.jsonl.gz",
         (json.dumps(t) + "\n").encode(),
     )
+    if mode == "invalid_issues":
+        path = data / "report/continuous_reversal_operating" / DAY / "machine-comparison.json"
+        with pytest.raises(ValueError, match="replay_upstream_issues_invalid"):
+            list(A.replay_records(data, DAY, A.stat_receipt(path), lambda _: "KOSPI"))
+        return
     A.process_date(data, DAY, stop_at=time.monotonic() + 5)
     cursor = A.read_json(A.namespace(data) / DAY / "cursor.json")
     daily = A.check_seal(A.read_json(cursor["daily_path"]))
@@ -1690,8 +2271,15 @@ def test_retained_replay_label_chain_reports_epoch_gap_without_inventing_outcome
     assert len(natural) == 1 and natural[0]["outcome"] == ("W" if resolved else "U")
     if resolved:
         assert natural[0]["label_binding"] == "exact_event_time_actual_ask"
-    if mode == "resolved":
+    if mode in {"resolved", "partial"}:
         assert "replay_empty_partition" not in daily["input_exclusions"]
+        if mode == "partial":
+            assert daily["input_exclusions"]["replay_upstream_source_epoch_unverified"] == 25
+            assert not any("replay_upstream_" + key in daily["input_exclusions"] for key in ("zero", "negative", "boolean", "text"))
+            path = data / "report/continuous_reversal_operating" / DAY / "machine-comparison.json"
+            resumed = list(A.replay_records(data, DAY, A.stat_receipt(path), lambda _: "KOSPI", start=[0, 1]))
+            assert len(resumed) == 2
+            assert sum(chunk[3].get("replay_upstream_source_epoch_unverified", 0) for chunk in resumed) == 25
     else:
         assert daily["input_exclusions"]["replay_empty_partition"] == 1
         assert (
@@ -1761,7 +2349,7 @@ def test_early_night_defer_publishes_latest_without_reservation_or_source_reads(
     A.publish_night_status(root, completed)
     original = (root / "last_completed_computation.json").read_bytes()
     reservation = state_path.read_bytes()
-    result = A.scheduled(tmp_path)
+    result = A.scheduled(tmp_path, source_date=DAY)
     assert result["status"] == "deferred_resource_or_window"
     assert result["reason"] == reason
     assert result["attempted_at_kst"] == now.isoformat()
@@ -1773,3 +2361,775 @@ def test_early_night_defer_publishes_latest_without_reservation_or_source_reads(
     assert (root / "last_completed_computation.json").read_bytes() == original
     assert not (root / "schedule_cursor.json").exists()
     assert not list((root / "attempts").glob("*.json"))
+
+
+def effective_registry_capture(data, monkeypatch, *, compact=True, inherited=False):
+    """Real registry/wire/overlay owners and the original native receipt."""
+
+    from src.engine.scalping import reversal_auxiliary_intraday as I
+    from src.engine.scalping import reversal_auxiliary_registry as G
+    from src.engine.scalping import reversal_auxiliary_research_wire as W
+    from src.engine.scalping import continuous_reversal_policy_v6 as V
+    from src.tests.test_reversal_extended_policy import FIXTURES
+    from src.utils import constants
+
+    monkeypatch.setattr(constants, "DATA_DIR", data)
+    old = G.definition(
+        G.A.V1.ARMS[1], input_version="continuous_reversal_union_auxiliary_v3"
+    )
+    G.register(data, old)
+    definition = (
+        G.compact_definition(old, research_wire_contract=W.contract())
+        if compact
+        else old
+    )
+    G.register(data, definition)
+    inp, prompt, schema = G.production_request(
+        tuple(next(iter(FIXTURES.values()))[k] for k in ("event", "source")), definition
+    )
+    bundle, _ = source_bundle(data)
+    f = bundle["continuous_reversal"]
+    f.update(
+        schema=V.SCHEMA,
+        auxiliary_report_sha256="a" * 64,
+        report_file_sha256={},
+        operating_manifest={"detector_manifest_hash": "d" * 64},
+    )
+    f["machine_cells"]["samsung|REGULAR|ALL"]["routes"]["SOR"]["backend"] = "union_v6"
+    p = f["auxiliary_cells"]["samsung|REGULAR|ALL"]["routes"]["SOR"]
+    p["payload"] = dict(
+        arm=old["base_arm"],
+        binding=G.projector(old["input_version"]).binding(old["base_arm"]),
+    )
+    p["payload_sha256"] = R.digest(p["payload"])
+    f.pop("family_sha256")
+    f["family_sha256"] = R.digest(f)
+    bundle.pop("bundle_sha256")
+    bundle["bundle_sha256"] = R.digest(bundle)
+    A.atomic(
+        data
+        / "runtime/mechanistic_entry_policy/generations"
+        / (bundle["bundle_sha256"] + ".json"),
+        bundle,
+    )
+    sid = "samsung|REGULAR|ALL|SOR"
+    if inherited:
+        report = R.seal(
+            dict(
+                auxiliary_registry_bindings={sid: definition["registry_sha256"]},
+                auxiliary_reader_code_hashes=I.code_hashes(),
+            )
+        )
+        path = (
+            data
+            / "runtime/mechanistic_entry_policy/sources"
+            / ("reversal-" + "a" * 64 + ".json")
+        )
+        A.atomic(path, report)
+        f["report_file_sha256"]["auxiliary"] = A.file_hash(path)
+        f.pop("family_sha256")
+        f["family_sha256"] = R.digest(f)
+        bundle.pop("bundle_sha256")
+        bundle["bundle_sha256"] = R.digest(bundle)
+        A.atomic(
+            data
+            / "runtime/mechanistic_entry_policy/generations"
+            / (bundle["bundle_sha256"] + ".json"),
+            bundle,
+        )
+    overlay = R.seal(
+        dict(
+            schema=I.SCHEMA,
+            authority=I.AUTHORITY,
+            day=DAY,
+            effective_from=DAY + "T09:00:00+09:00",
+            base_bundle_sha256=bundle["bundle_sha256"],
+            base_family_sha256=f["family_sha256"],
+            detector_manifest_hash="d" * 64,
+            bindings={sid: definition["registry_sha256"]},
+            code_hashes=I.code_hashes(),
+        )
+    )
+    A.atomic(
+        I.root(data) / "generations" / (overlay["artifact_content_sha256"] + ".json"),
+        overlay,
+    )
+    body, t = native_capture()
+    a = body["source"]["assessment"]
+    a.update(
+        route="SOR",
+        auxiliary_registry_sha256=definition["registry_sha256"],
+        auxiliary_binding=G.binding(definition),
+    )
+    if not inherited:
+        a["auxiliary_overlay_sha256"] = overlay["artifact_content_sha256"]
+    if compact:
+        env = G.envelope(inp, definition)
+        a.update(
+            auxiliary_wire_contract=env["contract"], auxiliary_wire_hashes=env["hashes"]
+        )
+    body["source"]["auxiliary_request"] = dict(
+        input=inp, prompt=prompt, response_schema=schema
+    )
+    body["bundle_sha256"] = bundle["bundle_sha256"]
+    body["runtime_consumption"]["bundle_sha256"] = bundle["bundle_sha256"]
+    native = body["runtime_consumption"]["continuous_reversal"]
+    native.update(
+        bundle_sha256=bundle["bundle_sha256"],
+        family_sha256=f["family_sha256"],
+        machine_component_sha256=R.digest(f["machine_cells"]),
+        auxiliary_component_sha256=R.digest(f["auxiliary_cells"]),
+        **{
+            k + "_sha256": R.digest(v)
+            for k, v in body["source"]["auxiliary_request"].items()
+        },
+    )
+    rehash_native(body)
+    t.update(
+        machine_bundle_sha256=bundle["bundle_sha256"],
+        entry_ai_component_sha256=native["auxiliary_component_sha256"],
+        provider_called=True,
+        decision_evaluation_status="evaluated",
+        result_source="live",
+        entry_ai_risk_verdict="PASS",
+        prompt_version=G.binding(definition)["prompt_version"],
+        machine_observation_sha256=body["machine_observation_sha256"],
+        entry_auxiliary_response_contract_valid=True,
+        entry_auxiliary_response_contract_errors=[],
+        entry_ai_contract_valid=True,
+    )
+    return body, t, definition, bundle, overlay
+
+
+def bind_effective_capture(data, body, t):
+    path = data / "native.jsonl"
+    path.write_text(json.dumps(body) + "\n")
+    chunks = list(
+        A.native_records(dict(path=str(path)), DAY, data, stop_at=time.monotonic() + 10)
+    )
+    native = chunks[0][0][0]
+    projected = R.project_trace(t, DAY, "KOSPI")[0]
+    R.bind_native(projected, native)
+    return projected, native
+
+
+@pytest.mark.parametrize(
+    "compact,inherited", [(False, False), (True, False), (True, True)]
+)
+def test_effective_registry_native_producer_to_selection(
+    tmp_path, monkeypatch, compact, inherited
+):
+    from src.engine.scalping import reversal_auxiliary_registry as G
+
+    body, t, definition, *_ = effective_registry_capture(
+        tmp_path, monkeypatch, compact=compact, inherited=inherited
+    )
+    before = copy.deepcopy(body)
+    projected, native = bind_effective_capture(tmp_path, body, t)
+    assert (
+        projected["native_binding_status"]
+        == projected["auxiliary_binding_status"]
+        == "verified"
+    )
+    assert projected["auxiliary_binding"] == G.binding(definition)
+    assert native["auxiliary_source_refs"] and A.receipts_current(
+        native["auxiliary_source_refs"]
+    )
+    candidate = registry(row())["scopes"][row()["scope_key"]]["candidates"][0]
+    assert R.selection(projected, candidate, dict(grade="B", state="RECOVERY")) is True
+    assert body == before
+
+
+@pytest.mark.parametrize(
+    "defect",
+    [
+        "registry_missing",
+        "overlay_identity",
+        "declaration_missing",
+        "binding",
+        "prompt",
+        "schema",
+        "wire",
+        "future",
+        "scope",
+        "component",
+        "response",
+        "version",
+        "request_hash",
+        "machine_component",
+    ],
+)
+def test_effective_registry_invalid_proof_never_falls_back(
+    tmp_path, monkeypatch, defect
+):
+    from src.engine.scalping import reversal_auxiliary_intraday as I
+    from src.engine.scalping import reversal_auxiliary_registry as G
+    from src.engine.scalping import continuous_reversal_policy_v6 as V
+
+    body, t, value, bundle, overlay = effective_registry_capture(tmp_path, monkeypatch)
+    a = body["source"]["assessment"]
+    if defect == "overlay_identity":
+        a["auxiliary_overlay_sha256"] = "../invalid"
+    elif defect == "registry_missing":
+        (G.directory(tmp_path) / (value["registry_sha256"] + ".json")).unlink()
+    elif defect == "declaration_missing":
+        a.pop("auxiliary_registry_sha256")
+    elif defect == "binding":
+        a["auxiliary_binding"]["prompt_version"] = "other"
+    elif defect in {"prompt", "schema"}:
+        body["source"]["auxiliary_request"][
+            "prompt" if defect == "prompt" else "response_schema"
+        ] = "changed"
+    elif defect == "wire":
+        a["auxiliary_wire_hashes"] = {}
+    elif defect in {"future", "scope"}:
+        if defect == "future":
+            overlay["effective_from"] = DAY + "T10:00:00+09:00"
+        else:
+            overlay["bindings"] = {}
+        overlay = R.seal(overlay)
+        A.atomic(
+            I.root(tmp_path)
+            / "generations"
+            / (overlay["artifact_content_sha256"] + ".json"),
+            overlay,
+        )
+        a["auxiliary_overlay_sha256"] = overlay["artifact_content_sha256"]
+    elif defect == "component":
+        body["runtime_consumption"]["continuous_reversal"][
+            "auxiliary_component_sha256"
+        ] = ("x" * 64)
+    elif defect == "response":
+        t["entry_auxiliary_response_contract_valid"] = False
+    elif defect == "version":
+        t["prompt_version"] = "other"
+    elif defect == "request_hash":
+        body["runtime_consumption"]["continuous_reversal"]["input_sha256"] = "x" * 64
+    elif defect == "machine_component":
+        body["runtime_consumption"]["continuous_reversal"][
+            "machine_component_sha256"
+        ] = ("x" * 64)
+    rehash_native(body)
+    t["machine_observation_sha256"] = body["machine_observation_sha256"]
+    projected, native = bind_effective_capture(tmp_path, body, t)
+    assert projected.get("auxiliary_binding_status") != "verified"
+    if defect != "component":
+        assert (
+            projected["auxiliary_binding"]["registry_sha256"]
+            == value["registry_sha256"]
+        )
+    candidate = registry(row())["scopes"][row()["scope_key"]]["candidates"][0]
+    assert R.selection(projected, candidate, dict(grade="B", state="RECOVERY")) is None
+
+
+def test_effective_registry_report_separates_binding_labels_and_machine(
+    tmp_path, monkeypatch
+):
+    body, t, *_ = effective_registry_capture(tmp_path, monkeypatch)
+    projected, _ = bind_effective_capture(tmp_path, body, t)
+    projected = R.attach_joins(projected, [observation()])
+    projected.update(
+        outcome="U",
+        outcome_reason="native_label_source_contract_missing",
+        machine_axes=[],
+    )
+    agg = R.Aggregator()
+    agg.add(projected)
+    report = agg.comparison("fixture")
+    agg.close()
+    counts = next(iter(report["scope_observations"].values()))["counts"]
+    assert (
+        counts["auxiliary_binding_verified"]
+        == counts["outcome_U_reason_native_label_source_contract_missing"]
+        == 1
+    )
+    assert (
+        next(iter(report["capability_by_scope"].values()))["machine"]
+        == "role_unverified"
+    )
+    assert (
+        projected["outcome"] == "U"
+    )  # A valid request does not repair missing price paths.
+
+
+def test_bounded_cumulative_keeps_older_sources_outside_verified_range(
+    tmp_path, monkeypatch
+):
+    from src.tests.test_main_market_weakness_research_automation import setup_sources
+
+    data, *_ = setup_sources(tmp_path, monkeypatch)
+    A.process_date(data, DAY, stop_at=time.monotonic() + 10)
+    original = A.discover_dates
+    older = "2026-09-30"
+    monkeypatch.setattr(
+        A,
+        "discover_dates",
+        lambda *args, **kwargs: sorted(set(original(*args, **kwargs) + [older])),
+    )
+    # Discovery is independently bounded as well as its declared start.
+    comparison = A.cumulative(
+        data, stop_at=time.monotonic() + 10, from_date=DAY, through_date=DAY
+    )
+    assert comparison["source_scope"]["source_dates"] == [DAY]
+    assert A.comparison_current(data, comparison)
+    assert (
+        not comparison["pending_source_dates"]
+        and not comparison["invalidated_source_dates"]
+    )
+    assert older in A.research_source_scope(data, through_date=DAY)["source_dates"]
+    with pytest.raises(ValueError, match="range_invalid"):
+        A.research_source_scope(data, from_date="2026-12-01", through_date=DAY)
+
+
+@pytest.mark.parametrize(
+    "defect", [None, "different_registry", "missing_registry", "overlay_race"]
+)
+def test_notifier_compares_current_effective_registry(tmp_path, monkeypatch, defect):
+    from src.engine.scalping import reversal_auxiliary_intraday as I
+    from src.engine.scalping import reversal_auxiliary_registry as G
+    from src.engine.scalping import mechanistic_entry_runtime_policy as P
+
+    body, t, value, bundle, overlay = effective_registry_capture(tmp_path, monkeypatch)
+    scope = A.scope_contract(
+        tmp_path, bundle["bundle_sha256"], "samsung|REGULAR|ALL", "SOR", cache={}
+    )
+    candidate = dict(
+        definition=dict(
+            kind="post_auxiliary_withhold_cf",
+            policy_scope=scope["policy_scope"],
+            scope_parent_machine_payload_sha256=scope[
+                "scope_parent_machine_payload_sha256"
+            ],
+            cohort_contract=scope["cohort_contract"],
+            auxiliary_binding=G.binding(value),
+            auxiliary_hash=R.digest(G.binding(value)),
+        )
+    )
+    monkeypatch.setattr(P, "load_effective", lambda **kwargs: bundle)
+    pointer = I.root(tmp_path) / "current.json"
+    A.atomic(pointer, overlay)
+
+    def current(*args):
+        if defect == "overlay_race":
+            A.atomic(pointer, R.seal(dict(overlay, changed=True)))
+        return dict(
+            overlay,
+            bindings={} if defect == "different_registry" else overlay["bindings"],
+        )
+
+    monkeypatch.setattr(I, "at_confirmation", current)
+    if defect == "missing_registry":
+        (G.directory(tmp_path) / (value["registry_sha256"] + ".json")).unlink()
+    assert N.current_parent_matches(tmp_path, candidate) is (defect is None)
+
+
+def test_registry_trace_without_native_cannot_bypass_selection():
+    t = trace()
+    t.update(
+        provider_called=True,
+        decision_evaluation_status="evaluated",
+        result_source="live",
+        entry_ai_risk_verdict="PASS",
+        prompt_version="main_auxiliary_prompt_registry_v2:" + "a" * 64,
+        entry_ai_component_sha256="b" * 64,
+    )
+    projected = R.project_trace(t, DAY, "KOSPI")[0]
+    projected["identity_grade"] = "canonical"
+    candidate = registry(row())["scopes"][row()["scope_key"]]["candidates"][0]
+    assert R.selection(projected, candidate, dict(grade="B", state="RECOVERY")) is None
+
+
+def test_unverified_registry_does_not_seed_or_merge_verified_scope(
+    tmp_path, monkeypatch
+):
+    body, t, *_ = effective_registry_capture(tmp_path, monkeypatch)
+    valid, _ = bind_effective_capture(tmp_path, body, t)
+    valid = R.attach_joins(valid, [observation()])
+    bad = R.attach_joins(
+        dict(valid, auxiliary_binding_status="request_or_component_binding_unverified"),
+        [observation()],
+    )
+    assert bad["scope_key"] != valid["scope_key"]
+    a = R.Aggregator()
+    a.add(bad)
+    daily = a.daily(DAY)
+    a.close()
+    assert not next(iter(daily["scopes"].values()))["feature_histograms"]
+    assert not next(iter(R.freeze_candidates(daily, "g")["scopes"].values()))[
+        "candidates"
+    ]
+
+
+@pytest.mark.parametrize("missing", [True, False])
+def test_failed_registry_dependency_repair_invalidates_projection(
+    tmp_path, monkeypatch, missing
+):
+    from src.engine.scalping import reversal_auxiliary_intraday as I
+    from src.engine.scalping import reversal_auxiliary_registry as G
+
+    body, t, value, _, overlay = effective_registry_capture(tmp_path, monkeypatch)
+    path = (
+        G.directory(tmp_path) / (value["registry_sha256"] + ".json")
+        if missing
+        else I.root(tmp_path)
+        / "generations"
+        / (overlay["artifact_content_sha256"] + ".json")
+    )
+    original = path.read_bytes()
+    if missing:
+        path.unlink()
+    else:
+        path.write_text("{}")
+    projected, native = bind_effective_capture(tmp_path, body, t)
+    assert projected["auxiliary_binding_status"] != "verified"
+    assert A.receipts_current(native["auxiliary_source_refs"])
+    path.write_bytes(original)
+    assert not A.receipts_current(native["auxiliary_source_refs"])
+    assert (
+        bind_effective_capture(tmp_path, body, t)[0]["auxiliary_binding_status"]
+        == "verified"
+    )
+
+
+@pytest.mark.parametrize("changed", [None, "request", "registry"])
+def test_effective_registry_cache_reuses_only_immutable_provenance(
+    tmp_path, monkeypatch, changed
+):
+    from src.engine.scalping import reversal_auxiliary_intraday as I
+    from src.engine.scalping import reversal_auxiliary_registry as G
+
+    body, t, value, *_ = effective_registry_capture(tmp_path, monkeypatch)
+    second = copy.deepcopy(body)
+    if changed == "request":
+        second["source"]["auxiliary_request"]["prompt"] += " changed"
+        second["runtime_consumption"]["continuous_reversal"]["prompt_sha256"] = (
+            R.digest(second["source"]["auxiliary_request"]["prompt"])
+        )
+        rehash_native(second)
+    path = tmp_path / "native-pair.jsonl"
+    path.write_text(json.dumps(body) + "\n" + json.dumps(second) + "\n")
+    original = I.validate_record
+    calls = []
+
+    def validate(*args, **kwargs):
+        calls.append(True)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(I, "validate_record", validate)
+    monkeypatch.setattr(A, "CHUNK_ROWS", 1)
+    stream = A.native_records(
+        dict(path=str(path)), DAY, tmp_path, stop_at=time.monotonic() + 10
+    )
+    first = next(stream)[0][0]
+    assert first["effective_auxiliary_status"] == "verified"
+    if changed == "registry":
+        (G.directory(tmp_path) / (value["registry_sha256"] + ".json")).write_text("{}")
+    later = next(stream)[0][0]
+    stream.close()
+    assert (later["effective_auxiliary_status"] == "verified") is (changed is None)
+    assert len(calls) == 1
+
+
+def test_overlay_ancestry_stays_in_cursor_input_not_repeated_projection(tmp_path, monkeypatch):
+    body, t, *_ = effective_registry_capture(tmp_path, monkeypatch)
+    _, native = bind_effective_capture(tmp_path, body, t)
+    native["auxiliary_source_refs"] = [dict(path="/source/" + str(i) + "x" * 1024, status="missing") for i in range(100)]
+    expected_refs = copy.deepcopy(native["auxiliary_source_refs"])
+    db = A.native_index(tmp_path, dict(source_date=DAY, generation="bounded"))
+    try:
+        A.index_native_rows(db, [native], "fixture")
+        projected = R.project_trace(t, DAY, "KOSPI")[0]
+        A.bind_trace_native(projected, db)
+        assert projected["auxiliary_binding_status"] == "verified"
+        part = A.write_partition(tmp_path, [R.attach_joins(projected, [observation()])] * 10)
+        # The same reader limit that rejected the original duplicated ancestry
+        # is scaled down here; production MAX_JSON is unchanged.
+        value = A.check_seal(A.read_json(part["path"], limit=200000))
+        assert len(value["rows"]) == 10
+        assert native["auxiliary_source_refs"] == expected_refs  # Still available to the cursor writer.
+        assert "auxiliary_source_refs" not in json.loads(db.execute("SELECT row FROM native").fetchone()[0])
+    finally:
+        db.close()
+
+
+def test_valid_response_and_registry_are_separate_from_existing_execution_rejection(tmp_path, monkeypatch):
+    body, t, *_ = effective_registry_capture(tmp_path, monkeypatch)
+    t.update(entry_ai_contract_valid=False, entry_post_response_execution_valid=False,
+             entry_ai_contract_errors=['reversal_signal_expired_or_changed'],
+             entry_ai_effective_assessment=dict(effective_verdict='INSUFFICIENT', contract_valid=False))
+    projected, _ = bind_effective_capture(tmp_path, body, t)
+    assert projected['auxiliary_verdict'] == 'PASS'
+    assert projected['auxiliary_response_contract_verified'] is True
+    assert projected['auxiliary_binding_status'] == 'verified'
+    assert projected['auxiliary_execution_status'] == 'rejected'
+    candidate = registry(row())['scopes'][row()['scope_key']]['candidates'][0]
+    assert R.selection(projected, candidate, dict(grade='B', state='RECOVERY')) is None
+    projected = R.attach_joins(projected, [observation()])
+    fixed = registry(projected)
+    agg = R.Aggregator(fixed)
+    agg.add(projected)
+    report = agg.comparison('rejected')
+    agg.close()
+    counts = next(iter(report['scope_observations'].values()))['counts']
+    assert counts['existing_execution_rejected'] == counts['execution_rejected'] == 1
+    assert counts.get('candidate_common_range_gap', 0) == 0
+    assert report['comparisons'][0]['baseline']['W'] == report['comparisons'][0]['baseline']['F'] == 0
+
+
+@pytest.mark.parametrize('effective', [None, 'invalid', []])
+def test_missing_execution_proof_is_not_a_registry_failure_or_baseline(tmp_path, monkeypatch, effective):
+    body, t, *_ = effective_registry_capture(tmp_path, monkeypatch)
+    t.pop('entry_ai_contract_valid')
+    t['entry_ai_effective_assessment'] = effective
+    projected, _ = bind_effective_capture(tmp_path, body, t)
+    assert projected['auxiliary_binding_status'] == 'verified'
+    assert projected['auxiliary_execution_status'] == 'unverified'
+    candidate = registry(row())['scopes'][row()['scope_key']]['candidates'][0]
+    assert R.selection(projected, candidate, dict(grade='B', state='RECOVERY')) is None
+
+
+def test_missing_historical_reader_proof_is_distinct_from_price_source_loss(tmp_path, monkeypatch):
+    import errno
+    from src.engine.scalping import reversal_auxiliary_intraday as I
+    body, t, *_ = effective_registry_capture(tmp_path, monkeypatch)
+    missing = I.root(tmp_path) / 'compatibility' / ('a' * 64 + '.json')
+    def unavailable(*args, **kwargs):
+        raise FileNotFoundError(errno.ENOENT, 'missing', str(missing))
+    monkeypatch.setattr(I, 'validate_record', unavailable)
+    projected, native = bind_effective_capture(tmp_path, body, t)
+    assert projected['auxiliary_binding_status'] != 'verified'
+    assert projected['auxiliary_binding_reason'] == 'historical_reader_compatibility_missing'
+    assert dict(path=str(missing), status='missing') in native['auxiliary_source_refs']
+    projected = R.attach_joins(projected, [observation()])
+    projected.update(outcome='U', outcome_reason='native_label_source_contract_missing')
+    agg = R.Aggregator();agg.add(projected)
+    counts = next(iter(agg.daily(DAY)['scopes'].values()))['counts'];agg.close()
+    assert counts['auxiliary_binding_reason_historical_reader_compatibility_missing'] == 1
+    assert counts['outcome_U_reason_native_label_source_contract_missing'] == 1
+
+
+@pytest.mark.parametrize('offset',[0,[0,0]])
+def test_latest_progress_resumes_after_backlog_using_actual_committed_label_index(tmp_path,monkeypatch,offset):
+    days=[(datetime.fromisoformat(DAY)-timedelta(days=n)).date().isoformat() for n in (3,2,1,0)]
+    root=A.namespace(tmp_path);parts=[A.write_partition(root,[dict(row(identity=name,origin='confirmation_replay'),auxiliary_hash=None)]) for name in ('a','b')]
+    cursor=dict(source_date=DAY,status='in_progress',generation='a'*64,source_index=3,offset=offset,partitions=parts,native_indexed_rows=0)
+    A.atomic(root/DAY/'cursor.json',cursor)
+    monkeypatch.setattr(A,'cursor_current',lambda data,c:c.get('source_date')==DAY)
+    choose=lambda:A.select_source_date(tmp_path,days,night=DAY,check_preflight=lambda:None)
+    assert choose()==DAY
+    db=A.label_index(root,dict(cursor,partitions=parts[:1]));db.close()
+    assert choose()==days[0]
+    assert choose()==DAY, 'committed first partition must receive a resume slot'
+    db=A.label_index(root,cursor);db.close()
+    assert choose()==days[1]
+    assert choose()==DAY, 'committed label progress counts even when cursor offsets are unchanged'
+    assert choose()==days[2]
+    assert choose()==days[0], 'unchanged progress must yield to backlog'
+    saved=A.read_json(root/'schedule_cursor.json');assert saved['last_source_date']==days[0]
+    assert saved['latest_checkpoint_before']['position'][-1]==2
+
+
+@pytest.mark.parametrize('damage',['stale_source','new_generation_no_progress','index_alias','index_invalid'])
+def test_latest_resume_rejects_invalid_or_unchanged_generation_progress(tmp_path,monkeypatch,damage):
+    days=[(datetime.fromisoformat(DAY)-timedelta(days=n)).date().isoformat() for n in (2,1,0)];root=A.namespace(tmp_path)
+    cursor=dict(source_date=DAY,status='in_progress',generation='a'*64,source_index=0,offset=0,partitions=[],native_indexed_rows=0)
+    A.atomic(root/DAY/'cursor.json',cursor)
+    current=[True];monkeypatch.setattr(A,'cursor_current',lambda data,c:current[0] and c.get('source_date')==DAY)
+    choose=lambda:A.select_source_date(tmp_path,days,night=DAY,check_preflight=lambda:None)
+    assert choose()==DAY
+    cursor['source_index']=1
+    if damage=='stale_source':current[0]=False
+    if damage=='new_generation_no_progress':cursor.update(generation='b'*64,source_index=0)
+    path=root/DAY/cursor['generation']/'label_bindings.sqlite';path.parent.mkdir(parents=True,exist_ok=True)
+    if damage=='index_alias':
+        target=tmp_path/'outside.sqlite';target.write_bytes(b'unchanged');path.symlink_to(target)
+    if damage=='index_invalid':path.write_bytes(b'invalid sqlite')
+    A.atomic(root/DAY/'cursor.json',cursor)
+    assert choose()==days[0]
+    assert choose()==days[1]
+    if damage=='index_alias':assert target.read_bytes()==b'unchanged' and path.is_symlink()
+
+
+@pytest.mark.parametrize('bad',[[],dict(generation='unknown',position=[0]*5),dict(generation='a'*64,position=[True]*6),dict(generation='a'*64,position=[0])])
+def test_latest_progress_rejects_malformed_sealed_checkpoint_without_replacing_it(tmp_path,monkeypatch,bad):
+    root=A.namespace(tmp_path);path=root/'schedule_cursor.json'
+    A.atomic(path,R.seal(dict(latest_checkpoint_before=bad,latest_priority_night=DAY,latest_priority_date=DAY)))
+    original=path.read_bytes();monkeypatch.setattr(A,'cursor_current',lambda *a:False)
+    with pytest.raises(ValueError,match='source_rotation_checkpoint_invalid'):
+        A.select_source_date(tmp_path,[DAY],night=DAY,check_preflight=lambda:None)
+    assert path.read_bytes()==original
+
+
+def rejected_trace(kind="preflight", probe=False):
+    _, value = native_capture()
+    value.pop("continuous_reversal_consumption")
+    value.pop("machine_observation_sha256")
+    value.update(
+        provider_called=False,
+        action="DROP",
+        source_event_stage=(
+            "zero_base_probe_machine_only_v1"
+            if probe
+            else "watching_analyze_target_async_v1"
+        ),
+    )
+    if kind == "preflight":
+        value.update(
+            entry_mechanistic_action="source_invalid",
+            result_source="input_preflight_blocked",
+            reason="ai_input_preflight_blocked",
+            machine_source_invalid_receipt=True,
+            machine_evaluation_status="source_quality_blocked_before_assessment",
+        )
+    else:
+        value.update(
+            entry_mechanistic_action=None,
+            result_source="mechanistic_pre_adjudication_rejected",
+            reason="mechanistic_input_contract_invalid",
+            machine_source_invalid_receipt=False,
+            machine_evaluation_status="assessment_contract_invalid",
+            machine_contract_error="reversal_signal_path_changed",
+        )
+    return value
+
+
+@pytest.mark.parametrize("kind", ["preflight", "contract"])
+def test_pre_native_rejection_is_preserved_through_trace_binding(kind):
+    projected, reason = R.project_trace(rejected_trace(kind), DAY, "KOSPI")
+    assert reason is None
+    db = sqlite3.connect(":memory:")
+    db.execute(
+        "CREATE TABLE native(key TEXT PRIMARY KEY,source TEXT,row TEXT,conflict INTEGER)"
+    )
+    A.bind_trace_native(projected, db)
+    db.close()
+    assert projected["native_binding_status"] == "not_adjudicated"
+    assert projected["outcome"] == "U" and projected["entry_ask"] is None
+    assert projected["outcome_reason"] == (
+        "pre_native_input_preflight_blocked"
+        if kind == "preflight"
+        else "pre_native_assessment_contract_invalid"
+    )
+    assert projected["machine_contract_error"] == (
+        None if kind == "preflight" else "reversal_signal_path_changed"
+    )
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("provider_called", True),
+        ("continuous_reversal_consumption", {"pid": 123}),
+        ("entry_mechanistic_action", "ENTER_NOW"),
+        ("machine_evaluation_status", "unknown"),
+    ],
+)
+def test_pre_native_rejection_does_not_hide_unknown_or_consumed_input(field, value):
+    raw = rejected_trace()
+    raw[field] = value
+    row = R.project_trace(raw, DAY, "KOSPI")[0]
+    assert not row.get("pre_native_rejection_reason")
+    assert row["outcome_reason"] == "exact_label_binding_missing"
+
+
+def test_machine_only_probe_trace_is_not_a_live_natural_decision():
+    row = R.project_trace(rejected_trace("contract", probe=True), DAY, "KOSPI")[0]
+    assert row["decision_origin"] == "probe_observation"
+
+
+def test_sealed_preflight_capture_is_rejection_not_corrupt_native_consumption():
+    raw, _ = native_capture()
+    raw["runtime_consumption"].pop("continuous_reversal")
+    raw["runtime_consumption"]["consumed_at"] = raw["captured_at"]
+    raw["source"]["assessment"] = dict(
+        schema="mechanistic_entry_source_invalid_v1",
+        action="source_invalid",
+        reason="ai_input_preflight_blocked",
+    )
+    raw["machine_observation_sha256"] = R.native_digest(
+        {k: v for k, v in raw.items() if k != "machine_observation_sha256"}
+    )
+    assert R.project_native_observation(raw, DAY) == (
+        None,
+        "native_input_preflight_rejected",
+    )
+    raw["source"]["exact_payload"]["stock_code"] = "000000"
+    assert R.project_native_observation(raw, DAY) == (
+        None,
+        "native_observation_binding_invalid",
+    )
+
+
+def historical_registry_capture(data, monkeypatch, defect=None):
+    from src.engine.scalping import reversal_auxiliary_intraday as I
+    from src.engine.scalping import reversal_auxiliary_registry as G
+    from src.engine.scalping import reversal_auxiliary_compatibility as C
+    from src.engine.scalping import continuous_reversal_postclose as P
+    body, t, value, bundle, overlay = effective_registry_capture(data, monkeypatch)
+    origin = data/'frozen-origin'
+    origin.mkdir()
+    old_hashes = {}
+    frozen = []
+    for name in I.code_hashes():
+        p = origin/name
+        p.write_text('# original reader '+name+'\n')
+        old_hashes[name] = A.file_hash(p)
+        frozen.append(dict(path=str(p)))
+    overlay = P.seal(dict(overlay, code_hashes=old_hashes))
+    source = I.root(data)/'generations'/(overlay['artifact_content_sha256']+'.json')
+    A.atomic(source, overlay)
+    body['source']['assessment']['auxiliary_overlay_sha256'] = overlay['artifact_content_sha256']
+    rehash_native(body)
+    t['machine_observation_sha256'] = body['machine_observation_sha256']
+    lineage = data/'original-source.json'
+    lineage.write_text('{"original":true}')
+    inventory = dict(schema='historical_native_reader_source_inventory_v1',root=str(origin),git_commit='a'*40,
+                     source_hashes={x['path']:A.file_hash(x['path']) for x in frozen})
+    if defect == 'inventory':inventory['source_hashes'].pop(frozen[0]['path'])
+    inventory_path = data/'code-inventory.json'
+    A.atomic(inventory_path,P.seal(inventory))
+    original = dict(original_validation_status='pass',bundle_sha256=bundle['bundle_sha256'],
+        original_reader_root=str(origin),original_reader_commit='a'*40,code_inventory_path=str(inventory_path),
+        code_inventory_sha256=A.file_hash(inventory_path),reader_hashes=old_hashes,
+        refs=overlay['bindings'],values={value['registry_sha256']:value},
+        bindings={value['registry_sha256']:G.binding(value)},source_sha256=A.file_hash(source),
+        lineage_sources=[dict(path=str(lineage),sha256=A.file_hash(lineage))])
+    if defect == 'native_status':original['original_validation_status']='fail'
+    if defect == 'native_bundle':original['bundle_sha256']='wrong'
+    if defect == 'native_scope':original['refs']={}
+    if defect == 'registry':original['bindings']={}
+    original_path=data/'original-validation.json'
+    A.atomic(original_path,P.seal(original))
+    evidence=data/'reader-parity.json'
+    A.atomic(evidence,P.seal(dict(schema='reviewed_historical_auxiliary_reader_parity_v1',status='pass',
+        base_bundle_sha256=bundle['bundle_sha256'],source_sha256=A.file_hash(source),
+        v1_bindings_sha256=P.digest(overlay['bindings']),new_reader_hashes=I.code_hashes(),
+        original_reader_result_path=str(original_path),original_reader_result_sha256=A.file_hash(original_path))))
+    C.issue(data,bundle,source,old_hashes,I.code_hashes(),evidence=evidence,frozen_readers=frozen)
+    if defect=='code':Path(frozen[0]['path']).write_text('modified reader')
+    if defect=='lineage':lineage.write_text('{"changed":true}')
+    if defect=='proof_missing':C.path(data,bundle,source,I.code_hashes()).unlink()
+    # Historical research cannot grant present-day native execution eligibility.
+    monkeypatch.setattr(I,'validate_record',lambda *a,**k:pytest.fail('prospective validator called'))
+    monkeypatch.setattr(I,'lineage_sources',lambda *a,**k:pytest.fail('prospective lineage called'))
+    return body,t
+
+
+def test_original_native_validation_binds_historical_registry_without_current_launch_authority(tmp_path,monkeypatch):
+    body,t=historical_registry_capture(tmp_path,monkeypatch)
+    projected,native=bind_effective_capture(tmp_path,body,t)
+    assert projected['native_binding_status']=='verified'
+    assert projected['auxiliary_binding_status']=='verified'
+    assert native['effective_auxiliary_status']=='verified'
+    assert projected['actual_order_submitted'] is False
+    assert projected['allowed_runtime_apply'] is False
+    assert projected['outcome']=='U'
+
+
+@pytest.mark.parametrize('defect',['inventory','native_status','native_bundle','native_scope','registry','code','lineage','proof_missing'])
+def test_historical_reader_proof_never_admits_missing_or_conflicting_evidence(tmp_path,monkeypatch,defect):
+    body,t=historical_registry_capture(tmp_path,monkeypatch,defect)
+    projected,native=bind_effective_capture(tmp_path,body,t)
+    assert projected.get('auxiliary_binding_status')!='verified'
+    assert native['effective_auxiliary_status']=='unverified'
+    assert projected['outcome']=='U'

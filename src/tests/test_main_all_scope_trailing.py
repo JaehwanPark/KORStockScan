@@ -24,9 +24,11 @@ def position():
     return dict(position_key='main:1', evidence_kind='actual_completed', owner='main',
         automatic_management_allowed=True, entry_at=at('2026-10-08T09:00:00'), qty=10, buy_basis_krw=1000,
         route='KRX', item='123456', terminal_status='COMPLETED', cost_model={
-            'buy_cost_krw': 0, 'sell_cost_rate': .0023, 'source_sha256': 'a' * 64},
+            'buy_cost_krw': 0, 'sell_cost_rate': .0023, 'source_sha256': 'a' * 64,
+            'known_at': at('2026-09-29T00:00:00')},
         actual_cost_reconciliation={'status': 'actual_cost_reconciled', 'exact_pnl_krw': 4,
-            'exact_profit_rate': .4, 'receipt_sha256': 'b' * 64, 'raw_sha256': 'c' * 64})
+            'exact_profit_rate': .4, 'receipt_sha256': 'b' * 64, 'raw_sha256': 'c' * 64,
+            'known_at': at('2026-10-08T09:00:01')})
 
 
 def quote(seq, clock, *, bid=100.5, peak=101, qty=10):
@@ -90,6 +92,27 @@ def test_quote_envelope_limit_includes_final_source_hash(monkeypatch):
     size = len(json.dumps(result, sort_keys=True, separators=(',', ':'), allow_nan=False).encode())
     monkeypatch.setattr(replay, 'MAX_QUOTE_ENVELOPE_BYTES', size - 1)
     assert replay.quote_projection(event['ws_data'], **kwargs)['reason'] == 'shared_quote_envelope_budget_exceeded'
+
+
+@pytest.mark.parametrize('fault', [None, 'sha', 'size', 'oversize', 'trailing_bytes', 'truncated', 'bad_base64', 'unknown_codec'])
+def test_quote_storage_is_lossless_bounded_and_keeps_semantic_hash(fault):
+    import base64
+    import json
+    raw = quote(1, '2026-10-08T09:00:01')
+    packed = replay.encode_quote(raw)
+    assert len(json.dumps(packed)) < len(json.dumps(raw))
+    if fault == 'sha': packed['raw_sha256'] = 'b'*64
+    if fault == 'size': packed['raw_bytes'] -= 1
+    if fault == 'oversize': packed['raw_bytes'] = replay.MAX_QUOTE_ENVELOPE_BYTES+1
+    if fault == 'trailing_bytes': packed['payload'] = base64.b64encode(base64.b64decode(packed['payload'])+b'garbage').decode()
+    if fault == 'truncated': packed['payload'] = packed['payload'][:-4]
+    if fault == 'bad_base64': packed['payload'] = '****'
+    if fault == 'unknown_codec': packed['codec'] = 'unknown'
+    if fault:
+        with pytest.raises(ValueError): replay.decode_quote(packed)
+    else:
+        for value in (raw, json.dumps(raw), packed, json.dumps(packed)):
+            assert replay.decode_quote(value) == raw
 
 
 def test_parent_carry_all_market_types_and_forged_override_rejected():
@@ -200,7 +223,8 @@ def test_registered_type_grid_trains_before_holdout_and_keeps_failed_winner():
             source = dict(status='ready',known_at=entry-1,window_bars=2,source_sha256='a'*64,
                           features=features,feature_sha256=digest(features))
             context[identity] = dict(entry_at=entry,observation_end_at=entry+2,completion_at=entry+2,
-                evidence_kind='actual_completed',buy_basis_krw=1000,entry_context=source)
+                evidence_kind='actual_completed',actual_cost_available_at=entry+2,
+                buy_basis_krw=1000,entry_context=source)
             deltas = {'incumbent':0,'a':5 if day<7 else -2,'b':4 if day<7 else 8}
             results[identity] = {aliases[name]:dict(modeled_net_pnl_krw=delta,actual_pnl_krw=0,
                 slippage_net_pnl_krw=[delta,delta,delta]) for name,delta in deltas.items()}
@@ -227,6 +251,72 @@ def test_registered_type_grid_trains_before_holdout_and_keeps_failed_winner():
     diagnostic = typed.research_registered_grid(lambda:iter([changed]),grid=hypotheses,candidates={'a':a,'b':b},
         parent_values=parent,parent_classifier_parameters=cfg,evaluation=evaluation)
     assert all(c['train_selected_candidate']=='incumbent' for c in diagnostic['cells'].values())
+
+
+@pytest.mark.parametrize('known,cutoff,expected', [
+    (100., 101., True), (100., 100., True), (100., 99., False),
+    (None, 101., False), (float('nan'), 101., False), (float('inf'), 101., False),
+    (True, 101., False), ('100', 101., False), (0, 101., False),
+    (100., None, True), (None, None, False), (100., float('nan'), False),
+    pytest.param(10**1000, 101., False, id='oversized-epoch'),
+])
+def test_training_cost_clock_requires_known_settlement_before_split(known, cutoff, expected):
+    context = dict(evidence_kind='actual_completed', actual_cost_available_at=known)
+    assert replay.training_cost_available(context, cutoff) is expected
+    for evidence in ('actual_entry_alternative_exit', 'enter_pass_opportunity_cf'):
+        assert replay.training_cost_available({**context, 'evidence_kind':evidence}, cutoff)
+
+
+def test_partition_context_carries_original_actual_cost_availability():
+    p = position()
+    available = p['actual_cost_reconciliation']['known_at']
+    result = replay.summarize_partitions([p], {p['position_key']:[quote(1, '2026-10-08T09:00:01')]},
+        {}, incumbent=vector())
+    assert result['population_context'][p['position_key']]['actual_cost_available_at'] == available
+    assert p['actual_cost_reconciliation']['known_at'] == available
+
+
+@pytest.mark.parametrize('evidence', ['actual_completed', 'actual_entry_alternative_exit', 'enter_pass_opportunity_cf'])
+def test_training_cost_cutoff_preserves_census_and_unions_existing_path_purge(evidence):
+    start = at('2026-09-29T09:00:00')
+    cutoff = start + 7 * 86400
+    contexts, results = {}, {}
+    for day in range(10):
+        for seq in range(6):
+            identity = f'{day}:{seq}'
+            entry = start + day * 86400 + seq * 10
+            contexts[identity] = dict(entry_at=entry, completion_at=entry+2,
+                observation_end_at=entry+2, evidence_kind=evidence,
+                actual_cost_available_at=entry+2, buy_basis_krw=1000)
+            results[identity] = {'base':dict(modeled_net_pnl_krw=1., actual_pnl_krw=0.,
+                slippage_net_pnl_krw=[1., 0., -1.])}
+    contexts['0:0']['actual_cost_available_at'] = cutoff + 1
+    contexts['0:1']['actual_cost_available_at'] = None
+    contexts['0:2']['observation_end_at'] = cutoff
+    contexts['0:3'].update(actual_cost_available_at=cutoff+1, observation_end_at=cutoff)
+    contexts['0:4']['actual_cost_available_at'] = cutoff  # Available at the cutoff is usable.
+    part = dict(candidate_aliases={'incumbent':'base'}, population_context=contexts,
+        minimal_results=results, common_ids=sorted(contexts))
+    resident = replay.common_evaluation([part])
+    streamed = replay.common_evaluation(lambda:iter([part]))
+    assert resident == streamed
+    stratum = resident['strata'][evidence]
+    actual = evidence == 'actual_completed'
+    assert len(resident['common_ids']) == len(stratum['common_ids']) == 60
+    assert len(stratum['holdout_ids']) == 18
+    assert stratum['cost_unavailable_train_ids'] == (['0:0','0:1','0:3'] if actual else [])
+    assert stratum['purged_ids'] == (['0:0','0:1','0:2','0:3'] if actual else ['0:2','0:3'])
+    assert '0:4' in stratum['train_ids']
+    assert stratum['metrics']['incumbent']['train']['n'] == (38 if actual else 40)
+    assert stratum['existing_selector_sample_floor_met'] is actual
+    if actual:
+        # Missing settlement cannot be hidden behind a previously met sample floor.
+        for identity in stratum['train_ids'][:10]:
+            contexts[identity]['actual_cost_available_at'] = None
+        reduced = replay.common_evaluation([part])['strata'][evidence]
+        assert len(reduced['train_ids']) == 28
+        assert reduced['existing_selector_sample_floor_met'] is False
+        assert len(reduced['common_ids']) == 60
 
 
 def test_candidate_cannot_replace_parent_alias():
@@ -456,3 +546,150 @@ def test_wrong_route_and_identified_malformed_path_cannot_create_economics():
     assert result['common_ids']==[p['position_key']]
     assert result['excluded_ids']==['bad']
     assert replay.replay({**p,'cost_model':{**p['cost_model'],'known_at':p['entry_at']+1}},[],vector())['reason']=='cost_model_not_known_at_entry'
+
+
+@pytest.mark.parametrize('clock', ['2026-10-08T08:59:59+09:00',
+    '2026-10-07T23:59:59+00:00', '2026-10-07T23:59:59Z'])
+def test_native_model_clock_survives_quote_serialization_and_matches_epoch(clock):
+    import json
+    p = position()
+    event = quote(1, '2026-10-08T09:00:01')
+    model = {**p['cost_model'], 'known_at': clock}
+    projected = replay.quote_projection(event['ws_data'], known_at=event['known_at'],
+        event_at=event['event_at'], route='KRX', item='123456', transport_epoch=1,
+        sequence=1, bid=event['bid'], ask=event['ask'], bid_qty=10, peak=101,
+        quantity=10, coverage_complete=True, entry_cost_model=model)
+    trade = dict(id='native-clock', main_automatic_management_allowed=True, status='COMPLETED',
+        holding_ai_required=False, actual_cost_reconciliation=p['actual_cost_reconciliation'],
+        buy_fill_legs=[dict(at='2026-10-08T09:00:00+09:00', qty=10, amount_krw=1000)],
+        timeline=[dict(stage='scalp_trailing_input_transition', fields={
+            'universal_trailing_quote': json.dumps(projected)})])
+    positions, paths = replay.completed_sources(json.loads(json.dumps([trade])))
+    assert positions[0]['cost_model']['known_at'] == clock
+    actual = replay.replay(positions[0], paths['native-clock'], vector())
+    numeric = deepcopy(positions[0])
+    numeric['cost_model']['known_at'] = datetime.fromisoformat(clock).timestamp()
+    expected = replay.replay(numeric, paths['native-clock'], vector())
+    assert actual == expected and actual['status'] == 'modeled_full_exit'
+    assert model['known_at'] == clock
+
+
+@pytest.mark.parametrize('clock', [None, '', '2026-10-08T08:59:59', 'invalid',
+    True, float('nan'), float('inf'), 0, -1, '2026-10-08T09:00:01+09:00'])
+def test_cost_clock_absence_or_invalid_time_never_becomes_known_at_entry(clock):
+    p = position()
+    p['cost_model']['known_at'] = clock
+    assert replay.replay(p, [], vector())['reason'] == 'cost_model_not_known_at_entry'
+
+
+@pytest.mark.parametrize('legacy_qty', [None, 1, 9])
+def test_completed_aggregate_quantity_never_invents_first_buy_or_add_path(legacy_qty):
+    trade = dict(id='aggregate-only', main_automatic_management_allowed=True,
+        status='COMPLETED', first_buy_at_epoch=position()['entry_at'],
+        buy_filled_qty=9, buy_fill_amount=900, buy_fill_quantity=legacy_qty,
+        actual_cost_reconciliation=position()['actual_cost_reconciliation'],
+        trailing_replay_cost_model=position()['cost_model'])
+    positions, paths = replay.completed_sources([trade])
+    p = positions[0]
+    assert p['completed_buy_filled_qty'] == 9 and p['completed_buy_fill_amount'] == 900
+    assert p['qty'] is p['buy_basis_krw'] is p['entry_at'] is None
+    result = replay.replay(p, paths[p['position_key']], vector())
+    assert result['reason'] == 'completed_buy_fill_ledger_missing'
+    assert result['actual_pnl_krw'] is result['modeled_net_pnl_krw'] is None
+
+
+def official_cost_projection(tmp_path, *, fault=None):
+    """Actual existing cost/report producers with a fake broker transport."""
+    from src.tests.test_broker_cost_source import broker_fixture, NOW
+    from src.tests.test_broker_cost_reconciliation import fixture
+    from src.engine import sniper_trade_review_report as review
+    source, context, _, _ = broker_fixture(tmp_path)
+    context['custody_rows'][0]['filled_qty'] = 2
+    trade, events, _, _, _ = fixture()
+    trade['id'], trade['code'] = 7, '005930'
+    for event in events:
+        event.fields['order_no'] = '11' if event.stage == 'position_rebased_after_fill' else '12'
+        event.fields.pop('holding_cost_owner', None)
+        event.fields.pop('holding_cost_account_scope_sha256', None)
+    if fault == 'multiple_positions':
+        context['peer_records'].append(8)
+    if fault == 'manual':
+        context['custody_rows'][0]['owner_type'] = 'manual'
+    row = review._completed_trade_projection(trade, events, {'entry_mode': 'normal'},
+        broker_cost_source=source, cost_custody_rows=context['custody_rows'],
+        cost_peer_records=context['peer_records'], knowledge_cutoff=NOW.timestamp()+1)
+    # Model costs are independent from the later official settlement receipt.
+    row['trailing_replay_cost_model'] = {**position()['cost_model'],
+        'known_at': '2026-10-08T09:59:59+09:00'}
+    return row
+
+
+def test_official_whole_position_producer_reaches_actual_cost_consumer(tmp_path):
+    row = official_cost_projection(tmp_path)
+    native = deepcopy(row['actual_cost_reconciliation'])
+    assert native['status'] == 'actual_cost_reconciled' and 'raw_sha256' not in native
+    positions, paths = replay.completed_sources([row])
+    result = replay.replay(positions[0], paths['7'], vector())
+    assert result['actual_pnl_krw'] == 190
+    # Missing historical AI evidence is still censored after cost admission.
+    assert result['status'] == 'censored' and result['reason'] == 'original_holding_ai_mode_unobserved'
+    assert result['modeled_net_pnl_krw'] is None
+    assert positions[0]['actual_cost_reconciliation'] == native
+
+
+@pytest.mark.parametrize('fault', ['multiple_positions', 'manual', 'amount_tamper',
+    'source_tamper', 'research_scope', 'unknown_scope', 'malformed_scope', 'naive_clock', 'future_completion'])
+def test_whole_position_costs_keep_native_provenance_and_custody_guards(tmp_path, fault):
+    row = official_cost_projection(tmp_path, fault=fault)
+    actual = row['actual_cost_reconciliation']
+    if fault == 'amount_tamper': actual['exact_pnl_krw'] += 1
+    if fault == 'source_tamper': actual['source_sha256'] = 'f'*64
+    if fault in {'research_scope', 'unknown_scope', 'malformed_scope', 'naive_clock'}:
+        if fault == 'research_scope': actual['economics_scope'] = 'initial_quantity_research_only'
+        if fault == 'unknown_scope': actual['allocation_scope'] = 'unverified_total'
+        if fault == 'malformed_scope': actual['allocation_scope'] = {'unexpected': 'scope'}
+        if fault == 'naive_clock': actual['cost_available_at'] = '2026-10-08T21:00:00'
+        actual['receipt_sha256'] = digest({k:v for k,v in actual.items() if k != 'receipt_sha256'})
+    positions, paths = replay.completed_sources([row])
+    if fault == 'future_completion': positions[0]['completion_at'] = at('2026-10-09T22:00:00')
+    result = replay.replay(positions[0], paths['7'], vector())
+    assert result['actual_pnl_krw'] is None
+    assert result['reason'] in {'actual_completed_cost_or_terminal_unverified',
+        'position_identity_or_custody_unverified'}
+
+
+def test_actual_cost_availability_uses_settlement_not_entry_time(tmp_path):
+    actual = official_cost_projection(tmp_path)['actual_cost_reconciliation']
+    native = deepcopy(actual)
+    known = replay.actual_cost_available_epoch(actual)
+    assert known == at('2026-10-08T21:00:00')
+    assert known > position()['entry_at']
+    actual['reconciled_at'] = '2026-10-09T00:00:00+09:00'
+    assert replay.actual_cost_available_epoch(actual) == at('2026-10-09T00:00:00')
+    for clock in (None, '', '2026-10-08T21:00:00', 1, '2026-10-08T20:59:59+09:00'):
+        actual['reconciled_at'] = clock
+        actual['known_at'] = known  # Legacy fallback cannot hide invalid native clocks.
+        assert replay.actual_cost_available_epoch(actual) is None
+    assert native['reconciled_at'] == '2026-10-08T21:00:00+09:00'
+
+
+@pytest.mark.parametrize('clock,valid', [(1.0, True), (1, True), (None, False),
+    (True, False), (float('inf'), False), (float('nan'), False), (0, False),
+    ('2026-10-08T21:00:00+09:00', False), ('1', False)])
+def test_legacy_actual_cost_knowledge_clock_is_explicit_numeric_only(clock, valid):
+    actual = {**position()['actual_cost_reconciliation'], 'known_at': clock}
+    result = replay.actual_cost_available_epoch(actual)
+    assert (result is not None) == valid
+    if valid: assert result == clock
+    actual['allocation_scope'] = 'broker_day_symbol_whole_position'
+    assert replay.actual_cost_available_epoch(actual) is None
+
+
+def test_malformed_actual_cost_scope_is_excluded_without_aborting_population():
+    p = position()
+    p['actual_cost_reconciliation']['allocation_scope'] = {'bad': 'scope'}
+    assert replay.actual_cost_available_epoch(p['actual_cost_reconciliation']) is None
+    results = replay.summarize_partitions([p, {**position(), 'position_key': 'healthy'}],
+        {p['position_key']: [], 'healthy': [quote(1, '2026-10-08T09:00:01')]}, {}, incumbent=vector())
+    assert results['common_ids'] == ['healthy']
+    assert results['excluded_ids'] == ['main:1']

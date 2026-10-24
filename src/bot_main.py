@@ -12,6 +12,14 @@ from pathlib import Path
 # 🚀 [핵심 1] 단독 실행을 위한 루트 경로 탐지
 # ==========================================
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if __name__ == '__main__' and '--validate-startup' in sys.argv[1:]:
+    # This branch runs before DB, logging, Telegram, calendar and engine imports.
+    # The dedicated child installs mandatory isolation before loading policies.
+    if len(sys.argv) != 3 or sys.argv[1] != '--validate-startup':
+        raise SystemExit('usage: bot_main.py --validate-startup REQUEST_JSON')
+    sys.path.insert(0, str(PROJECT_ROOT))
+    from src.engine.automation.main_startup_validation import child_main
+    raise SystemExit(child_main(sys.argv[2]))
 _STARTUP_HOLD = PROJECT_ROOT / 'data/runtime/operator_startup_hold.json'
 if __name__ == '__main__' and (_STARTUP_HOLD.exists() or _STARTUP_HOLD.is_symlink()):
     raise SystemExit('operator_postclose_startup_hold_active')
@@ -70,7 +78,9 @@ from src.engine.error_detector import (
     iter_daemon_alert_events,
     REPORT_DIR as ERROR_REPORT_DIR,
 )
-from src.engine.infrastructure.restart_requests import consume_restart_request
+from src.engine.infrastructure.restart_requests import (
+    consume_restart_request, request_shutdown, shutdown_requested, finish_main_shutdown,
+)
 
 
 # ==========================================
@@ -219,7 +229,9 @@ def _refresh_startup_observer(identity, *, monotonic=None, wait=None, heartbeat=
     def run(args, limit):
         remaining = min(limit, deadline - monotonic() - 5)
         if remaining < 1:
-            return 75
+            # No child ran. Do not confuse exhausted startup time with a
+            # failed source producer and overwrite a current full observation.
+            return None
         with log.open('ab') as output:
             child = subprocess.Popen([str(root/'.venv/bin/python'), '-B', '-m', *args],
                 cwd=root, env={**os.environ, 'PYTHONPATH': str(root)},
@@ -253,8 +265,18 @@ def _refresh_startup_observer(identity, *, monotonic=None, wait=None, heartbeat=
                     wait(.5)
             if _startup_consumption_check(identity).get('status') != 'ready':
                 return dict(receipt, reason='startup_observer_identity_changed')
+            # Preserve late admission: an unstarted producer must not replace
+            # an already completed current observation with source-only output.
+            if deadline - monotonic() - 45 < 1:
+                return dict(receipt, reason='startup_observer_deadline_expired',
+                            producer_started=False, publication_attempted=False)
+            # Keep 25 seconds for the observer plus its five-second cleanup.
+            # Attestation uses the same original 150-second process deadline.
             producer = run(['src.engine.buy_funnel_sentinel', '--date', day,
-                            '--use-cache', '--use-summary'], max(0., deadline-monotonic()-45))
+                            '--use-cache', '--use-summary'], max(0., deadline-monotonic()-30))
+            if producer is None:
+                return dict(receipt, reason='startup_observer_deadline_expired',
+                            producer_started=False, publication_attempted=False)
             remaining = min(120., deadline - monotonic() - 5)
             if remaining < 20:
                 return dict(receipt, reason='startup_observer_deadline_expired', producer_exit=producer)
@@ -264,6 +286,9 @@ def _refresh_startup_observer(identity, *, monotonic=None, wait=None, heartbeat=
             if producer != 0:
                 observer.append('--source-only')
             code = run(observer, remaining)
+            if code is None:
+                return dict(receipt, reason='startup_observer_deadline_expired',
+                            producer_exit=producer, publication_attempted=False)
             # The full detector immediately verifies generation, completeness
             # and semantic failures. Exit zero alone is not a health receipt.
             return dict(receipt, status='attempted', producer_exit=producer, observer_exit=code)
@@ -514,6 +539,8 @@ def dispatch_daily_report_if_due(now: datetime, already_sent: bool) -> bool:
 # 🎯 메인 실행부 (Main Thread)
 # ==========================================
 if __name__ == "__main__":
+    signal.signal(signal.SIGTERM, request_shutdown)
+    engine_thread = None
     install_dual_logger()
     print("🤖 KORStockScan v13.0 통합 관제 시스템 기동 중...")
 
@@ -583,7 +610,7 @@ if __name__ == "__main__":
 
         # 💡 [아키텍처 포인트 3] 콜백(broadcast_alert) 파라미터 완전 제거!
         engine_thread = threading.Thread(
-            target=kiwoom_sniper_v2.run_sniper, daemon=True
+            target=kiwoom_sniper_v2.run_sniper, daemon=False
         )
         engine_thread.start()
         write_heartbeat("sniper_engine")
@@ -634,7 +661,7 @@ if __name__ == "__main__":
     monitor_archive_sent = False
 
     heartbeat_counter = 0
-    while True:
+    while not shutdown_requested():
         try:
             now = datetime.now()
             heartbeat_counter += 1
@@ -670,9 +697,8 @@ if __name__ == "__main__":
                     },
                 )
                 time.sleep(65)  # 23:51분으로 넘겨서 무한 재시작 방지
-                from src.utils.pipeline_event_logger import drain_pipeline_event_summary_before_termination
-                drain_pipeline_event_summary_before_termination()
-                os.kill(os.getpid(), signal.SIGTERM)
+                request_shutdown()
+                break
 
             # [스케줄러 3] 관리자의 우아한 재시작(restart.flag) 감지
             if RESTART_FLAG_PATH.exists():
@@ -694,20 +720,21 @@ if __name__ == "__main__":
                     "🔄 [시스템] 수동 재시작 플래그 감지. 관제탑을 종료합니다. "
                     f"request={restart_request or 'source=unknown_legacy_touch'}"
                 )
-                time.sleep(3)  # 다른 쓰레드들이 종료될 시간을 잠시 부여
-                from src.utils.pipeline_event_logger import drain_pipeline_event_summary_before_termination
-                drain_pipeline_event_summary_before_termination()
-                os.kill(os.getpid(), signal.SIGTERM)
+                request_shutdown()
+                break
 
             # 메인 루프 부하 방지
             time.sleep(1)
 
         except KeyboardInterrupt:
             print("\n🛑 관리자에 의해 통합 관제 시스템이 종료되었습니다.")
-            sys.exit(0)
+            request_shutdown()
+            break
 
         except Exception as e:
             from src.utils.logger import log_error
 
             log_error(f"메인 관제탑 루프 에러: {e}")
             time.sleep(5)
+
+    finish_main_shutdown(engine_thread)

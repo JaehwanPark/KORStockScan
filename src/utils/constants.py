@@ -1092,9 +1092,6 @@ class TradingConfig:
     # ==========================================
     # 🎯 AI 엔진 제어값 (OpenAI)
     # ==========================================
-    GPT_FAST_MODEL = "gpt-5-nano"
-    GPT_DEEP_MODEL = "gpt-5.4"
-    GPT_REPORT_MODEL = "gpt-5.4-mini"
     GPT_THRESHOLD_CORRECTION_MODEL: str = "gpt-5.5"
     GPT_THRESHOLD_CORRECTION_FALLBACK_MODELS: tuple = ("gpt-5.4", "gpt-5.4-mini")
     GPT_ENABLE_SCALPING_DEEP_RECHECK: bool = False
@@ -1118,6 +1115,11 @@ class TradingConfig:
         3000  # entry/analyze_target live decision timeout
     )
     OPENAI_SCALPING_ENTRY_MODEL: str = "gpt-5.4-nano"
+    OPENAI_REALTIME_REPORT_MODEL: str = "gpt-5.4-mini"
+    OPENAI_SWING_ANALYSIS_MODEL: str = "gpt-5.4-mini"
+    OPENAI_SCALPING_SHARED_MODEL: str = "gpt-5-nano"
+    OPENAI_WATCHING_SHADOW_MODEL: str = "gpt-5-nano"
+    OPENAI_GATEKEEPER_SHADOW_MODEL: str = "gpt-5-nano"
     OPENAI_SCALPING_ENTRY_TRANSPORT_MODE: str = "http"
     OPENAI_SCALPING_ENTRY_TIMEOUT_MS: int = (
         5000  # complete structured entry response budget on the HTTP primary path
@@ -1139,12 +1141,6 @@ class TradingConfig:
     OPENAI_PRIMARY_BEDROCK_FALLBACK_FAMILY: str = "lite_v2"
     OPENAI_PRIMARY_BEDROCK_FALLBACK_PRIMARY_TIMEOUT_MS: int = 7000
     OPENAI_PRIMARY_BEDROCK_FALLBACK_TIMEOUT_MS: int = 7000
-    OPENAI_SCANNER_REPORT_TIMEOUT_MS: int = (
-        15000  # source-only morning scanner report timeout
-    )
-    OPENAI_OVERNIGHT_TIMEOUT_MS: int = (
-        12000  # source-only overnight_v1 batch 판단 timeout
-    )
     OPENAI_RESPONSES_MAX_OUTPUT_TOKENS: int = 512  # OpenAI live JSON 응답 토큰 상한
     OPENAI_REASONING_EFFORT: str = "minimal"  # hot path 추론 effort
     OPENAI_RESPONSES_WS_LATE_DISCARD_ENABLED: bool = True  # deadline 초과 응답 discard
@@ -1183,7 +1179,6 @@ class TradingConfig:
     OPENAI_DUAL_PERSONA_APPLY_GATEKEEPER: bool = (
         False  # 장중 긴급 완화: Gatekeeper dual-persona shadow 일시 비활성화
     )
-    OPENAI_DUAL_PERSONA_APPLY_OVERNIGHT: bool = True
     OPENAI_DUAL_PERSONA_WORKERS: int = 2
     OPENAI_DUAL_PERSONA_MAX_EXTRA_MS: int = 2500
     OPENAI_DUAL_PERSONA_GATEKEEPER_MIN_SAMPLES: int = 30
@@ -5308,6 +5303,12 @@ def _build_trading_rules() -> TradingConfig:
     env_openai_holding_flow_timeout_ms = _env_int(
         "KORSTOCKSCAN_OPENAI_HOLDING_FLOW_TIMEOUT_MS"
     )
+    env_openai_realtime_report_model = _env_str("KORSTOCKSCAN_OPENAI_REALTIME_REPORT_MODEL")
+    env_openai_swing_analysis_model = _env_str("KORSTOCKSCAN_OPENAI_SWING_ANALYSIS_MODEL")
+    env_openai_scalping_shared_model = _env_str("KORSTOCKSCAN_OPENAI_SCALPING_SHARED_MODEL")
+    env_openai_watching_shadow_model = _env_str("KORSTOCKSCAN_OPENAI_WATCHING_SHADOW_MODEL")
+    env_openai_gatekeeper_shadow_model = _env_str("KORSTOCKSCAN_OPENAI_GATEKEEPER_SHADOW_MODEL")
+    env_openai_holding_exit_vote_model = _env_str("KORSTOCKSCAN_OPENAI_HOLDING_EXIT_VOTE_MODEL")
     env_openai_holding_flow_model = _env_str("KORSTOCKSCAN_OPENAI_HOLDING_FLOW_MODEL")
     env_openai_primary_bedrock_fallback_endpoints = _env_csv_tuple(
         "KORSTOCKSCAN_OPENAI_PRIMARY_BEDROCK_FALLBACK_ENDPOINTS"
@@ -5320,12 +5321,6 @@ def _build_trading_rules() -> TradingConfig:
     )
     env_openai_primary_bedrock_fallback_timeout_ms = _env_int(
         "KORSTOCKSCAN_OPENAI_PRIMARY_BEDROCK_FALLBACK_TIMEOUT_MS"
-    )
-    env_openai_scanner_report_timeout_ms = _env_int(
-        "KORSTOCKSCAN_OPENAI_SCANNER_REPORT_TIMEOUT_MS"
-    )
-    env_openai_overnight_timeout_ms = _env_int(
-        "KORSTOCKSCAN_OPENAI_OVERNIGHT_TIMEOUT_MS"
     )
     env_openai_max_output_tokens = _env_int(
         "KORSTOCKSCAN_OPENAI_RESPONSES_MAX_OUTPUT_TOKENS"
@@ -5385,12 +5380,16 @@ def _build_trading_rules() -> TradingConfig:
         or env_openai_holding_exit_vote_timeout_ms is not None
         or env_openai_holding_flow_timeout_ms is not None
         or env_openai_holding_flow_model is not None
+        or env_openai_realtime_report_model is not None
+        or env_openai_swing_analysis_model is not None
+        or env_openai_scalping_shared_model is not None
+        or env_openai_watching_shadow_model is not None
+        or env_openai_gatekeeper_shadow_model is not None
+        or env_openai_holding_exit_vote_model is not None
         or env_openai_primary_bedrock_fallback_endpoints is not None
         or env_openai_primary_bedrock_fallback_family is not None
         or env_openai_primary_bedrock_fallback_primary_timeout_ms is not None
         or env_openai_primary_bedrock_fallback_timeout_ms is not None
-        or env_openai_scanner_report_timeout_ms is not None
-        or env_openai_overnight_timeout_ms is not None
         or env_openai_max_output_tokens is not None
         or env_openai_reasoning_effort is not None
         or env_openai_ws_late_discard is not None
@@ -5485,6 +5484,36 @@ def _build_trading_rules() -> TradingConfig:
                 if env_openai_holding_flow_timeout_ms is not None
                 else config.OPENAI_HOLDING_FLOW_TIMEOUT_MS
             ),
+            OPENAI_REALTIME_REPORT_MODEL=(
+                env_openai_realtime_report_model
+                if env_openai_realtime_report_model is not None
+                else config.OPENAI_REALTIME_REPORT_MODEL
+            ),
+            OPENAI_SWING_ANALYSIS_MODEL=(
+                env_openai_swing_analysis_model
+                if env_openai_swing_analysis_model is not None
+                else config.OPENAI_SWING_ANALYSIS_MODEL
+            ),
+            OPENAI_SCALPING_SHARED_MODEL=(
+                env_openai_scalping_shared_model
+                if env_openai_scalping_shared_model is not None
+                else config.OPENAI_SCALPING_SHARED_MODEL
+            ),
+            OPENAI_WATCHING_SHADOW_MODEL=(
+                env_openai_watching_shadow_model
+                if env_openai_watching_shadow_model is not None
+                else config.OPENAI_WATCHING_SHADOW_MODEL
+            ),
+            OPENAI_GATEKEEPER_SHADOW_MODEL=(
+                env_openai_gatekeeper_shadow_model
+                if env_openai_gatekeeper_shadow_model is not None
+                else config.OPENAI_GATEKEEPER_SHADOW_MODEL
+            ),
+            OPENAI_HOLDING_EXIT_VOTE_MODEL=(
+                env_openai_holding_exit_vote_model
+                if env_openai_holding_exit_vote_model is not None
+                else config.OPENAI_HOLDING_EXIT_VOTE_MODEL
+            ),
             OPENAI_HOLDING_FLOW_MODEL=(
                 env_openai_holding_flow_model
                 if env_openai_holding_flow_model is not None
@@ -5509,16 +5538,6 @@ def _build_trading_rules() -> TradingConfig:
                 env_openai_primary_bedrock_fallback_timeout_ms
                 if env_openai_primary_bedrock_fallback_timeout_ms is not None
                 else config.OPENAI_PRIMARY_BEDROCK_FALLBACK_TIMEOUT_MS
-            ),
-            OPENAI_SCANNER_REPORT_TIMEOUT_MS=(
-                env_openai_scanner_report_timeout_ms
-                if env_openai_scanner_report_timeout_ms is not None
-                else config.OPENAI_SCANNER_REPORT_TIMEOUT_MS
-            ),
-            OPENAI_OVERNIGHT_TIMEOUT_MS=(
-                env_openai_overnight_timeout_ms
-                if env_openai_overnight_timeout_ms is not None
-                else config.OPENAI_OVERNIGHT_TIMEOUT_MS
             ),
             OPENAI_RESPONSES_MAX_OUTPUT_TOKENS=(
                 env_openai_max_output_tokens

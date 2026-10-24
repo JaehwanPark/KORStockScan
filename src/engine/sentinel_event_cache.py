@@ -208,7 +208,7 @@ def _update_and_load_cached_event_rows(
                     decode_errors += 1
                     last_good_offset = raw_handle.tell()
                     continue
-                if compact_index and cache_name == 'buy_funnel_sentinel_events' and schema_version in (19,20):
+                if compact_index and cache_name == 'buy_funnel_sentinel_events' and schema_version in (19,20,21,22):
                     from src.engine.monitoring.sentinel_source_window import _epoch
                     try:
                         if not isinstance(payload,dict):
@@ -352,7 +352,7 @@ def _update_and_load_cached_event_rows(
         "cache_projection_skip_reason": projection_skip,
         "updated_at": datetime.now().isoformat(timespec="seconds"),
     }
-    if compact_index and cache_name == 'buy_funnel_sentinel_events' and schema_version in (19, 20):
+    if compact_index and cache_name == 'buy_funnel_sentinel_events' and schema_version in (19, 20, 21, 22):
         from src.engine.monitoring.sentinel_source_window import maintain
         new_meta['source_window_projection'] = maintain(cache_path,
             before_cache_stamp if reusable_projection else None, new_meta,

@@ -29,7 +29,7 @@ from src.engine.scalping.initial_quantity_type import (
     kst_timestamp as _timestamp, type_from_decision_receipt as _type_from_decision_receipt,
 )
 from src.utils.constants import DATA_DIR, PROJECT_ROOT
-from src.utils.jsonl_io import existing_or_gzip_path, open_text_auto
+from src.utils.jsonl_io import existing_or_gzip_path
 
 BASELINE = date(2026, 6, 5)
 REPORT_SCHEMA = "initial_entry_quantity_completed_trade_replay_v1"
@@ -119,6 +119,10 @@ def _block_io_wait_ms() -> float | None:
 
 
 def _file_sha256(path: Path) -> str:
+    from src.engine.infrastructure.validation_digest_session import reused_digest
+    reused = reused_digest(path)
+    if reused is not None:
+        return reused
     digest = hashlib.sha256()
     with path.open("rb") as handle:
         for block in iter(lambda: handle.read(8 * 1024 * 1024), b""):
@@ -246,7 +250,7 @@ def _quantity_compact_fact_issue(day, sidecar, dependency):
     return None
 
 
-def _quantity_fact_generation_issue(day):
+def _quantity_fact_generation_issue(day, *, original_cost_generation=None):
     """Validate the native fact seal without loading historical timelines.
 
     Oversized legacy snapshots need the original bounded native projection;
@@ -275,7 +279,8 @@ def _quantity_fact_generation_issue(day):
                         ) + (Path(str(sidecar) + '.dependencies.json'),)
         try:
             before = tuple((str(p), source_stat(p.stat()) if p.exists() else None) for p in sources)
-            dependency = _capture_day(DATA_DIR, directory, day)
+            dependency = _capture_day(DATA_DIR, directory, day,
+                                      original_cost_generation=original_cost_generation)
             issue = _quantity_compact_fact_issue(day, sidecar, dependency)
             after = tuple((str(p), source_stat(p.stat()) if p.exists() else None) for p in sources)
             if before != after:
@@ -311,6 +316,26 @@ def _quantity_fact_generation_issue(day):
         return 'fact_snapshot_native_projection_invalid'
 
 
+def _quantity_original_fact_generation_issue(day):
+    """Verify original facts independently of a later official cost revision.
+
+    This does not admit the original economics as current. The completion
+    adapter binds current costs separately and clears superseded actual PnL.
+    """
+    from src.engine.strategy_position_performance_report import _status_path
+    from src.engine.scalping.initial_quantity_source_cache import _completion_json
+    from src.engine.lifecycle.holding_window_generation import MAX_METADATA_BYTES
+    try:
+        receipt, _ = _completion_json(_status_path(day), MAX_METADATA_BYTES)
+        proof = receipt.get('completion_snapshot_source') or {}
+        original = receipt.get('actual_cost_source_generation')
+        if proof.get('source_basis') in {'native_bounded_fact_projection', 'native_original_snapshot_stream'} and isinstance(original, dict):
+            return _quantity_fact_generation_issue(day, original_cost_generation=original)
+    except (OSError, ValueError, TypeError, KeyError):
+        pass
+    return _quantity_fact_generation_issue(day)
+
+
 def _read_trade_facts(as_of: str, *, entry_on_or_after: str | None = None) -> list[dict[str, Any]]:
     """Read the completed-trade fact owner without mutating its database."""
     from sqlalchemy import or_
@@ -342,10 +367,8 @@ def _read_trade_facts(as_of: str, *, entry_on_or_after: str | None = None) -> li
         generations = {}
         for day in days:
             path = _status_path(day)
-            issue = _quantity_fact_generation_issue(day)
+            issue = _quantity_original_fact_generation_issue(day)
             costs=source_generation(DATA_DIR,day)
-            if issue is None and json.loads(path.read_bytes()).get('actual_cost_source_generation')!=costs:
-                issue='persisted_fact_cost_generation_stale'
             generations[day] = {"path":str(path), "sha256":_file_sha256(path) if path.is_file() else None,
                                 "issue":issue,"cost_generation":costs}
         rows=[]
@@ -364,7 +387,7 @@ def _read_trade_facts(as_of: str, *, entry_on_or_after: str | None = None) -> li
         from src.engine.scalping.initial_quantity_source_cache import completion_overlay
         overlaid = completion_overlay(rows, as_of=as_of, data_dir=DATA_DIR,
             entry_on_or_after=start.isoformat(), entry_generations=generations,
-            validate_day=_quantity_fact_generation_issue)
+            validate_day=_quantity_original_fact_generation_issue)
         for day, gen in generations.items():
             path = Path(gen['path'])
             if (gen['sha256'] != (_file_sha256(path) if path.exists() else None)
@@ -667,6 +690,175 @@ def _record_id(raw: str) -> str:
     return match.group(1) or match.group(2)
 
 
+_QUANTITY_PIPELINE_FIELDS = frozenset('''
+actual_execution_venue actual_order_submitted avg_buy_price binding_caps
+actual_execution_venue_source actual_execution_venue_verified execution_venue_override
+broker_actual_execution_venue broker_actual_execution_venue_source
+broker_actual_exchange_code broker_actual_exchange_name broker_sor_flag
+broker_route broker_route_requested broker_route_requested_raw broker_route_override
+broker_execution_observed_at broker_order_no buy_pressure_10t
+cap_tick_depth_item cap_tick_item cap_tick_market_route cap_tick_observed_epoch
+cap_tick_price_krw cap_tick_quantity cap_tick_transport_epoch
+capture_clock_status capture_disposition capture_end_epoch capture_id
+capture_interruption_reason capture_order_start_epoch capture_planned_epoch
+capture_queue_rejected_count capture_queued_count capture_record_id
+capture_runtime_pid capture_runtime_start_ticks capture_source_date capture_stock_code
+classifier_route_key classifier_transport_epoch current_price decision_authority
+effective_qty effective_venue entry_cancel_wait_submission_context
+entry_execution_sizing_plan_sha256 entry_execution_sizing_valid entry_mode
+entry_split_order_leg_count entry_split_order_probe_first_applied entry_split_order_probe_qty
+entry_submit_attempt_id execution_no fill_price fill_qty
+initial_quantity_attempt_id initial_quantity_bundle_order_start_at
+initial_quantity_bundle_total_wait_sec initial_quantity_cap_research_context
+initial_quantity_leg_index initial_quantity_order_start_at initial_quantity_policy_file_sha256
+initial_quantity_runtime_pid initial_quantity_schedule_sha256 latest_price
+market_data_transport_epoch market_session_bucket observation_coverage order_no
+position_sizing_policy_sha256 position_sizing_policy_status pre_cap_qty
+quantity_type quantity_type_classifier_version quantity_type_policy_row
+quote_consistency_state quote_stale ratio reference_time requested_qty
+scalping_sizing_position_sizing_policy_sha256 scalping_sizing_position_sizing_policy_status
+scalping_sizing_quantity_type scalping_sizing_quantity_type_classifier_version
+scalping_sizing_quantity_type_policy_row sizing_venue_at_allocation source_signature
+tag tick_aggressor_pressure_usable tick_context_quality tier ws_age_ms ws_route
+'''.split())
+
+
+def _quantity_pipeline_rows(handle, records, receipt):
+    """Project large native rows without losing their execution/policy fields.
+
+    Full raw generations remain byte-bound by the caller. Only fields consumed
+    by quantity path reconstruction enter this bounded offline projection.
+    """
+    from src.engine.lifecycle.research_json_stream import Reader, sealed_sorted_object_projection
+
+    class Line:
+        def __init__(self, first):
+            self.first = first
+            self.done = first.endswith('\n')
+
+        def read(self, size):
+            if self.first:
+                value, self.first = self.first[:size], self.first[size:]
+                return value
+            if self.done:
+                return ''
+            value = handle.readline(size)
+            self.done = not value or value.endswith('\n')
+            return value
+
+    while raw := handle.readline(64 * 1024 + 1):
+        if len(raw.encode('utf-8')) <= 64 * 1024:
+            yield raw, None
+            continue
+        identity, projected = {}, {}
+        blocked = [False]
+        verified_context = [None]
+
+        def project_fields(reader):
+            reader.spaces()
+            if reader.peek() != '{':
+                blocked[0] = True
+                reader.skip()
+                return None
+            # Runtime context rows have more fields than a small research
+            # object. Bound their keys while retaining only this consumer's
+            # execution contract; never materialize the large context values.
+            reader.take('{')
+            first, seen, result, retained_bytes = True, set(), {}, 0
+            while True:
+                reader.spaces()
+                if reader.peek() == '}':
+                    reader.offset += 1
+                    return result
+                if not first:
+                    reader.take(',')
+                key = reader.value(1024)
+                if not isinstance(key, str) or key in seen or len(seen) >= 4096:
+                    raise ValueError('quantity_pipeline_field_identity_invalid')
+                seen.add(key)
+                reader.take(':')
+                if key in _QUANTITY_PIPELINE_FIELDS and not blocked[0]:
+                    if key == 'entry_cancel_wait_submission_context':
+                        reader.spaces()
+                        if reader.peek() != '"':
+                            blocked[0] = True; reader.skip()
+                            first = False
+                            continue
+                        stream = reader.string_stream()
+                        try:
+                            context = sealed_sorted_object_projection(stream,
+                                {'schema', 'stock_code', 'frozen_at', 'actual_timeout_sec', 'child_id'})
+                        except ValueError as exc:
+                            if str(exc) == 'shared_research_budget_partition_resume_required':raise
+                            # Only this identified row is unusable. Drain its
+                            # encoded field before reading the next envelope.
+                            context = None
+                        while stream.read(65536):pass
+                        verified_context[0] = context
+                        if context is None:
+                            blocked[0] = True
+                        else:
+                            retained_bytes += len(json.dumps(context).encode('utf-8'))
+                            if retained_bytes > 64 * 1024:blocked[0] = True
+                        first = False
+                        continue
+                    try:
+                        result[key] = reader.value(64 * 1024)
+                        retained_bytes += len(json.dumps({key: result[key]},
+                            ensure_ascii=False).encode('utf-8'))
+                        if retained_bytes > 64 * 1024:
+                            blocked[0] = True
+                            result.clear()
+                    except ValueError as exc:
+                        if str(exc) != 'research_legacy_json_field_partition_required':
+                            raise
+                        blocked[0] = True
+                        reader.skip()
+                else:
+                    reader.skip()
+                first = False
+
+        def field(key, reader):
+            if key == 'record_id':
+                value = reader.value(1024)
+                if value is not None and (isinstance(value, bool) or not isinstance(value, (int, str))):
+                    raise ValueError('quantity_pipeline_record_identity_invalid')
+                identity[key] = '' if value is None else str(value)
+                projected[key] = value
+            elif key in {'stage', 'stock_code', 'emitted_at'}:
+                projected[key] = reader.value(4096)
+            elif key == 'fields':
+                projected[key] = project_fields(reader)
+            else:
+                reader.skip()
+            return iter(())
+
+        reader = Reader(Line(raw))
+        for _ in reader.fields(field):
+            pass
+        reader.spaces()
+        if reader.peek() or 'record_id' not in identity:
+            raise ValueError('quantity_pipeline_record_partition_required')
+        if identity['record_id'] in records:
+            if (not blocked[0] and isinstance(projected.get('fields'), dict)
+                    and all(isinstance(projected.get(key), str) and projected[key]
+                            for key in ('stage', 'stock_code', 'emitted_at'))):
+                encoded = json.dumps(projected, ensure_ascii=False) + '\n'
+                if len(encoded.encode('utf-8')) <= 64 * 1024:
+                    receipt['oversized_projected_rows'] = receipt.get('oversized_projected_rows', 0) + 1
+                    receipt['oversized_projection_contract'] = 'quantity_execution_fields_v1'
+                    # Verified metadata stays in memory beside the projection;
+                    # raw fields cannot claim that their own hash was checked.
+                    yield encoded, verified_context[0]
+                    continue
+            affected = receipt.setdefault('oversized_in_cohort_record_ids', [])
+            if identity['record_id'] not in affected:
+                affected.append(identity['record_id'])
+                affected.sort()
+        else:
+            receipt['oversized_out_of_cohort_records'] = receipt.get('oversized_out_of_cohort_records', 0) + 1
+
+
 def _exit_at(trade: dict[str, Any]) -> datetime | None:
     return _timestamp(trade.get("exit_at"))
 
@@ -687,7 +879,56 @@ def _fresh_observed_price(fields: dict[str, Any]) -> tuple[float | None, str]:
 
 def join_post_fill_paths(trades, **kwargs):
     from src.engine.scalping.initial_quantity_source_cache import join
-    return join(trades, **kwargs)
+    paths = join(trades, **kwargs)
+    _join_native_research_buy_fills(trades, paths, kwargs.get('data_dir', DATA_DIR))
+    return paths
+
+
+def _join_native_research_buy_fills(trades, paths, data_dir):
+    """Bind recovered cost executions to their original sizing/order path.
+
+    Raw pipeline caches remain unchanged. Existing partial/conflicting fills
+    are never replaced, and an observed registry clock proves no exchange venue.
+    """
+    from src.engine.lifecycle import broker_cost_allocation as allocation
+    from src.engine.lifecycle import main_stop_research_cost as native
+    from src.engine.lifecycle.research_input_budget import Claim
+    from src.engine.sniper_trade_review_report import _quantity_registry_index
+    pending = [trade for trade in trades if trade.get('quantity_research_cost')
+               and trade['trade_id'] in paths and not paths[trade['trade_id']].get('fills')
+               and not paths[trade['trade_id']].get('source_gap')]
+    if not pending:
+        return
+    root = Path(data_dir)
+    registry_path = root/'runtime/order_owner_registry.jsonl'
+    with Claim(registry_path.stat().st_size * 12 if registry_path.exists() else 0):
+        registry, generation, _ = native._registry(root)
+        index = _quantity_registry_index(registry)
+        for trade in pending:
+            path = paths[trade['trade_id']]
+            try:
+                recovered = allocation.native_research_buy_fills(root, dict(
+                    id=trade['record_id'], code=trade['stock_code'],
+                    buy_time=trade['entry_at_fact_buy_time'], buy_qty=trade['buy_qty'],
+                    buy_price=trade['buy_price']), registry, generation, index)
+                if recovered is None:
+                    continue
+                legs, _, proof = recovered
+                cost = trade['quantity_research_cost']
+                if (cost['buy_fill_identity'] != allocation.fill_identity(legs)
+                        or sum(leg['qty'] for leg in legs) != trade['buy_qty']):
+                    raise ValueError('quantity_native_buy_cost_identity_mismatch')
+                fills = [dict(at=_timestamp(leg['at']), emitted_at=_timestamp(leg['at']),
+                    price=leg['price'], qty=leg['qty'], order_no=leg['order_no'],
+                    execution_no=leg['execution_no'], route=leg['route'], venue='UNKNOWN',
+                    actual_execution_venue_verified=False, broker_actual_execution_venue='UNKNOWN',
+                    clock_precision_sec=0, clock_source=proof['clock_source']) for leg in legs]
+                path['fills'].extend(fills)
+                path['native_buy_fill_source'] = proof
+            except (ValueError, TypeError, KeyError, OSError) as exc:
+                if str(exc).startswith('shared_research_budget_'):
+                    raise
+                path['source_gap'].append('quantity_native_buy_source_invalid')
 
 
 def _quantity_capture_lifecycle_sources(data_dir, day, *, decode=False):
@@ -748,6 +989,7 @@ def _quantity_capture_lifecycle_sources(data_dir, day, *, decode=False):
 def _join_post_fill_paths_uncached(trades: list[dict[str, Any]], *, data_dir: Path = DATA_DIR,
                          scan_seconds: dict[str, float] | None = None,
                          source_receipts: dict[str, Any] | None = None,
+                         source_byte_proofs: dict[str, Any] | None = None,
                          price_horizon_seconds: int = LEG_TTL_SECONDS) -> dict[str, dict[str, Any]]:
     """Stream only matching record IDs from each native pipeline partition."""
     by_date: dict[str, dict[str, list[dict[str, Any]]]] = defaultdict(lambda: defaultdict(list))
@@ -785,9 +1027,17 @@ def _join_post_fill_paths_uncached(trades: list[dict[str, Any]], *, data_dir: Pa
         stat = path.stat()
         archive_receipt_path = Path(f"{path}.archive_receipt.json")
         archive_identity_valid: bool | None = None
+        logical_source = None
         if path.suffix == ".gz" and archive_receipt_path.is_file():
             try:
-                archive = json.loads(archive_receipt_path.read_text(encoding="utf-8"))
+                if archive_receipt_path.is_symlink() or archive_receipt_path.stat().st_size > 128 * 1024:
+                    raise ValueError('quantity_pipeline_archive_receipt_invalid')
+                raw_receipt = archive_receipt_path.read_bytes()
+                if len(raw_receipt) > 128 * 1024:
+                    raise ValueError('quantity_pipeline_archive_receipt_invalid')
+                archive = json.loads(raw_receipt)
+                if not isinstance(archive, dict) or not isinstance(archive.get('archive_generation'), dict):
+                    raise ValueError('quantity_pipeline_archive_receipt_invalid')
                 generation = archive["archive_generation"]
                 archive_identity_valid = bool(
                     archive.get("schema") == "pipeline_raw_archive_identity_v1"
@@ -795,13 +1045,29 @@ def _join_post_fill_paths_uncached(trades: list[dict[str, Any]], *, data_dir: Pa
                     and generation.get("inode") == stat.st_ino
                     and generation.get("size_bytes") == stat.st_size
                     and generation.get("mtime_ns") == stat.st_mtime_ns)
+                if archive_identity_valid and ('artifact_content_sha256' in archive or 'ctime_ns' in generation):
+                    # Reuse the native raw archive owner's sealed logical
+                    # authority. Keep the original raw receipt shape stable;
+                    # compression is storage custody, not a new research input.
+                    from src.engine.automation.main_trailing_source_store import _archive_logical_authority
+                    logical = path.with_suffix('')
+                    checked = _archive_logical_authority(logical)
+                    observed = dict(device=stat.st_dev, inode=stat.st_ino, size_bytes=stat.st_size,
+                                    mtime_ns=stat.st_mtime_ns, ctime_ns=stat.st_ctime_ns)
+                    if (path.is_symlink() or logical.exists() or checked is None or checked[0] != archive
+                            or archive['archive_generation'] != observed):
+                        raise ValueError('quantity_pipeline_archive_generation_invalid')
+                    logical_source = dict(path=str(logical), size_bytes=archive['logical_size_bytes'],
+                                          sha256=archive['logical_content_sha256'], archive_identity_valid=None)
             except (OSError, ValueError, KeyError, TypeError):
                 archive_identity_valid = False
         if source_receipts is not None:
             source_receipts[day] = {"path": str(path), "size_bytes": stat.st_size,
-                                    "sha256": _file_sha256(path),
+                                    "sha256": None,
                                     "archive_identity_valid": archive_identity_valid,
                                     "capture_lifecycle_generation": lifecycle_generation}
+            if logical_source is not None and archive_identity_valid:
+                source_receipts[day].update(logical_source)
         if archive_identity_valid is False:
             for group in records.values():
                 for trade in group:
@@ -810,10 +1076,10 @@ def _join_post_fill_paths_uncached(trades: list[dict[str, Any]], *, data_dir: Pa
         for group in records.values():
             for trade in group:
                 result[trade["trade_id"]]["source_path"] = str(path)
-        with open_text_auto(path) as handle:
-            for raw in iter(lambda: handle.readline(64 * 1024 + 1), ""):
-                if len(raw.encode("utf-8")) > 64 * 1024:
-                    raise ValueError("quantity_pipeline_record_partition_required")
+        from src.engine.lifecycle.research_json_stream import hashed_text_source
+        with hashed_text_source(path) as (handle, physical_digest):
+            scan_receipt = source_receipts[day] if source_receipts is not None else {}
+            for raw, verified_context in _quantity_pipeline_rows(handle, records, scan_receipt):
                 rid = _record_id(raw)
                 group = records.get(rid)
                 if not group:
@@ -871,7 +1137,8 @@ def _join_post_fill_paths_uncached(trades: list[dict[str, Any]], *, data_dir: Pa
                     if stage == "entry_cancel_wait_submission" and within_entry_join:
                         context_raw = fields.get("entry_cancel_wait_submission_context")
                         try:
-                            context = json.loads(context_raw) if isinstance(context_raw, str) else {}
+                            context = (verified_context if verified_context is not None else
+                                       json.loads(context_raw) if isinstance(context_raw, str) else {})
                         except ValueError:
                             context = {}
                         order_start = _timestamp(context.get("frozen_at"))
@@ -884,7 +1151,8 @@ def _join_post_fill_paths_uncached(trades: list[dict[str, Any]], *, data_dir: Pa
                                 "source": "entry_cancel_wait_submission_context_frozen_at",
                                 "total_wait_sec": context.get('actual_timeout_sec'),
                                 "frozen_context_valid": bool(context.get('schema')=='entry_cancel_wait_submitted_paired_v2'
-                                    and context.get('sha256')==_digest({k:v for k,v in context.items() if k!='sha256'})),
+                                    and (verified_context is not None
+                                         or context.get('sha256')==_digest({k:v for k,v in context.items() if k!='sha256'}))),
                                 "probe_applied": str(context.get("child_id") or "").startswith(
                                     "entry_split_probe"),
                                 "emitted_at": emitted})
@@ -999,12 +1267,23 @@ def _join_post_fill_paths_uncached(trades: list[dict[str, Any]], *, data_dir: Pa
                         broker_fill_raw = fields.get("broker_execution_observed_at")
                         fill_at = _timestamp(broker_fill_raw) or emitted
                         if fill_at and price and qty and qty > 0 and qty.is_integer():
+                            from src.trading.market.execution_venue import execution_venue_fields, broker_route_fields
+                            venue_fields = execution_venue_fields(fields, observed_at=fill_at)
+                            route_fields = broker_route_fields(
+                                fields.get("broker_route_requested") or fields.get("broker_route"),
+                                observed_at=fill_at)
                             bucket["fills"].append({"at": fill_at, "emitted_at": emitted,
                                 "clock_precision_sec": (
                                     1 if broker_fill_raw and "." not in
                                     str(broker_fill_raw).split("T")[-1] else 0),
                                 "price": price,
-                                "qty": int(qty), "venue": str(fields.get("actual_execution_venue") or "UNKNOWN"),
+                                "qty": int(qty), "venue": venue_fields["actual_execution_venue"],
+                                "route": (venue_fields["actual_execution_venue"] if
+                                          route_fields["broker_route_requested"] == "UNKNOWN" else
+                                          route_fields["broker_route_requested"]),
+                                "venue_assignment_authority": venue_fields["execution_venue_override"],
+                                "actual_execution_venue_verified": venue_fields["actual_execution_venue_verified"],
+                                "broker_actual_execution_venue": fields.get("broker_actual_execution_venue", "UNKNOWN"),
                                 "order_no": str(fields.get("order_no") or ""),
                                 "execution_no": str(fields.get("execution_no") or ""),
                                 "clock_source": ("broker_execution_observed_at"
@@ -1024,6 +1303,11 @@ def _join_post_fill_paths_uncached(trades: list[dict[str, Any]], *, data_dir: Pa
                                     "epoch": str(fields.get("classifier_transport_epoch")
                                                  or fields.get("market_data_transport_epoch") or ""),
                                     "stage": stage})
+        if source_receipts is not None and logical_source is None:
+            source_receipts[day]['sha256'] = physical_digest.hexdigest()
+        for rid in scan_receipt.get('oversized_in_cohort_record_ids', []):
+            for trade in records[rid]:
+                result[trade['trade_id']]['source_gap'].append('pipeline_record_partition_required')
         try:
             stat_after = path.stat()
             source_stable = (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns) == (
@@ -1047,6 +1331,10 @@ def _join_post_fill_paths_uncached(trades: list[dict[str, Any]], *, data_dir: Pa
                     bucket["capture_receipts"].clear()
                     bucket["source_gap"].append("pipeline_changed_during_scan")
         if source_stable:
+            if source_byte_proofs is not None:
+                from src.engine.lifecycle.holding_window_generation import source_stat
+                source_byte_proofs[day] = dict(source_stat=list(source_stat(stat_after)),
+                    generation=dict(path=path.name,size=stat.st_size,sha256=physical_digest.hexdigest()))
             for group in records.values():
                 for trade in group:
                     bucket = result[trade["trade_id"]]
@@ -1404,12 +1692,57 @@ def _cap_candidate_trade(
             "cost_model": COST_MODEL}
 
 
+
+def _policy_clock_interval_proof(trade, path, decision, first_fill):
+    """Prove pre-submit policy custody inside a second-resolution fill clock.
+
+    A broker second is an interval. Only an exact request -> acknowledged
+    order -> original fill join can resolve its subsecond ordering; no grace or
+    inferred execution timestamp is introduced.
+    """
+    fact_entry = _timestamp(trade.get('entry_at_fact_buy_time'))
+    entry = first_fill.get('at') if first_fill else None
+    if (entry is None or fact_entry is None or fact_entry < entry
+            or fact_entry.date() != entry.date() or not first_fill or decision.get('stage') != 'entry_execution_sizing_plan'
+            or first_fill.get('clock_source') != 'broker_execution_observed_at'
+            or first_fill.get('clock_precision_sec') != 1
+            or type(first_fill.get('qty')) is not int or not 0 < first_fill['qty'] <= trade.get('buy_qty',0)
+            or not first_fill.get('order_no') or not first_fill.get('execution_no')
+            or not entry < decision['at'] < entry + timedelta(seconds=1)):
+        return None
+    fields = decision['fields']
+    identity = (fields.get('entry_submit_attempt_id'),fields.get('entry_execution_sizing_plan_sha256'))
+    if (not isinstance(identity[0],str) or not identity[0]
+            or re.fullmatch(r'[0-9a-f]{64}',str(identity[1] or '')) is None):return None
+    sent = [row for row in path.get('order_sent', []) if row['order_no'] == first_fill['order_no']]
+    if (len(sent) != 1 or (sent[0]['attempt_id'],sent[0]['plan_sha']) != identity
+            or sent[0]['at'] > first_fill.get('emitted_at',entry)):
+        return None
+    sent = sent[0]
+    requests = [row for row in path.get('order_requests', [])
+        if (row['attempt_id'],row['plan_sha'],row['tag']) == (*identity,sent['tag'])]
+    if (len(requests) != 1 or not decision['at'] <= requests[0]['at'] <= sent['at']
+            or not requests[0]['at'] < entry + timedelta(seconds=1)
+            or (sent['at']-requests[0]['at']).total_seconds() > 120):
+        return None
+    proof = dict(schema='initial_quantity_policy_clock_interval_v1', broker_precision_sec=1,
+        decision_at=decision['at'].isoformat(), request_at=requests[0]['at'].isoformat(),
+        sent_at=sent['at'].isoformat(), fill_at=entry.isoformat(),
+        fill_received_at=first_fill['emitted_at'].isoformat(), order_no=first_fill['order_no'],
+        execution_no=first_fill['execution_no'],attempt_id=identity[0],plan_sha256=identity[1],
+        request_tag=sent['tag'],fill_qty=first_fill['qty'])
+    return {**proof,'proof_sha256':_digest(proof)}
+
+
 def _paired_candidate(trade: dict[str, Any], path: dict[str, Any], shape: str) -> dict[str, Any]:
     if shape == "parent":
         entry_at = _timestamp(trade.get("entry_at_fact_buy_time"))
+        first_fill = min(path.get("fills") or [], key=lambda item: item["at"], default=None)
+        def before_entry(item):
+            return item["at"] <= entry_at or _policy_clock_interval_proof(trade,path,item,first_fill) is not None
         decisions = [item for item in path.get("decisions") or []
                      if entry_at and abs((item["at"] - entry_at).total_seconds()) <= 3600
-                     and (item["at"] <= entry_at or item["stage"] == "order_bundle_submitted"
+                     and (before_entry(item) or item["stage"] == "order_bundle_submitted"
                           and (item["at"] - entry_at).total_seconds() <= 30)]
         # The submitted bundle is often closer to the fill than the sizing
         # decision.  It is an execution event, not proof of which policy
@@ -1417,7 +1750,7 @@ def _paired_candidate(trade: dict[str, Any], path: dict[str, Any], shape: str) -
         # research, but bind a refresh trade to the actual sizing event.
         sizing_decisions = [item for item in decisions
                             if item["stage"] == "entry_execution_sizing_plan"
-                            and item["at"] <= entry_at]
+                            and before_entry(item)]
         decision = (max(sizing_decisions, key=lambda item: item["at"])
                     if sizing_decisions else
                     min(decisions, key=lambda item: abs((item["at"] - entry_at).total_seconds()))
@@ -1426,11 +1759,11 @@ def _paired_candidate(trade: dict[str, Any], path: dict[str, Any], shape: str) -
         fields["effective_venue"] = fields.get("effective_venue") or fields.get("sizing_venue_at_allocation")
         if decision:
             fields["reference_time"] = fields.get("reference_time") or decision["at"].isoformat()
+        clock_proof = _policy_clock_interval_proof(trade,path,decision,first_fill) if decision else None
+        classification_upper = first_fill["at"] + timedelta(seconds=1,microseconds=-1) if clock_proof else entry_at
         quantity_type = (_type_from_decision_receipt(
-            fields, decision_at=decision["at"], entry_at=entry_at)
+            fields, decision_at=decision["at"], entry_at=classification_upper)
             if decision and entry_at else "SAFE_UNKNOWN")
-        first_fill = min(path.get("fills") or [], key=lambda item: item["at"],
-                         default=None)
         order_no = str(first_fill.get("order_no") or "") if first_fill else ""
         sent = [item for item in path.get("order_sent") or []
                 if order_no and item["order_no"] == order_no]
@@ -1487,6 +1820,7 @@ def _paired_candidate(trade: dict[str, Any], path: dict[str, Any], shape: str) -
                                             if bound_decision and sent_identity else None),
                 **({"applied_cap_research_context": cap_context}
                    if cap_context is not None else {}),
+                **({"policy_decision_clock_proof":clock_proof} if clock_proof else {}),
                 "fixed_exit_assumption": False}
     if path.get("source_gap"):
         return {"status": "path_source_gap",
@@ -1611,7 +1945,9 @@ def _paired_candidate(trade: dict[str, Any], path: dict[str, Any], shape: str) -
             "fill_at": first["at"].isoformat(), "fill_clock_source": first["clock_source"],
             "decision_stage": decision["stage"],
             "decision_emitted_after_fill_proxy": decision["at"] > first["at"],
-            "venue_provenance": "verified" if decision_venue in {"KRX", "NXT"}
+            "venue_provenance": "verified" if not first.get("venue_assignment_authority")
+                and first.get("actual_execution_venue_verified") is not False
+                and decision_venue in {"KRX", "NXT"}
                 and first["venue"] == decision_venue else "unverified_conditional"}
 
 
@@ -1642,6 +1978,7 @@ def build_initial_quantity_replay(as_of: str, *, data_dir: Path = DATA_DIR,
                                      source_receipts=source_receipts,
                                      price_horizon_seconds=horizon)
     if path_cache is not None:
+        _join_native_research_buy_fills(eligible_trades, paths, data_dir)
         path_cache.update({"census": census, "paths": paths,
                            "pipeline_source_receipts": source_receipts,
                            "date_scan_seconds": date_scan_seconds,
@@ -1694,7 +2031,9 @@ def build_initial_quantity_replay(as_of: str, *, data_dir: Path = DATA_DIR,
                 "capture_exit_epoch": _timestamp(trade['exit_at']).timestamp(),
                 "fills": [
                     {"at": fill["at"].isoformat(), "price": fill["price"],
-                     "qty": fill["qty"], "venue": fill["venue"]}
+                     "qty": fill["qty"], "venue": fill["venue"],
+                     **{key: fill.get(key) for key in ("route", "venue_assignment_authority",
+                         "actual_execution_venue_verified", "broker_actual_execution_venue")}}
                     for fill in sorted(unique_fills.values(),
                                        key=lambda item: item["at"])],
                 "following_ticks": path.get("cap_ticks") or [],
@@ -1722,8 +2061,12 @@ def build_initial_quantity_replay(as_of: str, *, data_dir: Path = DATA_DIR,
                      "entry_date": trade["entry_date"], "quantity_type": quantity_type,
                      "entry_fill_at": first_fill["at"].isoformat() if first_fill else None,
                      "entry_fill_venue": first_fill.get("venue") if first_fill else None,
+                     "entry_fill_venue_verified": first_fill.get("actual_execution_venue_verified") if first_fill else False,
+                     "entry_fill_venue_assignment_authority": first_fill.get("venue_assignment_authority") if first_fill else None,
                      "entry_fill_clock_source": (first_fill.get("clock_source")
                                                  if first_fill else None),
+                     **({'native_buy_fill_source': path['native_buy_fill_source']}
+                        if path.get('native_buy_fill_source') else {}),
                      "applied_policy_status": parent.get("applied_policy_status"),
                      "applied_policy_file_sha256": parent.get("applied_policy_file_sha256"),
                      "applied_policy_runtime_pid": parent.get("applied_policy_runtime_pid"),
@@ -1732,6 +2075,11 @@ def build_initial_quantity_replay(as_of: str, *, data_dir: Path = DATA_DIR,
                         if "applied_cap_research_context" in parent else {}),
                      "policy_decision_stage": parent.get("policy_decision_stage"),
                      "policy_decision_at": parent.get("policy_decision_at"),
+                     **({"policy_decision_clock_proof": parent["policy_decision_clock_proof"],
+                         "entry_fill_clock_precision_sec":first_fill["clock_precision_sec"],
+                         "entry_fill_order_no":first_fill["order_no"],
+                         "entry_fill_execution_no":first_fill["execution_no"]}
+                        if parent.get("policy_decision_clock_proof") and first_fill else {}),
                      "entry_order_start_at": (matched_starts[0]["at"].isoformat()
                                               if len(matched_starts) == 1 else None),
                      "modeled_parent_net_pnl_krw": trade["modeled_parent_net_pnl_krw"],
@@ -2282,6 +2630,8 @@ def publish_refresh_quantity_evaluation(
     terminal_receipt: dict[str, Any] | None = None,
     following_bars: dict[str, Any] | None = None,
     timeout_research: dict[str, Any] | None = None,
+    publish_current: bool = True,
+    accepted_historical_record_ids: list[str] | None = None,
 ) -> dict[str, Any]:
     """Seal a post-apply replay and carry/eligible research decision.
 
@@ -2289,6 +2639,10 @@ def publish_refresh_quantity_evaluation(
     policy publisher must consume it before any runtime change is possible.
     """
     output_dir = _quantity_output_path(output_dir)
+    if type(publish_current) is not bool:
+        raise ValueError('quantity_stage_publication_mode_invalid')
+    if not publish_current and report.get('evaluation_algorithm') != REPAIR_VERSION:
+        raise ValueError('quantity_prepared_generation_requires_current_reader')
     from src.engine.scalping.initial_quantity_activation import (
         refresh_parent_policy_valid,
     )
@@ -2333,7 +2687,17 @@ def publish_refresh_quantity_evaluation(
     day = report["source_date"]
     base_output = output_dir
     committed = base_output / "committed_stage.json"
+    if committed.is_symlink() or (committed.exists() and committed.stat().st_size > 65536):
+        raise ValueError('quantity_stage_reference_invalid')
     previous_commit = committed.read_bytes() if committed.exists() else None
+    if previous_commit is not None:
+        _read_refresh_stage_reference(committed, base_output, day)
+    from src.engine.scalping import initial_quantity_monitor_projection as projection
+    reader_code = projection._code()
+    prepared = committed.with_name('committed_stage.' + _digest(reader_code) + '.json')
+    if prepared.is_symlink() or (prepared.exists() and prepared.stat().st_size > 65536):
+        raise ValueError('quantity_stage_reference_invalid')
+    previous_prepared = prepared.read_bytes() if prepared.exists() else None
     if report.get("evaluation_algorithm") == REPAIR_VERSION:
         verify_refresh_source_generations(report)
         run_hash = _digest({"report": report["report_content_sha256"],
@@ -2416,23 +2780,33 @@ def publish_refresh_quantity_evaluation(
     stage = {**body, "receipt_content_sha256": _digest(body)}
     stage_path = output_dir / f"initial_quantity_refresh_stage_{day}.json"
     stage_sha = _write_immutable_json(stage_path, stage)
-    from src.engine.scalping.initial_quantity_monitor_projection import publish as publish_monitor_projection
-    monitor_projection = publish_monitor_projection(stage_path, stage, report, data_root=DATA_DIR)
+    monitor_projection = projection.publish(stage_path, stage, report, data_root=DATA_DIR,
+        publish_current=publish_current, accepted_historical_record_ids=accepted_historical_record_ids)
     if report.get("evaluation_algorithm") == REPAIR_VERSION:
         from src.engine.scalping.pre_submit_delay_initial_policy import _atomic
         import fcntl
         if monitor_projection is None and not refresh_quantity_stage_terminal_valid(stage):
             raise ValueError("quantity_generation_validation_failed")
+        if reader_code != projection._code():
+            raise ValueError('quantity_stage_reader_changed')
         with (base_output / ".commit.lock").open("a+b") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX)
             latest = committed.read_bytes() if committed.exists() else None
             if latest != previous_commit:
-                if latest and json.loads(latest).get("stage_sha256") == stage_sha:
-                    return stage
-                raise ValueError("quantity_stage_cas_conflict")
-            _atomic(committed, {"schema":"initial_quantity_stage_reference_v2",
+                if not (publish_current and latest
+                        and json.loads(latest).get('stage_sha256') == stage_sha):
+                    raise ValueError("quantity_stage_cas_conflict")
+            if (prepared.read_bytes() if prepared.exists() else None) != previous_prepared:
+                raise ValueError('quantity_stage_cas_conflict')
+            reference = {"schema":"initial_quantity_stage_reference_v2",
                 "source_date":day, "stage_path":str(stage_path.resolve()),
-                "stage_sha256":stage_sha})
+                "stage_sha256":stage_sha}
+            if publish_current:
+                _atomic(committed, reference)
+            if not publish_current or previous_prepared is not None:
+                parent = committed.read_bytes() if committed.exists() else None
+                _atomic(prepared, dict(reference, reader_code=reader_code,
+                    committed_parent_sha256=(hashlib.sha256(parent).hexdigest() if parent is not None else None)))
     return stage
 
 
@@ -2443,9 +2817,7 @@ def verify_refresh_source_generations(report, *, pipeline_reference_only=False):
     for day, gen in census.get("persisted_fact_generations", {}).items():
         if gen.get("sha256") and _file_sha256(Path(gen["path"])) != gen["sha256"]:
             raise ValueError("quantity_fact_source_generation_changed")
-        current_issue=_quantity_fact_generation_issue(day)
-        if current_issue is None and json.loads(Path(gen['path']).read_bytes()).get('actual_cost_source_generation')!=gen.get('cost_generation'):
-            current_issue='persisted_fact_cost_generation_stale'
+        current_issue=_quantity_original_fact_generation_issue(day)
         if current_issue != gen.get("issue") or gen.get('cost_generation')!=source_generation(DATA_DIR,day):
             raise ValueError("quantity_fact_cost_generation_changed")
     from src.engine.scalping.initial_quantity_source_cache import verify_completion_overlay_generations
@@ -2462,7 +2834,21 @@ def verify_refresh_source_generations(report, *, pipeline_reference_only=False):
                 if not native.source_receipt_matches(gen, data_root=DATA_DIR):
                     raise ValueError("quantity_pipeline_source_generation_changed")
                 continue
-        if _file_sha256(Path(gen["path"])) != gen.get("sha256"):
+        path=Path(gen['path'])
+        if not path.exists() and path.name.endswith('.jsonl'):
+            from src.engine.automation.main_trailing_source_store import _archive_logical_authority, _archive_generation
+            # The native compressor/enrollment already verified complete
+            # logical SHA/size and gzip CRC against this physical generation.
+            proof=_archive_logical_authority(path)
+            if proof is None:
+                raise ValueError('quantity_pipeline_source_generation_changed')
+            _archive_generation(DATA_DIR,path)
+            if (gen.get('sha256')!=proof[0]['logical_content_sha256']
+                    or gen.get('size_bytes')!=proof[0]['logical_size_bytes']
+                    or gen.get('archive_identity_valid') is not None):
+                raise ValueError('quantity_pipeline_source_generation_changed')
+            continue
+        if _file_sha256(path) != gen.get("sha256"):
             raise ValueError("quantity_pipeline_source_generation_changed")
     for key in ("source_quality_by_entry_date", "source_quality_by_exit_date"):
         for gen in census.get(key, {}).values():
@@ -2470,22 +2856,50 @@ def verify_refresh_source_generations(report, *, pipeline_reference_only=False):
                 raise ValueError("quantity_source_quality_generation_changed")
 
 
-def committed_refresh_stage_path(output_dir: Path, day: str) -> Path:
-    legacy = output_dir / f"initial_quantity_refresh_stage_{day}.json"
-    pointer = output_dir / "committed_stage.json"
-    if not pointer.exists():
-        return legacy
+def _read_refresh_stage_reference(pointer, output_dir, day, *, read=None):
     if pointer.is_symlink() or pointer.stat().st_size > 65536:
-        raise ValueError("quantity_stage_reference_invalid")
-    ref = json.loads(pointer.read_bytes())
-    path = Path(ref["stage_path"])
-    if (ref.get("schema") != "initial_quantity_stage_reference_v2"
-            or ref.get("source_date") != day
-            or not path.is_absolute() or path.is_symlink()
-            or not path.resolve().is_relative_to(output_dir.resolve() / "generations")
-            or _file_sha256(path) != ref.get("stage_sha256")):
-        raise ValueError("quantity_stage_reference_invalid")
-    return path
+        raise ValueError('quantity_stage_reference_invalid')
+    ref = read(pointer, limit=65536) if read else json.loads(pointer.read_bytes())
+    if (not isinstance(ref, dict) or not isinstance(ref.get('stage_path'), str)
+            or ref.get('schema') != 'initial_quantity_stage_reference_v2'
+            or ref.get('source_date') != day
+            or re.fullmatch(r'[0-9a-f]{64}', str(ref.get('stage_sha256'))) is None):
+        raise ValueError('quantity_stage_reference_invalid')
+    path = Path(ref['stage_path'])
+    if (not path.is_absolute() or path.is_symlink()
+            or not path.resolve().is_relative_to(output_dir.resolve()/'generations')
+            or not path.is_file() or path.stat().st_size > 1024*1024
+            or (not read and _file_sha256(path) != ref['stage_sha256'])):
+        raise ValueError('quantity_stage_reference_invalid')
+    if read:
+        read(path, limit=1024*1024, expected_sha=ref['stage_sha256'])
+    return ref
+
+
+def committed_refresh_stage_path(output_dir: Path, day: str, *, read=None) -> Path:
+    """Resolve an exact reader's successor without changing the issued parent.
+
+    Another publication or a damaged exact reference must not silently fall back.
+    Health supplies its bounded, generation-tracked reader to the common parser.
+    """
+    from src.engine.scalping.initial_quantity_monitor_projection import _code
+    output_dir = _quantity_output_path(output_dir)
+    committed = output_dir/'committed_stage.json'
+    code = _code()
+    prepared = committed.with_name('committed_stage.' + _digest(code) + '.json')
+    exact = prepared.exists() or prepared.is_symlink()
+    pointer = prepared if exact else committed
+    if not pointer.exists() and not pointer.is_symlink():
+        return output_dir/f'initial_quantity_refresh_stage_{day}.json'
+    ref = _read_refresh_stage_reference(pointer, output_dir, day, read=read)
+    if exact:
+        if committed.exists() or committed.is_symlink():
+            _read_refresh_stage_reference(committed, output_dir, day, read=read)
+        parent_sha = _file_sha256(committed) if committed.exists() else None
+        if (ref.get('reader_code') != code or 'committed_parent_sha256' not in ref
+                or ref['committed_parent_sha256'] != parent_sha):
+            raise ValueError('quantity_stage_reference_invalid')
+    return Path(ref['stage_path'])
 
 
 def refresh_quantity_stage_terminal_valid(receipt: Any) -> bool:
@@ -2964,6 +3378,13 @@ def _main_impl(argv: list[str] | None = None) -> int:
                 or report["census"].get("entry_on_or_after") != refresh_window(parent)):
             raise ValueError("existing_replay_refresh_window_invalid")
     else:
+        if args.output_dir or args.output or args.policy_output:
+            # Publication prepares late-cost derivatives before pinning the
+            # batch. Read-only census/observer/replay consumers never publish.
+            from src.engine.scalping.initial_quantity_source_cache import prepare_completion_cost_revisions
+            prepare_completion_cost_revisions(args.data_dir.resolve(),
+                refresh_window(parent) if parent else BASELINE.isoformat(), args.as_of,
+                validate_day=_quantity_original_fact_generation_issue)
         report = build_initial_quantity_replay(
             args.as_of, data_dir=args.data_dir, performance=performance,
             entry_on_or_after=refresh_window(parent) if parent else None,
@@ -3057,6 +3478,7 @@ def main(argv: list[str] | None = None) -> int:
     import sys
     from src.engine.lifecycle.research_admission import direct_job
     from src.engine.lifecycle.research_disk_budget import use
+    from src.engine.infrastructure.validation_digest_session import postclose_session
     probe = argparse.ArgumentParser(add_help=False)
     probe.add_argument("--as-of")
     probe.add_argument("--replay", type=Path)
@@ -3069,7 +3491,7 @@ def main(argv: list[str] | None = None) -> int:
     root = args.output_dir or args.data_dir / "report/initial_entry_quantity_type_policy"
     # Match the existing dispatcher admission deadline. Another heavy owner
     # legitimately reserves both slots for longer than the direct CLI's 60s.
-    with direct_job(args.data_dir, "initial_entry_quantity_refresh", day, timeout=14400), use(root), use(args.data_dir / "report/initial_entry_quantity_type_policy"):
+    with direct_job(args.data_dir, "initial_entry_quantity_refresh", day, timeout=14400), postclose_session(args.data_dir, day), use(root), use(args.data_dir / "report/initial_entry_quantity_type_policy"):
         return _main_impl(argv)
 
 

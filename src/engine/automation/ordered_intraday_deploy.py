@@ -18,7 +18,7 @@ import uuid
 import shlex
 import stat
 import time
-from contextlib import contextmanager
+from contextlib import contextmanager, ExitStack
 from datetime import datetime
 from pathlib import Path
 
@@ -26,6 +26,54 @@ from src.engine.automation import intraday_release_handoff as H
 from src.engine.infrastructure import runtime_release_router as R
 
 CONFIRM = 'APPROVED_ORDERED_INTRADAY_DEPLOY_AND_RESTART'
+
+
+def verify_candidate_delay_code(day, root, commit):
+    """Retain a natively verified prepared origin across the first live handoff."""
+    manifest_path = H.bootstrap.manifest_path(day)
+    manifest_raw = manifest_path.read_bytes() if manifest_path.exists() else None
+    try:
+        return H.verify_candidate_delay_code(day, root, commit)
+    except ValueError as exc:
+        if str(exc) != 'entry_consumer_original_code_contract_invalid':
+            raise
+    from src.engine.automation import prepared_policy_code_handoff as P
+    from src.engine.scalping.pre_submit_delay_initial_policy import CONTRACT_PATHS
+    manifest = json.loads(manifest_raw)
+    bound = manifest['pre_submit_delay_handoff']
+    selected, selected_commit = R.selected_release(H.DATA_DIR.parent)
+    paths = {name: name for name in CONTRACT_PATHS}
+    origin = P.resolve_prepared_code_origin(H.DATA_DIR, day, family='pre_submit_delay',
+        policy_sha=bound['policy_sha256'], expected=bound['code_contract_sha256'], paths=paths,
+        selected_root=selected, selected_commit=selected_commit)
+    if origin['basis'] != 'verified_selected_prepared_code_handoff':
+        raise ValueError('deployment_prepared_delay_origin_required')
+    changed = H._verify_entry_code_delta(root, commit, origin['origin_commit'], paths,
+                                         bound['code_contract_sha256'])
+    if manifest_path.read_bytes() != manifest_raw:
+        raise ValueError('deployment_prepared_delay_manifest_changed')
+    return dict(status='pass', target_date=day, origin_commit=origin['origin_commit'],
+                release_commit=commit, changed_consumer_paths=changed,
+                policy_effect='unchanged', actual_pid_consumed=False, prepared_code_origin=origin)
+
+
+def inherit_prepared_delay_code(workspace, day, candidate, check):
+    """Run under ordered locks after drain, before selection; no policy writes."""
+    origin = check.get('prepared_code_origin')
+    if not origin:
+        return None
+    from src.engine.automation import prepared_policy_code_handoff as P
+    if any(H._sha(path) != sha for path, sha in origin['sources'].items()):
+        raise ValueError('deployment_prepared_delay_source_changed')
+    previous_path = Path(origin['code_handoff_receipt_path'])
+    previous = P._read(previous_path)
+    prepared = P._read(previous['prepared_receipt'])
+    return P.issue(Path(workspace)/'data', day, family='pre_submit_delay',
+        policy_sha=previous['policy_sha256'], expected=previous['original_code_sha256'],
+        paths=previous['paths'], release_root=candidate,
+        prepared_receipt=previous['original_prepared_receipt'],
+        origin_verification=prepared['verification_path'], confirm=P.AUTHORITY,
+        previous_handoff=previous_path)
 
 
 @contextmanager
@@ -88,6 +136,32 @@ def verify_candidate_active_policy(workspace, candidate, commit, day):
                 candidate_commit=commit, bundle_sha256=bundle['bundle_sha256'], policy_effect='unchanged')
 
 
+def verify_candidate_report_currentness(workspace, candidate, day):
+    """Use existing bounded report consumers before any Main drain.
+
+    Historical economic gaps remain evidence; invalidated current report/code
+    bindings must be natively republished by their owners before a transition.
+    """
+    from src.engine.monitoring import main_trailing_currentness as trailing
+    from src.engine.error_detectors.artifact_freshness import _initial_quantity_semantics
+    data = Path(workspace)/'data'
+    source_date = H.preserve_checklist(day)['source_date']
+    holding = H._read(data/'report/monitor_snapshots'/('holding_exit_observation_'+source_date+'.json'))
+    observed = trailing.observe(data, holding, target_date=day)
+    if observed.get('status') != 'generation_current':
+        raise ValueError('deployment_trailing_report_not_current')
+    quantity = _initial_quantity_semantics(Path(candidate), source_date)
+    if (quantity.get('bounded_contract_validated') is not True
+            or quantity.get('observation_complete') is not True
+            or 'initial_quantity_stage_missing_after_date' in quantity.get('findings', [])
+            or quantity.get('postclose_stage_status') in {None, 'not_observed', 'source_invalid'}):
+        raise ValueError('deployment_quantity_report_not_current:'+','.join(quantity.get('findings', [])))
+    return dict(status='pass', source_date=source_date, target_date=day,
+        trailing=observed, quantity={key:quantity.get(key) for key in (
+            'status','findings','postclose_stage_status','observation_generation','source_reference_count')},
+        policy_effect='unchanged', runtime_effect=False, actual_pid_consumed=False)
+
+
 def _metadata_signature(path):
     info = Path(path).lstat()
     return tuple(getattr(info, "st_" + name) for name in (
@@ -98,6 +172,42 @@ def _owned_metadata(path):
     """Reuse the startup owner's bounded, strict, no-follow regular reader."""
     value, raw = R._startup_receipt(Path(path))
     return value, raw, _metadata_signature(path)
+
+
+def verify_candidate_p5(workspace, day, candidate, commit, path, expected_sha, selection):
+    """Authenticate pre-drain execution proof against its original selector.
+
+    Candidate execution and then-selected incumbent are separate identities.
+    Never inherit a predecessor's P5 pointer or accept a prepared successor P5.
+    """
+    path = Path(path or '')
+    if (not path.is_absolute() or path.resolve() != path
+            or path.parent.parent != Path(workspace)/'data/report/main_startup_validation'/day
+            or path.name != 'final.json'
+            or re.fullmatch('[0-9a-f]{32}', path.parent.name) is None
+            or re.fullmatch('[0-9a-f]{64}', str(expected_sha)) is None):
+        raise ValueError('deployment_candidate_p5_reference_invalid')
+    proof, raw, signature = _owned_metadata(path)
+    if (_digest(raw) != expected_sha
+            or proof.get('schema') != 'main_policy_load_exit_validation_v1'
+            or proof.get('run_id') != path.parent.name or proof.get('status') != 'passed'
+            or proof.get('findings') != [] or proof.get('target_date') != day
+            or type(proof.get('child_exit_code')) is not int or proof['child_exit_code'] != 0
+            or proof.get('failure_phase') is not None
+            or proof.get('execution_release_root') != str(candidate)
+            or proof.get('execution_release_commit') != commit
+            or proof.get('selected_release_root') != selection.get('release_root')
+            or proof.get('selected_release_commit') != selection.get('git_commit')
+            or any(proof.get(k) is not True for k in (
+                'child_terminated', 'load_check_passed', 'protected_sources_unchanged'))
+            or any(proof.get(k) is not False for k in (
+                'runtime_effect', 'allowed_runtime_apply', 'actual_pid_consumed'))):
+        raise ValueError('deployment_candidate_p5_invalid')
+    return dict(path=str(path), sha256=expected_sha, signature=signature,
+                target_date=day, execution_release_root=str(candidate),
+                execution_release_commit=commit,
+                selected_release_root=selection['release_root'],
+                selected_release_commit=selection['git_commit'])
 
 
 
@@ -237,17 +347,132 @@ def _wait(predicate, timeout, reason):
         time.sleep(0.25)
 
 
-def execute(driver):
+@contextmanager
+def _source_database_epoch(workspace, day):
+    """Keep native WAL readers resident across drain, launch and attestation."""
+    from src.engine.automation import main_trailing_source_store as store
+    from src.engine.lifecycle.research_input_budget import Claim
+    data = (Path(workspace)/'data').resolve(strict=True)
+    with ExitStack() as readers:
+        for namespace in store.NAMESPACES:
+            target = store._index_path(data, namespace, day)
+            if target.exists() or target.is_symlink():
+                claim = Claim(2*1024*1024)
+                readers.callback(claim.close)
+                readers.enter_context(store._connection(target, readonly=True))
+        yield
+
+
+@contextmanager
+def sentinel_preparation_lock(driver):
+    """Reserve the existing producer before drain and release before startup."""
+    if getattr(driver, '_sentinel_preparation_owned', False) is True:
+        yield
+        return
+    path = Path(driver.workspace)/'tmp/run_buy_funnel_sentinel.lock'
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open('a') as lock:
+        def acquire():
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                return False
+            return True
+        _wait(acquire, 60, 'deployment_sentinel_preparation_owner_busy')
+        driver._sentinel_preparation_owned = True
+        try:
+            yield
+        finally:
+            driver._sentinel_preparation_owned = False
+
+
+def stopped_preparation_failure_sources(failed, failed_path):
+    """Authenticate native preparation and an exact retained prestart failure."""
+    phase_error = failed.get('failed_phase'), failed.get('error')
+    if failed.get('phase') != 'failed' or failed.get('status') != 'fail':
+        return {}
+    sources = {}
+    known = phase_error in {
+        ('selected', '[Errno 11] Resource temporarily unavailable'),
+        ('prepared', 'tuple indices must be integers or slices, not str'),
+        ('prepared', 'deployment_selection_changed')}
+    if not known and phase_error[0] == 'prepared':
+        # A short native P5 reference retains the original failed report. It
+        # authorizes only stopped recovery after the missing prepared-code
+        # handoffs have been repaired, never launch or a replacement verdict.
+        error = phase_error[1]
+        if not isinstance(error, str) or len(error) > 1024*1024:
+            return {}
+        base = Path(failed_path).parents[4]/'report/main_startup_validation'/failed['target_date']
+        short = error.startswith('selected_p5_failed:')
+        if short:
+            path = Path(error.removeprefix('selected_p5_failed:'))
+            if (path.parent.parent != base or path.name != 'final.json'
+                    or re.fullmatch('[0-9a-f]{32}', path.parent.name) is None):
+                raise ValueError('deployment_prestart_failure_identity_invalid')
+            native, raw, _ = _owned_metadata(path)
+            value = native
+            finding = 'ValueError:prepared_code_intraday_custody_invalid'
+        else:
+            if not error.startswith("{'schema': 'main_policy_load_exit_validation_v1'"):
+                return {}
+            value = ast.literal_eval(error)
+            run = value.get('run_id', '')
+            if not isinstance(run, str) or re.fullmatch('[0-9a-f]{32}', run) is None:
+                raise ValueError('deployment_prestart_failure_identity_invalid')
+            path = base/run/'final.json'
+            native, raw, _ = _owned_metadata(path)
+            finding = 'ValueError:startup_main_code_pair_unreviewed:src/engine/scalping/reversal_code_handoff.py'
+        intake = native.get('native_preparation_checks', {}).get('intake', {})
+        if (native != value or native.get('schema') != 'main_policy_load_exit_validation_v1'
+                or native.get('status') != 'failed' or native.get('failure_phase') != 'intake'
+                or native.get('target_date') != failed.get('target_date')
+                or native.get('findings') != [finding]
+                or native.get('run_id') != path.parent.name
+                or any(native.get(key) is not False for key in ('runtime_effect','actual_pid_consumed','allowed_runtime_apply'))
+                or intake.get('status') != 'pass' or intake.get('findings') != []
+                or intake.get('target_date') != failed.get('target_date')
+                or intake.get('selected_release_commit') != failed.get('candidate_commit')
+                or intake.get('verification_code_commit') != failed.get('candidate_commit')
+                or intake.get('verification_code_root') != failed.get('candidate_root')):
+            raise ValueError('deployment_prestart_failure_binding_invalid')
+        sources[str(path)] = _digest(raw)
+        known = True
+    if not known:
+        return {}
+    if phase_error[0] == 'prepared':
+        window = failed.get('sentinel_source_window') or {}
+        summary = failed.get('sentinel_summary') or {}
+        if (window.get('schema') != 'sentinel_source_window_preparation_v1'
+                or window.get('target_date') != failed.get('target_date')
+                or window.get('runtime_effect') is not False or summary.get('status') != 'ok'
+                or summary.get('runtime_effect') is not False):
+            raise ValueError('deployment_prepared_stage_proof_invalid')
+    for module in ('intraday_release_handoff', 'runtime_policy_bootstrap', 'auxiliary_reader_readiness'):
+        path = Path(failed_path).with_name('selected-' + module + '.log')
+        value, raw, _ = _owned_metadata(path)
+        if (value.get('status') != 'pass' or value.get('target_date') != failed.get('target_date')
+                or value.get('findings') or value.get('actual_pid_consumed') is True):
+            raise ValueError('deployment_selected_preparation_proof_invalid')
+        sources[str(path)] = _digest(raw)
+    return sources
+
+
+def execute(driver, *, validate_prepared=None):
     """Order is deliberate: no selection or shared document write before drain."""
     with R.scheduled_execution_lease(driver.workspace, exclusive=True):
         try:
             driver.preflight()
-            driver.acquire_hold()
-            driver.drain()
-            driver.publish()
-            driver.prepare()
-            driver.start()
-            return driver.attest()
+            with _source_database_epoch(driver.workspace, driver.day):
+                with sentinel_preparation_lock(driver):
+                    driver.acquire_hold()
+                    driver.drain()
+                    driver.publish()
+                    driver.prepare()
+                if validate_prepared is not None:
+                    validate_prepared(driver)
+                driver.start()
+                return driver.attest()
         except BaseException as exc:
             driver.fail(exc)
             raise
@@ -296,8 +521,199 @@ def _compatible_validation_session(previous, candidate, module):
     except (OSError,ValueError,SyntaxError,UnicodeError):
         return False
 
+def pin_collector_shutdown(workspace, identity):
+    """Pin the actual collector actor before any stop request is published."""
+    path = Path(workspace) / 'data/runtime/scalp_micro_reversion_forward_collector/latest.json'
+    payload, raw = R._startup_receipt(path)
+    snapshot = payload.get('collector_snapshot') or {}
+    if snapshot.get('collector_lifecycle') == 'closed':
+        return _pin_closed_collector(Path(workspace), identity, path, payload, raw)
+    if not Path('/proc', str(identity['pid'])).exists():
+        proof = H.closed_consumption_observation()
+        if (proof.get('basis') != 'interrupted_consumed_process' or proof.get('pid_identity') != identity
+                or proof.get('collector_path') != str(path) or proof.get('collector_sha256') != _digest(raw)
+                or _main_pids() or not _session_absent()):
+            raise ValueError('deployment_interrupted_collector_unproven')
+        return dict(path=str(path), sha256=_digest(raw), pid=identity['pid'], start_ticks=identity['start_ticks'],
+            sequence_epoch=proof['collector_epoch'], basis='interrupted_consumed_process',
+            source_admission='unverified_interrupted_epoch', terminal_verified=False,
+            original_collector_receipt=payload, historical_consumption=proof)
+
+    if (snapshot.get('process_pid') != identity['pid']
+            or snapshot.get('process_start_ticks') != identity['start_ticks']
+            or snapshot.get('collector_lifecycle') != 'running'
+            or type(snapshot.get('sequence_epoch')) is not int
+            or snapshot['sequence_epoch'] <= 0
+            or payload.get('valid_until_epoch', 0) < time.time()
+            or snapshot.get('source_contract') != 'main_market_source_v1'):
+        raise ValueError('deployment_collector_shutdown_actor_unproven')
+    return dict(path=str(path), sha256=_digest(raw), pid=identity['pid'],
+                start_ticks=identity['start_ticks'], sequence_epoch=snapshot['sequence_epoch'],
+                enqueued_count=snapshot['enqueued_count'])
+
+
+def _pin_closed_collector(workspace, identity, path, payload, raw):
+    """Bind an already closed native epoch without requiring Main to be closed.
+
+    A modern observer-only latency canary can end before its live Main. Legacy
+    closures still require market-close and WS actor proof. Both require exact
+    native writer reconciliation before any restart request.
+    """
+    from src.engine.error_detectors.process_health import _is_expected_thread_terminal
+    selected, _ = R._startup_receipt(workspace/'data/runtime/runtime_release_selection.json')
+    heartbeat, _ = R._startup_receipt(workspace/'tmp/error_detector_heartbeat.json')
+    receipt = selected.get('actual_pid_receipt') or {}
+    terminal = (heartbeat.get('threads') or {}).get('sniper_engine') or {}
+    circuit = heartbeat.get('ai_circuit') or {}
+    snapshot = payload['collector_snapshot']
+    now = datetime.now(H.KST)
+    recorded = datetime.fromisoformat(str(receipt.get('recorded_at_kst') or ''))
+    closed = datetime.fromisoformat(str(payload.get('generated_at') or ''))
+    ended = datetime.fromisoformat(str(terminal.get('last_beat') or ''))
+    epoch = snapshot.get('sequence_epoch')
+    canary_stop = snapshot.get('canary_auto_stop_reason')
+    if (any(value.tzinfo is None for value in (recorded, closed, ended))
+            or not recorded <= closed <= now
+            or not recorded <= ended <= now
+            or any(value.astimezone(H.KST).date() != now.date() for value in (recorded, closed, ended))
+            or selected.get('actual_pid_consumed') is not True
+            or receipt.get('pid') != identity['pid'] or receipt.get('start_ticks') != identity['start_ticks']
+            or receipt.get('process_cwd') != identity['cwd']
+            or identity['cwd'] != str(Path(selected.get('release_root') or '')/'src')
+            or type(epoch) is not int or epoch <= 0
+            or (heartbeat.get('main_loop') or {}).get('pid') != identity['pid']
+            or circuit.get('pid') != identity['pid'] or circuit.get('process_start_ticks') != identity['start_ticks']
+            or (not canary_stop and (not ended <= closed or terminal.get('alive') is not False
+                or type(terminal.get('unresolved_scalping_count')) is not int
+                or terminal['unresolved_scalping_count'] != 0 or terminal.get('unresolved_scalping_codes') != ''
+                or not _is_expected_thread_terminal('sniper_engine', terminal, now_ts=now.timestamp())))):
+        raise ValueError('deployment_closed_collector_actor_or_terminal_unproven')
+    pin = dict(path=str(path), sha256=_digest(raw), pid=identity['pid'],
+        start_ticks=identity['start_ticks'], sequence_epoch=epoch,
+        enqueued_count=snapshot['enqueued_count'],
+        basis='native_observer_canary_stop' if canary_stop else 'native_market_close', terminal=terminal)
+    if canary_stop:
+        from src.engine.scalping.micro_reversion import canary_monitor as C
+        guard_path = Path(selected['release_root'])/'configs'/C.DEFAULT_GUARD_PATH.name
+        if guard_path.is_symlink() or not stat.S_ISREG(guard_path.stat().st_mode):
+            raise ValueError('deployment_canary_guard_config_unproven')
+        guard = C.load_canary_guard(guard_path)
+        evaluated = json.loads(json.dumps(C.evaluate_canary_snapshot(snapshot, guard)))
+        reasons = set(evaluated.get('stop_reasons') or ()) - {'prior_auto_stop:'+str(canary_stop)}
+        if (not isinstance(canary_stop, str) or not reasons
+                or set(canary_stop.split(';')) != reasons
+                or any(not reason.startswith(('producer_callback_latency_p95_exceeded:',
+                    'producer_callback_latency_p99_exceeded:')) for reason in reasons)
+                or evaluated.get('stop_required') is not True or evaluated.get('latency_guard_armed') is not True
+                or payload.get('canary_guard') != evaluated
+                or payload.get('guard_config_sha256') != guard.config_sha256
+                or payload.get('baseline_id') != guard.baseline_id
+                or H._sha(guard_path) != guard.config_sha256
+                or snapshot.get('process_pid') != identity['pid']
+                or snapshot.get('process_start_ticks') != identity['start_ticks']):
+            raise ValueError('deployment_observer_canary_close_unproven')
+        pin['guard_config_source'] = dict(path=str(guard_path), sha256=guard.config_sha256)
+    if 'process_pid' in snapshot or 'process_start_ticks' in snapshot:
+        if (snapshot.get('process_pid') != identity['pid']
+                or snapshot.get('process_start_ticks') != identity['start_ticks']
+                or snapshot.get('source_contract') != 'main_market_source_v1'):
+            raise ValueError('deployment_market_closed_collector_unproven')
+    else:
+        # Legacy receipts alone need the historical WS actor. A modern closed
+        # collector may have stopped before this actor ever published a frame.
+        frame_path = workspace/'data/runtime/kiwoom_ws_snapshot/latest.json'
+        frame, frame_raw = R._startup_receipt(frame_path)
+        producer = frame.get('shared_transport_producer') or {}
+        frame_at = frame.get('generated_at_epoch')
+        if (type(frame_at) not in (int, float)
+                or not recorded.timestamp() <= frame_at <= closed.timestamp()
+                or producer.get('schema') != 'shared_ws_transport_producer_v1'
+                or producer.get('process') != dict(pid=identity['pid'], start_ticks=int(identity['start_ticks']),
+                    boot_id=Path('/proc/sys/kernel/random/boot_id').read_text().strip())
+                or producer.get('source_root') != selected.get('release_root')
+                or producer.get('source_commit') != selected.get('git_commit')
+                or (producer.get('completed_bar_integrity') or {}).get('observer_epoch') != epoch):
+            raise ValueError('deployment_market_closed_collector_unproven')
+        pin['actor_source'] = dict(path=str(frame_path), sha256=_digest(frame_raw))
+    # Require durable full native closure BEFORE publishing a restart flag.
+    pin['closed_receipts'] = verify_collector_shutdown(pin)['receipts']
+    return pin
+
+
+def verify_collector_shutdown(pin):
+    """Process exit is insufficient: require its immutable, native closed epoch."""
+    from src.engine.scalping.micro_reversion.observer_source_quality import (
+        main_raw_epoch_validation, source_close_verified, source_loss_counters, CANARY_FORBIDDEN_TRUE_FIELDS)
+    path = Path(pin['path'])
+    payload, raw = R._startup_receipt(path)
+    snapshot = payload.get('collector_snapshot') or {}
+    if pin.get('basis') == 'interrupted_consumed_process':
+        if (_digest(raw) != pin['sha256'] or payload != pin['original_collector_receipt']
+                or H.closed_consumption_observation() != pin['historical_consumption']
+                or _main_pids() or not _session_absent()):
+            raise ValueError('deployment_interrupted_collector_changed')
+        return dict(status='preserved_unverified', pid=pin['pid'], start_ticks=pin['start_ticks'],
+            sequence_epochs=[pin['sequence_epoch']], receipts=[], terminal_verified=False,
+            source_admission='unverified_interrupted_epoch')
+    epochs = snapshot.get('reconciled_sequence_epochs') or []
+    if (not isinstance(epochs, list) or not epochs
+            or any(type(epoch) is not int or epoch <= 0 for epoch in epochs)):
+        raise ValueError('deployment_collector_closed_epochs_invalid')
+    already_closed = pin.get('basis') in {'native_market_close', 'native_observer_canary_stop'}
+    guard = pin.get('guard_config_source')
+    if pin.get('basis') == 'native_observer_canary_stop' and not isinstance(guard, dict):
+        raise ValueError('deployment_canary_guard_config_missing')
+    if guard and (Path(guard['path']).is_symlink() or H._sha(guard['path']) != guard['sha256']):
+        raise ValueError('deployment_canary_guard_config_changed')
+    if already_closed:
+        actor = pin.get('actor_source')
+        if (_digest(raw) != pin['sha256']
+                or actor is not None and _digest(R._startup_receipt(Path(actor['path']))[1]) != actor['sha256']
+                or actor is None and (snapshot.get('process_pid') != pin['pid']
+                    or snapshot.get('process_start_ticks') != pin['start_ticks']
+                    or snapshot.get('source_contract') != 'main_market_source_v1')):
+            raise ValueError('deployment_market_closed_collector_changed')
+    if (not already_closed and (snapshot.get('process_pid') != pin['pid']
+            or snapshot.get('process_start_ticks') != pin['start_ticks'])
+            or pin['sequence_epoch'] not in epochs
+            or snapshot.get('enqueued_count', -1) < pin['enqueued_count']):
+        raise ValueError('deployment_collector_closed_identity_invalid')
+    dates = sorted(snapshot.get('writer_bytes_by_trade_date') or {})
+    if not dates:
+        dates = [datetime.fromisoformat(payload['generated_at']).astimezone(H.KST).date().isoformat()]
+    proofs = []
+    for day in dates:
+        receipt = path.parent / 'closed' / f"{day}-{snapshot['sequence_epoch']}.json"
+        closed, raw = R._startup_receipt(receipt)
+        native = main_raw_epoch_validation(closed, source_date=day)
+        # A latency canary deliberately remains semantically ineligible. The
+        # deployment consumes byte closure only, never rewrites that guard or
+        # grants research/trading admission to the stopped epoch.
+        canary_drained = (pin.get('basis') == 'native_observer_canary_stop'
+            and closed.get('canary_guard') == payload.get('canary_guard')
+            and closed.get('guard_config_sha256') == guard['sha256']
+            and closed.get('baseline_id') == payload.get('baseline_id')
+            and native.get('status') == 'main_raw_epoch_contract_invalid'
+            and snapshot.get('source_contract') == 'main_market_source_v1'
+            and snapshot.get('collector_lifecycle') == 'closed' and source_close_verified(snapshot)
+            and all(type(snapshot.get(k)) is int and snapshot[k] == 0 for k in source_loss_counters(snapshot))
+            and snapshot.get('broker_order_forbidden') is True
+            and all(snapshot.get(k) is False for k in CANARY_FORBIDDEN_TRUE_FIELDS))
+        if (closed.get('collector_snapshot') != snapshot
+                or not (canary_drained or native.get('eligible'))):
+            raise ValueError('deployment_collector_closed_epoch_invalid')
+        proofs.append(dict(path=str(receipt), sha256=_digest(raw), source_date=day))
+    if 'closed_receipts' in pin and proofs != pin['closed_receipts']:
+        raise ValueError('deployment_collector_closed_receipts_changed')
+    return dict(status='verified', pid=pin['pid'], start_ticks=pin['start_ticks'],
+                sequence_epochs=epochs, receipts=proofs,
+                source_admission='native_semantics_unchanged',
+                observer_canary_stopped=pin.get('basis') == 'native_observer_canary_stop')
+
+
 class Deployment:
-    def __init__(self, workspace, candidate, day, confirm, *, adopt_failed_hold=False):
+    def __init__(self, workspace, candidate, day, confirm, *, adopt_failed_hold=False,
+                 candidate_p5_path=None, candidate_p5_sha256=None):
         if confirm != CONFIRM:
             raise ValueError('ordered_deployment_explicit_approval_required')
         H._today(day, None)
@@ -317,6 +733,13 @@ class Deployment:
         self.failed_hold_adoption = None
         self._preflight_native_verified = False
         self.preserve_editable_checklist = True
+        self.candidate_p5_path = candidate_p5_path
+        self.candidate_p5_sha256 = candidate_p5_sha256
+
+    def pin_candidate_p5(self):
+        self.candidate_p5 = verify_candidate_p5(self.workspace, self.day,
+            self.candidate, self.commit, self.candidate_p5_path,
+            self.candidate_p5_sha256, json.loads(self.before))
 
     def run_json(self, root, module, *args, timeout=120):
         # Compatible predecessors share this invocation's digest session too.
@@ -351,6 +774,7 @@ class Deployment:
         self.candidate, self.commit = R.validate_release(self.workspace, {
             'schema': 'runtime_release_selection_v1', 'workspace': str(self.workspace),
             'release_root': str(self.candidate), 'git_commit': commit})
+        self.pin_candidate_p5()
         if Path(__file__).resolve().parents[3] != self.candidate:
             raise ValueError('deployment_must_execute_reviewed_candidate_code')
         if self.candidate == self.previous:
@@ -365,16 +789,27 @@ class Deployment:
         if self.flag.exists() or self.flag.is_symlink():
             raise ValueError('deployment_existing_restart_request')
         receipt = self.old.get('actual_pid_receipt') or {}
-        self.identity = H._identity(receipt.get('pid'))
+        self.closed_predecessor = None
+        try:
+            self.identity = H._identity(receipt.get('pid'))
+        except FileNotFoundError:
+            self.closed_predecessor = H.verify_closed_predecessor_consumption(self.day)
+            self.identity = self.closed_predecessor['pid_identity']
         if (self.old.get('actual_pid_consumed') is not True
                 or self.identity['cwd'] != str(self.previous / 'src')
-                or _main_pids() != [self.identity['pid']]):
+                or _main_pids() != ([] if self.closed_predecessor else [self.identity['pid']])):
             raise ValueError('deployment_predecessor_not_current_singleton')
-        parent = Path('/proc', str(self.identity['pid']), 'stat').read_text().rsplit(')', 1)[1].split()[1]
-        self.launcher = int(parent)
-        self.launcher_stat = Path('/proc', parent, 'stat').read_text().rsplit(')', 1)[1].split()[19]
-        if str(self.previous / 'src/run_bot.sh').encode() not in Path('/proc', parent, 'cmdline').read_bytes().split(b'\0'):
-            raise ValueError('deployment_predecessor_supervisor_unrecognized')
+        self.collector_shutdown_pin = pin_collector_shutdown(self.workspace, self.identity)
+        self.launcher = self.launcher_stat = None
+        if self.closed_predecessor:
+            if not _session_absent():
+                raise ValueError('deployment_closed_predecessor_supervisor_present')
+        else:
+            parent = Path('/proc', str(self.identity['pid']), 'stat').read_text().rsplit(')', 1)[1].split()[1]
+            self.launcher = int(parent)
+            self.launcher_stat = Path('/proc', parent, 'stat').read_text().rsplit(')', 1)[1].split()[19]
+            if str(self.previous / 'src/run_bot.sh').encode() not in Path('/proc', parent, 'cmdline').read_bytes().split(b'\0'):
+                raise ValueError('deployment_predecessor_supervisor_unrecognized')
         self.directory = self.workspace / 'data/runtime/release_transitions' / self.day / self.commit
         self.directory.mkdir(parents=True, exist_ok=False)
         self.state = dict(schema='ordered_intraday_deployment_v1', authority=CONFIRM,
@@ -383,12 +818,29 @@ class Deployment:
             predecessor_identity=self.identity, runtime_effect='authorized_code_restart_only',
             predecessor_launcher=dict(pid=self.launcher, start_ticks=self.launcher_stat),
             policy_effect='unchanged', original_selection_sha256=_digest(self.before))
+        self.state['candidate_p5'] = self.candidate_p5
         _atomic(self.directory / 'selection-before.json', self.before)
+        if self.collector_shutdown_pin.get('basis') == 'interrupted_consumed_process':
+            raw = Path(self.collector_shutdown_pin['path']).read_bytes()
+            if _digest(raw) != self.collector_shutdown_pin['sha256']:
+                raise ValueError('deployment_interrupted_collector_changed')
+            _atomic(self.directory/'interrupted-collector-original.json', raw)
+            heartbeat = self.workspace/'tmp/error_detector_heartbeat.json'
+            heartbeat_raw = heartbeat.read_bytes()
+            if _digest(heartbeat_raw) != self.closed_predecessor['closed_observation']['source_hashes'][str(heartbeat)]:
+                raise ValueError('deployment_interrupted_heartbeat_changed')
+            _atomic(self.directory/'interrupted-heartbeat-original.json', heartbeat_raw)
+            self.state['interrupted_collector'] = self.collector_shutdown_pin
         self.checkpoint('preflight')
         try:
-            check = self.run_json(self.previous, 'src.engine.automation.intraday_release_handoff',
+            if self.closed_predecessor:
+                check = self.closed_predecessor
+                self.state['closed_predecessor'] = check
+                _atomic(self.directory/'closed-predecessor.json', _json_bytes(check))
+            else:
+                check = self.run_json(self.previous, 'src.engine.automation.intraday_release_handoff',
                                   '--verify', '--target-date', self.day, '--pid', str(self.identity['pid']))
-            self.run_json(self.previous, 'src.engine.automation.runtime_policy_bootstrap',
+                self.run_json(self.previous, 'src.engine.automation.runtime_policy_bootstrap',
                           '--verify', '--target-date', self.day, '--pid', str(self.identity['pid']))
         except ValueError:
             if not getattr(self, 'preserve_editable_checklist', False):
@@ -418,7 +870,8 @@ class Deployment:
         else:
             path, _ = H._paths(self.day, self.previous_commit)
             self.frozen = H._read(path)['frozen_files']
-        code_check = H.verify_candidate_delay_code(self.day, self.candidate, self.commit)
+        code_check = verify_candidate_delay_code(self.day, self.candidate, self.commit)
+        self.prepared_delay_check = code_check
         _atomic(self.directory / 'candidate-delay-code.json', _json_bytes(code_check))
         stop_check = H.verify_candidate_stop_code(self.day, self.candidate, self.commit)
         _atomic(self.directory / 'candidate-stop-code.json', _json_bytes(stop_check))
@@ -426,7 +879,12 @@ class Deployment:
         _atomic(self.directory / 'candidate-holding-vote-code.json', _json_bytes(holding_check))
         active_check = verify_candidate_active_policy(self.workspace, self.candidate, self.commit, self.day)
         _atomic(self.directory/'candidate-active-policy-code.json', _json_bytes(active_check))
+        self.state['candidate_report_currentness'] = verify_candidate_report_currentness(
+            self.workspace, self.candidate, self.day)
         self.frozen = dict(self.frozen)
+        self.frozen.update((code_check.get('prepared_code_origin') or {}).get('sources', {}))
+        # The selector is transition provenance, asserted separately below.
+        self.frozen.pop(str(self.selection), None)
         self.frozen[active_check['receipt_path']] = active_check['receipt_sha256']
         self.frozen[active_check['pointer_path']] = active_check['pointer_sha256']
         self.checklist = self.workspace / 'docs/checklists' / (self.day + '-stage2-todo-checklist.md')
@@ -442,6 +900,9 @@ class Deployment:
             self.frozen.pop(str(self.checklist), None)
         _atomic(self.directory / 'checklist-before.md', self.document_before)
         self.assert_unchanged()
+        from src.engine.monitoring.sentinel_summary_contract import check_pending_migration
+        self.state['sentinel_summary_preflight'] = check_pending_migration(
+            self.workspace / 'data', self.day)
         self._preflight_native_verified = True
         if getattr(self, "adopt_failed_hold", False):
             # All native predecessor, policy/code and source checks above stay
@@ -571,6 +1032,10 @@ class Deployment:
         self._assert_failed_transition_unchanged()
         if self.selection.read_bytes() != self.before:
             raise ValueError('deployment_selection_changed')
+        if verify_candidate_p5(self.workspace, self.day, self.candidate, self.commit,
+                self.candidate_p5['path'], self.candidate_p5['sha256'],
+                json.loads(self.before)) != self.candidate_p5:
+            raise ValueError('deployment_candidate_p5_changed')
         if any(H._sha(path) != sha for path, sha in self.frozen.items()):
             raise ValueError('deployment_predecessor_generation_changed')
 
@@ -618,11 +1083,24 @@ class Deployment:
 
     def drain(self):
         self.assert_hold()
+        if getattr(self, 'closed_predecessor', None):
+            self.assert_unchanged()
+            if (H.closed_consumption_observation(self.day) != self.closed_predecessor['closed_observation']
+                    or _main_pids() or not _session_absent() or self.flag.exists()):
+                raise ValueError('deployment_closed_predecessor_changed')
+            self.checkpoint('drained', drained_at=datetime.now(H.KST).isoformat(),
+                drain_basis=('interrupted_consumed_process_preserved'
+                    if self.closed_predecessor['closed_observation'].get('basis') == 'interrupted_consumed_process'
+                    else 'native_postclose_stopped_consumption_verified'),
+                collector_shutdown=verify_collector_shutdown(self.collector_shutdown_pin))
+            return
         if H._identity(self.identity['pid']) != self.identity:
             raise ValueError('deployment_predecessor_identity_changed')
         if Path('/proc', str(self.launcher), 'stat').read_text().rsplit(')', 1)[1].split()[19] != self.launcher_stat:
             raise ValueError('deployment_supervisor_identity_changed')
         self.assert_unchanged()
+        self.collector_shutdown_pin = pin_collector_shutdown(self.workspace, self.identity)
+        self.checkpoint(self.phase, collector_shutdown_pin=self.collector_shutdown_pin)
         with self.flag.open('x') as out:
             out.write('source=ordered_intraday_deploy old_pid=' + str(self.identity['pid']) + '\n')
             out.flush()
@@ -634,7 +1112,8 @@ class Deployment:
               'deployment_supervisor_stop_timeout')
         if _main_pids() or self.flag.exists():
             raise ValueError('deployment_drain_not_complete')
-        self.checkpoint('drained', drained_at=datetime.now(H.KST).isoformat())
+        closure = verify_collector_shutdown(self.collector_shutdown_pin)
+        self.checkpoint('drained', drained_at=datetime.now(H.KST).isoformat(), collector_shutdown=closure)
 
     def publish(self):
         self.assert_hold()
@@ -645,6 +1124,8 @@ class Deployment:
         value = dict(self.old)
         value.pop('actual_pid_receipt', None)
         value.update(release_root=str(self.candidate), git_commit=self.commit,
+            candidate_p5_path=self.candidate_p5['path'],
+            candidate_p5_sha256=self.candidate_p5['sha256'],
             source_commit=self.previous_commit,
             previous_release_root=str(self.previous), previous_git_commit=self.previous_commit,
             previous_selection_backup=str(self.directory / 'selection-before.json'),
@@ -663,6 +1144,9 @@ class Deployment:
         self.published = _json_bytes(value)
         with (self.workspace / 'data/runtime/runtime_release_selection.lock').open('a') as lock:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            self.assert_unchanged()
+            inherit_prepared_delay_code(self.workspace, self.day, self.candidate,
+                                        getattr(self, 'prepared_delay_check', {}))
             self.assert_unchanged()
             _atomic(self.selection, self.published)
             if getattr(self, 'preserve_editable_checklist', False):
@@ -683,7 +1167,18 @@ class Deployment:
                       '--verify', '--target-date', self.day)
         self.run_json(self.candidate, 'src.engine.automation.auxiliary_reader_readiness',
                       '--target-date', self.day)
-        self.checkpoint('prepared')
+        with sentinel_preparation_lock(self):
+            from src.engine.monitoring.sentinel_source_window import prepare
+            source_window = prepare(self.workspace / 'data')
+            from src.engine import buy_funnel_sentinel as buy
+            from src.engine.monitoring.sentinel_summary_contract import check_pending_migration
+            check_pending_migration(self.workspace / 'data', self.day)
+            _, summary = buy.load_pipeline_event_summaries(self.day)
+        from src.engine.automation import prepared_policy_code_handoff as code
+        handoffs = code.issue_selected(self.workspace / 'data', self.day,
+                                       release_root=self.candidate)
+        self.checkpoint('prepared', sentinel_source_window=source_window,
+                        sentinel_summary=summary, native_prepared_code_handoffs=handoffs)
 
     def start(self):
         self.assert_hold()
@@ -742,9 +1237,31 @@ class Deployment:
                         recovery='inspect_transition_and_preserve_startup_hold')
 
 
-def _stopped_intraday_predecessor(day, previous, previous_commit, identity, failed_path):
+def _stopped_intraday_predecessor(day, previous, previous_commit, identity, failed_path, *, _depth=0):
     """Recheck the genuine same-day consumption, without inventing a native PID."""
+    if _depth > 3:
+        raise ValueError('deployment_stopped_predecessor_ancestry_invalid')
     proof_path = Path(failed_path).with_name('preflight-intraday_release_handoff.log')
+    if not proof_path.exists():
+        failed, failed_raw, _ = _owned_metadata(failed_path)
+        parent = failed.get('failed_hold_adoption') or {}
+        origin = Path(parent.get('failed_transition_path') or '')
+        expected = Path(failed_path).parent.parent/(parent.get('failed_selected_commit') or '')/'status.json'
+        if (_depth >= 3 or origin != expected or origin == Path(failed_path)
+                or not parent.get('intraday_predecessor_proof_sha256')
+                or parent.get('transfer_status') != 'transferred_exact_owned_hold'):
+            raise ValueError('deployment_stopped_predecessor_ancestry_invalid')
+        original, raw, _ = _owned_metadata(origin)
+        if (_digest(raw) != parent.get('failed_transition_sha256')
+                or original.get('predecessor_identity') != identity
+                or original.get('previous_commit') != previous_commit
+                or original.get('candidate_commit') != parent.get('failed_selected_commit')):
+            raise ValueError('deployment_stopped_predecessor_ancestry_changed')
+        proof = _stopped_intraday_predecessor(day,previous,previous_commit,identity,origin,_depth=1)
+        if proof['sha256'] != parent['intraday_predecessor_proof_sha256']:
+            raise ValueError('deployment_stopped_predecessor_proof_changed')
+        proof['frozen_files'].update({str(origin):_digest(raw),str(failed_path):_digest(failed_raw)})
+        return proof
     proof, proof_raw, _ = _owned_metadata(proof_path)
     handoff_path, consumed_path = H._paths(day, previous_commit)
     handoff, handoff_raw, _ = _owned_metadata(handoff_path)
@@ -793,7 +1310,8 @@ class StoppedDeploymentRecovery(Deployment):
                 or Path('/proc', str(self.launcher)).exists()):
             raise ValueError('deployment_recovery_requires_stopped_main_and_supervisor')
 
-    def preflight(self):
+    def inspect_stopped_origin(self):
+        """Read-only original custody inspection shared with isolated P5."""
         self.before = self.selection.read_bytes()
         selected = json.loads(self.before)
         failed_root, failed_commit = R.selected_release(self.workspace)
@@ -804,6 +1322,7 @@ class StoppedDeploymentRecovery(Deployment):
         prior_path = failed_path.with_name('selection-before.json')
         prior, prior_raw, prior_sig = _owned_metadata(prior_path)
         identity = failed.get('predecessor_identity') or {}
+        preparation_sources = stopped_preparation_failure_sources(failed, failed_path)
         if (selected.get('deployment_transition') != str(failed_path)
                 or selected.get('actual_pid_consumed') is not False
                 or selected.get('approval_scope') != 'ordered_intraday_deploy_and_restart'
@@ -813,8 +1332,9 @@ class StoppedDeploymentRecovery(Deployment):
                 or failed.get('candidate_commit') != failed_commit
                 or failed.get('candidate_root') != str(failed_root)
                 or failed.get('phase') != 'failed' or failed.get('status') != 'fail'
-                or failed.get('failed_phase') != 'selected'
-                or failed.get('error') != 'deployment_validation_failed:src.engine.automation.intraday_release_handoff'
+                or ((failed.get('failed_phase'), failed.get('error')) not in {
+                    ('selected', 'deployment_validation_failed:src.engine.automation.intraday_release_handoff'),
+                    ('starting', 'deployment_pid_attestation_timeout')} and not preparation_sources)
                 or failed.get('policy_effect') != 'unchanged'
                 or hold != dict(schema='ordered_deployment_startup_hold_v1', authority=CONFIRM,
                     transition=str(failed_path), target_date=self.day,
@@ -843,10 +1363,31 @@ class StoppedDeploymentRecovery(Deployment):
         self.launcher = failed['predecessor_launcher']['pid']
         self.assert_stopped()
         self.previous, self.previous_commit = R.validate_release(self.workspace, prior)
+        return dict(selected=selected, failed_root=failed_root, failed_commit=failed_commit, failed_path=failed_path, hold=hold, hold_raw=hold_raw, hold_sig=hold_sig, failed=failed, failed_raw=failed_raw, failed_sig=failed_sig, prior_path=prior_path, prior=prior, prior_raw=prior_raw, prior_sig=prior_sig, identity=identity, preparation_sources=preparation_sources)
+
+    def preflight(self):
+        origin = self.inspect_stopped_origin()
+        selected = origin['selected']
+        failed_root = origin['failed_root']
+        failed_commit = origin['failed_commit']
+        failed_path = origin['failed_path']
+        hold = origin['hold']
+        hold_raw = origin['hold_raw']
+        hold_sig = origin['hold_sig']
+        failed = origin['failed']
+        failed_raw = origin['failed_raw']
+        failed_sig = origin['failed_sig']
+        prior_path = origin['prior_path']
+        prior = origin['prior']
+        prior_raw = origin['prior_raw']
+        prior_sig = origin['prior_sig']
+        identity = origin['identity']
+        preparation_sources = origin['preparation_sources']
         commit = R.git(self.candidate, 'rev-parse', 'HEAD')
         self.candidate, self.commit = R.validate_release(self.workspace, dict(
             schema='runtime_release_selection_v1', workspace=str(self.workspace),
             release_root=str(self.candidate), git_commit=commit))
+        self.pin_candidate_p5()
         if (self.candidate in {failed_root, self.previous}
                 or Path(__file__).resolve().parents[3] != self.candidate):
             raise ValueError('deployment_recovery_requires_new_reviewed_candidate')
@@ -859,13 +1400,21 @@ class StoppedDeploymentRecovery(Deployment):
         else:
             native = _stopped_intraday_predecessor(self.day, self.previous,
                 self.previous_commit, identity, failed_path)
-        checks = dict(delay=H.verify_candidate_delay_code(self.day, self.candidate, self.commit),
+        checks = dict(delay=verify_candidate_delay_code(self.day, self.candidate, self.commit),
             stop=H.verify_candidate_stop_code(self.day, self.candidate, self.commit),
-            holding=H.verify_candidate_holding_vote_code(self.day, self.candidate, self.commit))
+            holding=H.verify_candidate_holding_vote_code(self.day, self.candidate, self.commit),
+            active=verify_candidate_active_policy(self.workspace, self.candidate, self.commit, self.day),
+            reports=verify_candidate_report_currentness(self.workspace, self.candidate, self.day))
+        self.prepared_delay_check = checks['delay']
         self.directory = self.workspace / 'data/runtime/release_transitions' / self.day / self.commit
         self.directory.mkdir(parents=True, exist_ok=False)
         self.old = prior
-        self.frozen = dict(native['frozen_files'])
+        self.frozen = {**native['frozen_files'], **preparation_sources}
+        self.frozen.update((checks['delay'].get('prepared_code_origin') or {}).get('sources', {}))
+        self.frozen.pop(str(self.selection), None)
+        active = checks['active']
+        self.frozen.update({active['receipt_path']: active['receipt_sha256'],
+                            active['pointer_path']: active['pointer_sha256']})
         self.checklist = self.workspace / 'docs/checklists' / (self.day + '-stage2-todo-checklist.md')
         self.document_before = self.document_after = self.checklist.read_bytes()
         self.state = dict(schema='ordered_intraday_deployment_v1', authority=CONFIRM,
@@ -880,6 +1429,7 @@ class StoppedDeploymentRecovery(Deployment):
                 previous_hold_sha256=_digest(hold_raw),
                 **{('native_predecessor_sha256' if native_basis else 'intraday_predecessor_proof_sha256'):native['sha256']},
                 transfer_status='verified_not_transferred'))
+        self.state['candidate_p5'] = self.candidate_p5
         self.failed_hold_adoption = dict(raw=hold_raw, signature=hold_sig,
             transition_path=str(failed_path), transition_raw=failed_raw, transition_signature=failed_sig,
             prior_path=str(prior_path), prior_raw=prior_raw, prior_signature=prior_sig)
@@ -915,12 +1465,16 @@ def main(argv=None):
     parser.add_argument('--workspace', type=Path, default=H.DATA_DIR.parent)
     parser.add_argument('--release-root', type=Path, required=True)
     parser.add_argument('--target-date', required=True)
+    parser.add_argument('--candidate-p5-path', type=Path, required=True)
+    parser.add_argument('--candidate-p5-sha256', required=True)
     parser.add_argument('--confirm', required=True)
     args = parser.parse_args(argv)
     try:
         with R.runtime_release_set_lock(args.workspace):
             with detector_transition_lock(args.workspace):
-                result = execute(Deployment(args.workspace, args.release_root, args.target_date, args.confirm))
+                result = execute(Deployment(args.workspace, args.release_root, args.target_date, args.confirm,
+                    candidate_p5_path=args.candidate_p5_path,
+                    candidate_p5_sha256=args.candidate_p5_sha256))
     except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as exc:
         print(json.dumps({'status': 'fail', 'findings': [str(exc)]}))
         return 1

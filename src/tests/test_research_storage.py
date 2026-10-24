@@ -215,3 +215,36 @@ def test_copy_sealed_tree_preserves_generation_and_rejects_collision(tmp_path):
     (target/ref['path']).write_text('{}')
     with pytest.raises(ValueError,match='immutable_shard_changed'):
         s.copy_tree(source,target,ref)
+
+
+def test_tree_copy_reads_each_source_once_without_separate_digest_pass(tmp_path,monkeypatch):
+    from pathlib import Path
+    source=tmp_path/'original';target=tmp_path/'published'
+    rows=[{'id':i,'value':'x'*1000}for i in range(600)]
+    ref=store.write_tree(source,rows)
+    opened=[];original_open=Path.open
+    def tracked_open(path,*args,**kwargs):
+        if path.is_relative_to(source):opened.append(path)
+        return original_open(path,*args,**kwargs)
+    monkeypatch.setattr(Path,'open',tracked_open)
+    monkeypatch.setattr(store,'byte_generation',lambda _:pytest.fail('copy hashed an already verified shard again'))
+    store.copy_tree(source,target,ref)
+    expected=set(source.glob('shards/*.json'))
+    assert set(opened)==expected and len(opened)==len(expected)
+    assert list(store.iter_tree(target,ref))==rows
+
+
+@pytest.mark.parametrize('mutation',['source_bytes','root_count','logical_hash','target_symlink','target_oversize'])
+def test_single_pass_copy_preserves_original_failure_contracts(tmp_path,mutation):
+    source=tmp_path/'original';target=tmp_path/'published'
+    ref=store.write_tree(source,[{'id':1}]);before=health()
+    if mutation=='source_bytes':(source/ref['path']).write_text('{}')
+    elif mutation=='root_count':ref={**ref,'count':9}
+    elif mutation=='logical_hash':ref={**ref,'logical_sha256':'0'*64}
+    else:
+        destination=target/ref['path'];destination.parent.mkdir(parents=True)
+        if mutation=='target_symlink':destination.symlink_to(source/ref['path'])
+        else:
+            with destination.open('wb')as handle:handle.truncate(8*1024*1024)
+    with pytest.raises(ValueError):store.copy_tree(source,target,ref)
+    assert health()==before

@@ -31,6 +31,18 @@ from src.engine.sniper_position_tags import (
 )
 from src.utils.logger import log_error, log_info
 
+
+def _canonical_target_datetimes(row):
+    """Detach SQL datetime scalars from pandas without inventing missing time."""
+    for name, value in row.items():
+        if value is pd.NaT:
+            row[name] = None
+        elif type(value) is pd.Timestamp and value.nanosecond == 0:
+            # SQL DateTime is microsecond precision; retain timezone/fold.
+            row[name] = value.to_pydatetime(warn=False)
+    return row
+
+
 SWING_REAL_WATCHING_ENABLED_ENV = "KORSTOCKSCAN_SWING_REAL_WATCHING_ENABLED"
 SWING_REAL_WATCHING_STRATEGIES = {"KOSPI_ML", "KOSDAQ_ML", "MAIN", "SWING"}
 
@@ -1052,7 +1064,7 @@ class DBManager:
             # 엔진에 넘기기 전에 임시 컬럼 삭제
             df = df.drop(columns=["priority"])
 
-            targets = df.to_dict("records")
+            targets = [_canonical_target_datetimes(row) for row in df.to_dict("records")]
 
             # 기본값 보정 (스나이퍼 엔진의 부담을 DB 매니저가 덜어줍니다)
             default_prob = getattr(TRADING_RULES, "SNIPER_AGGRESSIVE_PROB", 0.8)

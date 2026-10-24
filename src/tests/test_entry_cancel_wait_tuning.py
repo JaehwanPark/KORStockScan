@@ -5,6 +5,114 @@ from pathlib import Path
 from src.engine.automation import entry_cancel_wait_tuning as mod
 
 
+@pytest.fixture
+def terminal_cancel_pair(monkeypatch):
+    from src.engine.pipeline_event_summary import execution_projection_identity
+    monkeypatch.setenv('KORSTOCKSCAN_BROKER_ACCOUNT_KEY','terminal-test-account')
+    day='2026-10-22'
+    terminal=dict(event='ORDER_TERMINAL',state='ORDER_TERMINAL',event_hash='a'*64,
+        account_key='terminal-test-account',
+        intent_id='intent',symbol='123456',owner_type='main_scalping',
+        owner_id='main_scalping:7',position_id='main_scalping:7',side='BUY',action='NEW',
+        order_date=day,broker_order_no='order',quantity=1,filled_qty=1,
+        observed_at_kst=day+'T09:00:00+09:00')
+    fields=dict(orig_ord_no='order',entry_split_initial_entry_seed='large frozen source'*100,
+                cancel_reason='entry_split_probe_timeout')
+    requested=dict(stage='entry_order_cancel_requested',emitted_date=day,emitted_at=day+'T09:01:00',
+                   pipeline='ENTRY_PIPELINE',stock_code='123456',record_id=7,fields=fields)
+    failed={**requested,'stage':'entry_order_cancel_failed','emitted_at':day+'T09:01:01',
+            'fields':{**fields,'cancel_response':'failed','cancel_message':'owner_registry_cancel_original_not_open'}}
+    for row in (requested,failed):row['execution_source_event_sha256']=execution_projection_identity(row)
+    return [requested,failed],[terminal]
+
+
+@pytest.mark.parametrize('damage',[None,'partial','boolean_fill','account','owner','date','clock','message','unpaired'])
+def test_terminal_cancel_diagnostics_preserve_original_identities_without_raw_duplication(terminal_cancel_pair,damage):
+    import copy
+    rows,registry=copy.deepcopy(terminal_cancel_pair)
+    if damage=='partial':registry[0]['filled_qty']=0
+    elif damage=='boolean_fill':registry[0]['filled_qty']=True
+    elif damage=='account':registry[0]['account_key']='other-account'
+    elif damage=='owner':registry[0]['owner_id']='main_scalping:other'
+    elif damage=='date':registry[0]['order_date']='2026-10-21'
+    elif damage=='clock':registry[0]['observed_at_kst']='2026-10-22T09:02:00+09:00'
+    elif damage=='message':rows[1]['fields']['cancel_message']='broker_failure'
+    elif damage=='unpaired':rows=rows[:1]
+    kept,diagnostics=mod._partition_terminal_cancel_diagnostics(iter(rows),registry)
+    if damage:
+        assert kept==rows and diagnostics=={}
+    else:
+        assert kept==[]
+        groups=diagnostics['2026-10-22']
+        assert {sha for group in groups for sha in group['event_sha256s']}=={mod._digest(r) for r in rows}
+        assert {sha for group in groups for sha in group['execution_sha256s']}=={r['execution_source_event_sha256'] for r in rows}
+        assert len(json.dumps(diagnostics))<len(json.dumps(rows))
+        mod._validate_terminal_cancel_diagnostics(groups,'2026-10-22',registry=registry)
+
+
+@pytest.mark.parametrize('damage',[None,'new_loss','identity','terminal','partial','pair','generation'])
+def test_terminal_diagnostics_reconcile_the_real_native_census(tmp_path,monkeypatch,terminal_cancel_pair,damage):
+    import copy
+    from src.engine.pipeline_event_summary import CANCEL_WAIT_SUMMARY_STAGES,IDENTITY_CONTRACT,IDENTITY_MODULUS
+    from src.engine.scalping import entry_split_order_plan as entry
+    rows,registry=copy.deepcopy(terminal_cancel_pair);day='2026-10-22'
+    summary=tmp_path/'pipeline_event_summaries'/f'pipeline_event_producer_summary_{day}.jsonl'
+    summary.parent.mkdir()
+    stages=CANCEL_WAIT_SUMMARY_STAGES|{'order_leg_sent'}
+    summary.write_text(''.join(json.dumps(dict(target_date=day,stage=stage,
+        identity_contract=IDENTITY_CONTRACT,execution_projection_identity_contract='lossless_execution_projection_v1',
+        event_count=sum(r['stage']==stage for r in rows),
+        execution_projection_hash_sum=format(sum(int(r['execution_source_event_sha256'],16) for r in rows if r['stage']==stage)%IDENTITY_MODULUS,'064x')))+'\n' for stage in stages))
+    manifest=dict(target_date=day,identity_contract=IDENTITY_CONTRACT,summary_stages=sorted(stages),
+                  summary_storage_size_bytes=summary.stat().st_size)
+    summary.with_name(f'pipeline_event_producer_summary_manifest_{day}.json').write_text(json.dumps(manifest))
+    census=entry._execution_projection_census(day,rows,stages=stages,data_root=tmp_path)
+    assert census['status']=='ready'
+    kept,diagnostics=mod._partition_terminal_cancel_diagnostics(rows,registry);groups=diagnostics[day]
+    if damage=='new_loss':census['native_census_projection']['expected_stage_counts'][rows[0]['stage']]+=1
+    elif damage=='identity':groups[0]['execution_sha256s'][0]='f'*64
+    elif damage=='terminal':registry[0]['event_hash']='f'*64
+    elif damage=='partial':registry[0]['filled_qty']=0
+    elif damage=='pair':groups.pop()
+    elif damage=='generation':summary.write_text('{}\n')
+    if damage in {'terminal','partial','pair','generation'}:
+        with pytest.raises(ValueError):
+            mod._validate_terminal_cancel_diagnostics(groups,day,registry=registry)
+            mod._projected_census_matches(tmp_path,day,kept,manifest,census['native_census_projection'],groups)
+    else:
+        actual=mod._projected_census_matches(tmp_path,day,kept,manifest,census['native_census_projection'],groups)
+        assert actual is (damage is None)
+        if damage is None:
+            binding=mod._source_binding(dict(status='ready',retained_event_count=2,producer_census=census),
+                dict(status='verified'),diagnostics=groups)
+            state=dict(through_date=day,parents=[],source_events=[],source_counts={},actual_outcomes=[],
+                model_rows=[],submission_reconciliation=dict(by_date={day:dict(source_binding=binding)}))
+            state['sha256']=mod._digest(state)
+            directory=tmp_path/'report/entry_cancel_wait_tuning';directory.mkdir(parents=True)
+            from src.engine.scalping.entry_cancel_wait_runtime import ECONOMIC_SCHEMA
+            payload=dict(date=day,generated_at=day+'T20:00:00+09:00',economic_schema=ECONOMIC_SCHEMA,economic_state=state)
+            payload['proof_sha256']=mod._digest({k:v for k,v in payload.items() if k!='generated_at'})
+            report_path=directory/f'entry_cancel_wait_tuning_{day}.json'
+            report_path.write_text(json.dumps(payload))
+            import hashlib
+            report_path.with_suffix('.reuse-contract.json').write_text(json.dumps(dict(
+                artifact_sha256=hashlib.sha256(report_path.read_bytes()).hexdigest(),
+                report_proof_sha256=payload['proof_sha256'],as_of=payload['generated_at'],
+                terminal_cancel_diagnostics_sha256=mod._diagnostic_projection_digest(payload))))
+            monkeypatch.setattr(mod,'DATA_DIR',tmp_path);monkeypatch.setattr(mod,'REPORT_DIR',directory)
+            monkeypatch.setattr(entry,'_execution_registry_snapshot',lambda:(registry,dict(status='verified')))
+            monkeypatch.setattr(entry,'_bounded_execution_projection',lambda *_a,**_k:pytest.fail('unchanged large source rescan'))
+            rebuilt=mod._previous_state('2026-10-23')
+            assert rebuilt['_verified_source_bindings'][day]==binding
+            assert rebuilt['source_events']==[]
+            groups[0]['event_sha256s'][0]='f'*64
+            state['sha256']=mod._digest({k:v for k,v in state.items() if k!='sha256'})
+            payload['proof_sha256']=mod._digest({k:v for k,v in payload.items() if k not in {'generated_at','proof_sha256'}})
+            report_path.write_text(json.dumps(payload))
+            with pytest.raises(ValueError,match='diagnostic_publication_changed'):
+                mod._previous_state('2026-10-23')
+
+
 def _unclassified_history(day='2026-09-30'):
     events = [dict(stage='order_leg_sent', emitted_date=day, record_id=i,
                    pipeline='ENTRY_PIPELINE',stock_code='123456', fields=dict(actual_order_submitted=True,
@@ -83,6 +191,35 @@ def test_registry_only_attempt_cannot_be_verified_zero():
         'order_date':'2026-09-17','client_intent_id':'main:1:ENTRY_BUY:1','state':'INTENT_AMBIGUOUS'}]
     parents,unclassified=mod._parents('2026-09-17',[],registry)
     assert not parents and unclassified==1
+
+
+@pytest.mark.parametrize('state,order,filled,expected', [
+    ('INTENT_REJECTED','',0,0), ('INTENT_AMBIGUOUS','',0,1),
+    ('INTENT_RESERVED','',0,1), ('INTENT_REJECTED','000123',0,1),
+    ('INTENT_REJECTED','',1,1), ('ORDER_TERMINAL','000123',0,1)])
+def test_rejected_reservation_is_preserved_separately_from_submitted_orders(state,order,filled,expected):
+    row=dict(intent_id='rejected',owner_type='main_scalping',owner_id='main_scalping:1',
+        side='BUY',action='NEW',order_date='2026-10-16',client_intent_id='main:1:ENTRY_BUY:1',
+        state=state,broker_order_no=order,filled_qty=filled,fill_amount=filled*100,
+        reason='original_entry_deadline_expired')
+    details={};parents,unknown=mod._parents('2026-10-16',[],[row],details=details)
+    assert parents==[] and unknown==expected
+    assert details['rejected_without_order_intent_ids']==(['rejected'] if not expected else [])
+    unresolved=mod._unresolved_prior_custody('2026-10-19',[row],[],[])
+    assert ('rejected' in unresolved) is bool(expected)
+    assert row['reason']=='original_entry_deadline_expired'
+
+
+def test_rejected_reservation_cannot_hide_a_native_submission_or_fill():
+    row=dict(intent_id='rejected',owner_type='main_scalping',owner_id='main_scalping:1',
+        side='BUY',action='NEW',order_date='2026-10-16',state='INTENT_REJECTED')
+    event=dict(stage='order_leg_sent',emitted_date='2026-10-16',record_id=1,
+        fields=dict(actual_order_submitted=True,broker_order_no='000123',owner_registry_intent_id='rejected'))
+    with pytest.raises(ValueError,match='rejected_intent_submission_source_conflict'):
+        mod._parents('2026-10-16',[event],[row])
+    fill={**row,'event':'FILL_RECORDED','filled_qty':1,'fill_amount':100}
+    _,unknown=mod._parents('2026-10-16',[],[row,fill])
+    assert unknown==1
 
 
 def test_residual_receipt_classifies_native_order_without_timeout_tuning_authority():
@@ -231,6 +368,38 @@ def test_sequential_first_leg_is_source_only_parent_not_unclassified():
     changed['fields']['initial_quantity_schedule_sha256'] = 'b' * 64
     with pytest.raises(ValueError, match='sequential_schedule'):
         mod._parents(day, [changed], registry)
+
+
+@pytest.mark.parametrize('fault',[None,'account','symbol','owner','date','unknown_parent','operation','ambiguous_parent'])
+def test_reprice_scope_requires_native_parent_and_preserves_custody(fault):
+    day,_,sent,registry=_sequential_first_fixture()
+    sent['fields'].update(broker_order_no='00010',buy_child_id='attempt-42:00010')
+    registry[0]['broker_order_no']='00010'
+    reprice={**registry[0],'intent_id':'R1','broker_order_no':'00011',
+        'client_intent_id':'main_scalping:42:42:ENTRY_REPRICE_BUY:00010:'+'c'*32}
+    if fault in {'account','symbol','owner','date'}:
+        field={'account':'account_key','symbol':'symbol','owner':'owner_id','date':'order_date'}[fault]
+        reprice[field]={'account':'other','symbol':'654321','owner':'main_scalping:43','date':'2026-09-29'}[fault]
+    elif fault=='unknown_parent':reprice['client_intent_id']=reprice['client_intent_id'].replace('00010:','00099:')
+    elif fault=='operation':reprice['client_intent_id']=reprice['client_intent_id'].replace('ENTRY_REPRICE_BUY','ENTRY_BUY')
+    elif fault=='ambiguous_parent':registry.append({**registry[0],'intent_id':'duplicate'})
+    details={};parents,unknown=mod._parents(day,[sent],[*registry,reprice],details=details)
+    if fault:
+        assert details['excluded_reprice_order_sources']==[]
+        if fault!='date':assert unknown>0
+        return
+    assert unknown==0 and len(parents)==1
+    proof=details['excluded_reprice_order_sources'][0]
+    assert proof['intent_id']=='R1' and proof['root_submission_intent_id']=='I1'
+    assert proof['parent_broker_order_no']=='00010' and proof['economic_eligible'] is False
+    assert proof['terminal_or_cost_inferred'] is False
+    # Scope classification cannot reconcile a real order or its costs.
+    assert mod._unresolved_prior_custody('2026-10-19',[*registry,reprice],parents,[])==['I1','R1']
+    chained={**reprice,'intent_id':'R2','broker_order_no':'00012',
+        'client_intent_id':'main_scalping:42:42:ENTRY_REPRICE_BUY:00011:'+'d'*32}
+    details={};_,unknown=mod._parents(day,[sent],[*registry,reprice,chained],details=details)
+    assert unknown==0
+    assert {x['root_submission_intent_id'] for x in details['excluded_reprice_order_sources']}=={'I1'}
 
 
 def test_sequential_first_uncertain_attempt_stays_out_of_submitted_parents():
@@ -722,6 +891,42 @@ def test_native_census_projection_keeps_semantics_without_redecoding_full_source
     path=data/'pipeline_event_summaries/pipeline_event_producer_summary_2026-10-02.jsonl'
     path.write_text(path.read_text()+'{}\n')
     assert mod.validated_reconciliation_view(report,data_root=data)['status']=='source_invalid'
+
+
+@pytest.mark.parametrize('change', ['gzip','both','changed','corrupt','symlink','fifo','missing','budget'])
+def test_inline_census_compression_keeps_logical_source_and_original_report(tmp_path,monkeypatch,change):
+    import gzip,os
+    from src.engine.scalping import entry_split_order_plan as entry
+    from src.engine.pipeline_event_summary import CANCEL_WAIT_SUMMARY_STAGES,producer_summary_paths
+    report,_,_,_=_reconciliation_fixture(tmp_path,monkeypatch)
+    data=tmp_path/'data';paths=[]
+    for day,row in report['economic_state']['submission_reconciliation']['by_date'].items():
+        if not row['coverage_verified']:continue
+        census=entry._execution_projection_census(day,[],stages=CANCEL_WAIT_SUMMARY_STAGES|{'order_leg_sent'},data_root=data)
+        row['source_binding']['native_census_projection']=census['native_census_projection']
+        paths.append(producer_summary_paths(data/'pipeline_event_summaries',day)[0])
+    _reseal_reconciliation(report);original=json.dumps(report,sort_keys=True)
+    path=paths[0];raw=path.read_bytes();archive=path.with_name(path.name+'.gz')
+    archive.write_bytes(gzip.compress(raw if change!='changed' else raw+b'{}\n'))
+    if change!='both':path.unlink()
+    if change=='corrupt':archive.write_bytes(archive.read_bytes()[:-5])
+    elif change=='symlink':
+        target=archive.with_suffix('.saved');archive.rename(target);archive.symlink_to(target)
+    elif change=='fifo':archive.unlink();os.mkfifo(archive)
+    elif change=='missing':archive.unlink()
+    elif change=='budget':monkeypatch.setattr(mod,'MAX_RECONCILIATION_METADATA_BYTES',1)
+    monkeypatch.setattr(entry,'_execution_projection_census',lambda *a,**k:pytest.fail('replayed original census'))
+    view=mod.validated_reconciliation_view(report,data_root=data)
+    assert json.dumps(report,sort_keys=True)==original
+    if change in {'gzip','both'}:
+        assert view['status']=='incumbent_carry' and view['findings']==[]
+        from src.utils import jsonl_io
+        with monkeypatch.context() as cache:
+            cache.setattr(jsonl_io,'iter_jsonl_objects_strict',lambda *a,**k:pytest.fail('unchanged archive reread'))
+            assert mod.validated_reconciliation_view(report,data_root=data)==view
+        archive.write_bytes(gzip.compress(raw+b'{}\n'))
+        assert mod.validated_reconciliation_view(report,data_root=data)['status']=='source_invalid'
+    else:assert view['status'] in {'source_invalid','unobservable'}
 
 
 @pytest.mark.parametrize('mutation,reason', [

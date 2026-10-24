@@ -3708,25 +3708,25 @@ def test_deadline_scheduler_attach_does_not_starve_behind_later_precheck():
 
 
 def test_deadline_scheduler_runtime_drains_one_attach_between_prechecks():
-    source = inspect.getsource(kiwoom_sniper_v2.run_sniper)
+    source = inspect.getsource(kiwoom_sniper_v2._run_sniper_iterations)
 
     assert source.count("_drain_scanner_promotion_inbox(") == 2
     assert source.count("max_items=1") >= 2
     assert "attach_guard_queue = _runtime_iteration_targets(" in source
     assert (
         "_scanner_scheduler_attach_must_yield_to_runtime_work(\n"
-        "                attach_guard_queue\n"
-        "            )" in source
+        "            attach_guard_queue\n"
+        "        )" in source
     )
     assert (
         "_scanner_scheduler_attach_must_yield_to_runtime_work(\n"
-        "                    runtime_work_queue\n"
-        "                )" in source
+        "                runtime_work_queue\n"
+        "            )" in source
     )
 
 
 def test_deadline_scheduler_runtime_requeues_continuation_before_attach_drain():
-    source = inspect.getsource(kiwoom_sniper_v2.run_sniper)
+    source = inspect.getsource(kiwoom_sniper_v2._run_sniper_iterations)
     helper_idx = source.index("def _admit_runtime_live_attaches")
     continuation_idx = source.index(
         "_runtime_requeue_pending_scanner_scheduler_targets(",
@@ -3890,7 +3890,7 @@ def test_runtime_discards_old_delayed_heavy_for_refreshed_generation():
 
 
 def test_deadline_scheduler_runtime_surfaces_inbox_registration_before_target_revisit():
-    source = inspect.getsource(kiwoom_sniper_v2.run_sniper)
+    source = inspect.getsource(kiwoom_sniper_v2._run_sniper_iterations)
     helper_idx = source.index("def _admit_runtime_live_attaches")
     drain_idx = source.index(
         "drain_result = _drain_scanner_promotion_inbox(",
@@ -4355,7 +4355,7 @@ def test_scheduler_pre_recovery_gate_blocks_invalid_runtime_provenance(
 
 
 def test_scheduler_pre_recovery_gate_runs_before_blocking_ws_recovery():
-    source = inspect.getsource(kiwoom_sniper_v2.run_sniper)
+    source = inspect.getsource(kiwoom_sniper_v2._run_sniper_iterations)
 
     gate_idx = source.index("_scanner_scheduler_pre_recovery_block_reason(")
     recovery_idx = source.index("_recover_missing_ws_snapshot(", gate_idx)
@@ -6139,7 +6139,7 @@ def test_scanner_full_eval_pressure_disabled_keeps_base_limit(tmp_path, monkeypa
 
 
 def test_scanner_full_eval_budget_defers_before_watching_handler():
-    source = inspect.getsource(kiwoom_sniper_v2.run_sniper)
+    source = inspect.getsource(kiwoom_sniper_v2._run_sniper_iterations)
     effective_limit_idx = source.index(
         "scanner_full_eval_limit = _scanner_full_eval_effective_limit("
     )
@@ -6150,7 +6150,7 @@ def test_scanner_full_eval_budget_defers_before_watching_handler():
     append_idx = source.index("delayed_scanner_heavy_eval.append", budget_check_idx)
     continue_idx = source.index("continue", append_idx)
     inline_handle_idx = source.index(
-        "handle_watching_state(\n                        stock,", append_idx
+        "handle_watching_state(\n                    stock,", append_idx
     )
 
     assert effective_limit_idx < budget_check_idx
@@ -6158,7 +6158,7 @@ def test_scanner_full_eval_budget_defers_before_watching_handler():
 
 
 def test_scanner_rising_full_eval_relief_is_checked_before_budget_defer():
-    source = inspect.getsource(kiwoom_sniper_v2.run_sniper)
+    source = inspect.getsource(kiwoom_sniper_v2._run_sniper_iterations)
     budget_check_idx = source.index(
         "and scanner_full_eval_count >= scanner_full_eval_limit"
     )
@@ -6172,7 +6172,7 @@ def test_scanner_rising_full_eval_relief_is_checked_before_budget_defer():
 
 
 def test_scanner_rising_strength_recheck_queues_ws_recovery_only_for_stale_snapshot_before_watch_eviction():
-    source = inspect.getsource(kiwoom_sniper_v2.run_sniper)
+    source = inspect.getsource(kiwoom_sniper_v2._run_sniper_iterations)
     handle_idx = source.index("handle_watching_state(")
     recheck_idx = source.index('entry_strength_momentum_recheck_pending"))', handle_idx)
     source_reason_idx = source.index(
@@ -6197,7 +6197,7 @@ def test_scanner_rising_strength_recheck_queues_ws_recovery_only_for_stale_snaps
 
 
 def test_scanner_rest_quote_loop_budget_is_checked_before_recovery_calls():
-    source = inspect.getsource(kiwoom_sniper_v2.run_sniper)
+    source = inspect.getsource(kiwoom_sniper_v2._run_sniper_iterations)
     limit_idx = source.index("scanner_rest_quote_fallback_loop_limit =")
     helper_idx = source.index("def _scanner_rest_quote_recovery_options", limit_idx)
     first_call_idx = source.index(
@@ -6220,7 +6220,7 @@ def test_scanner_rest_quote_loop_budget_is_checked_before_recovery_calls():
 
 
 def test_run_sniper_builds_scanner_ws_cache_before_target_iteration():
-    source = inspect.getsource(kiwoom_sniper_v2.run_sniper)
+    source = inspect.getsource(kiwoom_sniper_v2._run_sniper_iterations)
     context_idx = source.index("queue_context = _runtime_queue_context(")
     cache_idx = source.index(
         "scanner_ws_snapshot_cache = _runtime_scanner_ws_snapshot_cache", context_idx
@@ -6252,12 +6252,12 @@ def test_run_sniper_builds_scanner_ws_cache_before_target_iteration():
 
 
 def test_run_sniper_batches_scanner_ws_recovery_reg_before_loop_end():
-    source = inspect.getsource(kiwoom_sniper_v2.run_sniper)
+    source = inspect.getsource(kiwoom_sniper_v2._run_sniper_iterations)
     pending_idx = source.index("pending_scanner_ws_reg")
     queue_idx = source.index("def _queue_scanner_ws_reg", pending_idx)
     missing_recovery_idx = source.index("publish_ws_reg=False", queue_idx)
     missing_queue_idx = source.index(
-        '_queue_scanner_ws_reg(\n                                    code, "scanner_watching_ws_snapshot_recovery"',
+        '_queue_scanner_ws_reg(\n                                code, "scanner_watching_ws_snapshot_recovery"',
         missing_recovery_idx,
     )
     stale_recovery_idx = source.index(
@@ -6265,7 +6265,7 @@ def test_run_sniper_batches_scanner_ws_recovery_reg_before_loop_end():
     )
     stale_no_publish_idx = source.index("publish_ws_reg=False", stale_recovery_idx)
     stale_queue_idx = source.index(
-        '_queue_scanner_ws_reg(\n                                    code, "scanner_fast_precheck_stale_ws_recovery"',
+        '_queue_scanner_ws_reg(\n                                code, "scanner_fast_precheck_stale_ws_recovery"',
         stale_no_publish_idx,
     )
     final_flush_idx = source.rindex("_flush_pending_scanner_ws_reg()")
@@ -6277,7 +6277,7 @@ def test_run_sniper_batches_scanner_ws_recovery_reg_before_loop_end():
 
 
 def test_run_sniper_defers_scanner_skip_event_emits_until_loop_tail():
-    source = inspect.getsource(kiwoom_sniper_v2.run_sniper)
+    source = inspect.getsource(kiwoom_sniper_v2._run_sniper_iterations)
     defer_def_idx = source.index("def _defer_scanner_watching_runtime_skip")
     missing_idx = source.index(
         "_defer_scanner_watching_runtime_skip(\n                                stock",
@@ -6302,7 +6302,7 @@ def test_run_sniper_defers_scanner_skip_event_emits_until_loop_tail():
 
 
 def test_run_sniper_defers_scanner_precheck_and_lag_event_emits_until_loop_tail():
-    source = inspect.getsource(kiwoom_sniper_v2.run_sniper)
+    source = inspect.getsource(kiwoom_sniper_v2._run_sniper_iterations)
     defer_log_def_idx = source.index("def _defer_scanner_entry_pipeline_log")
     fast_def_idx = source.index(
         "def _defer_emit_scanner_fast_precheck", defer_log_def_idx
@@ -6342,7 +6342,7 @@ def test_run_sniper_defers_scanner_precheck_and_lag_event_emits_until_loop_tail(
 
 
 def test_run_sniper_disables_legacy_queue_lag_eviction_in_scheduler_mode():
-    source = inspect.getsource(kiwoom_sniper_v2.run_sniper)
+    source = inspect.getsource(kiwoom_sniper_v2._run_sniper_iterations)
     work_queue_idx = source.index(
         'runtime_work_queue = list(queue_context["iteration_targets"])'
     )
@@ -6355,7 +6355,7 @@ def test_run_sniper_disables_legacy_queue_lag_eviction_in_scheduler_mode():
         "else _defer_emit_scanner_runtime_queue_lag(", scheduler_archive_guard_idx
     )
     fast_result_idx = source.index(
-        'fast_precheck_result = str(\n                            stock.get("_scanner_fast_precheck_result")',
+        'fast_precheck_result = str(\n                        stock.get("_scanner_fast_precheck_result")',
         queue_call_idx,
     )
     scheduler_complete_idx = source.index(
@@ -6374,14 +6374,14 @@ def test_run_sniper_disables_legacy_queue_lag_eviction_in_scheduler_mode():
 
 
 def test_scanner_pipeline_events_flush_before_heavy_eval_handler():
-    source = inspect.getsource(kiwoom_sniper_v2.run_sniper)
+    source = inspect.getsource(kiwoom_sniper_v2._run_sniper_iterations)
     flush_def_idx = source.index("def _flush_delayed_scanner_heavy_eval")
     heavy_lag_idx = source.index("_defer_emit_scanner_heavy_eval_lag(", flush_def_idx)
     pipeline_flush_idx = source.index(
         "_flush_deferred_scanner_pipeline_events()", heavy_lag_idx
     )
     heavy_handle_idx = source.index(
-        "handle_watching_state(\n                            delayed_stock",
+        "handle_watching_state(\n                        delayed_stock",
         pipeline_flush_idx,
     )
 
@@ -6389,13 +6389,13 @@ def test_scanner_pipeline_events_flush_before_heavy_eval_handler():
 
 
 def test_scanner_heavy_eval_completion_flushes_on_success_and_exception():
-    source = inspect.getsource(kiwoom_sniper_v2.run_sniper)
+    source = inspect.getsource(kiwoom_sniper_v2._run_sniper_iterations)
     flush_def_idx = source.index("def _flush_delayed_scanner_heavy_eval")
     snapshot_idx = source.index(
         "heavy_eval_completion_stock = dict(delayed_stock)", flush_def_idx
     )
     handler_idx = source.index(
-        "handle_watching_state(\n                            delayed_stock",
+        "handle_watching_state(\n                        delayed_stock",
         flush_def_idx,
     )
     exception_idx = source.index("except Exception:", handler_idx)
@@ -6420,7 +6420,7 @@ def test_scanner_heavy_eval_completion_flushes_on_success_and_exception():
 
 
 def test_run_sniper_processes_one_delayed_heavy_eval_before_live_attach_yield():
-    source = inspect.getsource(kiwoom_sniper_v2.run_sniper)
+    source = inspect.getsource(kiwoom_sniper_v2._run_sniper_iterations)
     flush_idx = source.index("def _flush_delayed_scanner_heavy_eval")
     attempted_init_idx = source.index("heavy_eval_attempted = False", flush_idx)
     delayed_loop_idx = source.index("while delayed_scanner_heavy_eval:", flush_idx)
@@ -6452,7 +6452,7 @@ def test_run_sniper_processes_one_delayed_heavy_eval_before_live_attach_yield():
 
 
 def test_async_heavy_eval_dispatch_yields_before_another_runtime_target():
-    source = inspect.getsource(kiwoom_sniper_v2.run_sniper)
+    source = inspect.getsource(kiwoom_sniper_v2._run_sniper_iterations)
     state_idx = source.index("scanner_async_commit_yield_requested = False")
     flush_idx = source.index("def _flush_delayed_scanner_heavy_eval", state_idx)
     flush_gate_idx = source.index("if scanner_async_commit_yield_requested:", flush_idx)
@@ -6477,7 +6477,7 @@ def test_async_heavy_eval_dispatch_yields_before_another_runtime_target():
 
 
 def test_async_heavy_eval_yield_skips_one_normal_polling_sleep():
-    source = inspect.getsource(kiwoom_sniper_v2.run_sniper)
+    source = inspect.getsource(kiwoom_sniper_v2._run_sniper_iterations)
     yield_idx = source.index("scanner_async_commit_yield_requested = True")
     sleep_budget_idx = source.index(
         "_sleep_ms = 0 if scanner_async_commit_yield_requested else 1000",
@@ -6489,7 +6489,7 @@ def test_async_heavy_eval_yield_skips_one_normal_polling_sleep():
 
 
 def test_async_commit_has_no_retired_rising_missed_adapter():
-    source = inspect.getsource(kiwoom_sniper_v2.run_sniper)
+    source = inspect.getsource(kiwoom_sniper_v2._run_sniper_iterations)
     commit_idx = source.index("if scheduled_lane is ScannerLane.COMMIT:")
     opening_adapter_idx = source.index(
         "handle_scanner_async_opening_rotation_commit(", commit_idx
@@ -6500,7 +6500,7 @@ def test_async_commit_has_no_retired_rising_missed_adapter():
 
 
 def test_opening_rotation_ttl_sweep_is_independent_and_precedes_general_fifo():
-    source = inspect.getsource(kiwoom_sniper_v2.run_sniper)
+    source = inspect.getsource(kiwoom_sniper_v2._run_sniper_iterations)
     sweep_interval_idx = source.index(
         'getattr(run_sniper, "last_opening_rotation_ttl_sweep_time", 0)'
     )
@@ -6518,7 +6518,7 @@ def test_opening_rotation_ttl_sweep_is_independent_and_precedes_general_fifo():
 
 
 def test_opening_rotation_async_strategy_miss_handoffs_to_generic_watching_owner():
-    source = inspect.getsource(kiwoom_sniper_v2.run_sniper)
+    source = inspect.getsource(kiwoom_sniper_v2._run_sniper_iterations)
     commit_idx = source.index("if scheduled_lane is ScannerLane.COMMIT:")
     opening_adapter_idx = source.index(
         "opening_rotation_commit_handled = "
@@ -6553,7 +6553,7 @@ def test_opening_rotation_async_strategy_miss_handoffs_to_generic_watching_owner
 
 
 def test_async_commit_preserves_same_generation_followup_before_warm_parking():
-    source = inspect.getsource(kiwoom_sniper_v2.run_sniper)
+    source = inspect.getsource(kiwoom_sniper_v2._run_sniper_iterations)
     commit_idx = source.index("if scheduled_lane is ScannerLane.COMMIT:")
     followup_wait_idx = source.index(
         "followup_async_wait_state = (",
@@ -6587,7 +6587,7 @@ def test_async_commit_preserves_same_generation_followup_before_warm_parking():
 
 
 def test_scheduler_ready_heavy_eval_flushes_before_next_promotion_attach():
-    source = inspect.getsource(kiwoom_sniper_v2.run_sniper)
+    source = inspect.getsource(kiwoom_sniper_v2._run_sniper_iterations)
     enqueue_idx = source.index(
         'owner="eligible_precheck_heavy_eval"',
     )
@@ -6607,7 +6607,7 @@ def test_scheduler_ready_heavy_eval_flushes_before_next_promotion_attach():
 
 
 def test_runtime_live_attach_reopens_delayed_heavy_eval_flush():
-    source = inspect.getsource(kiwoom_sniper_v2.run_sniper)
+    source = inspect.getsource(kiwoom_sniper_v2._run_sniper_iterations)
     helper_idx = source.index("def _admit_runtime_live_attaches")
     nonlocal_idx = source.index(
         "nonlocal runtime_work_queue, scanner_heavy_eval_flushed", helper_idx
@@ -6620,7 +6620,7 @@ def test_runtime_live_attach_reopens_delayed_heavy_eval_flush():
 
 
 def test_run_sniper_rechecks_work_queue_after_delayed_heavy_eval_flush():
-    source = inspect.getsource(kiwoom_sniper_v2.run_sniper)
+    source = inspect.getsource(kiwoom_sniper_v2._run_sniper_iterations)
     work_queue_idx = source.index(
         'runtime_work_queue = list(queue_context["iteration_targets"])'
     )
@@ -6639,7 +6639,7 @@ def test_run_sniper_rechecks_work_queue_after_delayed_heavy_eval_flush():
 
 
 def test_scanner_heavy_eval_refreshes_ws_snapshot_before_handler():
-    source = inspect.getsource(kiwoom_sniper_v2.run_sniper)
+    source = inspect.getsource(kiwoom_sniper_v2._run_sniper_iterations)
     flush_def_idx = source.index("def _flush_delayed_scanner_heavy_eval")
     eval_ws_idx = source.index("eval_ws_data = delayed_ws_data", flush_def_idx)
     recheck_idx = source.index(
@@ -6647,7 +6647,7 @@ def test_scanner_heavy_eval_refreshes_ws_snapshot_before_handler():
     )
     assign_idx = source.index("eval_ws_data = recheck_snapshot", recheck_idx)
     handle_idx = source.index(
-        "handle_watching_state(\n                            delayed_stock",
+        "handle_watching_state(\n                        delayed_stock",
         assign_idx,
     )
     eval_arg_idx = source.index("eval_ws_data", handle_idx)
@@ -6663,7 +6663,7 @@ def test_scanner_heavy_eval_refreshes_ws_snapshot_before_handler():
 
 
 def test_scanner_heavy_eval_stale_recheck_repairs_before_handler():
-    source = inspect.getsource(kiwoom_sniper_v2.run_sniper)
+    source = inspect.getsource(kiwoom_sniper_v2._run_sniper_iterations)
     flush_def_idx = source.index("def _flush_delayed_scanner_heavy_eval")
     recheck_idx = source.index(
         "_scanner_ws_subscription_recheck_snapshot_and_fields(", flush_def_idx
@@ -6678,7 +6678,7 @@ def test_scanner_heavy_eval_stale_recheck_repairs_before_handler():
     merged_arg_idx = source.index("**heavy_recheck_skip_fields", skip_idx)
     continue_idx = source.index("continue", skip_idx)
     handle_idx = source.index(
-        "handle_watching_state(\n                            delayed_stock",
+        "handle_watching_state(\n                        delayed_stock",
         continue_idx,
     )
 
@@ -6687,7 +6687,7 @@ def test_scanner_heavy_eval_stale_recheck_repairs_before_handler():
 
 
 def test_scanner_heavy_eval_allows_bounded_opening_handoff_before_recovery():
-    source = inspect.getsource(kiwoom_sniper_v2.run_sniper)
+    source = inspect.getsource(kiwoom_sniper_v2._run_sniper_iterations)
     flush_def_idx = source.index("def _flush_delayed_scanner_heavy_eval")
     stale_idx = source.index("heavy_recheck_repair_needed = (", flush_def_idx)
     handoff_idx = source.index("_opening_rotation_upstream_handoff_fields(", stale_idx)
@@ -6698,7 +6698,7 @@ def test_scanner_heavy_eval_allows_bounded_opening_handoff_before_recovery():
         "scanner_heavy_eval_stale_ws_recovery", bounded_branch_idx
     )
     handle_idx = source.index(
-        "handle_watching_state(\n                            delayed_stock",
+        "handle_watching_state(\n                        delayed_stock",
         recover_idx,
     )
     fresh_clock_idx = source.index(
@@ -6737,7 +6737,7 @@ def test_scanner_market_data_enrichment_accepts_opening_bounded_handoff(monkeypa
 
 
 def test_scanner_strength_recheck_waiting_skips_before_full_eval_budget():
-    source = inspect.getsource(kiwoom_sniper_v2.run_sniper)
+    source = inspect.getsource(kiwoom_sniper_v2._run_sniper_iterations)
     waiting_idx = source.index("if _scanner_strength_recheck_waiting(")
     budget_idx = source.index(
         "and scanner_full_eval_count >= scanner_full_eval_limit", waiting_idx
@@ -6748,7 +6748,7 @@ def test_scanner_strength_recheck_waiting_skips_before_full_eval_budget():
 
 
 def test_scanner_fast_precheck_not_eligible_skips_before_heavy_eval():
-    source = inspect.getsource(kiwoom_sniper_v2.run_sniper)
+    source = inspect.getsource(kiwoom_sniper_v2._run_sniper_iterations)
     precheck_idx = source.index("fast_precheck_result = str(")
     not_eligible_idx = source.index(
         'fast_precheck_result != "eligible_for_heavy_entry_eval"', precheck_idx
@@ -6777,7 +6777,7 @@ def test_scanner_fast_precheck_not_eligible_skips_before_heavy_eval():
 
 
 def test_scanner_fast_precheck_deferred_call_preserves_code_for_backoff_lookup():
-    source = inspect.getsource(kiwoom_sniper_v2.run_sniper)
+    source = inspect.getsource(kiwoom_sniper_v2._run_sniper_iterations)
     helper_idx = source.index("def _defer_emit_scanner_fast_precheck(")
     capture_idx = source.index(
         "sniper_state_handlers._capture_rising_missed_entry_turn_bbo(", helper_idx
@@ -6793,7 +6793,7 @@ def test_scanner_fast_precheck_deferred_call_preserves_code_for_backoff_lookup()
 
 
 def test_scanner_fast_precheck_is_flushed_before_non_scanner_targets():
-    source = inspect.getsource(kiwoom_sniper_v2.run_sniper)
+    source = inspect.getsource(kiwoom_sniper_v2._run_sniper_iterations)
     transition_flush_idx = source.index("and not _is_scanner_watching_target(stock)")
     flush_call_idx = source.index(
         "_flush_delayed_scanner_heavy_eval()", transition_flush_idx
@@ -6807,7 +6807,7 @@ def test_scanner_fast_precheck_is_flushed_before_non_scanner_targets():
 
 
 def test_holding_missing_ws_snapshot_reaches_holding_freshness_guard():
-    source = inspect.getsource(kiwoom_sniper_v2.run_sniper)
+    source = inspect.getsource(kiwoom_sniper_v2._run_sniper_iterations)
     missing_ws_branch_idx = source.index(
         'if not ws_data or ws_data.get("curr", 0) == 0:'
     )
@@ -9655,7 +9655,7 @@ def test_scanner_heavy_eval_explicit_recheck_bypasses_cadence_only_once(
 
 
 def test_run_sniper_gates_legacy_heavy_eval_before_consuming_loop_budget():
-    source = inspect.getsource(kiwoom_sniper_v2.run_sniper)
+    source = inspect.getsource(kiwoom_sniper_v2._run_sniper_iterations)
     strength_wait_idx = source.index("if _scanner_strength_recheck_waiting(")
     budget_start = source.index('budget_source = "standard"')
     preview_gate_idx = source.index(
@@ -10637,7 +10637,7 @@ def test_scanner_async_transport_wait_state_never_uses_ready_result_as_heavy_wor
 
 
 def test_scanner_async_commit_window_covers_one_busy_outer_loop():
-    source = inspect.getsource(kiwoom_sniper_v2.run_sniper)
+    source = inspect.getsource(kiwoom_sniper_v2._run_sniper_iterations)
     enqueue_idx = source.index('owner="scanner_async_result_ready"')
     deadline_idx = source.index(
         "deadline_epoch=commit_enqueued_epoch + 5.0",
@@ -10681,7 +10681,7 @@ def test_watching_wrapper_forwards_general_entry_handoff_controls(monkeypatch):
 
 
 def test_persistent_ws_gap_uses_dedicated_repair_batch_queue():
-    source = inspect.getsource(kiwoom_sniper_v2.run_sniper)
+    source = inspect.getsource(kiwoom_sniper_v2._run_sniper_iterations)
     queue_def_idx = source.index("pending_scanner_ws_persistent_repair")
     queue_call_idx = source.index("_queue_scanner_ws_persistent_repair(")
     force_publish_idx = source.index('"repair_cycle": "persistent_ws_gap"')
@@ -10690,7 +10690,7 @@ def test_persistent_ws_gap_uses_dedicated_repair_batch_queue():
 
 
 def test_subscription_recheck_snapshot_is_applied_before_fast_precheck_retry():
-    source = inspect.getsource(kiwoom_sniper_v2.run_sniper)
+    source = inspect.getsource(kiwoom_sniper_v2._run_sniper_iterations)
     helper_idx = source.index("_apply_subscription_recheck_snapshot_if_ready")
     queue_idx = source.index("_queue_scanner_ws_persistent_repair(", helper_idx)
     apply_idx = source.index('phase="fast_precheck"', queue_idx)
@@ -10706,7 +10706,7 @@ def test_subscription_recheck_snapshot_is_applied_before_fast_precheck_retry():
 
 
 def test_subscription_recheck_snapshot_is_applied_before_heavy_eval_recheck_skip():
-    source = inspect.getsource(kiwoom_sniper_v2.run_sniper)
+    source = inspect.getsource(kiwoom_sniper_v2._run_sniper_iterations)
     flush_idx = source.index("def _flush_delayed_scanner_heavy_eval")
     repair_idx = source.index("scanner_heavy_eval_stale_ws_recovery", flush_idx)
     apply_idx = source.index('phase="heavy_eval_repair"', repair_idx)
@@ -10718,7 +10718,7 @@ def test_subscription_recheck_snapshot_is_applied_before_heavy_eval_recheck_skip
 
 
 def test_rest_quote_price_only_strength_gap_eviction_runs_before_full_eval_budget():
-    source = inspect.getsource(kiwoom_sniper_v2.run_sniper)
+    source = inspect.getsource(kiwoom_sniper_v2._run_sniper_iterations)
     reason_idx = source.index('"rising_rest_quote_recovery_without_realtime_strength"')
     eviction_idx = source.index("_maybe_expire_scanner_watch_for_stale", reason_idx)
     budget_idx = source.index(
@@ -11983,7 +11983,7 @@ def test_scanner_full_eval_deferred_eviction_can_be_disabled(monkeypatch):
 
 
 def test_run_sniper_full_eval_deferred_eviction_is_checked_before_deferred_skip_log():
-    source = inspect.getsource(kiwoom_sniper_v2.run_sniper)
+    source = inspect.getsource(kiwoom_sniper_v2._run_sniper_iterations)
     fields_idx = source.index('skip_reason": "scanner_full_eval_loop_budget_deferred"')
     decision_idx = source.index(
         "_scanner_watch_eviction_decision_from_full_eval_deferred(", fields_idx

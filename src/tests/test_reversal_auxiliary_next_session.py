@@ -19,6 +19,7 @@ from src.engine.ai import offline_comparison_store as S
 
 SIDS = ['034020|PRE|20000_TO_100000|NXT', '196170|PRE|GE_100000|NXT']
 VERIFY_FROZEN = B._verify_frozen
+SEMANTIC_CODE_PARITY = B._semantic_code_parity
 
 
 @pytest.fixture
@@ -193,6 +194,38 @@ def test_future_publication_retry_returns_original_generation(carry):
     assert len(list((I.root(f.data)/'generations').glob('*.json')))==1
 
 
+@pytest.mark.parametrize('fault', [None, 'cutoff', 'proof', 'source', 'preopen', 'pid', 'code_refresh'])
+def test_same_day_carry_requires_stopped_native_proof_and_closed_source(carry, monkeypatch, fault):
+    from src.engine.automation import postclose_done_controller as done, ordered_intraday_deploy as ordered
+    from src.engine.scalping import continuous_reversal_policy_v6 as policy
+    f = carry
+    f.target['continuous_reversal']['code_refresh'] = dict(stopped_postclose_preparation=dict(
+        source_date='2026-10-16', publication_date='2026-10-16', target_date='2026-10-19'))
+    P.write(f.target_path, f.target); P.write(f.candidate_path, f.target)
+    m = prepare(f)
+    m['source_code_handoff'] = {'native_proof': True}
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2026, 10, 19, 7, 35 if fault == 'cutoff' else 20, tzinfo=I.K.KST)
+    monkeypatch.setattr(B, 'datetime', Clock)
+    checks = []
+    def validate(bundle, data):
+        checks.append('code')
+        if fault == 'code_refresh': raise ValueError('v6_code_refresh_policy_changed')
+    monkeypatch.setattr(policy, '_validate_code_refresh', validate)
+    monkeypatch.setattr(done, 'done_terminal_receipt_issues', lambda *a, **k: ['invalid'] if fault == 'source' else [])
+    if fault == 'proof': f.target['continuous_reversal']['code_refresh'] = {}
+    if fault == 'preopen': P.write(f.data/'report/threshold_cycle_preopen_status/threshold_cycle_preopen_2026-10-19.status.json', {})
+    if fault == 'pid': monkeypatch.setattr(ordered, '_main_pids', lambda: [123])
+    if fault:
+        with pytest.raises(ValueError): B._future_guard(f.data, m, f.target)
+    else:
+        assert B._future_guard(f.data, m, f.target).date().isoformat() == '2026-10-19'
+        assert checks == ['code']
+    assert not list((I.root(f.data)/'days').glob('**/*.json'))
+
+
 @pytest.mark.parametrize('field',['bindings','changes','rollback_bindings','previous_overlay_sha256','effective_mode',
                                  'effective_from','revoked_overlays','revoked_scope_overlays'])
 def test_idempotent_retry_rejects_resealed_extra_behavior(carry,field):
@@ -268,6 +301,14 @@ def test_identical_source_in_another_release_preserves_historical_paths(carry,mo
     f=carry;m=prepare(f)
     path=tmp_path/'other-release/src/engine/scalping/reversal_auxiliary_next_session.py'
     path.parent.mkdir(parents=True);path.write_bytes(Path(B.__file__).read_bytes())
+    current = Path(B.__file__).resolve().parents[3]; moved = path.parents[3]
+    names = {str(B._source_path(current, name).relative_to(current))
+             for name in {*B._code_hashes(), *B.J.code_hashes(), *I.code_hashes()}}
+    names.update(('src/engine/infrastructure/startup_validation_code_context.py',
+                  'src/engine/scalping/reversal_auxiliary_source_handoff.py'))
+    for name in names:
+        target=moved/name; target.parent.mkdir(parents=True,exist_ok=True)
+        target.write_bytes((current/name).read_bytes())
     spec=importlib.util.spec_from_file_location('copied_auxiliary_next_session',path)
     copied=importlib.util.module_from_spec(spec);spec.loader.exec_module(copied)
     for name in ['_verify_frozen','_frozen_inventory','_semantic_code_parity','_bindings']:
@@ -298,3 +339,137 @@ def test_frozen_validation_errors_remain_controlled_source_gaps(carry,monkeypatc
     with pytest.raises(ValueError,match='auxiliary_next_session_frozen_validation_failed') as caught:
         VERIFY_FROZEN(f.frozen,f.source_path,f.old_path)
     assert caught.value.__cause__ is not None
+
+
+def test_os_delegation_rebuilds_native_semantics_without_relaunching_frozen_process(carry, monkeypatch):
+    from src.engine.infrastructure import startup_validation_code_context as context
+    f=carry; manifest=prepare(f)
+    proof=dict(manifest=manifest,frozen_inventory=manifest['frozen_inventory'],
+        frozen_validation=manifest['frozen_validation'],original_code_hashes={},runtime_code_hashes={})
+    # Only the OS proof is isolated here; its real-kernel binding has a separate
+    # suite. Native prepare still rebuilds scope, registry, sources and ledger.
+    def verified(value,bundle,data):
+        assert value==manifest and bundle==f.target and Path(data)==f.data
+        return proof
+    monkeypatch.setattr(context,'validation_auxiliary_preparation',verified)
+    def forbidden(*args):raise AssertionError('delegated frozen process/Git was relaunched')
+    monkeypatch.setattr(B,'_frozen_inventory',forbidden)
+    monkeypatch.setattr(B,'_verify_frozen',forbidden)
+    B._VERIFIED.clear()
+    assert B.validate_manifest(f.data,manifest,f.target)==manifest
+    B._VERIFIED.clear()
+    f.bindings[next(k for k in f.bindings if k not in SIDS)]='z'*64
+    with pytest.raises(ValueError,match='baseline_changed'):
+        B.validate_manifest(f.data,manifest,f.target)
+
+
+def test_validation_manifest_argument_without_real_context_does_not_bypass_frozen_proof(carry):
+    f=carry;manifest=prepare(f)
+    with pytest.raises(ValueError,match='validation_delegation_arguments_changed'):
+        B.prepare(f.data,source_manifest_path=f.source_path,source_bundle_path=f.old_path,
+            frozen_root=f.frozen,target_bundle_path=f.target_path,prepared_path=f.prepared,
+            _validation_manifest=manifest)
+
+
+@pytest.mark.parametrize('changed',['handoff','original_source'])
+def test_formal_source_handoff_connects_prepare_cold_and_warm_native_consumers(carry,tmp_path,monkeypatch,changed):
+    """Private Git/code-shape fixture; frozen economic replay stays isolated.
+
+    The real source-pair algorithm, H producer/validator, A native preparation,
+    sealed source/dependency inventory and warm-cache invalidation are exercised.
+    This is not an operational research or publication PASS.
+    """
+    from src.tests.test_reversal_auxiliary_source_handoff import source as source_fixture
+    from src.engine.scalping import reversal_auxiliary_source_handoff as H
+    f=source_fixture.__wrapped__(carry,tmp_path,monkeypatch)
+    monkeypatch.setattr(B,'__file__',str(H._code_path(f.current,'reversal_auxiliary_next_session.py')))
+    monkeypatch.setattr(X,'__file__',str(H._code_path(f.current,'reversal_auxiliary_transition.py')))
+    monkeypatch.setattr(I,'code_hashes',lambda:dict(f.source['reader_code_hashes']))
+    monkeypatch.setattr(B,'_semantic_code_parity',SEMANTIC_CODE_PARITY)
+    calls=[]
+    def frozen(*args):
+        calls.append(args)
+        return dict(schema='frozen_auxiliary_input_validation_v1',source_manifest_sha256=f.source['artifact_content_sha256'],
+            source_bundle_sha256=N._read(f.original_path)['bundle_sha256'],verified_pairs=50,verified_raw_responses=100,
+            input_transition_code_hashes=f.source['input_transition_code_hashes'],network_forbidden=True,
+            provider_called=False,policy_published=False)
+    monkeypatch.setattr(B,'_verify_frozen',frozen)
+    value=H.build(f.data,previous_manifest_path=f.previous_path,previous_overlay_path=f.overlay_path,
+        target_bundle_path=f.target_path)
+    path=tmp_path/'source-code-handoff.json';P.write(path,value)
+    prepared=tmp_path/'new-prepared.json';P.write(prepared,dict(schema='next_preopen_readiness_v1',
+        status='prepared_verified',source_date=f.target['source_date'],target_date=f.target['target_date'],
+        selected_release_commit=f.current_commit,activation_candidate={'bundle_sha256':f.target['bundle_sha256']}))
+    args=dict(source_manifest_path=f.source_path,source_bundle_path=f.original_path,frozen_root=f.frozen,
+        target_bundle_path=f.target_path,prepared_path=prepared)
+    with pytest.raises(ValueError,match='current_semantic_code_changed'):
+        B.prepare(f.data,**args)
+    manifest=B.prepare(f.data,**args,source_code_handoff_path=path)
+    assert len(calls)==1
+    assert manifest['source_code_handoff']=={**B._reference(path),'artifact_content_sha256':value['artifact_content_sha256']}
+    assert manifest['semantic_code_hashes']==f.previous['semantic_code_hashes']
+    assert {r['path']:r['sha256'] for r in manifest['sources']}.items()>=value['source_hashes'].items()
+    assert str(path) in dict(B._dependencies(manifest))
+    B._VERIFIED.clear()
+    assert B.validate_manifest(f.data,manifest,f.target)==manifest
+    assert len(calls)==2
+    def unexpected(*args,**kwargs):raise AssertionError('warm cache rebuilt immutable handoff')
+    monkeypatch.setattr(H,'validate',unexpected)
+    assert B.validate_manifest(f.data,manifest,f.target)==manifest
+    modified=path if changed=='handoff' else f.source_path
+    modified.write_bytes(modified.read_bytes()+b' ')
+    with pytest.raises(ValueError,match='source_changed'):
+        B.validate_manifest(f.data,manifest,f.target)
+
+
+@pytest.mark.parametrize('fault', [None, 'unreviewed', 'original', 'changed_after_validation'])
+def test_preserved_manifest_accepts_only_reviewed_later_reader(carry, tmp_path, monkeypatch, fault):
+    import shutil
+    import hashlib
+    from src.tests.test_reversal_auxiliary_source_handoff import source as source_fixture
+    from src.engine.scalping import reversal_auxiliary_source_handoff as H
+    from src.engine.infrastructure import startup_validation_code_context as C
+    f = source_fixture.__wrapped__(carry, tmp_path, monkeypatch)
+    monkeypatch.setattr(B, '__file__', str(H._code_path(f.current, 'reversal_auxiliary_next_session.py')))
+    monkeypatch.setattr(X, '__file__', str(H._code_path(f.current, 'reversal_auxiliary_transition.py')))
+    monkeypatch.setattr(I, 'code_hashes', lambda: dict(f.source['reader_code_hashes']))
+    monkeypatch.setattr(B, '_semantic_code_parity', SEMANTIC_CODE_PARITY)
+    monkeypatch.setattr(B, '_verify_frozen', lambda *args: dict(
+        schema='frozen_auxiliary_input_validation_v1', source_manifest_sha256=f.source['artifact_content_sha256'],
+        source_bundle_sha256=N._read(f.original_path)['bundle_sha256'], verified_pairs=50, verified_raw_responses=100,
+        input_transition_code_hashes=f.source['input_transition_code_hashes'], network_forbidden=True,
+        provider_called=False, policy_published=False))
+    proof = H.build(f.data, previous_manifest_path=f.previous_path, previous_overlay_path=f.overlay_path,
+                    target_bundle_path=f.target_path)
+    proof_path = tmp_path/'source-code-handoff.json'; P.write(proof_path, proof)
+    prepared_path = tmp_path/'prepared-reader.json'
+    P.write(prepared_path, dict(schema='next_preopen_readiness_v1', status='prepared_verified',
+        source_date=f.target['source_date'], target_date=f.target['target_date'], selected_release_commit=f.current_commit,
+        activation_candidate={'bundle_sha256': f.target['bundle_sha256']}))
+    manifest = B.prepare(f.data, source_manifest_path=f.source_path, source_bundle_path=f.original_path,
+        frozen_root=f.frozen, target_bundle_path=f.target_path, prepared_path=prepared_path,
+        source_code_handoff_path=proof_path)
+    before = copy.deepcopy(manifest); original_proof = proof_path.read_bytes()
+    moved = tmp_path/'reviewed-reader'; shutil.copytree(f.current, moved)
+    history = dict(C.REVIEWED_PREPARATION_HISTORY)
+    for name in ('ai_engine_openai.py', 'reversal_auxiliary_next_session.py'):
+        path = H._code_path(moved, name); old = hashlib.sha256(path.read_bytes()).hexdigest()
+        path.write_bytes(path.read_bytes()+b'# reviewed cleanup reader\n')
+        relative = str(path.relative_to(moved))
+        history[relative] = {(old, hashlib.sha256(path.read_bytes()).hexdigest())}
+    if fault != 'unreviewed': monkeypatch.setattr(C, 'REVIEWED_PREPARATION_HISTORY', history)
+    monkeypatch.setattr(H, 'ROOT', moved)
+    monkeypatch.setattr(B, '__file__', str(H._code_path(moved, 'reversal_auxiliary_next_session.py')))
+    monkeypatch.setattr(X, '__file__', str(H._code_path(moved, 'reversal_auxiliary_transition.py')))
+    B._VERIFIED.clear()
+    if fault == 'original': H._code_path(f.current, 'ai_engine_openai.py').write_text('corrupt origin\n')
+    if fault in {'unreviewed', 'original'}:
+        with pytest.raises(ValueError): B.validate_manifest(f.data, manifest, f.target)
+    else:
+        assert B.validate_manifest(f.data, manifest, f.target) == before
+        if fault == 'changed_after_validation':
+            H._code_path(moved, 'ai_engine_openai.py').write_text('unknown reader\n')
+            with pytest.raises(ValueError): B.validate_manifest(f.data, manifest, f.target)
+        else:
+            assert B.validate_manifest(f.data, manifest, f.target) == before
+    assert manifest == before and proof_path.read_bytes() == original_proof
