@@ -6654,6 +6654,9 @@ def _machine_ai_natural_source_receipt(data_root: Path, target_date: str) -> dic
             "machine_threshold_tuning_blocked_reason"
         ),
         "compact_auxiliary_policy_measurement": compact_measurement,
+        "registered_auxiliary_policy_measurement": consumption.get(
+            "registered_auxiliary_policy_measurement"
+        ),
         "machine_terminal_tuning_gate": terminal_tuning_gate,
         "authority": "source_quality_receipt_only_no_runtime_apply",
     }

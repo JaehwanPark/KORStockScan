@@ -11085,3 +11085,409 @@ def test_final_bound_projection_migration_is_byte_bound_without_raw_bootstrap(
         )
         is None
     )
+
+
+@pytest.mark.parametrize(
+    "damage",
+    [
+        None,
+        "hash",
+        "native_hash",
+        "date",
+        "role",
+        "provider",
+        "order",
+        "apply",
+        "broker",
+        "redacted",
+        "trace_conflict",
+        "redacted_identity",
+        "missing_pid",
+    ],
+)
+def test_machine_only_probe_requires_original_role_and_no_provider_contract(
+    tmp_path, damage
+):
+    day = "2026-10-23"
+    exact = {
+        "evaluation_role": "probe_observation",
+        "mechanistic_micro_window": {"samples": 4},
+    }
+    assessment = {
+        "action": "ENTER_NOW",
+        "reason": "observed",
+        "policy_version": "dated-policy",
+    }
+    native = dict(
+        schema="continuous_reversal_consumption_v1",
+        assessment_sha256=audit._canonical_digest(assessment),
+        exact_payload_sha256=audit._canonical_digest(exact),
+        bundle_sha256="b" * 64,
+        pid=123,
+        process_start_ticks="456",
+        captured_at=day + "T16:00:00+09:00",
+        evaluation_role="probe_observation",
+        provider_state="probe_observation_provider_forbidden",
+        provider_request_observed=False,
+    )
+    row = dict(
+        schema="mechanistic_entry_observation_v1",
+        evaluation_role="probe_observation",
+        captured_at=native["captured_at"],
+        bundle_sha256="b" * 64,
+        label_context={
+            "snapshot_id": "probe-snapshot",
+            "effective_venue": "SOR",
+            "session_bucket": "SOR_AFTERMARKET",
+        },
+        source={"exact_payload": exact, "assessment": assessment},
+        runtime_consumption=dict(
+            pid=123, process_start_ticks="456", continuous_reversal=native
+        ),
+        redacted=False,
+        provider_called=False,
+        actual_order_submitted=False,
+        runtime_effect=False,
+        allowed_runtime_apply=False,
+        broker_order_forbidden=True,
+    )
+    if damage == "native_hash":
+        native["exact_payload_sha256"] = "0" * 64
+    if damage == "date":
+        row["captured_at"] = native["captured_at"] = "2026-10-22T16:00:00+09:00"
+    if damage == "role":
+        exact["evaluation_role"] = "main_live"
+        native["exact_payload_sha256"] = audit._canonical_digest(exact)
+    for case, field, value in [
+        ("provider", "provider_called", True),
+        ("order", "actual_order_submitted", True),
+        ("apply", "allowed_runtime_apply", True),
+        ("broker", "broker_order_forbidden", False),
+        ("redacted", "redacted", True),
+    ]:
+        if damage == case:
+            row[field] = value
+    row["machine_observation_sha256"] = audit._canonical_digest(row)
+    if damage == "redacted_identity":
+        row["label_context"]["snapshot_id"] = "[REDACTED]"
+        row["machine_observation_sha256"] = audit._canonical_digest(
+            {k: v for k, v in row.items() if k != "machine_observation_sha256"}
+        )
+    if damage == "missing_pid":
+        row["runtime_consumption"].pop("pid")
+        row["machine_observation_sha256"] = audit._canonical_digest(
+            {k: v for k, v in row.items() if k != "machine_observation_sha256"}
+        )
+    if damage == "hash":
+        row["machine_observation_sha256"] = "0" * 64
+    trace = dict(
+        schema="ai_decision_trace_v1",
+        decision_stage="entry_screen",
+        snapshot_id="probe-snapshot",
+        machine_bundle_sha256="b" * 64,
+        entry_mechanistic_action="ENTER_NOW",
+        provider_called=False,
+    )
+    originals = {}
+    for name, rows in [
+        ("ai_decision_payloads", [row]),
+        ("ai_decision_trace", [trace] if damage == "trace_conflict" else []),
+    ]:
+        path = tmp_path / name / f"{name}_{day}.jsonl"
+        path.parent.mkdir()
+        path.write_text("".join(json.dumps(r) + "\n" for r in rows))
+        originals[path] = path.read_bytes()
+    result = audit._machine_ai_natural_source_consumption(day, data_root=tmp_path)
+    population = result["machine_evaluation_population"]
+    assert population["count"] == 1
+    assert result["machine_threshold_tuning_input_allowed"] is False
+    assert population["provider_forbidden_probe_count"] == int(
+        damage in (None, "redacted")
+    )
+    assert population["trace_expected_count"] == int(damage not in (None, "redacted"))
+    if damage in (None, "redacted"):
+        assert population["trace_join_counts"] == {
+            "provider_forbidden_probe_observation": 1
+        }
+        assert result["machine_threshold_tuning_input_allowed"] is False
+        assert result["status"] == "pass"
+    else:
+        assert (
+            population["missing_required_context_counts"][
+                "probe_role_or_authority_conflict"
+            ]
+            == 1
+        )
+    assert all(path.read_bytes() == original for path, original in originals.items())
+
+
+@pytest.mark.parametrize(
+    "damage",
+    [
+        None,
+        "no_call",
+        "registry_missing",
+        "registry_hash",
+        "registry_json",
+        "prompt_missing",
+        "prompt_hash",
+        "prompt_text",
+        "variant",
+        "redacted",
+        "duplicate_prompt",
+        "wire_version",
+        "historical_projector",
+        "generation_changed",
+    ],
+)
+def test_registered_prompt_census_preserves_family_and_exact_archived_bytes(
+    tmp_path, damage, monkeypatch
+):
+    from src.engine.scalping import reversal_auxiliary_registry as registry
+    from src.engine.scalping import reversal_auxiliary_wire as wire
+    from src.engine.scalping import reversal_extended_union as union
+    from src.engine.scalping.mechanistic_entry_runtime_policy import AI_VERSION
+
+    day = "2026-10-23"
+    research = registry.definition("existing_wording", input_version=union.VERSION)
+    registry.register(tmp_path, research)
+    definition = registry.compact_definition(
+        research, research_wire_contract={"schema": "offline_test"}
+    )
+    if damage in ("wire_version", "historical_projector"):
+        if damage == "wire_version":
+            definition["wire_contract"]["version"] = "unknown"
+        else:
+            definition["projector_sha256"] = "a" * 64
+        definition["registry_sha256"] = audit._canonical_digest(
+            {k: v for k, v in definition.items() if k != "registry_sha256"}
+        )
+    ident = definition["registry_sha256"]
+    path = registry.directory(tmp_path) / (ident + ".json")
+    if damage != "registry_missing":
+        path.write_text(
+            json.dumps(
+                definition
+                if damage != "registry_hash"
+                else dict(definition, prompt="tampered")
+            )
+        )
+    if damage == "registry_json":
+        path.write_text("{malformed")
+    if damage == "historical_projector":
+        with pytest.raises(ValueError, match="auxiliary_registry_contract_invalid"):
+            registry.load(tmp_path, ident)
+    if damage == "generation_changed":
+        original_generation = audit._raw_generation
+        reads = []
+
+        def changing_generation(candidate):
+            value = original_generation(candidate)
+            if candidate == path:
+                reads.append(candidate)
+                value = dict(value, test_generation=len(reads))
+            return value
+
+        monkeypatch.setattr(audit, "_raw_generation", changing_generation)
+    version = registry.SCHEMA_V2 + ":" + ident
+    prompt = definition["prompt"] + wire.SUFFIX
+    prompt_hash = __import__("hashlib").sha256(prompt.encode()).hexdigest()
+    receipt = dict(
+        schema="ai_decision_prompt_v1",
+        prompt_sha256=prompt_hash,
+        sanitized_prompt=prompt,
+        redacted=False,
+        replay_exact=True,
+    )
+    trace = dict(
+        schema="ai_decision_trace_v1",
+        decision_stage="entry_screen",
+        snapshot_id="registered-snapshot",
+        prompt_version=version,
+        provider_called=damage != "no_call",
+        request_id="request",
+        decision_trace_id="trace",
+        prompt_sha256=prompt_hash,
+        auxiliary_system_prompt_sha256=audit._canonical_digest(definition["prompt"]),
+        entry_ai_prompt_variant=definition["base_arm"],
+        effective_venue="SOR",
+        session_bucket="SOR_AFTERMARKET",
+        machine_bundle_sha256="b" * 64,
+    )
+    if damage == "prompt_hash":
+        trace["auxiliary_system_prompt_sha256"] = "0" * 64
+    if damage == "prompt_text":
+        receipt["sanitized_prompt"] += " changed"
+    if damage == "variant":
+        trace["entry_ai_prompt_variant"] = "wrong"
+    if damage == "redacted":
+        receipt["redacted"] = True
+    prompts = (
+        []
+        if damage == "prompt_missing"
+        else [receipt] * (2 if damage == "duplicate_prompt" else 1)
+    )
+    for name, rows in [
+        ("ai_decision_payloads", []),
+        (
+            "ai_decision_trace",
+            [
+                trace,
+                dict(
+                    schema="ai_decision_trace_v1",
+                    decision_stage="entry_screen",
+                    prompt_version=AI_VERSION,
+                    provider_called=False,
+                ),
+            ],
+        ),
+        ("ai_decision_prompts", prompts),
+        (
+            "ai_decision_requests",
+            [dict(schema="ai_decision_request_provenance_v1", request_id="request")],
+        ),
+        (
+            "ai_decision_outcomes",
+            [dict(schema="ai_decision_outcome_label_v1", decision_trace_id="trace")],
+        ),
+    ]:
+        p = tmp_path / name / f"{name}_{day}.jsonl"
+        p.parent.mkdir()
+        p.write_text("".join(json.dumps(r) + "\n" for r in rows))
+    result = audit._machine_ai_natural_source_consumption(day, data_root=tmp_path)
+    registered = result["registered_auxiliary_policy_measurement"]
+    assert registered["natural_trace_count"] == 1
+    assert registered["provider_called_count"] == int(damage != "no_call")
+    assert registered["provider_not_called_count"] == int(damage == "no_call")
+    expected = (
+        "verified_archived_prompt_population"
+        if damage in (None, "historical_projector")
+        else (
+            "provider_not_called_on_source_date"
+            if damage == "no_call"
+            else "prompt_receipt_gap"
+        )
+    )
+    assert registered["measurement_status"] == expected
+    if expected == "prompt_receipt_gap" and damage != "generation_changed":
+        assert result["status"] == "warning_identity_or_provider_link_gap"
+    if damage == "registry_json":
+        assert (
+            result["sources"]["auxiliary_registry:" + ident]["invalid_json_line_count"]
+            == 1
+        )
+    if damage == "generation_changed":
+        assert result["status"] == "source_generation_changed"
+        assert result["tuning_input_allowed"] is False
+    assert registered["runtime_policy_compatibility_verified"] is False
+    assert registered["economic_eligibility_granted"] is False
+    compact = result["compact_auxiliary_policy_measurement"]
+    assert compact["natural_trace_count"] == 1
+    assert compact["measurement_status"] == "provider_not_called_on_source_date"
+    assert compact["measurement_allowed"] is False
+    # The direct report consumer carries the new census without promoting it.
+    from src.engine.scalping.ai_action_outcome_calibration import (
+        _machine_ai_natural_source_receipt,
+    )
+
+    p = (
+        tmp_path
+        / "report/observation_source_quality_audit"
+        / f"observation_source_quality_audit_{day}.json"
+    )
+    p.parent.mkdir(parents=True)
+    p.write_text(json.dumps({"machine_ai_natural_source_consumption": result}))
+    consumed = _machine_ai_natural_source_receipt(tmp_path, day)
+    assert consumed["registered_auxiliary_policy_measurement"] == registered
+    assert (
+        consumed["compact_auxiliary_policy_measurement"]["measurement_allowed"] is False
+    )
+
+
+@pytest.mark.parametrize(
+    "source_stage, broker_forbidden", [("ai_confirmed", True), ("entry_armed", False)]
+)
+@pytest.mark.parametrize(
+    "damage",
+    [
+        None,
+        "numeric",
+        "order",
+        "runtime",
+        "apply",
+        "authority",
+        "missing_authority",
+        "usable_conflict",
+    ],
+)
+def test_advisory_snapshot_optional_micro_unavailable_is_not_bad_measurement(
+    source_stage, broker_forbidden, damage
+):
+    fields = dict(
+        source_stage=source_stage,
+        chosen_action="BUY_NOW",
+        entry_action_final_blocked=False,
+        ai_decision_evaluation_status="evaluated",
+        ai_result_source="live",
+        provider_called=True,
+        decision_authority="entry_advisory_prompt_context_only",
+        runtime_effect=False,
+        allowed_runtime_apply=False,
+        actual_order_submitted=False,
+        broker_order_forbidden=broker_forbidden,
+        minute_candle_evaluation_state="unavailable_fail_closed",
+        curr_vs_micro_vwap_bp="not_evaluated",
+        micro_vwap_available=False,
+        minute_candle_window_fresh=True,
+        minute_candle_latest_age_ms=72000,
+    )
+    for case, key, value in [
+        ("numeric", "curr_vs_micro_vwap_bp", "0.00"),
+        ("order", "actual_order_submitted", True),
+        ("runtime", "runtime_effect", True),
+        ("apply", "allowed_runtime_apply", True),
+        ("authority", "decision_authority", "live_order"),
+        ("missing_authority", "runtime_effect", None),
+        ("usable_conflict", "micro_vwap_available", True),
+    ]:
+        if damage == case:
+            fields[key] = value
+    assert audit._micro_vwap_provenance_unusable(
+        fields, stage="scalp_entry_action_decision_snapshot"
+    ) is (damage is not None)
+
+
+@pytest.mark.parametrize(
+    "stage, forbidden", [("ai_confirmed", True), ("entry_armed", False)]
+)
+def test_native_advisory_producer_and_audit_keep_missing_micro_explicit(
+    monkeypatch, stage, forbidden
+):
+    from src.engine import sniper_state_handlers as producer
+
+    captured = []
+    monkeypatch.setattr(
+        producer, "_log_entry_pipeline", lambda *args, **fields: captured.append(fields)
+    )
+    producer._emit_scalp_entry_adm_snapshot(
+        {"id": 42, "strategy": "SCALPING"},
+        "036930",
+        stage,
+        chosen_action="BUY_NOW",
+        broker_order_forbidden=forbidden,
+        ai_decision={"action": "BUY", "score": 75, "ai_result_source": "live"},
+        extra_fields={
+            "ai_decision_trace_id": "exact-trace",
+            "micro_vwap_available": False,
+            "minute_candle_window_fresh": True,
+            "minute_candle_latest_age_ms": 72000,
+        },
+    )
+    assert len(captured) == 1
+    fields = captured[0]
+    assert fields["curr_vs_micro_vwap_bp"] == "not_evaluated"
+    assert fields["actual_order_submitted"] is False
+    assert fields["allowed_runtime_apply"] is False
+    assert not audit._micro_vwap_provenance_unusable(
+        fields, stage="scalp_entry_action_decision_snapshot"
+    )

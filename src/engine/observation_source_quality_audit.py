@@ -326,11 +326,14 @@ def _audited_jsonl(path: Path, receipt: dict[str, Any]):
     receipt["logical_content_sha256"] = digest.hexdigest()
 
 
-def _verified_machine_completion_capture(row: dict, day: str) -> dict | None:
+def _verified_machine_completion_capture(
+    row: dict, day: str, *, evaluation_role: str = "main_live"
+) -> dict | None:
     """Keep a bounded identity only after verifying the original capture bytes."""
     if (
-        row.get("schema") != "mechanistic_entry_observation_v1"
-        or row.get("evaluation_role") != "main_live"
+        evaluation_role not in {"main_live", "probe_observation"}
+        or row.get("schema") != "mechanistic_entry_observation_v1"
+        or row.get("evaluation_role") != evaluation_role
     ):
         return None
     digest = lambda value: hashlib.sha256(
@@ -359,7 +362,7 @@ def _verified_machine_completion_capture(row: dict, day: str) -> dict | None:
     if (
         not isinstance(native, dict)
         or not isinstance(assessment, dict)
-        or assessment.get("action") != "ENTER_NOW"
+        or (evaluation_role == "main_live" and assessment.get("action") != "ENTER_NOW")
         or native.get("schema") != "continuous_reversal_consumption_v1"
         or native.get("assessment_sha256") != digest(assessment)
         or native.get("exact_payload_sha256") != digest(source.get("exact_payload"))
@@ -367,6 +370,31 @@ def _verified_machine_completion_capture(row: dict, day: str) -> dict | None:
         or native.get("pid") != runtime.get("pid")
         or native.get("process_start_ticks") != runtime.get("process_start_ticks")
         or native.get("captured_at") != row.get("captured_at")
+    ):
+        return None
+    if evaluation_role == "probe_observation" and not (
+        isinstance(row.get("redacted"), bool)
+        and all(
+            row.get(key) is False
+            for key in (
+                "provider_called",
+                "actual_order_submitted",
+                "runtime_effect",
+                "allowed_runtime_apply",
+            )
+        )
+        and row.get("broker_order_forbidden") is True
+        and native.get("evaluation_role") == evaluation_role
+        and native.get("provider_state") == "probe_observation_provider_forbidden"
+        and native.get("provider_request_observed") is False
+        and isinstance(source.get("exact_payload"), dict)
+        and source["exact_payload"].get("evaluation_role") == evaluation_role
+        and context.get("snapshot_id")
+        and "redact" not in str(context["snapshot_id"]).lower()
+        and type(runtime.get("pid")) is int
+        and runtime["pid"] > 0
+        and str(runtime.get("process_start_ticks") or "").isdigit()
+        and re.fullmatch("[a-f0-9]{64}", str(row.get("bundle_sha256") or ""))
     ):
         return None
     try:
@@ -467,6 +495,166 @@ def _recover_machine_completion(
     )
 
 
+def _registered_auxiliary_source_measurement(traces, prompts, *, data_root):
+    """Verify historical prompt bytes, without granting current policy validity.
+
+    Registry execution validation pins today's projector code. Historical
+    provenance instead binds the immutable definition to the exact archived
+    prompt and trace. It must not authorize the legacy compact-policy gate.
+    """
+    from src.engine.scalping import reversal_auxiliary_registry as registry
+    from src.engine.scalping import reversal_auxiliary_wire as wire
+    from src.engine.scalping.continuous_reversal_postclose import digest
+
+    selected = [
+        row
+        for row in traces
+        if str(row.get("prompt_version") or "").startswith(
+            (registry.SCHEMA + ":", registry.SCHEMA_V2 + ":")
+        )
+    ]
+    archives = defaultdict(list)
+    for prompt in prompts:
+        archives[prompt.get("prompt_sha256")].append(prompt)
+    definitions, sources, counts, partitions = {}, {}, Counter(), defaultdict(Counter)
+    for row in selected:
+        if row.get("provider_called") is not True:
+            continue
+        version = row["prompt_version"]
+        if version not in definitions:
+            schema, ident = version.split(":", 1)
+            definition = None
+            if re.fullmatch("[a-f0-9]{64}", ident):
+                path = registry.directory(data_root) / (ident + ".json")
+                before = _raw_generation(path)
+                raw = b""
+                read_error = None
+                invalid_json = False
+                try:
+                    raw = path.read_bytes()
+                    value = json.loads(raw)
+                    if (
+                        isinstance(value, dict)
+                        and value.get("schema") == schema
+                        and value.get("registry_sha256") == ident
+                        and digest(
+                            {k: v for k, v in value.items() if k != "registry_sha256"}
+                        )
+                        == ident
+                        and isinstance(value.get("prompt"), str)
+                        and value["prompt"].strip()
+                        and value.get("base_arm")
+                    ):
+                        definition = value
+                except (OSError, ValueError) as exc:
+                    read_error = type(exc).__name__
+                    invalid_json = isinstance(exc, (json.JSONDecodeError, UnicodeError))
+                after = _raw_generation(path)
+                stable = bool(before and before == after)
+                if not stable:
+                    definition = None
+                sources["auxiliary_registry:" + ident] = dict(
+                    path=str(path),
+                    exists=path.is_file(),
+                    generation=after,
+                    generation_stable=stable,
+                    logical_content_sha256=(
+                        hashlib.sha256(raw).hexdigest() if raw else None
+                    ),
+                    logical_read_bytes=len(raw),
+                    nonempty_line_count=int(bool(raw)),
+                    invalid_json_line_count=int(invalid_json),
+                    definition_identity_valid=definition is not None,
+                    read_error=read_error,
+                )
+            definitions[version] = definition
+        definition = definitions[version]
+        archived = archives.get(row.get("prompt_sha256"), [])
+        status = "registry_definition_missing_or_invalid"
+        if definition is not None:
+            status = "prompt_receipt_gap"
+            if len(archived) == 1:
+                prompt = archived[0]
+                status = "prompt_or_variant_mismatch"
+                if (
+                    prompt.get("redacted") is False
+                    and prompt.get("replay_exact") is True
+                    and isinstance(prompt.get("sanitized_prompt"), str)
+                    and hashlib.sha256(
+                        prompt["sanitized_prompt"].encode("utf-8")
+                    ).hexdigest()
+                    == row.get("prompt_sha256")
+                    and prompt["sanitized_prompt"]
+                    == definition["prompt"]
+                    + (
+                        wire.SUFFIX
+                        if definition["schema"] == registry.SCHEMA_V2
+                        else ""
+                    )
+                    and (
+                        definition["schema"] == registry.SCHEMA
+                        or (
+                            isinstance(definition.get("wire_contract"), dict)
+                            and definition["wire_contract"].get("version")
+                            == wire.VERSION
+                            and definition["wire_contract"].get("decoder_version")
+                            == wire.DECODER_VERSION
+                        )
+                    )
+                    and row.get("auxiliary_system_prompt_sha256")
+                    == digest(definition["prompt"])
+                    and row.get("entry_ai_prompt_variant") == definition["base_arm"]
+                ):
+                    status = "verified_archived_prompt"
+        counts[status] += 1
+        partitions[
+            (
+                version,
+                str(row.get("effective_venue") or "UNKNOWN"),
+                str(row.get("session_bucket") or "UNKNOWN"),
+                str(row.get("machine_bundle_sha256") or "UNKNOWN"),
+            )
+        ][status] += 1
+    called = sum(counts.values())
+    return (
+        dict(
+            natural_trace_count=len(selected),
+            provider_called_count=called,
+            provider_not_called_count=len(selected) - called,
+            provider_prompt_receipt_counts=dict(sorted(counts.items())),
+            partitions=[
+                dict(
+                    prompt_version=key[0],
+                    effective_venue=key[1],
+                    session_bucket=key[2],
+                    machine_bundle_sha256=key[3],
+                    provider_prompt_receipt_counts=dict(sorted(value.items())),
+                )
+                for key, value in sorted(partitions.items())
+            ],
+            measurement_status=(
+                "not_observed_on_source_date"
+                if not selected
+                else (
+                    "provider_not_called_on_source_date"
+                    if not called
+                    else (
+                        "verified_archived_prompt_population"
+                        if counts["verified_archived_prompt"] == called
+                        else "prompt_receipt_gap"
+                    )
+                )
+            ),
+            authority="historical_prompt_provenance_only",
+            runtime_policy_compatibility_verified=False,
+            economic_eligibility_granted=False,
+            runtime_effect=False,
+            allowed_runtime_apply=False,
+        ),
+        sources,
+    )
+
+
 def _machine_ai_natural_source_consumption(
     target_date: str, *, data_root: Path = DATA_DIR
 ) -> dict[str, Any]:
@@ -500,14 +688,27 @@ def _machine_ai_natural_source_consumption(
                     completion_captures[
                         str(completion["context"].get("snapshot_id"))
                     ].append(completion)
+                probe_verified = bool(
+                    row.get("evaluation_role") == "probe_observation"
+                    and _verified_machine_completion_capture(
+                        row, target_date, evaluation_role="probe_observation"
+                    )
+                )
                 source = row.get("source")
                 source = source if isinstance(source, dict) else {}
                 exact = source.get("exact_payload")
                 exact = exact if isinstance(exact, dict) else {}
                 row = {
                     key: row.get(key)
-                    for key in ("schema", "bundle_sha256", "label_context")
+                    for key in (
+                        "schema",
+                        "bundle_sha256",
+                        "label_context",
+                        "evaluation_role",
+                        "redacted",
+                    )
                 } | {
+                    "probe_observation_verified": probe_verified,
                     "source": {
                         "assessment": source.get("assessment"),
                         "exact_payload": {
@@ -515,7 +716,7 @@ def _machine_ai_natural_source_consumption(
                                 "mechanistic_micro_window"
                             )
                         },
-                    }
+                    },
                 }
             elif name == "ai_decision_trace":
                 row = {
@@ -627,6 +828,10 @@ def _machine_ai_natural_source_consumption(
     machine_scopes: Counter[str] = Counter()
     machine_missing_fields: Counter[str] = Counter()
     machine_trace_join: Counter[str] = Counter()
+    machine_roles = Counter(
+        str(row.get("evaluation_role") or "unspecified_legacy") for row in captures
+    )
+    verified_probe_count = 0
     for capture in captures:
         source = (
             capture.get("source") if isinstance(capture.get("source"), dict) else {}
@@ -663,6 +868,14 @@ def _machine_ai_natural_source_consumption(
             if value in (None, "", {}, []):
                 machine_missing_fields[field] += 1
         snapshot_id = str(context.get("snapshot_id") or "").strip()
+        if capture.get(
+            "probe_observation_verified"
+        ) is True and not trace_by_snapshot.get(snapshot_id):
+            verified_probe_count += 1
+            machine_trace_join["provider_forbidden_probe_observation"] += 1
+            continue
+        if capture.get("evaluation_role") == "probe_observation":
+            machine_missing_fields["probe_role_or_authority_conflict"] += 1
         candidates = [
             trace
             for trace in trace_by_snapshot.get(snapshot_id, [])
@@ -933,6 +1146,19 @@ def _machine_ai_natural_source_consumption(
         incumbent_partitions
         and any(row["measurement_allowed"] is True for row in incumbent_partitions)
     )
+    registered_measurement, registry_sources = _registered_auxiliary_source_measurement(
+        traces, prompts, data_root=data_root
+    )
+    registered_prompt_gaps = registered_measurement[
+        "provider_called_count"
+    ] - registered_measurement["provider_prompt_receipt_counts"].get(
+        "verified_archived_prompt", 0
+    )
+    receipts.update(registry_sources)
+    source_generation_changed = source_generation_changed or any(
+        source["exists"] and not source["generation_stable"]
+        for source in registry_sources.values()
+    )
     status = (
         "source_generation_changed"
         if source_generation_changed
@@ -947,7 +1173,7 @@ def _machine_ai_natural_source_consumption(
                     if machine_contract_invalid_traces
                     else (
                         "warning_identity_or_provider_link_gap"
-                        if identity_gaps or provider_link_gaps
+                        if identity_gaps or provider_link_gaps or registered_prompt_gaps
                         else (
                             "warning_machine_source_invalid_excluded"
                             if machine_source_invalid_traces
@@ -1007,6 +1233,19 @@ def _machine_ai_natural_source_consumption(
         },
         "machine_evaluation_population": {
             "count": len(captures),
+            "evaluation_role_counts": dict(sorted(machine_roles.items())),
+            "provider_forbidden_probe_count": verified_probe_count,
+            "provider_forbidden_probe_redacted_count": sum(
+                row.get("probe_observation_verified") is True
+                and row.get("redacted") is True
+                and not trace_by_snapshot.get(
+                    str(
+                        (row.get("label_context") or {}).get("snapshot_id") or ""
+                    ).strip()
+                )
+                for row in captures
+            ),
+            "trace_expected_count": len(captures) - verified_probe_count,
             "action_counts": dict(sorted(machine_actions.items())),
             "scope_counts": dict(sorted(machine_scopes.items())),
             "missing_required_context_counts": dict(
@@ -1086,9 +1325,13 @@ def _machine_ai_natural_source_consumption(
                 "not_observed_on_source_date"
                 if not compact_traces
                 else (
-                    "prompt_receipt_gap"
-                    if not compact_measurement_allowed
-                    else "measurable_natural_compact_population"
+                    "provider_not_called_on_source_date"
+                    if not compact_provider_traces
+                    else (
+                        "prompt_receipt_gap"
+                        if not compact_measurement_allowed
+                        else "measurable_natural_compact_population"
+                    )
                 )
             ),
             "measurement_allowed": compact_measurement_allowed,
@@ -1097,11 +1340,15 @@ def _machine_ai_natural_source_consumption(
             "runtime_effect": False,
             "allowed_runtime_apply": False,
         },
+        "registered_auxiliary_policy_measurement": registered_measurement,
         "machine_terminal_tuning_gate": terminal_tuning_gate,
         "tuning_input_allowed": not bool(
             required_missing or invalid_json_sources or source_generation_changed
         ),
-        "machine_threshold_tuning_input_allowed": bool(captures)
+        "machine_threshold_tuning_input_allowed": any(
+            capture.get("evaluation_role") != "probe_observation"
+            for capture in captures
+        )
         and not bool(
             required_missing
             or invalid_json_sources
@@ -1113,19 +1360,27 @@ def _machine_ai_natural_source_consumption(
             )
         ),
         "machine_threshold_tuning_blocked_reason": (
-            "machine_attempt_conservation_gap"
-            if machine_unaccounted_trace_count
+            "machine_probe_population_not_tuning_input"
+            if captures
+            and all(
+                capture.get("evaluation_role") == "probe_observation"
+                for capture in captures
+            )
             else (
-                "machine_assessment_contract_invalid"
-                if machine_contract_invalid_traces
-                and not machine_contract_invalid_rows_isolated
+                "machine_attempt_conservation_gap"
+                if machine_unaccounted_trace_count
                 else (
-                    "machine_required_feature_blocked_before_assessment"
-                    if machine_feature_insufficient_traces and not captures
+                    "machine_assessment_contract_invalid"
+                    if machine_contract_invalid_traces
+                    and not machine_contract_invalid_rows_isolated
                     else (
-                        "machine_source_quality_blocked_before_assessment"
-                        if machine_expected_traces and not captures
-                        else None
+                        "machine_required_feature_blocked_before_assessment"
+                        if machine_feature_insufficient_traces and not captures
+                        else (
+                            "machine_source_quality_blocked_before_assessment"
+                            if machine_expected_traces and not captures
+                            else None
+                        )
                     )
                 )
             )
@@ -6215,6 +6470,32 @@ def _blocked_observation_records_fail_closed_source_gap(
                 and _contract_bool(fields.get("allowed_runtime_apply"), False)
             )
     if stage == "scalp_entry_action_decision_snapshot" and source == "minute_candle":
+        if (
+            fields.get("decision_authority") == "entry_advisory_prompt_context_only"
+            and fields.get("minute_candle_evaluation_state")
+            == "unavailable_fail_closed"
+            and fields.get("curr_vs_micro_vwap_bp") == "not_evaluated"
+            and all(
+                _is_present(fields.get(key)) and _contract_bool(fields.get(key), False)
+                for key in (
+                    "runtime_effect",
+                    "allowed_runtime_apply",
+                    "actual_order_submitted",
+                )
+            )
+            and _is_present(fields.get("broker_order_forbidden"))
+            and any(
+                _contract_bool(fields.get("broker_order_forbidden"), expected)
+                for expected in (True, False)
+            )
+            and not (
+                _contract_bool(fields.get("micro_vwap_available"), True)
+                and _contract_bool(fields.get("minute_candle_window_fresh"), True)
+            )
+        ):
+            # A diagnostic BUY/armed snapshot is not an execution receipt.
+            # Optional micro non-evaluation is valid even before a later guard.
+            return True
         source_stage = str(fields.get("source_stage") or "").strip().lower()
         preflight_blocked = (
             str(fields.get("ai_input_preflight_status") or "").strip().lower()
