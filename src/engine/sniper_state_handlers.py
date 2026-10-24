@@ -53037,7 +53037,7 @@ def _resolve_early_accel_strong_bundle_recheck(
         payload.get(
             "curr_vs_micro_vwap_bp", (ws_data or {}).get("curr_vs_micro_vwap_bp")
         ),
-        0.0,
+        None,
     )
     micro_vwap_available = _truthy_field(
         payload.get("micro_vwap_available", (ws_data or {}).get("micro_vwap_available"))
@@ -53060,12 +53060,18 @@ def _resolve_early_accel_strong_bundle_recheck(
             "minute_candle_latest_age_ms",
             (ws_data or {}).get("minute_candle_latest_age_ms"),
         ),
-        0,
+        None,
     )
-    micro_vwap_usable = bool(micro_vwap_available and minute_candle_window_fresh)
+    micro_vwap_usable = bool(
+        micro_vwap_available
+        and minute_candle_window_fresh
+        and micro_vwap_bp is not None
+        and minute_candle_latest_age_ms is not None
+        and minute_candle_latest_age_ms >= 0
+    )
     buy_pressure_10t = _safe_float(
         payload.get("buy_pressure_10t", (ws_data or {}).get("buy_pressure_10t")),
-        0.0,
+        None,
     )
     tick_aggressor_trusted_count = _safe_int(
         payload.get(
@@ -53074,7 +53080,7 @@ def _resolve_early_accel_strong_bundle_recheck(
         ),
         0,
     )
-    tick_aggressor_pressure_usable = (
+    tick_aggressor_pressure_usable = buy_pressure_10t is not None and (
         _truthy_field(
             payload.get(
                 "tick_aggressor_pressure_usable",
@@ -53113,12 +53119,29 @@ def _resolve_early_accel_strong_bundle_recheck(
         "cntr_str_available": bool(cntr_str_available),
         "cntr_str": f"{cntr_str:.1f}",
         "tick_acceleration_ratio": f"{tick_accel:.3f}",
-        "curr_vs_micro_vwap_bp": f"{micro_vwap_bp:.2f}",
+        "curr_vs_micro_vwap_bp": (
+            f"{micro_vwap_bp:.2f}" if micro_vwap_usable else "not_evaluated"
+        ),
         "micro_vwap_available": bool(micro_vwap_available),
         "minute_candle_context_quality": minute_candle_context_quality,
         "minute_candle_window_fresh": bool(minute_candle_window_fresh),
-        "minute_candle_latest_age_ms": minute_candle_latest_age_ms,
-        "buy_pressure_10t": f"{buy_pressure_10t:.2f}",
+        "minute_candle_latest_age_ms": (
+            minute_candle_latest_age_ms
+            if minute_candle_latest_age_ms is not None
+            and minute_candle_latest_age_ms >= 0
+            else "not_evaluated"
+        ),
+        "minute_candle_evaluation_state": (
+            "evaluated" if micro_vwap_usable else "unavailable_fail_closed"
+        ),
+        "buy_pressure_10t": (
+            f"{buy_pressure_10t:.2f}"
+            if tick_aggressor_pressure_usable
+            else "not_evaluated"
+        ),
+        "tick_pressure_evaluation_state": (
+            "evaluated" if tick_aggressor_pressure_usable else "unavailable_fail_closed"
+        ),
         "tick_aggressor_trusted_count": tick_aggressor_trusted_count,
         "tick_aggressor_pressure_usable": bool(tick_aggressor_pressure_usable),
         "original_action": action or "WAIT",
@@ -53229,15 +53252,17 @@ def _log_early_accel_strong_bundle_recheck(
         cntr_str_available=bool(decision.get("cntr_str_available")),
         cntr_str=decision.get("cntr_str") or "0.0",
         tick_acceleration_ratio=decision.get("tick_acceleration_ratio") or "0.000",
-        curr_vs_micro_vwap_bp=decision.get("curr_vs_micro_vwap_bp") or "0.00",
+        curr_vs_micro_vwap_bp=decision.get("curr_vs_micro_vwap_bp", "not_evaluated"),
         micro_vwap_available=bool(decision.get("micro_vwap_available")),
         minute_candle_context_quality=decision.get("minute_candle_context_quality")
         or "unknown",
         minute_candle_window_fresh=bool(decision.get("minute_candle_window_fresh")),
-        minute_candle_latest_age_ms=_safe_int(
-            decision.get("minute_candle_latest_age_ms"), 0
+        minute_candle_latest_age_ms=decision.get(
+            "minute_candle_latest_age_ms", "not_evaluated"
         ),
-        buy_pressure_10t=decision.get("buy_pressure_10t") or "0.00",
+        minute_candle_evaluation_state=decision.get("minute_candle_evaluation_state"),
+        buy_pressure_10t=decision.get("buy_pressure_10t", "not_evaluated"),
+        tick_pressure_evaluation_state=decision.get("tick_pressure_evaluation_state"),
         tick_aggressor_trusted_count=_safe_int(
             decision.get("tick_aggressor_trusted_count"), 0
         ),

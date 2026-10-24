@@ -6185,6 +6185,35 @@ def _blocked_observation_records_fail_closed_source_gap(
     stage: str, fields: dict[str, Any], *, source: str
 ) -> bool:
     """Accept explicit fail-closed source gaps on non-authoritative block rows."""
+    if stage in {
+        "early_accel_strong_bundle_recheck_evaluated",
+        "early_accel_strong_bundle_recheck_allowed",
+        "early_accel_strong_bundle_recheck_skipped",
+        "early_accel_strong_bundle_recheck_failed",
+        "early_accel_strong_bundle_recheck_corrected",
+    }:
+        state, value = (
+            ("minute_candle_evaluation_state", "curr_vs_micro_vwap_bp")
+            if source == "minute_candle"
+            else ("tick_pressure_evaluation_state", "buy_pressure_10t")
+        )
+        if fields.get(state) == "unavailable_fail_closed":
+            # A recheck receipt may report an unavailable optional feature.
+            # Keep numeric imputation and any order/apply claim invalid.
+            return (
+                fields.get(value) == "not_evaluated"
+                and all(
+                    _is_present(fields.get(key))
+                    for key in (
+                        "actual_order_submitted",
+                        "broker_order_forbidden",
+                        "allowed_runtime_apply",
+                    )
+                )
+                and _contract_bool(fields.get("actual_order_submitted"), False)
+                and _contract_bool(fields.get("broker_order_forbidden"), True)
+                and _contract_bool(fields.get("allowed_runtime_apply"), False)
+            )
     if stage == "scalp_entry_action_decision_snapshot" and source == "minute_candle":
         source_stage = str(fields.get("source_stage") or "").strip().lower()
         preflight_blocked = (
@@ -6357,6 +6386,10 @@ def _pressure_provenance_unusable(fields: dict[str, Any], *, stage: str = "") ->
         stage, fields, source="tick"
     ):
         return False
+    if stage.startswith("early_accel_strong_bundle_recheck_") and (
+        fields.get("tick_pressure_evaluation_state") == "unavailable_fail_closed"
+    ):
+        return True
     if not (
         _is_present(fields.get("buy_pressure_10t"))
         or _is_present(fields.get("buy_pressure"))
@@ -6384,6 +6417,10 @@ def _micro_vwap_provenance_unusable(fields: dict[str, Any], *, stage: str = "") 
         stage, fields, source="minute_candle"
     ):
         return False
+    if stage.startswith("early_accel_strong_bundle_recheck_") and (
+        fields.get("minute_candle_evaluation_state") == "unavailable_fail_closed"
+    ):
+        return True
     raw_value = (
         fields.get("curr_vs_micro_vwap_bp")
         if _is_present(fields.get("curr_vs_micro_vwap_bp"))

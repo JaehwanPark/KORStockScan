@@ -2523,6 +2523,185 @@ def test_early_accel_strong_bundle_pre_recheck_fields_are_contract_values(monkey
     assert decision["recheck_score"] == "not_evaluated"
 
 
+@pytest.mark.parametrize(
+    "stage_suffix", ["evaluated", "allowed", "skipped", "failed", "corrected"]
+)
+@pytest.mark.parametrize(
+    "features, expected_micro, expected_age, expected_pressure",
+    [
+        ({}, "not_evaluated", "not_evaluated", "not_evaluated"),
+        (
+            {"curr_vs_micro_vwap_bp": "nan", "minute_candle_latest_age_ms": "nan"},
+            "not_evaluated",
+            "not_evaluated",
+            "not_evaluated",
+        ),
+        (
+            {
+                "curr_vs_micro_vwap_bp": "nan",
+                "micro_vwap_available": True,
+                "minute_candle_window_fresh": True,
+                "minute_candle_latest_age_ms": 100,
+                "buy_pressure_10t": "nan",
+                "tick_aggressor_trusted_count": 10,
+                "tick_aggressor_pressure_usable": True,
+            },
+            "not_evaluated",
+            100,
+            "not_evaluated",
+        ),
+        (
+            {
+                "curr_vs_micro_vwap_bp": 8,
+                "micro_vwap_available": True,
+                "minute_candle_window_fresh": True,
+            },
+            "not_evaluated",
+            "not_evaluated",
+            "not_evaluated",
+        ),
+        (
+            {
+                "curr_vs_micro_vwap_bp": 7,
+                "micro_vwap_available": True,
+                "minute_candle_window_fresh": False,
+                "minute_candle_latest_age_ms": 100000,
+                "buy_pressure_10t": 90.17,
+                "tick_aggressor_trusted_count": 0,
+                "tick_aggressor_pressure_usable": False,
+            },
+            "not_evaluated",
+            100000,
+            "not_evaluated",
+        ),
+        (
+            {
+                "curr_vs_micro_vwap_bp": 0,
+                "micro_vwap_available": True,
+                "minute_candle_window_fresh": True,
+                "minute_candle_latest_age_ms": 0,
+                "buy_pressure_10t": 0,
+                "tick_aggressor_trusted_count": 4,
+                "tick_aggressor_pressure_usable": True,
+            },
+            "0.00",
+            0,
+            "0.00",
+        ),
+    ],
+)
+def test_strong_recheck_missing_source_is_not_measured_zero(
+    monkeypatch, stage_suffix, features, expected_micro, expected_age, expected_pressure
+):
+    from src.engine import observation_source_quality_audit as audit
+
+    monkeypatch.setattr(state_handlers, "_rule_bool", lambda key, default=False: False)
+    monkeypatch.setattr(
+        state_handlers, "_hydrate_scanner_promotion_runtime_context", lambda stock: None
+    )
+    captured = []
+    monkeypatch.setattr(
+        state_handlers, "_log_entry_pipeline", lambda *a, **kw: captured.append(kw)
+    )
+    decision = state_handlers._resolve_early_accel_strong_bundle_recheck(
+        {"position_tag": "SCANNER", "source_signature": "PRICE_JUMP_START"},
+        features,
+        strategy="SCALPING",
+        ai_decision={"action": "WAIT"},
+        ai_score=50,
+    )
+    assert decision["allowed"] is False
+    # The incident's upstream AI veto must not suppress malformed feature data.
+    decision["skip_reason"] = "ai_source_untrusted"
+    stage = "early_accel_strong_bundle_recheck_" + stage_suffix
+    state_handlers._log_early_accel_strong_bundle_recheck({}, "065450", stage, decision)
+    fields = captured[0]
+    assert fields["curr_vs_micro_vwap_bp"] == expected_micro
+    assert fields["minute_candle_latest_age_ms"] == expected_age
+    assert fields["buy_pressure_10t"] == expected_pressure
+    violations = audit._row_contract_violations(
+        stage, {"fields": fields}, audit.STAGE_CONTRACTS[stage]
+    )
+    assert violations == {"missing_fields": [], "zero_fields": [], "invalid_fields": []}
+    if expected_micro == "not_evaluated":
+        forged = {**fields, "curr_vs_micro_vwap_bp": "0.00"}
+        assert audit._micro_vwap_provenance_unusable(forged, stage=stage)
+        assert audit._micro_vwap_provenance_unusable(
+            {**fields, "actual_order_submitted": True}, stage=stage
+        )
+        assert audit._micro_vwap_provenance_unusable(
+            {**fields, "allowed_runtime_apply": None}, stage=stage
+        )
+    if expected_pressure == "not_evaluated":
+        assert audit._pressure_provenance_unusable(
+            {**fields, "buy_pressure_10t": "90.17"}, stage=stage
+        )
+
+
+@pytest.mark.parametrize(
+    "missing_age, source_block, quote_stale",
+    [
+        (False, False, False),
+        (True, False, False),
+        (False, True, False),
+        (False, False, True),
+    ],
+)
+def test_strong_recheck_preserves_source_and_stale_guards(
+    monkeypatch, missing_age, source_block, quote_stale
+):
+    monkeypatch.setattr(
+        state_handlers, "_hydrate_scanner_promotion_runtime_context", lambda stock: None
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_rule_bool",
+        lambda key, default=False: key == "EARLY_ACCEL_STRONG_BUNDLE_RECHECK_ENABLED",
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_rule_int",
+        lambda key, default: 8 if key.endswith("MIN_PASS_COUNT") else default,
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_early_accel_recheck_pre_ai_context_flags",
+        lambda stock: {"source_quality_block": source_block},
+    )
+    features = {
+        "curr_vs_micro_vwap_bp": 8,
+        "micro_vwap_available": True,
+        "minute_candle_window_fresh": True,
+        "minute_candle_latest_age_ms": None if missing_age else 100,
+        "buy_pressure_10t": 90,
+        "tick_aggressor_trusted_count": 10,
+        "tick_aggressor_pressure_usable": True,
+        "tick_acceleration_ratio": 1.2,
+        "quote_stale": quote_stale,
+    }
+    decision = state_handlers._resolve_early_accel_strong_bundle_recheck(
+        {
+            "position_tag": "SCANNER",
+            "source_signature": "PRICE_JUMP_START,VOLUME_SURGE_POSITIVE",
+            "price_delta_since_first_seen_pct": 1,
+            "comparable_flu_delta_since_first_seen": 1,
+            "cntr_str_available": True,
+            "cntr_str": 120,
+        },
+        features,
+        strategy="SCALPING",
+        ai_decision={
+            "action": "WAIT",
+            "ai_result_source": "live",
+            "ai_parse_ok": True,
+            "decision_quality_contract_status": "pass",
+        },
+        ai_score=50,
+    )
+    assert decision["allowed"] is (not (missing_age or source_block or quote_stale))
+    assert decision["strong_bundle_pass_count"] == (7 if missing_age else 8)
+
+
 def test_early_accel_strong_bundle_recheck_failure_class_is_canonical():
     assert (
         state_handlers._early_accel_strong_bundle_recheck_failure_class("DROP")
