@@ -1514,7 +1514,7 @@ def test_market_halt_window_artifact_is_not_gitignored():
     path = Path("data/source_quality/market_halt_windows/windows/2026-06-08.json")
     result = subprocess.run(
         ["git", "check-ignore", "-q", str(path)],
-        cwd=audit.DATA_DIR.parent,
+        cwd=Path(__file__).resolve().parents[2],
         check=False,
     )
 
@@ -1883,7 +1883,7 @@ def test_market_halt_session_events_artifact_is_gitignored():
     )
     result = subprocess.run(
         ["git", "check-ignore", "-q", str(path)],
-        cwd=audit.DATA_DIR.parent,
+        cwd=Path(__file__).resolve().parents[2],
         check=False,
     )
 
@@ -9285,7 +9285,7 @@ def test_preflight_seals_own_quarantine_only_while_its_exact_file_is_unchanged(
     day = "2026-10-12"
     _write_events(tmp_path, day, [_event("unrelated_stage", {})])
     raw = tmp_path / "pipeline_events" / f"pipeline_events_{day}.jsonl"
-    original_inode = raw.stat().st_ino
+    original_generation = audit._raw_exclusion_source_snapshot(raw)
     built = []
     native_build = audit.build_observation_source_quality_audit
 
@@ -9317,12 +9317,12 @@ def test_preflight_seals_own_quarantine_only_while_its_exact_file_is_unchanged(
     monkeypatch.setattr(
         audit, "_write_markdown", lambda report, path: path.write_text("audit\n")
     )
-    # A closed file was quiet before quarantine. The newly replaced inode has
-    # a recent mtime, reproducing the real preflight's false writer detection.
+    # A closed file was quiet before quarantine. Compare the full generation:
+    # the filesystem may reuse its original inode after the second replacement.
     monkeypatch.setattr(
         audit,
         "_raw_source_writer_active",
-        lambda *_args: raw.stat().st_ino != original_inode,
+        lambda *_args: audit._raw_exclusion_source_snapshot(raw) != original_generation,
     )
     calls = []
 
