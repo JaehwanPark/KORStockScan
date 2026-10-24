@@ -11,8 +11,44 @@ def stamp(clock):
     return datetime.fromisoformat(f"2026-09-10T{clock}+09:00")
 
 
+def quiet_states():
+    # Explicit native 0s receipts, not a clock-only opening-gap waiver.
+    return {
+        scope: {
+            "market_session_state_contract_version": "kiwoom_0s_market_operation_v1",
+            "market_session_state_market_scope": scope,
+            "market_session_state_raw": raw,
+            "market_session_state_normalized": "CALL_AUCTION",
+            "market_session_state_known": True,
+            "receive_timestamp": stamp("08:50:00").isoformat(),
+            "exchange_time_raw": "085000",
+            "market_session_remaining_raw": remaining,
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+        }
+        for scope, raw, remaining in (("KRX", "2", "001000"), ("NXT", "T", "001030"))
+    }
+
+
+def write_session_events(path):
+    path.write_text(
+        json.dumps(
+            {
+                "target_date": "2026-09-10",
+                "schema_version": 1,
+                "decision_authority": "source_quality_only",
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "session_events": list(quiet_states().values()),
+            }
+        )
+    )
+    return path
+
+
 def stale_row(route="krx_regular"):
     return {
+        "market_session_states_by_scope": quiet_states(),
         "stock_code": "005930",
         "subscribed": True,
         "registered_market_routes": [route],
@@ -80,6 +116,7 @@ def test_nxt_resumes_at_090030_without_masking_open_krx(routes, quiet):
         {"required_realtime_missing_types": ["00"]},
         {"required_realtime_missing_types": [{}]},
         {"registered_market_routes": ["unknown"]},
+        {"market_session_states_by_scope": {}},
     ],
 )
 def test_explicit_failure_or_unknown_authority_is_never_muted(extra):
@@ -242,8 +279,8 @@ def test_pipeline_age_only_gap_before_auction_remains_visible():
 @pytest.mark.parametrize(
     "file_time,route,at,reason",
     [
-        ("08:49:50", "krx_regular", "08:55:00", "scheduled_opening_gap_snapshot"),
-        ("08:49:50", "nxt_only", "09:00:20", "scheduled_opening_gap_snapshot"),
+        ("08:49:50", "krx_regular", "08:55:00", "verified_market_state_quiet_snapshot"),
+        ("08:49:50", "nxt_only", "09:00:20", "verified_market_state_quiet_snapshot"),
         ("08:49:50", "krx_regular", "09:00:20", "snapshot_stale"),
         ("08:49:50", "nxt_only", "09:00:30", "snapshot_stale"),
         ("08:40:00", "krx_regular", "08:55:00", "snapshot_stale"),
@@ -270,11 +307,16 @@ def test_event_driven_dashboard_pause_is_bounded_and_never_current_quote(
     )
     monkeypatch.setattr(monitor, "DEFAULT_DASHBOARD_SNAPSHOT_PATH", path)
     _, payload, provenance = monitor._resolve_snapshot(
-        None, target_date="2026-09-10", as_of=stamp(at)
+        None,
+        target_date="2026-09-10",
+        as_of=stamp(at),
+        market_session_receipts=monitor._load_market_session_state_receipts(
+            "2026-09-10", write_session_events(tmp_path / "session.json")
+        )[0],
     )
     assert provenance["selection_reason"] == reason
     assert provenance["current_freshness_usable"] is False
-    assert bool(payload) is (reason == "scheduled_opening_gap_snapshot")
+    assert bool(payload) is (reason == "verified_market_state_quiet_snapshot")
 
 
 def test_full_report_separates_quiet_from_fault_and_finalizes_by_event_time(tmp_path):
@@ -299,6 +341,7 @@ def test_full_report_separates_quiet_from_fault_and_finalizes_by_event_time(tmp_
         threshold_path=threshold,
         subscription_snapshot_path=snapshot,
         incremental_state_path=cache,
+        market_session_events_path=write_session_events(tmp_path / "session.json"),
     )
     report = monitor.build_report(
         "2026-09-10", generated_at=stamp("08:55:01").isoformat(), **kwargs
