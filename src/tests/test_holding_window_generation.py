@@ -415,7 +415,8 @@ def test_archived_empty_known_native_window_conflicts_fail_closed(tmp_path,mutat
     assert _verified_trade_review_projection(raw,day,data_root=tmp_path) is None
 
 
-@pytest.mark.parametrize('mutation',['manifest_hash','manifest_date','manifest_path','other_path','kinds',
+@pytest.mark.parametrize('mutation',['missing_manifest','missing_scope','missing_source_receipts',
+    'manifest_hash','manifest_date','manifest_path','other_path','kinds',
     'crc','isize','truncated','nonempty','metrics_shape','sections_shape','meta_shape','duplicate_key',
     'current_cost','count_bool','event_bool','recorded_cost_bool'])
 def test_archived_empty_native_source_failures_are_isolated_in_all_consumers(tmp_path,mutation):
@@ -425,7 +426,8 @@ def test_archived_empty_native_source_failures_are_isolated_in_all_consumers(tmp
     from src.engine.holding_exit_observation_report import _verified_trade_review_projection
     day='2026-10-08';raw,physical,_,manifest,value=_archived_empty_original(tmp_path)
     body=json.loads(manifest.read_bytes())
-    if mutation=='manifest_hash':body['snapshot_sha256']['trade_review']='a'*64
+    if mutation=='missing_manifest':pass  # Remove only after the common fixture write below.
+    elif mutation=='manifest_hash':body['snapshot_sha256']['trade_review']='a'*64
     elif mutation=='manifest_date':body['target_date']='2026-10-09'
     elif mutation=='manifest_path':body['snapshot_paths']['trade_review']=str(raw.with_name('other.json'))
     elif mutation=='other_path':body['snapshot_paths']['post_sell_feedback']=str(raw)
@@ -437,7 +439,11 @@ def test_archived_empty_native_source_failures_are_isolated_in_all_consumers(tmp
         physical.write_bytes(data)
     elif mutation=='current_cost':source_path(tmp_path,day).write_text('{"revision":2}')
     else:
-        if mutation=='nonempty':
+        if mutation=='missing_scope':value.pop('scope')
+        elif mutation=='missing_source_receipts':
+            value['meta']['trailing_event_source_receipts']=[]
+            value['meta']['completed_census_manifest']=completed_census_manifest(value)
+        elif mutation=='nonempty':
             value['sections']['completed_trade_projection']=[dict(id=7,completion_observed_date=day,status='COMPLETED')]
             value['meta']['sell_completed_event_ids']=['7'];value['meta']['completion_event_id_count']=1
             value['metrics']['canonical_completed_trades']=1
@@ -454,6 +460,7 @@ def test_archived_empty_native_source_failures_are_isolated_in_all_consumers(tmp
         if mutation=='duplicate_key':payload=payload.replace(b'"scope":"entered"',b'"scope":"entered","scope":"entered"')
         physical.write_bytes(gzip.compress(payload,mtime=0));body['snapshot_sha256']['trade_review']=hashlib.sha256(payload).hexdigest()
     manifest.write_text(json.dumps(body))
+    if mutation=='missing_manifest':manifest.unlink()
     window=capture_window(tmp_path,[day])
     assert window['dependencies'][day]['status']=='source_gap'
     assert _verified_trade_review_projection(raw,day,data_root=tmp_path) is None

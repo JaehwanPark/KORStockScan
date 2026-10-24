@@ -3032,3 +3032,20 @@ Friday monitoring scope refinement (2026-10-23T20:41:21+09:00): the user will sh
 교체/제거 대사: 문자열 전용 본문 스캔은 `DocumentReferences`로 **consolidated**, 기존 함수 이름은 archive 계획 검사의 실제 caller를 위해 같은 구현을 호출하도록 **retained**. archive inventory/verify/delete 구현은 기존 호출자와 원본 보존 계약으로 **retained**, 중복 새 wrapper/validator/보고서 producer/OPEN owner는 없다. 코드 변경은 기존 source owner의 참조 검사와 전파에 한정한다. 비테스트 source 신규 논리는 log_retention +169/-23, 기존 archive helper +16/-0이며255행의 최초 Git 편입은 신규 구현량과 구분한다. 테스트 +249/-1은 격리·회귀 추가다. 문서와 보관 증거는 별도이며 실제 배포·PREOPEN/PID 소비·자연 완주·경제성 수용은 이 검증으로 대체하지 않는다.
 
 최종 읽기 전용 대사: 선택 `7a962bbba703a1977b1ea68f7df85c9da6c9aae0`, source23→target26 native controller generation issues=[], prepared receipt/6개 물리 SHA·기동용 checklist가 전후 동일하고 Main 프로세스0이다. 변경 문서 로컬 링크304개 missing0/anchor 오류0, print-only backlog22개와10/26 단일 handoff owner 유지, Python3파일 compile 및 git diff --check PASS다. 원 strict/PASS 재생산·운영 selector 변경·재기동·외부 동기화는 수행하지 않았다.
+
+
+## Archived snapshot regression contract reconciliation — 2026-10-24
+
+사용자 요청은 기존 실패 스냅샷 테스트1건의 원인 분석·수리·리뷰·회귀·클린 커밋/푸시다. 기준은 clean main `f645fa8e993575bd8d6b21f2f41a4b22fba9e3ce`이며 운영 릴리스 변경·재생성·재기동은 제외한다. 10/24 checklist는 없고 10/26 strict-bound checklist와 기존 `DirectFamilyPreopenPolicyHandoff` owner는 편집하지 않았다.
+
+**원인:** `test_legacy_gzip_with_sidecar_retains_original_bounded_snapshot_contract`는 원 raw를 일반 gzip으로 바꿔 삭제한 후에도 `valid_empty`를 기대했다. 재현 결과는 `source_gap / window_archived_empty_contract_invalid`다. sidecar가 기록한 삭제 전 inode는 현재 gzip의 원본 결속 증거가 아니며, fixture에는 historical reader가 요구하는 `scope=entered`, structured-source receipt, 원 full-profile manifest도 없다. `save_monitor_snapshot → snapshot_archive.identity_available → holding_window_generation.capture_window → holding_exit_observation_report`를 대사한 결과 소비자의 거부가 올바르다. 경보·안전 검증을 완화할 사유가 아니다.
+
+Git 대사: 원 기대값은 `ed3e93a03`(10/16), 더 엄격한 archived-empty reader는 `7f2552aed`(10/17)에 들어갔다. 기대값을 source gap으로 고친 `ab6acbada`(10/19)는 현재 선택본 `7a962bbba`의 조상이나 workspace main의 조상은 아니며, 실제 테스트에도 그 수정이 빠져 있었다. 따라서 이번 실패의 근원은 소비자 계약 변경 후 테스트 수정의 통합 누락이다. 선택본의 다른 producer/consumer 변경까지 이번 커밋에 섞지 않는다.
+
+**수리·리뷰·보완:** 기존 [snapshot 회귀](../../src/tests/test_snapshot_archive.py)를 native receipt 유무의 두 경로로 대체했다. 실제 producer가 만든 sidecar를 양쪽 소비자가 읽는 상태에서 시작해, native compression은 같은 window·projection을 유지하고 일반 gzip/raw 삭제는 정확한 원인과 실제 gzip SHA를 보존한 source gap 및 holding reader 거부로 끝나는지 검증한다. 조회 후 원 gzip·sidecar·receipt bytes가 같고 raw나 허위 receipt가 재생성되지 않음을 확인한다. 리뷰에서는 여러 증거가 동시에 없는 원 fixture만으로 각 조건을 검증하기 부족하므로, 기존 [holding window 실패 행렬](../../src/tests/test_holding_window_generation.py)에 manifest·scope·structured-source receipt를 각각 제거한 세 사례를 보완했다. 나머지 원 manifest/hash와 census를 일치시켜 별도 결손이 두 소비자 모두에서 거부되는지 확인한다.
+
+**검증:** snapshot/window **100 PASS**, log_archive_service/holding_exit_observation_report **98 PASS**, 합계 **198 PASS**. 기존 정상 historical gzip, native 6/9-field manifest, 잘못된 날짜/범위/hash/비용 세대, CRC/중복 키/형식, budget 및 손상 원천 격리를 함께 검증했다. Python 테스트2파일 compile과 `git diff --check` PASS. 비테스트 소스 변경은0이며 검증 guard, 비용 null, runtime 권한은 그대로다.
+
+**원본·소비 증거:** [분석·검증 보존본](../../tmp/snapshot-legacy-gzip-repair-20261024/)에 변경 전7파일 SHA/원문, 원 실패와 상세 원인 로그, 상세 실패 fixture3파일, Git provenance/선택본 수정 patch, 회귀 결과를 보존했다. 최초 재현의 임시 fixture 디렉터리는 pytest 자동 보존 주기에 따라 제거됐으며 그 실행 로그와 원 테스트는 보존했다. 상세 원인 재현의 gzip/sidecar/dependency receipt는 별도 사본과 SHA로 보존했다. 운영 원본은 수정하지 않았다. 읽기 전용 native controller generation 검사 issues=[]이며 source23→target26 prepared6개 SHA·선택본·strict checklist가 작업 전후 같다. 이 검사는 기존 준비 증거의 보존 확인이며 실제 다음 Main 기동·자연 완주를 새로 증명하지 않는다.
+
+교체/제거: 잘못된 legacy-only 기대 테스트는 **replaced**되어 native/unbound 쌍으로 통합했다. 기존 정상 historical gzip fixture/reader는 실제 소비 계약 때문에 **retained**이며 별도 wrapper·validator·producer·OPEN owner는 추가하지 않았다. 기준 대비 비테스트 source +0/-0, tests +43/-11(순증32)이다. 증가는 두 소비자 대사·원문 보존·세 결손 분리 검증을 위한 것이며 기존 fixture를 재사용한다. 문서 변경은 이 감사기록 추가뿐이다. 테스트 결함 종결과 운영 배포·다음 자연 기동 수용은 구분한다.

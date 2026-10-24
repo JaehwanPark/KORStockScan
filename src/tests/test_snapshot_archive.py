@@ -214,9 +214,11 @@ def test_stop_cli_reuses_digests_without_persistent_validator_state(tmp_path, mo
     assert not (tmp_path/'runtime/validation_digests').exists()
 
 
-def test_legacy_gzip_with_sidecar_retains_original_bounded_snapshot_contract(snapshot, monkeypatch):
+@pytest.mark.parametrize('native_receipt', [False, True])
+def test_sidecar_requires_original_snapshot_binding_after_compression(snapshot, monkeypatch, native_receipt):
     import hashlib
     from src.engine import log_archive_service as snapshots
+    from src.engine.holding_exit_observation_report import _verified_trade_review_projection
     from src.engine.sniper_trade_review_report import completed_census_manifest
     monkeypatch.setattr(snapshots,'MONITOR_SNAPSHOT_DIR',snapshot.parent)
     payload=dict(date='2026-10-08',metrics={'canonical_completed_trades':0},
@@ -224,15 +226,38 @@ def test_legacy_gzip_with_sidecar_retains_original_bounded_snapshot_contract(sna
         sections={'completed_trade_projection':[],'open_scalp_position_projection':[]})
     payload['meta']['completed_census_manifest']=completed_census_manifest(payload)
     snapshots.save_monitor_snapshot('trade_review','2026-10-08',payload)
+    root = snapshot.parents[2]
+    before = capture_window(root, ['2026-10-08'])
+    assert before['dependencies']['2026-10-08']['status'] == 'valid_empty'
+    projected = _verified_trade_review_projection(snapshot, '2026-10-08', data_root=root)
+    assert projected is not None
     archived=Path(str(snapshot)+'.gz')
-    with gzip.open(archived,'wb') as handle:handle.write(snapshot.read_bytes())
-    snapshot.unlink()
-    window=capture_window(snapshot.parents[2],['2026-10-08'])
+    if native_receipt:
+        assert archive._gzip_file(snapshot, dry_run=False)[0]
+    else:
+        with gzip.open(archived,'wb') as handle:handle.write(snapshot.read_bytes())
+        snapshot.unlink()
+    originals = {path: path.read_bytes() for path in snapshot.parent.iterdir() if path.is_file()}
+    window=capture_window(root,['2026-10-08'])
     day=window['dependencies']['2026-10-08']
-    assert day['status']=='valid_empty'
-    assert day['projection']==dict(path=archived.name,size=archived.stat().st_size,
-        sha256=hashlib.sha256(archived.read_bytes()).hexdigest())
-    assert 'snapshot_identity' not in day['projection']
+    observed = _verified_trade_review_projection(snapshot, '2026-10-08', data_root=root)
+    if native_receipt:
+        assert window == before
+        assert observed == projected
+    else:
+        # The surviving sidecar cannot authenticate a removed raw inode.
+        # This payload also lacks the original scope, structured-source proof
+        # and full-profile manifest needed by the historical gzip reader.
+        assert day['status'] == 'source_gap'
+        assert day['reason'] == 'window_archived_empty_contract_invalid'
+        assert day['projection'][archived.name] == dict(path=archived.name, size=len(originals[archived]),
+            sha256=hashlib.sha256(originals[archived]).hexdigest())
+        assert observed is None
+        assert not source.identity_available(snapshot)
+        assert not Path(str(archived)+'.archive_receipt.json').exists()
+    verify_window(root, window)
+    assert not snapshot.exists()
+    assert {path: path.read_bytes() for path in snapshot.parent.iterdir() if path.is_file()} == originals
 
 
 @pytest.mark.parametrize('profile',['postclose_exit','intraday_light'])
