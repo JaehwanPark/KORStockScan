@@ -3089,3 +3089,109 @@ def test_recovery_cache_hit_rechecks_original_generation_before_return(
         view["status"] == "unobservable"
         and view["reason"] == "semantic_generation_changed_during_read"
     )
+
+
+def test_report_ignores_native_sources_that_have_no_replayable_seed(
+    tmp_path, monkeypatch
+):
+    from src.engine.scalping import native_packet_validation as micro
+
+    native_build = mod.build_report
+    report, _, _, _ = _reconciliation_fixture(tmp_path, monkeypatch)
+    monkeypatch.setattr(mod, "build_report", native_build)
+    monkeypatch.setattr(
+        mod,
+        "_parents",
+        lambda day, *_args, **_kwargs: (
+            [
+                dict(
+                    parent_id="missing-seed",
+                    source_date=day,
+                    seed={},
+                    children={},
+                    profile="standard",
+                    economic_eligible=True,
+                )
+            ],
+            0,
+        ),
+    )
+    from src.engine.scalping import entry_split_order_plan as entry
+
+    monkeypatch.setattr(
+        entry, "_source_quality_summary", lambda _day: {"tuning_input_allowed": True}
+    )
+    generation = {"value": "before"}
+    monkeypatch.setattr(
+        micro, "_source_generation_contract", lambda *_a, **_k: dict(generation)
+    )
+    before = native_build(report["date"], artifact_as_of=report["generated_at"])
+    generation["value"] = "after"
+    after = native_build(report["date"], artifact_as_of=report["generated_at"])
+    assert (
+        before["source_contract"]["native"] == after["source_contract"]["native"] == {}
+    )
+    assert before["proof_sha256"] == after["proof_sha256"]
+    assert after["economic_tuning_input_allowed"] is False
+
+
+@pytest.mark.parametrize("mutation", [None, "changed", "missing", "appeared"])
+def test_native_input_selection_preserves_consumed_generation_checks(
+    tmp_path, monkeypatch, mutation
+):
+    from src.engine.scalping import native_packet_validation as micro
+    from src.engine.scalping import strategy_owner_replay as replay
+    from src.engine.scalping import entry_split_order_plan as entry
+
+    day = "2026-10-02"
+    observations = tmp_path / "observations"
+    native_file = observations / f"trade_date={day}" / "source.json"
+    native_file.parent.mkdir(parents=True)
+    if mutation != "appeared":
+        native_file.write_text("original")
+    daily = tmp_path / "daily.json"
+    daily.write_text("{}")
+    unused_latest = tmp_path / "latest.json"
+    monkeypatch.setattr(micro, "OBSERVATION_ROOT", observations)
+    monkeypatch.setattr(
+        micro, "DEFAULT_SOURCE_EXCLUSION_MANIFEST", tmp_path / "exclusions.json"
+    )
+    monkeypatch.setattr(micro, "DEFAULT_CANARY_SNAPSHOT_PATH", unused_latest)
+    monkeypatch.setattr(micro, "resolve_target_canary_snapshot", lambda **_k: daily)
+    monkeypatch.setattr(replay, "_entry_seed_valid", lambda _seed: True)
+    monkeypatch.setattr(
+        entry, "_source_quality_summary", lambda _day: {"tuning_input_allowed": True}
+    )
+    parent = dict(
+        parent_id="p",
+        source_date=day,
+        seed=dict(
+            stock_code="123456",
+            observed_at=day + "T09:00:00+09:00",
+            effective_venue="KRX",
+            session_bucket="KRX_REGULAR",
+        ),
+    )
+    anchors, paths, canary = mod._native_replay_inputs(day, [parent])
+    assert canary == daily and unused_latest not in paths
+    assert len(anchors) == 1 and observations / f"trade_date={day}" in paths
+
+    def context(*_args):
+        # A later latest snapshot is irrelevant while the dated canary is selected.
+        unused_latest.write_text("new unrelated latest")
+        if mutation == "changed":
+            native_file.write_text("changed bound content")
+        elif mutation == "missing":
+            native_file.unlink()
+        elif mutation == "appeared":
+            native_file.write_text("newly available bound source")
+        return {"source_contract_ready": False}, {}, {}
+
+    monkeypatch.setattr(micro, "_micro_context", context)
+    if mutation:
+        with pytest.raises(ValueError, match="cancel_wait_native_generation_changed"):
+            mod._replay_parents([parent], [], [], {})
+    else:
+        rows, models, bindings = mod._replay_parents([parent], [], [], {})
+        assert rows == [] and models[0]["blocker"] == "native_scope_or_seed_unsupported"
+        assert bindings[day] == micro._source_generation_contract({}, extra_paths=paths)

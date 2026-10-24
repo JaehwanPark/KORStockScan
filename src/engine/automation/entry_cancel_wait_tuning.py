@@ -2260,6 +2260,41 @@ def _fit_model(model_rows, identity):
     return model
 
 
+def _native_replay_inputs(day, parents):
+    """Share the exact eligible anchors and native files with preflight."""
+    from src.engine.scalping import strategy_owner_replay as replay
+    from src.engine.scalping import native_packet_validation as micro
+
+    anchors = [
+        dict(
+            anchor_id=p["parent_id"],
+            symbol=p["seed"].get("stock_code"),
+            anchor_at=p["seed"].get("observed_at"),
+            expected_venues=[
+                replay.entry_native_market_venue(p["seed"].get("effective_venue"))
+            ],
+            expected_session_buckets=[p["seed"].get("session_bucket")],
+            adaptive_exit_source_only=True,
+        )
+        for p in parents
+        if replay._entry_seed_valid(p["seed"])
+    ]
+    if not anchors:
+        return anchors, [], None
+    canary = micro.resolve_target_canary_snapshot(
+        target_date=date.fromisoformat(day),
+        latest_path=micro.DEFAULT_CANARY_SNAPSHOT_PATH,
+        daily_root=micro.CANARY_DAILY_SNAPSHOT_DIR,
+    )
+    paths = [
+        micro.OBSERVATION_ROOT / f"trade_date={day}",
+        micro.DEFAULT_SOURCE_EXCLUSION_MANIFEST,
+    ]
+    if canary:
+        paths.append(canary)
+    return anchors, paths, canary
+
+
 def _replay_parents(parents, outcomes, events, model):
     from src.engine.scalping import strategy_owner_replay as replay
     from src.engine.scalping import entry_split_order_plan as entry
@@ -2297,20 +2332,7 @@ def _replay_parents(parents, outcomes, events, model):
                 for p in day_parents
             ]
             continue
-        anchors = [
-            dict(
-                anchor_id=p["parent_id"],
-                symbol=p["seed"].get("stock_code"),
-                anchor_at=p["seed"].get("observed_at"),
-                expected_venues=[
-                    replay.entry_native_market_venue(p["seed"].get("effective_venue"))
-                ],
-                expected_session_buckets=[p["seed"].get("session_bucket")],
-                adaptive_exit_source_only=True,
-            )
-            for p in day_parents
-            if replay._entry_seed_valid(p["seed"])
-        ]
+        anchors, paths, canary = _native_replay_inputs(day, day_parents)
         if not anchors:
             models += [
                 dict(
@@ -2322,17 +2344,6 @@ def _replay_parents(parents, outcomes, events, model):
                 for p in day_parents
             ]
             continue
-        canary = micro.resolve_target_canary_snapshot(
-            target_date=date.fromisoformat(day),
-            latest_path=micro.DEFAULT_CANARY_SNAPSHOT_PATH,
-            daily_root=micro.CANARY_DAILY_SNAPSHOT_DIR,
-        )
-        paths = [
-            micro.OBSERVATION_ROOT / f"trade_date={day}",
-            micro.DEFAULT_SOURCE_EXCLUSION_MANIFEST,
-        ]
-        if canary:
-            paths.append(canary)
         before = micro._source_generation_contract({}, extra_paths=paths)
         source, inventory, windows = micro._micro_context(
             day,
@@ -2798,29 +2809,31 @@ def build_report(
     )
     from src.engine.scalping import native_packet_validation as micro
 
-    native_generation = {
-        d: micro._source_generation_contract(
-            {},
-            extra_paths=[
-                micro.OBSERVATION_ROOT / f"trade_date={d}",
-                micro.DEFAULT_SOURCE_EXCLUSION_MANIFEST,
-                micro.DEFAULT_CANARY_SNAPSHOT_PATH,
-                micro.daily_canary_snapshot_path(
-                    date.fromisoformat(d), root=micro.CANARY_DAILY_SNAPSHOT_DIR
-                ),
-            ],
-        )
-        for d in {p["source_date"] for p in parents if p.get("economic_eligible", True)}
-    }
     from src.engine.scalping import entry_split_order_plan as entry
 
+    historical_quality = {
+        d: entry._source_quality_summary(d)
+        for d in {p["source_date"] for p in parents if p.get("economic_eligible", True)}
+    }
+    native_generation = {}
+    for day in sorted({p["source_date"] for p in economic_parents}):
+        day_parents = [
+            p
+            for p in economic_parents
+            if p["source_date"] == day and p.get("economic_eligible", True) is True
+        ]
+        if historical_quality.get(day, {}).get("tuning_input_allowed") is not True:
+            continue
+        anchors, paths, _ = _native_replay_inputs(day, day_parents)
+        if anchors:
+            native_generation[day] = micro._source_generation_contract(
+                {}, extra_paths=paths
+            )
     preflight = _digest(
         dict(
             source=source,
             native=native_generation,
-            historical_quality={
-                d: entry._source_quality_summary(d) for d in native_generation
-            },
+            historical_quality=historical_quality,
             previous=previous,
             incumbent_source=incumbent_source,
             predecessor=predecessor.get("sha256"),
