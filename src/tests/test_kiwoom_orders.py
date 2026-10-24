@@ -109,6 +109,49 @@ def _allow_buy_time_guards(monkeypatch):
     )
 
 
+def test_inventory_current_request_and_venue_merge_are_verified_offline(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        kiwoom_orders.kiwoom_utils,
+        "get_api_url",
+        lambda path: "https://offline.invalid" + path,
+    )
+
+    def post(url, headers, params, api_id, *, timeout):
+        calls.append((url, dict(headers), dict(params), api_id, timeout))
+        rows = [{"stk_cd": "A123456", "stk_nm": "KRX_FIRST", "rmnd_qty": "000005"}]
+        if params["dmst_stex_tp"] == "NXT":
+            rows = [
+                {"stk_cd": "A123456", "stk_nm": "DUPLICATE", "rmnd_qty": "9"},
+                {"stk_cd": "654321", "stk_nm": "NXT_ONLY", "rmnd_qty": "1,002"},
+                {"stk_cd": "111111", "stk_nm": "ZERO", "rmnd_qty": "0"},
+            ]
+        return types.SimpleNamespace(status_code=200), {
+            "return_code": 0,
+            "acnt_evlt_remn_indv_tot": rows,
+        }
+
+    monkeypatch.setattr(kiwoom_orders, "_post_kiwoom_with_auth_retry", post)
+    rows, successful_queries = kiwoom_orders.get_my_inventory("OFFLINE_TOKEN")
+    assert rows == [
+        {"code": "123456", "name": "KRX_FIRST", "qty": 5},
+        {"code": "654321", "name": "NXT_ONLY", "qty": 1002},
+    ]
+    assert successful_queries == {"KRX", "NXT"}
+    assert kiwoom_orders.get_last_inventory_errors() == []
+    assert [call[2] for call in calls] == [
+        {"qry_tp": "2", "dmst_stex_tp": "KRX"},
+        {"qry_tp": "2", "dmst_stex_tp": "NXT"},
+    ]
+    for url, headers, params, api_id, timeout in calls:
+        assert url == "https://offline.invalid/api/dostk/acnt"
+        assert api_id == headers["api-id"] == "kt00018"
+        assert headers["authorization"] == "Bearer OFFLINE_TOKEN"
+        assert headers["cont-yn"] == "N"
+        assert headers["next-key"] == ""
+        assert timeout == 5
+
+
 def test_kt00018_inventory_requires_http200_and_atomic_strict_rows(monkeypatch):
     responses = iter(
         (

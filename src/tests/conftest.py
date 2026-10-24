@@ -289,8 +289,3 @@ def isolate_module_logs(tmp_path, monkeypatch):
             active_logger.removeHandler(handler)
             handler.close()
     logger._MODULE_LOGGERS.clear()
-
-
-@pytest.fixture
-def token():
-    pytest.skip("token fixture not configured; skipping inventory API tests")
