@@ -2301,13 +2301,23 @@ def test_current_generation_cache_checks_every_dependency_and_isolates_callers(
     monkeypatch.setattr(
         runtime, "_read", lambda p: (reads.append(str(p)), original(p))[1]
     )
-    cached = runtime.load_effective(data_root=tmp_path, target_date="2026-09-22")
-    assert cached == active and not reads
-    cached["machine_policy"]["thresholds"]["maximum_spread_bp"] = -1
-    assert (
-        runtime.load_effective(data_root=tmp_path, target_date="2026-09-22") == active
-    )
     root = runtime.root(tmp_path)
+
+    def unexpected_full_validation(*args, **kwargs):
+        pytest.fail("unchanged dependencies must reuse validated policy")
+
+    with monkeypatch.context() as cache_hit:
+        cache_hit.setattr(runtime, "_load_current_uncached", unexpected_full_validation)
+        cached = runtime.load_effective(data_root=tmp_path, target_date="2026-09-22")
+        assert cached == active
+        # The activation pointer is re-read for schema and backwards-clock
+        # safety. Immutable source/parent/generation validation must be reused.
+        assert reads and set(reads) == {str(root / "current.json")}
+        cached["machine_policy"]["thresholds"]["maximum_spread_bp"] = -1
+        assert (
+            runtime.load_effective(data_root=tmp_path, target_date="2026-09-22")
+            == active
+        )
     paths = {
         "source": root / "sources" / f"{active['source_file_sha256']}.json",
         "parent": root
