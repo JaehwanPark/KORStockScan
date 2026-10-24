@@ -5297,6 +5297,8 @@ for (_trigger, _old_sha), _variant in tuple(REVIEWED_AFTERMARKET_LISTING_VARIANT
 REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
     name: REVIEWED_ENTRY_COST_PAIRS.get(name, ()) + tuple((origin, current) for origin in
         {REVIEWED_AFTERMARKET_LISTING_PREVIOUS[name]} |
+        {origin for origin, successor in REVIEWED_OPERATOR_MARKET_PAIRS.get(name, ())
+         if successor == REVIEWED_AFTERMARKET_LISTING_PREVIOUS[name]} |
         {old for pair in REVIEWED_ENTRY_COST_PAIRS.get(name, ()) for old in pair})
     for name, current in REVIEWED_AFTERMARKET_LISTING_HASHES.items()}}
 
@@ -5380,7 +5382,7 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         if os.path.isabs(normalized) or normalized == '..' or normalized.startswith('../'):
             raise ValueError('entry_consumer_code_path_outside_release')
         return normalized
-    def candidate_bytes(name):
+    def candidate_bytes(name, *, optional=False):
         normalized = repository_name(name)
         path = root
         for part in Path(normalized).parts:
@@ -5388,6 +5390,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
             if path.is_symlink():
                 raise ValueError('entry_consumer_code_source_symlink:' + name)
         if not path.is_file():
+            if optional and not path.exists():
+                return None
             raise ValueError('entry_consumer_code_source_missing:' + name)
         return path.read_bytes()
     def revision_bytes(revision, name):
@@ -5558,10 +5562,14 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     scanner_preflight = any((root / name).is_file()
         and hashlib.sha256(candidate_bytes(name)).hexdigest() == sha
         for name, sha in REVIEWED_SCANNER_PREFLIGHT_HASHES.items())
-    closed_scanner = (hashlib.sha256(candidate_bytes('src/engine/error_detectors/artifact_freshness.py')).hexdigest()
-        == REVIEWED_CLOSED_SCANNER_HASHES['src/engine/error_detectors/artifact_freshness.py'])
-    previous_closed_scanner = (_sha(root/'src/engine/error_detectors/artifact_freshness.py')
-        == REVIEWED_CLOSED_SCANNER_PREVIOUS_HASHES['src/engine/error_detectors/artifact_freshness.py'])
+    detector_name = 'src/engine/error_detectors/artifact_freshness.py'
+    # Discovery cannot enlarge an unrelated historical source inventory.
+    # Reuse the native reader so aliases in any path component and present
+    # non-files still fail. Declared/profile sources remain mandatory below.
+    detector_bytes = candidate_bytes(detector_name, optional=True)
+    detector_sha = hashlib.sha256(detector_bytes).hexdigest() if detector_bytes is not None else None
+    closed_scanner = detector_sha == REVIEWED_CLOSED_SCANNER_HASHES[detector_name]
+    previous_closed_scanner = detector_sha == REVIEWED_CLOSED_SCANNER_PREVIOUS_HASHES[detector_name]
     prepared_hashes = (REVIEWED_CLOSED_SCANNER_PROFILE if closed_scanner else
         REVIEWED_CLOSED_SCANNER_PREVIOUS_PROFILE if previous_closed_scanner else
         REVIEWED_SCANNER_PREFLIGHT_PROFILE if scanner_preflight else

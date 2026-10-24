@@ -128,6 +128,35 @@ def test_reviewed_consumer_source_pair_is_exact_and_read_only(tmp_path, monkeypa
     assert frozen == {p: p.read_bytes() for p in tmp_path.rglob('*') if p.is_file()}
 
 
+@pytest.mark.parametrize('declared', [False, True])
+@pytest.mark.parametrize('fault', ['missing', 'symlink', 'parent_symlink', 'directory'])
+def test_detector_profile_discovery_does_not_relax_declared_source_checks(tmp_path, monkeypatch, declared, fault):
+    import hashlib
+    own = 'src/engine/automation/intraday_release_handoff.py'
+    detector = 'src/engine/error_detectors/artifact_freshness.py'
+    independent = 'src/utils/numeric.py'
+    content = b'# unchanged verified source\n'
+    for name in (own, independent):
+        path = tmp_path/name; path.parent.mkdir(parents=True, exist_ok=True); path.write_bytes(content)
+    if fault == 'symlink':
+        path = tmp_path/detector; path.parent.mkdir(parents=True, exist_ok=True)
+        path.symlink_to(tmp_path/'absent-detector')
+    elif fault == 'parent_symlink':
+        (tmp_path/detector).parent.symlink_to(tmp_path/'absent-directory', target_is_directory=True)
+    elif fault == 'directory':
+        (tmp_path/detector).mkdir(parents=True)
+    monkeypatch.setattr(handoff.subprocess, 'check_output', lambda *_a, **_kw: content)
+    paths = {name:name for name in ([independent, detector] if declared else [independent])}
+    expected = hashlib.sha256(json.dumps({name:hashlib.sha256(content).hexdigest() for name in paths},
+        sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+    if declared or fault != 'missing':
+        reason = 'symlink' if 'symlink' in fault else 'missing'
+        with pytest.raises(ValueError, match='entry_consumer_code_source_'+reason):
+            handoff._verify_entry_code_delta(tmp_path, NEW, OLD, paths, expected)
+    else:
+        assert handoff._verify_entry_code_delta(tmp_path, NEW, OLD, paths, expected) == []
+
+
 @pytest.mark.parametrize('name', [
     'src/engine/strategy_position_performance_report.py',
     'src/engine/lifecycle/broker_cost_reconciliation.py',
@@ -2237,7 +2266,7 @@ def test_pre_submit_handoff_rejects_unreviewed_dependency(tmp_path,family,depend
 @pytest.mark.parametrize('fault',[None,'missing','dirty','committed_change','parent_mix'])
 @pytest.mark.parametrize('generation',['current','consumed_pre_startup','consumed_pre_shutdown','consumed_pre_native_label','consumed_pre_coordination','consumed_pre_prepared_validation','consumed_pre_prepared_repair','consumed_pre_main_preparation','consumed_pre_prepared_start','consumed_pre_first_turn','consumed_pre_expiry_health','consumed_pre_signed_surge','consumed_pre_preassessment','consumed_pre_prestart','consumed_pre_prepared_owner'])
 def test_entry_cost_handoff_keeps_exact_complete_generation(tmp_path,family,fault,generation,
-        dependency='src/engine/monitoring/entry_attempt_identity.py'):
+        dependency='src/engine/monitoring/entry_attempt_identity.py', policy_origin=None):
     import hashlib,os,subprocess
     from src.engine.scalping import main_stop_policy as stop, holding_vote_experiment as vote
     from src.engine.scalping.pre_submit_delay_initial_policy import CONTRACT_PATHS
@@ -2300,7 +2329,7 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(tmp_path,family,faul
     subprocess.run(['git','-C',str(root),'commit','-qm','integrated source fixture'],check=True)
     commit=subprocess.check_output(['git','-C',str(root),'rev-parse','HEAD'],text=True).strip()
     if fault=='dirty':path.write_bytes(path.read_bytes()+b'\nUNREVIEWED=True\n')
-    origin='75e0fbbf79d8842ceed159ea73166f8872b4e93e'
+    origin=policy_origin or '75e0fbbf79d8842ceed159ea73166f8872b4e93e'
     paths=({n:n for n in CONTRACT_PATHS} if family=='pre_submit_delay' else
         {n:'src/engine/'+n for n in (stop.implementation_paths() if family=='main_stop' else vote._code_paths())})
     expected=stop.digest({k:hashlib.sha256(subprocess.check_output(
@@ -2554,6 +2583,16 @@ def test_numeric_replay_preserves_consumed_holding_stream(tmp_path, family, faul
 @pytest.mark.parametrize('generation', ['current', 'consumed_rest_history', 'consumed_auxiliary_capability', 'consumed_numeric_source'])
 def test_aftermarket_listing_preserves_complete_consumed_profile(tmp_path, family, generation):
     test_entry_cost_handoff_keeps_exact_complete_generation(tmp_path, family, None, generation)
+
+
+@pytest.mark.parametrize('dependency,fault',
+    [('src/engine/kiwoom_orders.py', None)] +
+    [(path, fault) for path in sorted(handoff.REVIEWED_AFTERMARKET_LISTING_HASHES)
+     for fault in ('missing', 'dirty', 'committed_change', 'parent_mix')])
+def test_listing_successor_preserves_original_stop_origin_and_full_profile(tmp_path, dependency, fault):
+    test_entry_cost_handoff_keeps_exact_complete_generation(
+        tmp_path, 'main_stop', fault, 'current', dependency,
+        policy_origin='72617981be50cc900281fce313e37057f203b1bc')
 
 
 @pytest.mark.parametrize('dependency', sorted(handoff.REVIEWED_AFTERMARKET_LISTING_HASHES))
