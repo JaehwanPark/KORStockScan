@@ -119,10 +119,10 @@
 
 ### 원인 → 수리 → 회귀
 
-- 20:50:29 alert의 `optional_research_calendar_unverified`는 selected `e3665f20a`, Main649593/start22579533에서 확인했다. 설치 코드 hash는f6f00912, 선택 연구 코드는91667149였다. UID·시간대·Main 장전 calendar·자기 cron1개·명령은 모두 일치했다. 최초 위반은 배포 뒤 optional 설치 코드 결속의 미갱신이며 calendar 시간 변경이 아니다. 원 설치/시도/누적/탐지/selector·cron bytes는 [복구 전 증거](../../tmp/postclose-monitoring-20261021/optional-binding-before/)에 보존했다.
+- 20:50:29 alert의 `optional_research_calendar_unverified`는 selected `e3665f20a`, Main649593/start22579533에서 확인했다. 설치 코드 hash는f6f00912, 선택 연구 코드는91667149였다. UID·시간대·Main 장전 calendar·자기 cron1개·명령은 모두 일치했다. 최초 위반은 배포 뒤 optional 설치 코드 결속의 미갱신이며 calendar 시간 변경이 아니다. 원 설치/시도/누적/탐지/selector·cron bytes는 [복구 전 증거](/home/ubuntu/KORStockScan-storage-archives/recovered-doc-links-20261024/directory-index/L01.md)에 보존했다.
 - 실제 selected installer의 read-only gate도 `optional_selected_release_code_not_reviewed`였다. canonical 개발 workspace의 이전 automation 파일과 비교해, 정상적인 불변 release에서 수행하는 재결속을 거부했다. 기존 `selected_optional_code`가 실제 실행 코드의 기존7개 연구 의존성 digest와 wrapper를 선택본에 대조하도록 교체했다. 공유 workspace의 원천·예약 경로는 유지한다.
 - 알림의source10/13은10/21 04:40 마지막 개별 작업의 날짜였다. 누적2bd6b1b1은10/20까지13거래일을 포함한다.10/16·19는10/20 16:56,10/20은23:40 계산됐다. `last_completed_computation`을 누적 through-date로 표시하지 않도록 기존 detector→semantic alert→notifier에 역할·최신 시도/마지막 완료·누적 범위를 연결하고, 실제 코드 결속 불일치를 별도 이유로 전달했다.
-- 원 installer 회귀는1FAIL/3negative PASS, 날짜 detector/formatter는 각각 원 결함에서FAIL했다. 수리 후 installer/notifier90PASS와 optional detector2PASS, compile·diff check를 통과했다. [원 재현과 최종 검증 로그](../../tmp/postclose-monitoring-20261021/).
+- 원 installer 회귀는1FAIL/3negative PASS, 날짜 detector/formatter는 각각 원 결함에서FAIL했다. 수리 후 installer/notifier90PASS와 optional detector2PASS, compile·diff check를 통과했다. [원 재현과 최종 검증 로그](/home/ubuntu/KORStockScan-storage-archives/recovered-doc-links-20261024/directory-index/L02.md).
 
 수리 commit=`a995efc1a995d683b048d6702d3e4b3efaaf03ab`, baseline=`e3665f20ac2ddd1ff74d5a65b12410fe26827afa`. 비테스트 source3파일+31/-13, test3파일+72/-2, 새 module/producer/worker/예약0이다. 기존 mutable-workspace 비교 분기는 `removed/replaced`, 코드 digest·installer·detector·notifier는 현재 CLI/예약/알림 consumer 때문에 `retained/extended`다. 원 보고서·cursor·실패·불변 release는 역사 reader와 근거 때문에retained이며 별도 삭제 유예 경로는 없다. 증가는 기존 owner 간 결속 정보와 서로 다른 실패 회귀다. 이 문서·owning proposal·현재 checklist의 추가 기록은 기존 dirty 변경과 구분한다.
 
@@ -169,7 +169,7 @@
 
 수리본 code binding 때문에 무효화되는14일을 기존 canonical namespace에서 worker1/512MiB·단계60초/전체900초·낮은 CPU/I/O 우선순위로 단회 복구한다. 결정적 실패·무진전·selected/config 변경·heavy owner 진입 시 중단한다. 설치 code/calendar 재결속을 위조하거나 Main을 재기동하지 않는다. 정기 worker의 채택은 통합 배포/정식 installer 뒤 별도 확인한다. 이번 수동 복구와 후속 정기 소비의 코드 세대를 혼동하지 않는다.
 
-원 strict checklist snapshot5d44c3e5b68855253bd1052229c1f6dad84e0d1eed476ea508d06bf111052747은 기존 preserve_checklist로 검증·보존했다. 원 source21/target22/미종결 owner를 유지한다. [단회 실행·원 실패·검증 근거](../../tmp/weakness-native-label-repair-20261022/)에 실제 결과를 보존하며 추가 최종 수용은 이 절에 기록한다.
+원 strict checklist snapshot5d44c3e5b68855253bd1052229c1f6dad84e0d1eed476ea508d06bf111052747은 기존 preserve_checklist로 검증·보존했다. 원 source21/target22/미종결 owner를 유지한다. [단회 실행·원 실패·검증 근거](/home/ubuntu/KORStockScan-storage-archives/recovered-doc-links-20261024/directory-index/L03.md)에 실제 결과를 보존하며 추가 최종 수용은 이 절에 기록한다.
 
 
 ### 보완 후 실제 최종 수용
@@ -182,7 +182,7 @@ hard interruption도 label_dependency_pending이라는 기존 압축 cursor 단�
 
 10/21 새 daily21d99a1580e059830839ec26b550ee43c2a78343da44f258e5c7c39d04c00ac2는 실제94행을 W5/F3/U86으로 보존하고 PASS29 중6행을 W3/F3으로 연결했다. 전체 분석18,649행의 W1513/F11931/U5205이며 원 raw epoch 제외206,358은 daily/terminal에 그대로 남았다. 복구된8행 중6행의 시장 연결은 RECOVERY/B,2행은 시장 연결U다. 이 표본을 확정 약세 조정 효과나 실현 이익으로 해석하지 않는다. 후보184의 전향 baseline resolved는 전부0, 상태178 uncertainty_unresolved/6 source_gap, 적격0이다.
 
-native notification f569c0b602a61ba37a502e2c6169b624a893cbc3673f898219e72a4a52903d57은 not_eligible이며 같은 누적 generation·attempt·phase completed·manual summary를 대사했다. 실제 발송0, outbox/selector/설치/자동 순환 cursor/원 야간 예산5개 hash가 같다. 마지막 consumer 근거는 [직접 검증](../../tmp/weakness-native-label-repair-20261022/final-consumer-verification.json), [실제 복구](../../tmp/weakness-native-label-repair-20261022/reviewed-code-v2-recovery-result.json), [native 누적](../../data/report/main_market_weakness_research/cumulative/current.json)이다.
+native notification f569c0b602a61ba37a502e2c6169b624a893cbc3673f898219e72a4a52903d57은 not_eligible이며 같은 누적 generation·attempt·phase completed·manual summary를 대사했다. 실제 발송0, outbox/selector/설치/자동 순환 cursor/원 야간 예산5개 hash가 같다. 마지막 consumer 근거는 [직접 검증](/home/ubuntu/KORStockScan-storage-archives/recovered-doc-links-20261024/files/tmp/weakness-native-label-repair-20261022/final-consumer-verification.json), [실제 복구](/home/ubuntu/KORStockScan-storage-archives/recovered-doc-links-20261024/files/tmp/weakness-native-label-repair-20261022/reviewed-code-v2-recovery-result.json), [native 누적](../../data/report/main_market_weakness_research/cumulative/current.json)이다.
 
 이 수용은 사용자 승인 단회 실행의 코드·자료·누적·알림 판정 수용이다. 실제 Main/정기 wrapper는 여전히selected b1519a2d4/설치 a19fb4dd다. 새 수리 code의 정기 채택·native optional installer 재결속과 다음 야간 소비는 미실행이며 통합 배포 owner에 남긴다. 설치를 손으로 고치거나 active selector/cron을 바꾸어 완료를 만들지 않는다. 정기 incumbent 코드가 새 연구 generation을 자기 코드로 해석할 수 없으므로 다음21:40 전에 통합 배포 세션이 이 차이를 확인해야 한다. Main 정책/PREOPEN·자연 주문·비용 후 경제성의 새 완료 주장도 없다.
 
