@@ -47,19 +47,21 @@ def historical(registry, owner="episode", quantity=10, symbol="042660", state="O
 
 @pytest.mark.parametrize("owner", ["episode", "widget_auto_trade"])
 @pytest.mark.parametrize("side,action", [("BUY", "NEW"), ("SELL", "NEW"), ("BUY", "CANCEL"), ("SELL", "CANCEL"), ("SELL", "AMEND")])
-def test_all_retired_automatic_actions_rejected_before_reservation(registry, owner, side, action):
+@pytest.mark.parametrize("symbol", ["042660", "034020"])
+def test_all_retired_automatic_actions_rejected_before_reservation(registry, owner, side, action, symbol):
     context = OwnerOrderContext(owner, owner + ":fixture", owner + ":position", "request")
     with pytest.raises(OwnerRegistryError, match="permanently_retired"):
-        registry.reserve(context=context, symbol="042660", side=side, action=action,
+        registry.reserve(context=context, symbol=symbol, side=side, action=action,
                          quantity=10, route="SOR", order_date=date(2026, 10, 8))
     assert not registry.path.exists()
     from src.engine import kiwoom_orders
-    assert kiwoom_orders._reserve_owner_registry_intent(code="042660", side=side,
+    assert kiwoom_orders._reserve_owner_registry_intent(code=symbol, side=side,
         action=action, qty=10, route="SOR", owner_context=context)[2]["broker_order_attempted"] is False
 
 
-def test_manual_disposition_preserves_ledger_and_is_idempotent_without_flat(registry):
-    historical(registry)
+@pytest.mark.parametrize("symbol", ["042660", "034020"])
+def test_manual_disposition_preserves_ledger_and_is_idempotent_without_flat(registry, symbol):
+    historical(registry, symbol=symbol)
     before = registry.path.read_bytes()
     receipt = registry.retire_automatic_owners_to_manual()
     assert receipt["broker_flat_verified"] is False
@@ -183,11 +185,12 @@ def test_main_only_release_cannot_restore_removed_executor(tmp_path, defect):
     else:router._validate_retired_surfaces(workspace,root)
 
 
-def test_retired_unresolved_intents_do_not_hold_main_watch_admission(registry):
-    historical(registry, state='INTENT_RESERVED', filled=0)
-    assert registry.unresolved_intent_summary(symbol='042660', active_date=None)['unresolved_intent_count']==1
+@pytest.mark.parametrize("symbol", ["042660", "034020"])
+def test_retired_unresolved_intents_do_not_hold_main_watch_admission(registry, symbol):
+    historical(registry, symbol=symbol, state='INTENT_RESERVED', filled=0)
+    assert registry.unresolved_intent_summary(symbol=symbol, active_date=None)['unresolved_intent_count']==1
     registry.retire_automatic_owners_to_manual()
-    assert registry.unresolved_intent_summary(symbol='042660', active_date=None)['unresolved_intent_count']==0
+    assert registry.unresolved_intent_summary(symbol=symbol, active_date=None)['unresolved_intent_count']==0
 
 
 @pytest.mark.parametrize('defect', [None, 'source', 'terminal', 'strict', 'archive', 'retirement', 'current_date'])
