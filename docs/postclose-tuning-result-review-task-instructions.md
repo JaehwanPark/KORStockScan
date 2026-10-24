@@ -4,7 +4,7 @@
 
 # 장후작업 결과 점검 지시문
 
-역할: 활성 장후작업이 기계적으로 정상 종료했고, 비용 후 EV·순이익 개선에 필요한 의도한 분석결과를 만들었는지 판정하는 반복 점검 절차다. 문서 열람·편집은 점검 실행 요청이 아니다. 명시적인 결과 점검 요청은 기본적으로 읽기 전용이며, 단회 요청은 실제 as-of 상태를 보고하고 지속 요청은 지정된 종료조건까지 확인한다.
+역할: 활성 장후작업이 기계적으로 정상 종료했고, 비용 후 EV·순이익 개선에 필요한 의도한 분석결과를 만들었는지 판정하는 반복 점검 절차다. 문서 열람·편집은 점검 실행 요청이 아니다. 명시적인 결과 점검 요청은 기본적으로 읽기 전용이며 단회 요청은 실제 as-of 상태를 보고한다. 장후 운영 모니터링·복구가 호출되면 사용자가 범위·종료시각을 제한한 경우를 제외하고 §1.4의 실제 다음 Main 기동까지 확인한다.
 
 작업별로 **실행 정상성 / 분석 유효성 / 결손·결함 / 달성 가능성 / 직접 소비·다음 조치**를 따로 판정한다. exit 0·DONE·파일 생성·코드 존재·표본 증가를 경제성 성공으로 대체하지 않는다. 후보가 없어도 유효한 비교 끝에 incumbent carry가 나온 것은 의도한 분석결과일 수 있다.
 
@@ -24,7 +24,7 @@
 | 시간이 지나면 결과를 얻을 수 있는가? | 유효 표본의 실제 유입·maturity/기한·남은 조건·가능 최대표본·다음 경계; 구조상 유입 불가능 여부 |
 | 결과가 의도한 소비자까지 전달됐는가? | producer→adapter→평가기→candidate/publisher→dated loader 또는 summary/checklist의 동일 generation receipt |
 
-점검 완료는 전수 행의 판정 완료다. 운영 성공·경제성 후보 선정·다음 거래일 정책/PID 소비·자연 실현성과는 각각 별도 상태로 남긴다. 읽기 전용 점검을 끝내기 위해 잔여 구현이나 미래 자연 표본을 완료로 바꾸지 않는다.
+읽기 전용 점검 완료는 전수 행의 판정 완료다. 장후 운영 모니터링·복구의 완료는 §1.4를 적용하며 전수 판정이나 중간 DONE만으로 종료하지 않는다. 운영 성공·경제성 후보 선정·다음 거래일 정책/PID 소비·자연 실현성과는 각각 별도 상태로 남긴다. 읽기 전용 점검을 끝내기 위해 잔여 구현이나 미래 자연 표본을 완료로 바꾸지 않는다.
 
 ### 1.1 Submit drought 최우선 점검·개선 계약
 
@@ -38,11 +38,21 @@
 
 이미 승인된 지속 보조청산은 기존 `data/runtime/machine_profit_stagnation_deployment.json` 및 실제 loader의 policy pin·persistence/유효기간·신규 entry·custody·successor 복구와 정산 receipt를 확인한다. 지속 정책에 매일 새 승인 envelope를 요구하지 않는다. 기존 위젯/episode/manual 보유를 자동 이관하지 않는다. timing 연구 성공으로 새 exit family 활성화·target/수량 변경 권한을 만들지 않고, 미승인 전체 adaptive-exit 설계를 현재 필수 작업으로 복원하지 않는다. 운영 소비와 비용 후 자연 효과는 별도다.
 
+### 1.4 장후 전체 흐름의 기본 완료 기준
+
+[AGENTS §5](../AGENTS.md#5-review-and-completion)의 장후 완료 기준을 아래와 같이 실행한다. 사용자가 매번 전체 흐름을 다시 지시할 필요는 없다.
+
+1. **끝까지 소비 확인:** 대상 source date와 다음 거래일을 고정하고 기존 native 의존 순서대로 EOD·장후 계산, summary/checklist/strict/controller, 압축·정리·finalization/최종 detector, 준비/P5, 다음 PREOPEN, 선택 릴리스의 실제 Main PID/start·정책 소비, 해당 PID의 observer 게시와 첫 full health까지 확인한다. 원 실패 검사와 각 단계의 실제 terminal/date/hash도 검증한다. 문서상 예약이나 종료코드만으로 실제 소비를 대신하지 않는다.
+2. **수리부터 통합까지:** 최초 위반 owner를 수리하고 구현→검토→수정보완→재검토→영향 회귀를 반복한다. 실제 입력 크기·압축/논리 원천·날짜 전환·코드/원천 세대 변경과 결손/변조 거부를 bounded offline 증거로 검증한다. 배포·재기동이 이미 승인된 범위에서는 검토된 통합 후보를 [release routing](runtime-release-routing.md)의 실제 ordered 경로로 반영하고 무효화된 의존성만 순서대로 재생성한다. 코드 PASS에서 멈추거나 단계마다 같은 승인을 다시 요구하지 않는다.
+3. **완료 증거의 수명 보호:** 압축·정리·배포는 현재/준비된 정책과 strict/controller/PREOPEN이 참조하는 원천·논리 원문·체크리스트·코드 출처를 마지막 소비까지 보존한다. 경로 문자열뿐 아니라 native stage 코드 hash로 연결된 과거 릴리스도 기존 retention owner가 보호해야 한다. 변경 후 직접 소비자를 재검증하고 무효화된 후행 검증만 갱신한다. 새 증빙을 만들기 위한 삭제·원문 수정·stale PASS 재사용은 금지한다.
+4. **복구와 자연 완주 분리:** 정규 실행이 추가 수동 보정 없이 실제 기동까지 끝난 경우와 실패 후 승인된 수리·재생성으로 복구한 경우를 기존 감사/체크리스트에 구분한다. 복구 성공으로 최초 실패를 지우지 않으며, 수정본의 다음 정규 장후→Main 기동을 같은 owner의 자연 수용으로 확인한다. 이미 검증된 역사적 결손/null·유효 carry·정상 대기는 현재 실행 결함과 구분하고, 새 결손·상충은 계속 탐지한다. 주문·체결·양수 EV는 운영 완주의 추가 조건이 아니다.
+5. **대기와 인계:** 다음 실행창이 아직 오지 않았으면 자연 수용은 OPEN으로 유지하고 현재 체크리스트의 기존 stable ID에 source/target date, Due/Slot/TimeWindow, 남은 consumer와 판정 조건을 기록한다. 지속 모니터링은 실제 종료조건까지 이어가며, 사용자 지정 종료나 세션 인계 시에도 이 범위를 보존한다. `not_yet_due`는 전체 작업 완료가 아니다. 이미 유효한 승인 범위를 유지하고 새 권한이 필요한 정확한 행위만 차단 사유로 남긴다.
+
 ## 2. 권한 경계
 
 기본 결과 점검은 로그·status·report·manifest·systemd·process·lock·소스/consumer의 읽기 전용 대사와 점검 결과 기록이다. 실제 코드 수리·분석 worker 종료/재실행·보고서 재생성·추천 구현·commit/push·release 선택·서비스 기동은 별도 사용자 지시 및 기존 승인 범위를 확인한 경우에만 수행한다. 기존 승인은 그 대상·유효 범위 안에서 유지하며 후보별 재승인 gate를 추가하지 않는다.
 
-호출을 구분한다. `결과 점검`은 조회·판정이고, 별도로 명시한 `장후 운영 모니터링·복구·추천 구현`은 기존 Plan/runbook의 bounded source-only recovery와 §7 구현 계약을 따른다. 문서 정비는 두 실행을 모두 호출하지 않는다.
+호출을 구분한다. `결과 점검`은 조회·판정이고, `장후 운영 모니터링·복구`는 기존 Plan/runbook의 bounded source-only recovery와 §1.4의 전체 흐름 수용을 포함한다. 추천 구현이 요청된 경우에는 §7을 적용한다. 별도 배포·재기동 승인은 대상·기간 안에서 이어서 사용하며, 이 기본 완료 기준 자체가 새 매매 권한을 만들지는 않는다. 문서 정비는 이 실행들을 호출하지 않는다.
 
 매매 bot/episode의 기동·종료·재기동, 수동 env/lock/provider/model/route/threshold 변경, 실주문·취소·가격·수량·cap·cooldown 변경과 hard/protect/emergency·stale/conflict·broker/account/order guard 우회는 결과 점검 권한에 포함되지 않는다. 설치된 `THRESHOLD_CYCLE_POSTCLOSE_BOT_ACTION=stop`은 기존 자동 owner의 동작이다. report 복구를 위해 main wrapper를 수동 실행하면 stop 부작용이 있으므로 단순 점검 권한으로 실행하지 않는다.
 
@@ -59,7 +69,7 @@ OFF·퇴역 producer, 유효 frozen policy/checkpoint, 별도 custody/override·
 | 20:10 | DONE controller | predecessor/follower 대기·실패 reason·JSON `done`; 최신 verifier와 같은 generation |
 | 20:10 | tuning monitoring | predecessor 계약·단계 exit/status `success`·Parquet/DuckDB source hash/coverage |
 | 20:50 예약, EOD 완료 후 압축 | dashboard DB archive | EOD terminal 뒤 최신 대상일 DONE·검증된 archive/source generation·보존 계약 |
-| 다음 KRX 영업일 05:00, bounded | postclose finalization | 직전 KRX source date의 predecessor 확인→최신 summary/tower/checklist/strict closure→cleanup→source-date final detector receipt; 06:00 predecessor deadline, 06:50 종료 상한. 07:20 PREOPEN scanner 전 30분 확보 |
+| 다음 KRX 영업일 05:35, bounded | postclose finalization | 직전 KRX source date의 predecessor 확인→최신 summary/tower/checklist/strict closure→cleanup→source-date final detector receipt; 06:00 predecessor deadline, 06:50 종료 상한. 07:20 PREOPEN scanner 전 30분 확보 |
 | 장후 정기 5분, 21:50까지 및 finalization 후 | System Error Detector | 해당 run/stage/target의 unresolved critical·최신 terminal; 단순 이전 PASS 재사용 금지 |
 
 ### 3.1 공통 배포 경로와 독립 서비스 경계
@@ -218,6 +228,8 @@ Family strict 명령 `src.engine.verify_threshold_cycle_postclose_chain --date S
 
 독립 `entry_cancel_wait_runtime`의 기존 CLI 위치를 유지하며 lossless 제출/cancel projection census와 durable Main BUY 원장을 함께 확인한다. census 결손을 제출0으로, 미해결 이전 custody를 무노출 순익0으로 간주하지 않는다. 실제 제출이 있으면 frozen timeout/profile/route·native quote/trade·cancel ACK/late inventory·운영 exit/cost를 기존 entry owner에서 비교하며 미지원 상태는 null이다. 고정 제출 notional EV와 같은 자본 평균 일별 net의 보수적 하한을 함께 통과한 학습 후보 하나만 미사용 policy holdout에서 평가한다.
 
+전량 체결된 정확한 Main 원 주문의 영수증보다 늦게 발생했고, requested/failed 쌍과 `owner_registry_cancel_original_not_open`이 일치하는 비실행 취소 진단은 원문 파티션을 보존하면서 기존 원천 binding에 전체 식별자·해시·건수로 결속한다. 실행 입력에는 중복 frozen seed를 복제하지 않는다. 기존 발행 reuse 영수증, 원장 terminal, native census가 모두 검증돼야 하며, 부분 체결·미확인·다른 주문/소유자/날짜·새 결손은 계속 실패다. 다음 날 동일한 대용량 진단 원문을 다시 읽지 않고 같은 native 세대와 발행 영수증을 검증한다. 경제성 null, 원 실패, 기존 timeout과 주문 가드는 유지한다.
+
 새 schema report 및 dated scope policy를 tower/checklist source generation에 결속하고 standalone PREOPEN과 `_resolve_buy_order_timeout_sec`에서 검증한 scope만 소비한다. 공통 timeout·명시 OFF/override·order/guard/provider 권한은 보존한다. 원 평가일을 유지한 지연 발행은 publication date/다음 거래일을 명시한다. 사용자 승인과 closed review 이후 필요한 해당 CLI만 재생성하며 `--entry-cancel-wait-summary-only --require-summary-handoff`의 PASS는 전체 native DONE·PID 소비·자연 경제성 수락이 아니다.
 
 ### 5.2 결손·결함과 달성 가능성
@@ -300,9 +312,11 @@ expansion·attribution·hysteresis·timing·native capacity·research closed-loo
 
 main/controller/tuning/replay/machine/archive의 predecessor terminal을 대사하고 최종 summary generation·tower/checklist·strict verifier/controller→cleanup→final detector 순서·hash를 확인한다. generic detector PASS와 `postclose_final_detector`를 구분한다. wrapper cleanup DONE·detector handoff 시작만으로 실제 detector terminal 성공을 가정하지 않는다.
 
+약세연구를 포함한 복구는 [원 owner의 라벨 색인 진행 보존 계약](proposals/main-market-weakness-postclose-source-binding-and-candidate-repair-plan-2026-10-13.md#라벨-색인의-제한-시간과-진행-보존)을 따른다. 기존 야간 예산·source 날짜·원천 U/null을 유지하고 실제 daily/cumulative/notifier 소비를 대사한다. 자정 이후 보고서의 incumbent 읽기는 원 발행일의 엄격한 보존 증빙을 사용하며, 후보 발행은 기존 07:30/PREOPEN·bootstrap 경계를 통과해야 한다. Main의 당일 runtime 독자·활성화 검증은 유지한다.
+
 ### 8.8 다음 거래일 PREOPEN·07:55 기동 handoff
 
-각 active family의 next-trading-date candidate 또는 유효 incumbent carry·선정/탈락 사유·source/policy/hash·frozen generation을 PREOPEN resolver/독립 dated loader까지 확인한다. 아직 도래하지 않은 PREOPEN·기동·actual PID/R6·실현순익은 `not_yet_due`와 기존 Acceptance owner로 남긴다. 장후 발행 성공이나 경로 통일은 다음날 실제 기동·주문·경제성 성공이 아니다.
+각 active family의 next-trading-date candidate 또는 유효 incumbent carry·선정/탈락 사유·source/policy/hash·frozen generation을 PREOPEN resolver/독립 dated loader까지 확인한다. 지속 모니터링은 §1.4에 따라 실제 PREOPEN·Main PID 소비·observer/health까지 이어간다. 아직 도래하지 않은 기동 소비는 `not_yet_due`와 기존 Acceptance owner로 유지하며 전체 완료로 닫지 않는다. R6·실현순익은 별도 수용이고, 장후 발행 성공이나 경로 통일은 다음날 실제 기동·주문·경제성 성공이 아니다.
 
 ## 9. 최종 판정과 보고
 
@@ -312,7 +326,7 @@ main/controller/tuning/replay/machine/archive의 predecessor terminal을 대사�
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | 활성 목록의 각 작업 | | | | | | | |
 
-보고의 첫 문장은 **운영 종결 / 분석 유효성 / 경제성 선정 / 구조 차단**을 각각 요약한다. 운영은 `진행 중|정상종결|실패|미확인`, 분석은 유효/부족/무효 행 수, 경제성은 선정/유효 carry·reject/증거 부족, 구조 차단은 직접 owner와 원인으로 제시한다. 정상 운영 종결과 수익 개선을 한 GREEN으로 합치지 않는다.
+보고의 첫 문장은 **운영 종결 / 분석 유효성 / 경제성 선정 / 구조 차단**을 각각 요약한다. 운영은 `진행 중|정상종결|실패|미확인`으로 쓰되, 종결 시 `무개입 정규 완주|수동 복구 후 종결`을 구분하고 다음 정규 전체 흐름의 자연 수용 상태를 함께 밝힌다. 분석은 유효/부족/무효 행 수, 경제성은 선정/유효 carry·reject/증거 부족, 구조 차단은 직접 owner와 원인으로 제시한다. 정상 운영 종결과 수익 개선을 한 GREEN으로 합치지 않는다.
 
 이어 확정 결함·source exclusion·구조적 blocker부터 `판정→직접 근거→다음 조치`로 보고한다. 자연 maturity/유입 대기에는 실제 수와 다음 경계를, 불가능하거나 불명인 경로에는 ETA null과 closure test를 남긴다. 이전 완료·PID·배포 이력, 일반 원칙 반복과 무관한 후보는 나열하지 않는다. 원래 OPEN ID를 재사용하고 전체 Acceptance를 만족한 행만 닫는다. 문서/checklist 기록을 바꿨으면 print-only parser·링크/owner·diff를 검증하고 외부 sync는 실행하지 않는다.
 
