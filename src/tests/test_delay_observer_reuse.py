@@ -80,18 +80,26 @@ def test_source_changes_during_native_validation_are_rejected(
 ):
     original = initial.verify_source
 
-    def mutate(*args):
-        original(*args)
+    mutations = []
+
+    def mutate(*args, **kwargs):
+        assert kwargs == {"pipeline_reference_only": True}
+        original(*args, **kwargs)
         path = next(
             (policy_generation / "threshold_cycle").glob(
                 "date=*/family=pre_submit_delay/part-execution-*.jsonl"
             )
         )
         path.write_bytes(path.read_bytes() + b"\n")
+        mutations.append(path)
 
     monkeypatch.setattr(initial, "verify_source", mutate)
     result = bootstrap._pre_submit_delay_handoff("2026-10-05", observer_reuse=True)
     assert result[1]["status"] == "invalid_committed_generation"
+    assert len(mutations) == 1
+    assert bootstrap._DELAY_OBSERVER_CACHE["entry"]["error"] == (
+        "observer_delay_validation_failed:ValueError"
+    )
     assert "value" not in bootstrap._DELAY_OBSERVER_CACHE["entry"]
 
 
@@ -140,7 +148,8 @@ def test_failed_generation_backoff_and_repair(policy_generation, monkeypatch):
     original = initial.verify_source
     calls = []
 
-    def fail(*a):
+    def fail(*a, **kw):
+        assert kw == {"pipeline_reference_only": True}
         calls.append(1)
         raise ValueError("source_unavailable")
 
@@ -149,6 +158,9 @@ def test_failed_generation_backoff_and_repair(policy_generation, monkeypatch):
         result = bootstrap._pre_submit_delay_handoff("2026-10-05", observer_reuse=True)
         assert result[1]["status"] == "invalid_committed_generation"
     assert len(calls) == 1
+    assert bootstrap._DELAY_OBSERVER_CACHE["entry"]["error"] == (
+        "observer_delay_validation_failed:ValueError"
+    )
     bootstrap._DELAY_OBSERVER_CACHE["entry"]["retry_after"] = 0
     monkeypatch.setattr(initial, "verify_source", original)
     result = bootstrap._pre_submit_delay_handoff("2026-10-05", observer_reuse=True)
