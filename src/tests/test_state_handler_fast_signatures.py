@@ -95,7 +95,7 @@ def test_holding_pipeline_stable_block_logging_is_bounded_and_preserves_changes(
     monkeypatch.setenv(
         "KORSTOCKSCAN_HOLDING_PIPELINE_STABLE_BLOCK_LOG_INTERVAL_SEC", "15"
     )
-    monkeypatch.setattr(handlers.time, "time", lambda: next(times))
+    monkeypatch.setattr(handlers, "time", SimpleNamespace(time=lambda: next(times)))
     monkeypatch.setattr(
         handlers,
         "_holding_pipeline_observation_scope_fields",

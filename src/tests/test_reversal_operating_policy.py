@@ -639,12 +639,13 @@ def test_samsung_native_all_cell_and_callback_has_no_file_io(parent, monkeypatch
     root, b = parent
     R.R.configure(b["continuous_reversal"])
     R.R._STATES.clear()
-    monkeypatch.setattr(
-        "builtins.open",
-        lambda *a, **kw: (_ for _ in ()).throw(AssertionError("callback disk IO")),
-    )
-    for i, p in enumerate([102, 100, 101]):
-        R.observe_native("005930", "SOR_REGULAR", envelope(i, p, "005930"))
+    with monkeypatch.context() as callback_scope:
+        callback_scope.setattr(
+            "builtins.open",
+            lambda *a, **kw: (_ for _ in ()).throw(AssertionError("callback disk IO")),
+        )
+        for i, p in enumerate([102, 100, 101]):
+            R.observe_native("005930", "SOR_REGULAR", envelope(i, p, "005930"))
     assert len(R.R._STATES) == 1
     assert next(iter(R.R._STATES.values())).ready
 
