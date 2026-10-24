@@ -27,6 +27,11 @@ from .tax import (
 CLEAN_BASELINE_DATE = date(2026, 6, 5)
 DEFAULT_HORIZONS_SEC = (15, 30, 60, 120, 180, 300, 600)
 OBSERVATION_SCHEMA = "scalp_micro_reversion_price_observation_v4"
+# Public 0D fields consumed by the depth adapter; diagnostic custody only.
+DEPTH_SOURCE_FIDS = ("21", "121", "125", "6064", "6065", "6086", "6087") + tuple(
+    str(base + level) for base in (40, 50, 60, 70) for level in range(1, 6)
+)
+NORMALIZATION_EVIDENCE_MAX_BYTES = 4 * 1024 * 1024
 EVENT_SCHEMA = "scalp_micro_reversion_shock_event_v3"
 OUTCOME_SCHEMA = "scalp_micro_reversion_outcome_label_v3"
 REPORT_SCHEMA = "scalp_micro_reversion_v0_report_v5"

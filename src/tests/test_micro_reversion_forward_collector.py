@@ -123,6 +123,248 @@ def _collector(
     return collector
 
 
+def _raw_rejected_depth(
+    monkeypatch, *, missing_total=False, crossed=False, malformed=False
+):
+    at = datetime.fromisoformat("2026-10-23T16:00:38.260+09:00").timestamp()
+    monkeypatch.setattr("src.engine.kiwoom_websocket.time.time", lambda: at)
+    values = {
+        "21": "160038",
+        "41": "+10010",
+        "61": "100",
+        "51": "+10000",
+        "71": "150",
+        "121": "100",
+        "125": "150",
+        "6064": "100",
+        "6065": "150",
+        "6086": "0",
+        "6087": "0",
+        "not_market_data": "excluded",
+    }
+    if missing_total:
+        values.pop("121")
+    if crossed:
+        values["41"] = "+9990"
+    if malformed:
+        values["61"] = "unavailable"
+    depth = KiwoomWSManager._build_micro_reversion_depth_tick("196170_AL", values)
+    depth.update(transport_epoch=123, route_sequence=7)
+    return (
+        dict(
+            last_realtime_type_item={"0D": "196170_AL"},
+            last_realtime_type_effective_venue={"0D": "SOR"},
+            last_depth_tick=depth,
+            micro_observer_packet_receive_time_source="websocket_packet_ingress",
+            micro_observer_packet_received_at_ms=int(at * 1000) - 2,
+        ),
+        values,
+    )
+
+
+@pytest.mark.parametrize("case", ["missing_total", "crossed", "malformed"])
+def test_depth_rejection_preserves_raw_fields_through_existing_worker_and_reader(
+    tmp_path, monkeypatch, case
+):
+    from src.engine.scalping.micro_reversion.canary_monitor import (
+        normalization_source_quality_census,
+        evaluate_canary_snapshot,
+        load_canary_guard,
+    )
+
+    snapshot, raw = _raw_rejected_depth(monkeypatch, **{case: True})
+    c = _collector(tmp_path, depth_capture_enabled=True)
+    try:
+        assert (
+            c.observe_kiwoom_0d("196170", snapshot, realtime_type="0D")
+            == ProducerCanaryResult.INVALID_DEPTH_SNAPSHOT
+        )
+        # This is a copied source receipt, not a pointer into mutable WS state.
+        snapshot["last_depth_tick"]["raw_depth_fields"]["41"] = "changed later"
+    finally:
+        c.close()
+    state = c.runtime_snapshot().as_dict()
+    ledger = state["normalization_rejection_ledger"]
+    assert ledger["seen"] == ledger["rows"] == 1
+    assert ledger["complete"] and ledger["sealed"]
+    row = json.loads(Path(ledger["path"]).read_text())
+    assert row["raw_fields"] == {k: v for k, v in raw.items() if k != "not_market_data"}
+    assert row["packet_received_at_ms"] == row["normalization_received_at_ms"] - 2
+    assert row["route_sequence"] == 7 and row["transport_epoch"] == 123
+    assert (
+        row["reason"]
+        == {
+            "missing_total": "depth_fields_invalid",
+            "crossed": "depth_bbo_crossed",
+            "malformed": "depth_side_empty",
+        }[case]
+    )
+    assert state["depth_enqueued_count"] == 0
+    verified = normalization_source_quality_census(state)
+    assert verified["status"] == "verified" and verified["complete"]
+    assert verified["rejected_quotes_eligible"] is False
+    assert (
+        evaluate_canary_snapshot(state, load_canary_guard())[
+            "normalization_source_quality"
+        ]
+        == verified
+    )
+
+
+@pytest.mark.parametrize(
+    "damage",
+    [
+        "hash",
+        "pid",
+        "epoch",
+        "counter",
+        "partial",
+        "authority",
+        "symlink",
+        "budget",
+        "missing_raw",
+        "raw_too_long",
+        "packet_clock",
+        "ingress_claim",
+        "incomplete_count",
+    ],
+)
+def test_depth_rejection_custody_fails_closed_or_reports_partial(
+    tmp_path, monkeypatch, damage
+):
+    import hashlib
+    from src.engine.scalping.micro_reversion.canary_monitor import (
+        normalization_source_quality_census,
+    )
+
+    snapshot, _ = _raw_rejected_depth(monkeypatch, missing_total=True)
+    if damage == "missing_raw":
+        snapshot["last_depth_tick"].pop("raw_depth_fields")
+    if damage == "raw_too_long":
+        snapshot["last_depth_tick"]["raw_depth_fields"]["41"] = "0" * 10000
+    if damage == "packet_clock":
+        snapshot["micro_observer_packet_received_at_ms"] += 100000
+    c = ForwardObservationCollector(
+        flags=ObserverFeatureFlags(observer_enabled=True, depth_capture_enabled=True),
+        config=ForwardCollectorConfig(
+            output_root=tmp_path,
+            normalization_evidence_max_bytes=(
+                1 if damage == "budget" else 4 * 1024 * 1024
+            ),
+        ),
+    )
+    c.start()
+    try:
+        c.observe_kiwoom_0d("196170", snapshot, realtime_type="0D")
+    finally:
+        c.close()
+    state = c.runtime_snapshot().as_dict()
+    ledger = state["normalization_rejection_ledger"]
+    path = Path(ledger["path"])
+    if damage in {"pid", "epoch", "authority"}:
+        row = json.loads(path.read_text())
+        if damage == "pid":
+            row["process_pid"] += 1
+        if damage == "epoch":
+            row["local_observer_epoch"] += 1
+        if damage == "authority":
+            row["actual_order_submitted"] = True
+        raw = (json.dumps(row) + "\n").encode()
+        path.write_bytes(raw)
+        ledger.update(bytes=len(raw), sha256=hashlib.sha256(raw).hexdigest())
+    if damage == "hash":
+        ledger["sha256"] = "0" * 64
+    if damage == "counter":
+        ledger["seen"] += 1
+    if damage == "ingress_claim":
+        ledger["ingress_complete"] = False
+    if damage == "incomplete_count":
+        ledger["incomplete_raw"] = ledger["seen"] + 1
+    if damage == "partial":
+        path.write_bytes(path.read_bytes()[:-1])
+    if damage == "symlink":
+        other = path.with_suffix(".original")
+        path.rename(other)
+        path.symlink_to(other)
+    result = normalization_source_quality_census(state)
+    if damage in {"budget", "missing_raw", "raw_too_long", "packet_clock"}:
+        assert result["status"] == "partial" and not result["complete"]
+        assert ledger["bytes"] <= ledger["max_bytes"]
+    else:
+        assert result["status"] == "invalid" and not result["complete"]
+
+
+@pytest.mark.parametrize("failure", ["queue", "write", "fsync"])
+def test_depth_rejection_write_failure_cannot_seal_clean_shutdown(
+    tmp_path, monkeypatch, failure
+):
+    import queue
+
+    snapshot, _ = _raw_rejected_depth(monkeypatch, missing_total=True)
+    c = _collector(tmp_path, depth_capture_enabled=True)
+    if failure == "queue":
+
+        def full(_):
+            raise queue.Full
+
+        monkeypatch.setattr(c._normalization_queue, "put_nowait", full)
+    elif failure == "write":
+        p = c._normalization["path"]
+        p.parent.mkdir()
+        p.write_text("original foreign evidence")
+    else:
+
+        def failed(_):
+            raise OSError("offline fsync failure")
+
+        monkeypatch.setattr(collector_module.os, "fsync", failed)
+    c.observe_kiwoom_0d("196170", snapshot, realtime_type="0D")
+    with pytest.raises(RuntimeError, match="shutdown"):
+        c.close()
+    assert not c.runtime_snapshot().normalization_rejection_ledger["sealed"]
+    if c._normalization["file"] is not None:
+        c._normalization["file"].close()
+
+
+def test_normalization_evidence_bounds_rejections_without_changing_valid_depth(
+    tmp_path, monkeypatch
+):
+    from src.engine.scalping.micro_reversion.canary_monitor import (
+        normalization_source_quality_census,
+    )
+
+    rejected, _ = _raw_rejected_depth(monkeypatch, missing_total=True)
+    valid, _ = _raw_rejected_depth(monkeypatch)
+    c = ForwardObservationCollector(
+        flags=ObserverFeatureFlags(observer_enabled=True, depth_capture_enabled=True),
+        config=ForwardCollectorConfig(
+            output_root=tmp_path,
+            path_batch_size=256,
+            depth_queue_size=1000,
+            normalization_evidence_max_bytes=4096,
+        ),
+    )
+    c.start()
+    try:
+        for _ in range(98):
+            assert (
+                c.observe_kiwoom_0d("196170", rejected, realtime_type="0D")
+                == ProducerCanaryResult.INVALID_DEPTH_SNAPSHOT
+            )
+        assert (
+            c.observe_kiwoom_0d("196170", valid, realtime_type="0D")
+            == ProducerCanaryResult.ENQUEUED
+        )
+    finally:
+        c.close()
+    state = c.runtime_snapshot().as_dict()
+    ledger = state["normalization_rejection_ledger"]
+    assert state["depth_enqueued_count"] == state["depth_worker_processed_count"] == 1
+    assert ledger["seen"] == 98 and ledger["rows"] + ledger["omitted"] == 98
+    assert 0 < ledger["bytes"] <= 4096 and ledger["omitted"] > 0
+    assert normalization_source_quality_census(state)["status"] == "partial"
+
+
 def test_factory_is_default_off_and_creates_no_output(tmp_path, monkeypatch) -> None:
     for name in (
         "SCALP_MICRO_REVERSION_OBSERVER_ENABLED",

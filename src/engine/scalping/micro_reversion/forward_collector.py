@@ -28,6 +28,8 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from .contracts import (
+    DEPTH_SOURCE_FIDS,
+    NORMALIZATION_EVIDENCE_MAX_BYTES,
     PriceObservation,
     normalize_symbol,
     registration_item_market_data_identity,
@@ -234,6 +236,7 @@ class ForwardCollectorConfig:
     maximum_exchange_to_receive_lag_ms: int = 10_000
     exchange_timestamp_regression_tolerance_ms: int = 1_000
     storage_policy: PathStoragePolicy = field(default_factory=PathStoragePolicy)
+    normalization_evidence_max_bytes: int = NORMALIZATION_EVIDENCE_MAX_BYTES
 
     def __post_init__(self) -> None:
         if (
@@ -244,6 +247,13 @@ class ForwardCollectorConfig:
             raise ValueError("collector queue sizes must be positive")
         if self.path_batch_size <= 0:
             raise ValueError("path_batch_size must be positive")
+        if (
+            type(self.normalization_evidence_max_bytes) is not int
+            or not 0
+            < self.normalization_evidence_max_bytes
+            <= NORMALIZATION_EVIDENCE_MAX_BYTES
+        ):
+            raise ValueError("normalization evidence byte bound must be positive")
         if self.writer_flush_interval_sec <= 0 or self.worker_poll_interval_sec <= 0:
             raise ValueError("collector intervals must be positive")
         if self.exchange_future_skew_tolerance_ms < 0:
@@ -427,6 +437,7 @@ class ForwardCollectorSnapshot:
     timestamp_rejection_sample_total: int = 0
     timestamp_rejection_samples: tuple[dict[str, Any], ...] = ()
     timestamp_rejection_ledger: dict[str, Any] | None = None
+    normalization_rejection_ledger: dict[str, Any] | None = None
     process_pid: int = 0
     process_start_ticks: str = ""
     source_contract: str | None = None
@@ -461,6 +472,19 @@ class ForwardCollectorSnapshot:
                     LOW_DISK_CAPACITY_WARNING_METRIC_CONTRACT
                 ),
                 "timestamp_rejection": TIMESTAMP_REJECTION_METRIC_CONTRACT,
+                "normalization_rejection": {
+                    "metric_role": "source_quality_diagnostic",
+                    "decision_authority": "source_observation_only",
+                    "window_policy": "current_collector_bounded_journal",
+                    "sample_floor": "per_rejected_callback",
+                    "primary_decision_metric": "persisted_normalization_rejection_coverage",
+                    "source_quality_gate": "sealed_bytes_and_explicit_omission_error_counters",
+                    "forbidden_uses": [
+                        "source_imputation",
+                        "guard_relaxation",
+                        "broker_order_submission",
+                    ],
+                },
             },
         }
         if self.source_contract == "main_market_source_v1":
@@ -540,6 +564,22 @@ class ForwardObservationCollector:
         self._rejection_digest = hashlib.sha256()
         self._rejection_bytes = self._rejection_persisted = self._rejection_errors = 0
         self._rejection_sealed = False
+        self._normalization_queue = queue.Queue(maxsize=self.config.path_batch_size)
+        self._normalization = dict(
+            path=self.config.output_root
+            / "normalization_rejections"
+            / f"{self._sequence_epoch}.jsonl",
+            file=None,
+            digest=hashlib.sha256(),
+            bytes=0,
+            rows=0,
+            errors=0,
+            seen=0,
+            omitted=0,
+            incomplete_raw=0,
+            incomplete_identity=0,
+            sealed=False,
+        )
         self._completed_bar_transport_epoch = 0
         self._series_epochs: dict[tuple[str, str, str], int] = {}
         self._sequence_losses: dict[tuple[int, str, str, str], dict[int, str]] = {}
@@ -833,6 +873,28 @@ class ForwardObservationCollector:
         except Exception as exc:
             close_errors.append(exc)
         try:
+            evidence = self._normalization
+            if evidence["file"] is not None:
+                evidence["file"].flush()
+                os.fsync(evidence["file"].fileno())
+                evidence["file"].close()
+                evidence["file"] = None
+                fd = os.open(evidence["path"].parent, os.O_RDONLY | os.O_DIRECTORY)
+                try:
+                    os.fsync(fd)
+                finally:
+                    os.close(fd)
+            with self._metrics_lock:
+                evidence["sealed"] = (
+                    evidence["errors"] == 0
+                    and self._normalization_queue.empty()
+                    and evidence["seen"] == evidence["rows"] + evidence["omitted"]
+                )
+            if not evidence["sealed"]:
+                raise RuntimeError("normalization_rejection_journal_incomplete")
+        except Exception as exc:
+            close_errors.append(exc)
+        try:
             self._reconcile_references_and_paths(shutdown_clean=not close_errors)
         except Exception as exc:
             self._increment("_reference_reconciliation_errors")
@@ -1088,6 +1150,7 @@ class ForwardObservationCollector:
             depth = snapshot.get("last_depth_tick")
             if not isinstance(depth, dict):
                 self._increment("_depth_snapshot_blocks")
+                self._record_depth_rejection(symbol, snapshot, "depth_snapshot_missing")
                 return ProducerCanaryResult.INVALID_DEPTH_SNAPSHOT
             item = str(depth.get("item") or "").strip()
             type_item = str(
@@ -1191,16 +1254,21 @@ class ForwardObservationCollector:
                     "bid": bid_depth,
                 }:
                     raise ValueError("combined route totals conflict with depth")
-            except ValueError:
+            except ValueError as exc:
                 self._increment("_depth_snapshot_blocks")
+                self._record_depth_rejection(
+                    symbol, snapshot, "depth_fields_invalid", detail=str(exc)
+                )
                 return ProducerCanaryResult.INVALID_DEPTH_SNAPSHOT
             if not asks or not bids:
                 self._increment("_depth_snapshot_blocks")
+                self._record_depth_rejection(symbol, snapshot, "depth_side_empty")
                 return ProducerCanaryResult.INVALID_DEPTH_SNAPSHOT
             best_ask = asks[0][1]
             best_bid = bids[0][1]
             if best_ask < best_bid:
                 self._increment("_depth_snapshot_blocks")
+                self._record_depth_rejection(symbol, snapshot, "depth_bbo_crossed")
                 return ProducerCanaryResult.INVALID_DEPTH_SNAPSHOT
             received_at = datetime.fromtimestamp(received_at_ms / 1_000, tz=KST)
             session_bucket = _session_bucket(venue, exchange_timestamp.timetz())
@@ -1246,8 +1314,14 @@ class ForwardObservationCollector:
                     self._depth_queue_high_water, self._depth_sink.qsize()
                 )
             return ProducerCanaryResult.ENQUEUED
-        except Exception:
+        except Exception as exc:
             self._increment("_depth_snapshot_blocks")
+            self._record_depth_rejection(
+                symbol,
+                snapshot,
+                "depth_normalization_exception",
+                detail=type(exc).__name__,
+            )
             return ProducerCanaryResult.ISOLATED_ERROR
         finally:
             self._record_producer_callback_latency(
@@ -1257,6 +1331,81 @@ class ForwardObservationCollector:
                 self._active_callbacks -= 1
                 if self._active_callbacks == 0:
                     self._callback_condition.notify_all()
+
+    def _record_depth_rejection(self, symbol, snapshot, reason, *, detail=None):
+        """Queue bounded original fields before the existing rejection returns."""
+        snapshot = snapshot if isinstance(snapshot, dict) else {}
+        depth = snapshot.get("last_depth_tick")
+        depth = depth if isinstance(depth, dict) else {}
+        source = depth.get("raw_depth_fields")
+        raw = {}
+        complete = isinstance(source, dict) and not depth.get(
+            "raw_depth_fields_omitted"
+        )
+        for fid in DEPTH_SOURCE_FIDS:
+            if not isinstance(source, dict) or fid not in source:
+                continue
+            value = source[fid]
+            if value is None or isinstance(value, str) and len(value) <= 64:
+                raw[fid] = value
+            else:
+                complete = False
+
+        def positive(value):
+            return value if type(value) is int and value > 0 else None
+
+        sample = dict(
+            schema="depth_normalization_rejection_v1",
+            reason=reason,
+            detail=detail[:160] if isinstance(detail, str) else None,
+            symbol=normalize_symbol(symbol),
+            item=str(depth.get("item") or "")[:32],
+            process_pid=self._process_pid,
+            process_start_ticks=self._process_start_ticks,
+            local_observer_epoch=self._sequence_epoch,
+            transport_epoch=positive(depth.get("transport_epoch")),
+            route_sequence=positive(depth.get("route_sequence")),
+            normalization_received_at_ms=positive(depth.get("received_at_ms")),
+            packet_received_at_ms=(
+                positive(snapshot.get("micro_observer_packet_received_at_ms"))
+                if snapshot.get("micro_observer_packet_receive_time_source")
+                == "websocket_packet_ingress"
+                else None
+            ),
+            raw_fields=raw,
+            raw_fields_complete=complete,
+            raw_fields_scope="adapter_consumed_public_0d_fields_only",
+            rejection_stage="before_depth_queue",
+            runtime_effect=False,
+            allowed_runtime_apply=False,
+            actual_order_submitted=False,
+            broker_order_forbidden=True,
+        )
+        checked = time.time_ns() // 1_000_000
+        packet, normalized = (
+            sample["packet_received_at_ms"],
+            sample["normalization_received_at_ms"],
+        )
+        sample["checked_at_ms"] = checked
+        sample["ingress_identity_complete"] = bool(
+            packet
+            and normalized
+            and packet <= normalized <= checked
+            and sample["transport_epoch"]
+            and sample["route_sequence"]
+            and registration_item_market_data_identity(sample["item"])[0]
+            == sample["symbol"]
+        )
+        with self._metrics_lock:
+            state = self._normalization
+            state["seen"] += 1
+            state["incomplete_raw"] += int(not complete)
+            state["incomplete_identity"] += int(not sample["ingress_identity_complete"])
+            sample["rejection_index"] = state["seen"]
+            try:
+                self._normalization_queue.put_nowait(sample)
+            except queue.Full:
+                state["errors"] += 1
 
     def _record_timestamp_rejection(
         self,
@@ -1426,6 +1575,30 @@ class ForwardObservationCollector:
                 ),
                 process_pid=self._process_pid,
                 process_start_ticks=self._process_start_ticks,
+                normalization_rejection_ledger={
+                    "schema": "normalization_rejection_ledger_v1",
+                    "path": str(self._normalization["path"].absolute()),
+                    "sha256": self._normalization["digest"].hexdigest(),
+                    **{
+                        k: self._normalization[k]
+                        for k in (
+                            "bytes",
+                            "rows",
+                            "errors",
+                            "seen",
+                            "omitted",
+                            "incomplete_raw",
+                            "incomplete_identity",
+                            "sealed",
+                        )
+                    },
+                    "max_bytes": self.config.normalization_evidence_max_bytes,
+                    "complete": self._normalization["sealed"]
+                    and self._normalization["omitted"] == 0
+                    and self._normalization["incomplete_raw"] == 0
+                    and self._normalization["incomplete_identity"] == 0,
+                    "ingress_complete": self._normalization["incomplete_identity"] == 0,
+                },
                 timestamp_rejection_ledger={
                     "schema": "timestamp_rejection_ledger_v1",
                     "path": str(self._rejection_path.absolute()),
@@ -1750,18 +1923,61 @@ class ForwardObservationCollector:
             finally:
                 self._rejection_queue.task_done()
 
+    def _persist_normalization_rejections(self):
+        for _ in range(self.config.path_batch_size):
+            try:
+                sample = self._normalization_queue.get_nowait()
+            except queue.Empty:
+                return
+            state = self._normalization
+            try:
+                raw = (
+                    json.dumps(
+                        sample,
+                        ensure_ascii=True,
+                        allow_nan=False,
+                        separators=(",", ":"),
+                    )
+                    + "\n"
+                ).encode()
+                if (
+                    len(raw) > 16384
+                    or state["bytes"] + len(raw)
+                    > self.config.normalization_evidence_max_bytes
+                ):
+                    with self._metrics_lock:
+                        state["omitted"] += 1
+                    continue
+                if state["file"] is None:
+                    state["path"].parent.mkdir(parents=True, exist_ok=True)
+                    state["file"] = state["path"].open("xb")
+                if state["file"].write(raw) != len(raw):
+                    raise OSError("normalization_rejection_short_write")
+                with self._metrics_lock:
+                    state["digest"].update(raw)
+                    state["bytes"] += len(raw)
+                    state["rows"] += 1
+            except Exception:
+                with self._metrics_lock:
+                    state["errors"] += 1
+            finally:
+                self._normalization_queue.task_done()
+
     def _run(self) -> None:
         while (
             not self._stop_requested.is_set()
             or self._sink.qsize() > 0
             or not self._rejection_queue.empty()
+            or not self._normalization_queue.empty()
         ):
             self._persist_timestamp_rejections()
+            self._persist_normalization_rejections()
             try:
                 envelope = self._sink.get(
                     timeout=(
                         0
                         if not self._rejection_queue.empty()
+                        or not self._normalization_queue.empty()
                         else self.config.worker_poll_interval_sec
                     )
                 )

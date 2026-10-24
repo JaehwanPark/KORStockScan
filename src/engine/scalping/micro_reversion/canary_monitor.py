@@ -237,6 +237,196 @@ def _timestamp_rejection_receipts(snapshot):
             raise ValueError("timestamp_rejection_ledger_changed_or_hash_invalid")
 
 
+def normalization_source_quality_census(snapshot):
+    """Verify bounded rejection custody without making rejected quotes eligible."""
+    from .contracts import (
+        DEPTH_SOURCE_FIDS,
+        NORMALIZATION_EVIDENCE_MAX_BYTES,
+        registration_item_market_data_identity,
+    )
+
+    ledger = snapshot.get("normalization_rejection_ledger")
+    result = dict(
+        status="not_recorded_by_original_producer",
+        complete=False,
+        rejected_quotes_eligible=False,
+        runtime_effect=False,
+    )
+    if ledger is None:
+        return result
+    if not isinstance(ledger, dict):
+        return dict(result, status="invalid", error="ledger_not_object")
+    result.update(
+        seen=ledger.get("seen"),
+        persisted=ledger.get("rows"),
+        omitted=ledger.get("omitted"),
+        incomplete_raw=ledger.get("incomplete_raw"),
+        incomplete_identity=ledger.get("incomplete_identity"),
+    )
+    if ledger.get("sealed") is not True:
+        return dict(
+            result, status="write_error" if ledger.get("errors") else "unsealed"
+        )
+    try:
+        import stat
+
+        if (
+            ledger.get("schema") != "normalization_rejection_ledger_v1"
+            or any(
+                type(ledger.get(k)) is not int or ledger[k] < 0
+                for k in (
+                    "rows",
+                    "bytes",
+                    "errors",
+                    "seen",
+                    "omitted",
+                    "incomplete_raw",
+                    "incomplete_identity",
+                    "max_bytes",
+                )
+            )
+            or ledger["errors"] != 0
+            or ledger["seen"] != ledger["rows"] + ledger["omitted"]
+            or ledger["seen"] != snapshot.get("invalid_depth_snapshot_count")
+            or ledger["incomplete_raw"] > ledger["seen"]
+            or ledger["incomplete_identity"] > ledger["seen"]
+            or ledger.get("ingress_complete")
+            is not (ledger["incomplete_identity"] == 0)
+            or not 0 < ledger["max_bytes"] <= NORMALIZATION_EVIDENCE_MAX_BYTES
+            or ledger["bytes"] > ledger["max_bytes"]
+        ):
+            raise ValueError("ledger_counts_or_bound_invalid")
+        digest, count, incomplete, previous = hashlib.sha256(), 0, 0, 0
+        incomplete_identity = 0
+        reasons = {}
+        if ledger["rows"]:
+            with os.fdopen(
+                os.open(ledger["path"], os.O_RDONLY | os.O_NOFOLLOW), "rb"
+            ) as source:
+                before = os.fstat(source.fileno())
+                if (
+                    not stat.S_ISREG(before.st_mode)
+                    or before.st_size != ledger["bytes"]
+                ):
+                    raise ValueError("ledger_size_invalid")
+                while raw := source.readline(16385):
+                    if len(raw) > 16384 or not raw.endswith(b"\n"):
+                        raise ValueError("ledger_partial_row")
+                    digest.update(raw)
+                    row = json.loads(raw)
+                    index = row.get("rejection_index")
+                    fields = row.get("raw_fields")
+                    packet, normalized, checked = (
+                        row.get(k)
+                        for k in (
+                            "packet_received_at_ms",
+                            "normalization_received_at_ms",
+                            "checked_at_ms",
+                        )
+                    )
+                    identity_complete = bool(
+                        all(
+                            type(v) is int and v > 0
+                            for v in (
+                                packet,
+                                normalized,
+                                checked,
+                                row.get("transport_epoch"),
+                                row.get("route_sequence"),
+                            )
+                        )
+                        and packet <= normalized <= checked
+                        and registration_item_market_data_identity(row.get("item"))[0]
+                        == row.get("symbol")
+                    )
+                    if (
+                        row.get("schema") != "depth_normalization_rejection_v1"
+                        or type(index) is not int
+                        or not previous < index <= ledger["seen"]
+                        or row.get("process_pid") != snapshot.get("process_pid")
+                        or row.get("process_start_ticks")
+                        != snapshot.get("process_start_ticks")
+                        or row.get("local_observer_epoch")
+                        not in (
+                            snapshot.get("reconciled_sequence_epochs")
+                            or [snapshot.get("sequence_epoch")]
+                        )
+                        or not isinstance(fields, dict)
+                        or set(fields) - set(DEPTH_SOURCE_FIDS)
+                        or any(
+                            v is not None and (not isinstance(v, str) or len(v) > 64)
+                            for v in fields.values()
+                        )
+                        or type(row.get("raw_fields_complete")) is not bool
+                        or row.get("ingress_identity_complete") is not identity_complete
+                        or row.get("rejection_stage") != "before_depth_queue"
+                        or not all(
+                            row.get(k) is False
+                            for k in (
+                                "runtime_effect",
+                                "allowed_runtime_apply",
+                                "actual_order_submitted",
+                            )
+                        )
+                        or row.get("broker_order_forbidden") is not True
+                        or row.get("reason")
+                        not in {
+                            "depth_snapshot_missing",
+                            "depth_fields_invalid",
+                            "depth_side_empty",
+                            "depth_bbo_crossed",
+                            "depth_normalization_exception",
+                        }
+                    ):
+                        raise ValueError("ledger_receipt_invalid")
+                    previous = index
+                    count += 1
+                    incomplete += int(not row["raw_fields_complete"])
+                    incomplete_identity += int(not identity_complete)
+                    reasons[row["reason"]] = reasons.get(row["reason"], 0) + 1
+                after = os.fstat(source.fileno())
+                identity = lambda v: (
+                    v.st_dev,
+                    v.st_ino,
+                    v.st_size,
+                    v.st_mtime_ns,
+                    v.st_ctime_ns,
+                )
+                if identity(before) != identity(after):
+                    raise ValueError("ledger_changed")
+        if (
+            count != ledger["rows"]
+            or digest.hexdigest() != ledger.get("sha256")
+            or incomplete > ledger["incomplete_raw"]
+            or incomplete_identity > ledger["incomplete_identity"]
+        ):
+            raise ValueError("ledger_hash_or_count_invalid")
+        if not ledger["rows"] and ledger["bytes"] != 0:
+            raise ValueError("empty_ledger_bytes_invalid")
+        complete = (
+            ledger["omitted"] == 0
+            and ledger["incomplete_raw"] == 0
+            and ledger["incomplete_identity"] == 0
+        )
+        if ledger.get("complete") is not complete or (
+            not ledger["omitted"]
+            and (
+                incomplete != ledger["incomplete_raw"]
+                or incomplete_identity != ledger["incomplete_identity"]
+            )
+        ):
+            raise ValueError("ledger_coverage_invalid")
+        return dict(
+            result,
+            status="verified" if complete else "partial",
+            complete=complete,
+            reason_counts=reasons,
+            sha256=ledger["sha256"],
+        )
+    except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+        return dict(result, status="invalid", error=str(exc)[:160])
+
+
 def timestamp_source_quality_census(snapshot: dict[str, Any]) -> dict[str, Any]:
     """Keep pre-enqueue timestamp loss separate from collector stop authority."""
     fields = [
@@ -531,6 +721,7 @@ def evaluate_canary_snapshot(
         "stop_reasons": unique_reasons,
         "source_quality_row_exclusions": tuple(source_quality_row_exclusions),
         "timestamp_source_quality": timestamp_quality,
+        "normalization_source_quality": normalization_source_quality_census(snapshot),
         "operational_capacity_warnings": tuple(operational_capacity_warnings),
         "raw_row_exclusion_required": bool(source_quality_row_exclusions),
         "latency_guard_armed": latency_guard_armed,

@@ -565,18 +565,18 @@ def test_main_server_preflight_is_reproducible_and_drop_free() -> None:
     assert report["frozen_limits"]["producer_callback_latency_p99_max_ms"] > 0
 
 
+_CURRENT_CALLBACK_RECEIPT = (
+    "docs/audit-reports/2026-10-24-normalization-custody-latency-validation.json.txt"
+)
+
+
 def _reviewed_ws_lineage_sources():
     # Keep the historical receipt and runtime guard frozen. The additive raw
     # lineage path has a separate measured, exact-source receipt.
     root = Path(__file__).resolve().parents[2]
-    receipt = json.loads(
-        (
-            root
-            / "docs/audit-reports/2026-10-24-formatted-collector-latency-validation.json.txt"
-        ).read_text()
-    )
+    receipt = json.loads((root / _CURRENT_CALLBACK_RECEIPT).read_text())
     predecessor = (
-        "docs/audit-reports/2026-10-24-collector-source-latency-validation.json.txt"
+        "docs/audit-reports/2026-10-24-formatted-collector-latency-validation.json.txt"
     )
     assert receipt["predecessor_receipt"] == predecessor
     assert (
@@ -586,6 +586,13 @@ def _reviewed_ws_lineage_sources():
     assert receipt["status"] == "PASS_WITH_UNCHANGED_RUNTIME_LIMITS"
     assert receipt["scope"] == "collector_0b_absolute_canary_only"
     assert receipt["runtime_guard_changed"] is False
+    depth = receipt["normalization_custody_measurement"]
+    assert depth["iterations_per_case"] == 1000
+    assert depth["provider_calls"] == depth["orders"] == 0
+    assert depth["valid"]["enqueued"] == depth["valid"]["processed"] == 1000
+    assert depth["rejected"]["persisted"] == 1000
+    assert depth["rejected"]["custody_status"] == "verified"
+    assert depth["rejected"]["omitted"] == depth["rejected"]["errors"] == 0
     assert (
         hashlib.sha256(
             (root / receipt["source_format_review"]).read_bytes()
@@ -677,10 +684,7 @@ def test_mount_compatibility_does_not_accept_unreviewed_source(tmp_path):
 @pytest.mark.parametrize("damage", ["guard", "predecessor", "source", "runtime_change"])
 def test_current_callback_receipt_rejects_changed_bindings(monkeypatch, damage):
     root = Path(__file__).resolve().parents[2]
-    receipt_path = (
-        root
-        / "docs/audit-reports/2026-10-24-formatted-collector-latency-validation.json.txt"
-    )
+    receipt_path = root / _CURRENT_CALLBACK_RECEIPT
     original_read = Path.read_text
     receipt = json.loads(original_read(receipt_path))
     source = "src/engine/scalping/micro_reversion/path_journal.py"

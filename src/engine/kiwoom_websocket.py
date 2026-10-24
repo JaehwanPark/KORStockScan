@@ -34,6 +34,7 @@ from src.engine.scalping.micro_estimator_state import (
     DEFAULT_STORE as MICRO_ESTIMATOR_STORE,
 )
 from src.engine.scalping.micro_reversion.contracts import (
+    DEPTH_SOURCE_FIDS,
     registration_item_market_data_identity,
 )
 from src.trading.entry.orderbook_stability_observer import ORDERBOOK_STABILITY_OBSERVER
@@ -2859,12 +2860,25 @@ class KiwoomWSManager:
                 )
         combined_ask = unsigned_int(values.get("121"), None)
         combined_bid = unsigned_int(values.get("125"), None)
+        # Preserve only the public fields consumed by this adapter. Diagnostic
+        # custody must not normalize away the evidence that a row was rejected.
+        raw_fields, omitted = {}, []
+        for fid in DEPTH_SOURCE_FIDS:
+            if fid not in values:
+                continue
+            value = values[fid]
+            if value is None or isinstance(value, str) and len(value) <= 64:
+                raw_fields[fid] = value
+            else:
+                omitted.append(fid)
         return {
             "item": str(raw_item_code or ""),
             "market_route": KiwoomWSManager._ws_item_route(raw_item_code),
             "market_suffix": KiwoomWSManager._ws_item_market_suffix(raw_item_code),
             "orderbook_time_raw": str(values.get("21") or "").strip(),
             "received_at_ms": int(time.time() * 1000),
+            "raw_depth_fields": raw_fields,
+            "raw_depth_fields_omitted": omitted,
             "ask_levels": ask_levels,
             "bid_levels": bid_levels,
             "ask_depth": combined_ask,
