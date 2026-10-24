@@ -50,6 +50,88 @@ NATIVE_REPORT_LIMIT = 8 * 1024 * 1024
 NATIVE_REPORT_LOGICAL_LIMIT = 16 * 1024 * 1024
 
 
+def _preserve_previous_projection_receipt(path, receipt_path, current):
+    """Retain a superseded gzip's exact receipt before changing its live alias."""
+    import gzip
+    import io
+    from src.engine.lifecycle import snapshot_archive as archive
+
+    raw = file_bytes(receipt_path, 65536)
+    previous = json.loads(raw)
+    if previous == current:
+        return False
+    if (
+        not isinstance(previous, dict)
+        or previous.get("schema") != archive.SCHEMA
+        or previous.get("logical_path") != str(path)
+        or previous.get("runtime_effect") is not False
+        or previous.get("allowed_runtime_apply") is not False
+        or previous.get("artifact_content_sha256")
+        != generation.digest(
+            {k: v for k, v in previous.items() if k != "artifact_content_sha256"}
+        )
+        or type(previous.get("logical_size_bytes")) is not int
+        or not 0 <= previous["logical_size_bytes"] <= NATIVE_REPORT_LOGICAL_LIMIT
+        or not isinstance(previous.get("original_identity"), dict)
+        or set(previous["original_identity"])
+        != {"device", "inode", "size", "mtime_ns", "ctime_ns"}
+        or previous["original_identity"]["size"] != previous["logical_size_bytes"]
+        or any(
+            not isinstance(previous.get(k), str)
+            or len(previous[k]) != 64
+            or any(c not in "0123456789abcdef" for c in previous[k])
+            for k in ("archive_sha256", "logical_content_sha256")
+        )
+    ):
+        raise ValueError("native_report_previous_receipt_invalid")
+    archived = (
+        path.parent
+        / "superseded"
+        / (path.stem + "-" + previous["archive_sha256"][:16])
+        / (path.name + ".gz")
+    )
+    if archived.resolve() != archived:
+        raise ValueError("native_report_previous_archive_path_invalid")
+    before = archive.file_identity(archived.lstat())
+    expected = previous.get("archive_generation") or {}
+    # Native retention deduplicates identical compressed bytes. Historical
+    # inode/clock coordinates remain in the original receipt; they do not
+    # describe the retained blob or authorize its use as a current generation.
+    if (
+        not isinstance(expected, dict)
+        or set(expected) != set(before)
+        or expected["size"] != before["size"]
+    ):
+        raise ValueError("native_report_previous_archive_identity_invalid")
+    encoded = file_bytes(archived, NATIVE_REPORT_LIMIT)
+    with gzip.GzipFile(fileobj=io.BytesIO(encoded)) as stream:
+        logical = stream.read(previous["logical_size_bytes"] + 1)
+    if (
+        hashlib.sha256(encoded).hexdigest() != previous["archive_sha256"]
+        or len(logical) != previous["logical_size_bytes"]
+        or hashlib.sha256(logical).hexdigest() != previous["logical_content_sha256"]
+        or archive.file_identity(archived.lstat()) != before
+        or file_bytes(receipt_path, 65536) != raw
+    ):
+        raise ValueError("native_report_previous_archive_changed")
+    retained = archived.parent / (
+        receipt_path.name + "." + hashlib.sha256(raw).hexdigest() + ".json"
+    )
+    if retained.exists() or retained.is_symlink():
+        if retained.resolve() != retained or file_bytes(retained, 65536) != raw:
+            raise ValueError("native_report_previous_receipt_conflict")
+    else:
+        os.link(receipt_path, retained, follow_symlinks=False)
+        descriptor = os.open(archived.parent, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+    if file_bytes(retained, 65536) != raw or file_bytes(receipt_path, 65536) != raw:
+        raise ValueError("native_report_previous_receipt_changed")
+    return True
+
+
 def publish_native_report_projection(data, family, day):
     """Preserve original JSON with its existing lossless native archive contract.
 
@@ -124,11 +206,17 @@ def publish_native_report_projection(data, family, day):
             allowed_runtime_apply=False,
         )
         receipt["artifact_content_sha256"] = generation.digest(receipt)
+        receipt_path = Path(str(destination) + ".archive_receipt.json")
+        replace_receipt = False
+        if receipt_path.exists() or receipt_path.is_symlink():
+            replace_receipt = _preserve_previous_projection_receipt(
+                path, receipt_path, receipt
+            )
         files._write_atomic(
-            Path(str(destination) + ".archive_receipt.json"),
+            receipt_path,
             receipt,
             65536,
-            immutable=True,
+            immutable=not replace_receipt,
         )
         if (
             read_native_report(data, family, day)[1]

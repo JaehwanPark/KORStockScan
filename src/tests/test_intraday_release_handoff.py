@@ -5382,7 +5382,8 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(
     )
     subprocess.run(["git", "-C", str(root), "checkout", "-q", "75e0fbbf7"], check=True)
     hashes = {
-        "current": handoff.REVIEWED_PRODUCER_IDENTITY_PROFILE,
+        "current": handoff.REVIEWED_ARCHIVE_PROJECTION_PROFILE,
+        "consumed_producer_identity": handoff.REVIEWED_PRODUCER_IDENTITY_PROFILE,
         "consumed_cold_postclose": handoff.REVIEWED_STOPPED_POSTCLOSE_PROFILE,
         "consumed_auxiliary_format": handoff.REVIEWED_AUXILIARY_FORMAT_PROFILE,
         "consumed_postclose_source": handoff.REVIEWED_POSTCLOSE_SOURCE_PROFILE,
@@ -5428,6 +5429,9 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(
                     {
                         "consumed_auxiliary_format": "c0346b611",
                         "consumed_cold_postclose": "6fe72273e",
+                        "consumed_producer_identity": "2c9f2a6ad",
+                        "consumed_producer_identity": "2c9f2a6ad",
+                        "consumed_producer_identity": "2c9f2a6ad",
                         "consumed_postclose_source": "06dbfe661",
                         "consumed_closed_scanner": "2edf3263e",
                         "consumed_scanner_preflight": "6e970e41f",
@@ -6173,7 +6177,13 @@ def test_auxiliary_format_handoff_rejects_partial_successor(
 
 @pytest.mark.parametrize("family", ["pre_submit_delay", "main_stop", "holding_vote"])
 @pytest.mark.parametrize(
-    "generation", ["current", "consumed_auxiliary_format", "consumed_cold_postclose"]
+    "generation",
+    [
+        "current",
+        "consumed_auxiliary_format",
+        "consumed_cold_postclose",
+        "consumed_producer_identity",
+    ],
 )
 def test_cold_postclose_reader_preserves_original_complete_profile(
     tmp_path, family, generation
@@ -6184,7 +6194,13 @@ def test_cold_postclose_reader_preserves_original_complete_profile(
 
 
 @pytest.mark.parametrize(
-    "dependency", sorted(handoff.REVIEWED_STOPPED_POSTCLOSE_HASHES)
+    "dependency",
+    sorted(
+        {
+            **handoff.REVIEWED_STOPPED_POSTCLOSE_HASHES,
+            **handoff.REVIEWED_ARCHIVE_PROJECTION_HASHES,
+        }
+    ),
 )
 @pytest.mark.parametrize(
     "fault", ["missing", "dirty", "committed_change", "parent_mix"]

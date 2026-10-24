@@ -914,6 +914,34 @@ REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS["auxiliary"] += (
 )
 
 
+# Reviewed archive receipt succession and stopped workflow producer identity.
+# Current source producers and fresh fixtures are still required.
+REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS["entry_cancel_wait"] += (
+    (
+        "5fa218b7b916b6b2a98a7a395573dac80ff96d2345edae3b64f9f99e3574125d",
+        "06ec0dfd84a0865ac044ced0839f69bfe5f8f912c619d2d99861ae2a321743ae",
+    ),
+)
+REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS["rising_missed"] += (
+    (
+        "d48f497b194c96ca5776bacf2910a08de4c0c3a6a323c5cde1d8a30c171c15e4",
+        "6d662d9e2cc6f67ec9945dfa3d9da37e3acd22765cc48a1c30d95b892a432eb7",
+    ),
+)
+REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS["holding_vote"] += (
+    (
+        "7ea8d358191c970b16384b182f2feaa66c4486f1082f4c36cb54616df4485a81",
+        "2c8493a70cb399e336773c02f3d292d2f5d225fe742750089049b63ecc1a23b0",
+    ),
+)
+REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS["auxiliary"] += (
+    (
+        "8f7446efe983c1ad88ba90c3ca72114fe9e90d045356e8c7d74acd0d4ceb62fd",
+        "846bc2c07fc4742338ed17db282d913a6b14f8eab9723c9e1656d61f5f2abf23",
+    ),
+)
+
+
 def current_fixture_observation(observed, data):
     family = observed.get("family")
     pair = REVIEWED_SUCCESSORS.get(family)

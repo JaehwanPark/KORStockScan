@@ -1543,3 +1543,162 @@ def test_formatted_family_requires_both_exact_generations_without_promoting_hist
         assert result["historical_contract_status"] == "unverified"
         assert result["reviewed_code_pair"] == [old, current]
         assert result["current_fixture"] != result["preserved_historical_fixture"]
+
+
+@pytest.mark.parametrize("changed", [False, True])
+@pytest.mark.parametrize("interrupted", [False, True])
+def test_native_projection_republish_preserves_previous_generation(
+    tmp_path, monkeypatch, changed, interrupted
+):
+    import gzip
+    from src.utils.jsonl_io import write_json_object_generation_safe
+
+    data = tmp_path / "data"
+    _, report, _, _, _, _ = _fixture(data, "entry_cancel_wait")
+    payload = json.loads(report.read_text())
+    report.write_text(json.dumps(payload, indent=12))
+    old_source = report.read_bytes()
+    monkeypatch.setattr(
+        validation, "NATIVE_REPORT_LIMIT", len(gzip.compress(old_source)) + 256
+    )
+    original = validation.publish_native_report_projection(
+        data, "entry_cancel_wait", DAY
+    )
+    compressed = Path(str(report) + ".gz")
+    pointer = Path(str(compressed) + ".archive_receipt.json")
+    old_compressed, old_receipt = compressed.read_bytes(), pointer.read_bytes()
+    if changed:
+        payload["generated_at"] = DAY + "T22:00:00+09:00"
+        payload["policy_generation"] = generation.native(
+            payload,
+            family="entry_cancel_wait",
+            day=DAY,
+            data_root=data,
+            source_state="valid_empty",
+            comparison_state="insufficient_sample",
+            handoff_state="incumbent_carried",
+        )
+    write_json_object_generation_safe(report, payload, indent=12)
+    if interrupted:
+        from src.engine.scalping import entry_split_monitor_projection as files
+
+        with monkeypatch.context() as patch:
+            patch.setattr(
+                files,
+                "_write_atomic",
+                lambda *a, **k: (_ for _ in ()).throw(
+                    RuntimeError("interrupted_alias_publication")
+                ),
+            )
+            with pytest.raises(RuntimeError, match="interrupted_alias_publication"):
+                validation.publish_native_report_projection(
+                    data, "entry_cancel_wait", DAY
+                )
+        assert pointer.read_bytes() == old_receipt
+    current = validation.publish_native_report_projection(
+        data, "entry_cancel_wait", DAY
+    )
+    archived = (
+        report.parent
+        / "superseded"
+        / (report.stem + "-" + original["archive_sha256"][:16])
+    )
+    assert (archived / compressed.name).read_bytes() == old_compressed
+    assert (
+        archived
+        / (pointer.name + "." + hashlib.sha256(old_receipt).hexdigest() + ".json")
+    ).read_bytes() == old_receipt
+    value, digest = validation.read_native_report(data, "entry_cancel_wait", DAY)
+    assert value == payload and digest == current["logical_content_sha256"]
+    identities = (compressed.stat().st_ino, pointer.stat().st_ino)
+    assert (
+        validation.publish_native_report_projection(data, "entry_cancel_wait", DAY)
+        == current
+    )
+    assert identities == (compressed.stat().st_ino, pointer.stat().st_ino)
+    assert (
+        archived
+        / (pointer.name + "." + hashlib.sha256(old_receipt).hexdigest() + ".json")
+    ).read_bytes() == old_receipt
+    for _ in range(2):
+        write_json_object_generation_safe(report, payload, indent=12)
+        validation.publish_native_report_projection(data, "entry_cancel_wait", DAY)
+        assert (
+            validation.read_native_report(data, "entry_cancel_wait", DAY)[0] == payload
+        )
+        assert (
+            archived
+            / (pointer.name + "." + hashlib.sha256(old_receipt).hexdigest() + ".json")
+        ).read_bytes() == old_receipt
+
+
+@pytest.mark.parametrize(
+    "damage",
+    [
+        "missing",
+        "gzip",
+        "seal",
+        "logical",
+        "original_size",
+        "epoch",
+        "retained",
+        "symlink",
+    ],
+)
+def test_projection_generation_rotation_rejects_unproved_predecessor(
+    tmp_path, monkeypatch, damage
+):
+    import gzip
+    from src.utils.jsonl_io import write_json_object_generation_safe
+
+    data = tmp_path / "data"
+    _, report, _, _, _, _ = _fixture(data, "entry_cancel_wait")
+    payload = json.loads(report.read_text())
+    report.write_text(json.dumps(payload, indent=12))
+    monkeypatch.setattr(
+        validation, "NATIVE_REPORT_LIMIT", len(gzip.compress(report.read_bytes())) + 256
+    )
+    previous = validation.publish_native_report_projection(
+        data, "entry_cancel_wait", DAY
+    )
+    compressed = Path(str(report) + ".gz")
+    pointer = Path(str(compressed) + ".archive_receipt.json")
+    write_json_object_generation_safe(report, payload, indent=12)
+    archived = (
+        report.parent
+        / "superseded"
+        / (report.stem + "-" + previous["archive_sha256"][:16])
+    )
+    old = archived / compressed.name
+    retained = archived / (
+        pointer.name + "." + hashlib.sha256(pointer.read_bytes()).hexdigest() + ".json"
+    )
+    if damage == "missing":
+        old.unlink()
+    elif damage == "gzip":
+        old.write_bytes(b"broken gzip")
+    elif damage == "retained":
+        retained.write_text("conflicting receipt")
+    elif damage == "symlink":
+        retained.symlink_to(pointer)
+    else:
+        value = json.loads(pointer.read_bytes())
+        if damage == "seal":
+            value["artifact_content_sha256"] = "0" * 64
+        else:
+            if damage == "logical":
+                value["logical_content_sha256"] = "0" * 64
+            elif damage == "original_size":
+                value["original_identity"]["size"] += 1
+            else:
+                value["archive_generation"]["size"] += 1
+            value["artifact_content_sha256"] = generation.digest(
+                {k: v for k, v in value.items() if k != "artifact_content_sha256"}
+            )
+        pointer.write_text(json.dumps(value))
+    before = pointer.read_bytes()
+    with pytest.raises((ValueError, OSError, EOFError)):
+        validation.publish_native_report_projection(data, "entry_cancel_wait", DAY)
+    assert pointer.read_bytes() == before
+    with pytest.raises((ValueError, OSError)):
+        validation.read_native_report(data, "entry_cancel_wait", DAY)
