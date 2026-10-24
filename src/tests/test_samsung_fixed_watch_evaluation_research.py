@@ -1,5 +1,7 @@
 from copy import deepcopy
+import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import subprocess
@@ -423,7 +425,7 @@ def test_historical_policy_snapshot_preserves_original_hash_and_live_pointer(
     assert policy.read_bytes() == current
 
 
-def test_historical_snapshot_does_not_relax_other_source_hashes(tmp_path):
+def test_historical_snapshot_does_not_relax_other_source_hashes(tmp_path, monkeypatch):
     source = tmp_path / "arbitrary/policy_2026-10-06.json"
     source.parent.mkdir()
     source.write_text("original")
@@ -435,6 +437,17 @@ def test_historical_snapshot_does_not_relax_other_source_hashes(tmp_path):
     )
     with pytest.raises(ValueError, match="sealed_file_changed"):
         F.Q.verify_hashes({str(source): expected})
+    archive_root = tmp_path / "restored"
+    monkeypatch.setenv("KORSTOCKSCAN_TEST_HISTORICAL_SOURCE_DIR", str(archive_root))
+    assert historical_source_snapshot(source, expected) == source
+    snapshot = archive_root / expected / source.name
+    snapshot.parent.mkdir(parents=True)
+    snapshot.write_text("original")
+    assert historical_source_snapshot(source, expected) == snapshot
+    assert source.read_text() == "changed"
+    snapshot.write_text("different original")
+    with pytest.raises(ValueError, match="sealed_file_changed"):
+        historical_source_snapshot(source, expected)
 
 
 def test_historical_policy_snapshot_is_independent_of_later_pointer_changes(tmp_path):
@@ -447,6 +460,18 @@ def test_historical_policy_snapshot_is_independent_of_later_pointer_changes(tmp_
     )
     policy.write_text("next generation")
     F.Q.verify_hashes({str(snapshot): expected})
+
+
+def historical_source_snapshot(path, expected_sha256):
+    """Use an explicitly restored original, retaining its original byte seal."""
+    directory = os.environ.get("KORSTOCKSCAN_TEST_HISTORICAL_SOURCE_DIR")
+    if not directory:
+        return path
+    snapshot = Path(directory) / expected_sha256 / path.name
+    if not snapshot.exists():
+        return path
+    F.Q.verify_hashes({str(snapshot): expected_sha256})
+    return snapshot
 
 
 def historical_intake_fixture(tmp_path):
@@ -471,8 +496,11 @@ def historical_intake_fixture(tmp_path):
     # Never rehash an old production census against a repaired working file.
     # This historical unit intake is already rejected by validate_frozen at CLI.
     seals = {}
+    relocated = {}
     for name, digest in census["source_seals"].items():
+        original_name = name
         path = Path(name)
+        restored = historical_source_snapshot(path, digest)
         kernel_root = next(
             (
                 base
@@ -482,27 +510,41 @@ def historical_intake_fixture(tmp_path):
             None,
         )
         if kernel_root is not None:
-            data = path.read_bytes()
-            if F.R.P.file_sha(path) != digest:
+            data = restored.read_bytes()
+            if F.R.P.file_sha(restored) != digest:
                 relative = path.relative_to(kernel_root).as_posix()
-                data = subprocess.check_output(
-                    [
-                        "git",
-                        "-C",
-                        str(root),
-                        "show",
-                        "a17bd6d2587e1204eacd0cd283bcbd854eb71bfc:" + relative,
-                    ]
-                )
+                # The sealed census spans the original discovery and its later
+                # source-repair generation. Accept only an exact historical blob.
+                for revision in (
+                    "a17bd6d2587e1204eacd0cd283bcbd854eb71bfc",
+                    "aed5ea0e5560e947168c750509694fd4b91503e1",
+                ):
+                    result = subprocess.run(
+                        ["git", "-C", str(root), "show", revision + ":" + relative],
+                        capture_output=True,
+                        check=False,
+                    )
+                    if (
+                        result.returncode == 0
+                        and hashlib.sha256(result.stdout).hexdigest() == digest
+                    ):
+                        data = result.stdout
+                        break
+                else:
+                    raise ValueError("historical_kernel_original_blob_missing")
             snapshot = tmp_path / "historical-kernels" / path.relative_to(kernel_root)
             snapshot.parent.mkdir(parents=True, exist_ok=True)
             snapshot.write_bytes(data)
             assert F.R.P.file_sha(snapshot) == digest
             name = str(snapshot)
         else:
-            name = str(historical_policy_snapshot(root, tmp_path, path, digest))
+            name = str(historical_policy_snapshot(root, tmp_path, restored, digest))
+        relocated[original_name] = name
         seals[name] = digest
     census["source_seals"] = seals
+    for capture in census["captures"]:
+        location = capture["source_location"]
+        location["path"] = relocated.get(location["path"], location["path"])
     native = (
         root
         / "data/report/machine_observation_projection/machine_observation_projection_2026-10-02_0_1.json"
@@ -532,7 +574,26 @@ def historical_intake_fixture(tmp_path):
             for role, path in paths.items()
         },
     )
-    return root, f, capsule, paths, projection, census
+    # Replay the dated policy receipt sealed by this census, not today's pointer.
+    historical_root = tmp_path / "historical-root"
+    policy_root = historical_root / "data/runtime/mechanistic_entry_policy"
+    policy_root.mkdir(parents=True)
+    original_policy_root = root / "data/runtime/mechanistic_entry_policy"
+    current = original_policy_root / "current.json"
+    (policy_root / "current.json").write_bytes(
+        Path(relocated[str(current.resolve())]).read_bytes()
+    )
+    for directory in ("generations", "sources"):
+        (policy_root / directory).symlink_to(
+            original_policy_root / directory, target_is_directory=True
+        )
+    dated = original_policy_root / "policy_2026-10-02.json"
+    if dated.exists():
+        (policy_root / dated.name).symlink_to(dated)
+    (historical_root / "data/observations").symlink_to(
+        root / "data/observations", target_is_directory=True
+    )
+    return historical_root, f, capsule, paths, projection, census
 
 
 def test_historical_intake_roundtrips_native_and_canonical_sources(tmp_path):
@@ -570,7 +631,13 @@ def test_later_adapter_rejects_changed_native_labels_identity_and_incomplete_sou
     for role, data in [("projection", projection), ("capture_census", census)]:
         paths[role].write_text(json.dumps(data))
         capsule[role]["sha256"] = F.R.P.file_sha(paths[role])
-    with pytest.raises(ValueError):
+    reason = {
+        "label": "replay_normalized_projection_differs_from_native",
+        "native": "replay_normalized_projection_differs_from_native",
+        "omitted_row": "replay_trace_population_conflict",
+        "unsealed_source": "replay_parent_or_source_seals_missing",
+    }[defect]
+    with pytest.raises(ValueError, match=reason):
         F.validate_replay_input(root, capsule, f)
 
 
@@ -602,5 +669,10 @@ def test_canonical_capture_cannot_be_replaced_by_resealed_derived_context(
             r["features"] for r in sorted(projection["main"], key=lambda r: r["t"])
         ],
     )
-    with pytest.raises(ValueError):
+    reason = (
+        "duplicate_raw_capture_location"
+        if defect == "duplicate_location"
+        else "replay_normalized_capture_differs_from_canonical_raw"
+    )
+    with pytest.raises(ValueError, match=reason):
         F.validate_replay_input(root, capsule, f)
