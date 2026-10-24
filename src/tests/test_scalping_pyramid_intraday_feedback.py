@@ -8,7 +8,9 @@ def test_retired_report_is_explicit_and_cannot_produce_candidates():
     report = module.build_report("2026-09-17")
     assert report["status"] == "retired"
     assert report["allowed_runtime_apply"] is False
-    assert report["calibration_candidates"] == []
+    assert "calibration_candidates" not in report
+    assert report["runtime_effect"] is False
+    assert report["decision_authority"] == "archive_only"
 
 
 def test_retired_cli_does_not_publish_or_load_sources(capsys, monkeypatch):

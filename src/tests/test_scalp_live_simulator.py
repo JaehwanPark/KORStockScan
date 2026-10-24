@@ -3443,7 +3443,7 @@ def test_scalp_sim_candidate_window_enforces_ldm_sample_quota_sim_only(monkeypat
     )
 
 
-def test_scalp_sim_scale_in_window_expansion_returns_sim_only_action(monkeypatch):
+def test_retired_scale_in_window_cannot_be_enabled_by_old_rules(monkeypatch):
     rules = replace(
         CONFIG,
         SCALP_SIM_SCALE_IN_WINDOW_EXPANSION_ENABLED=True,
@@ -3476,16 +3476,12 @@ def test_scalp_sim_scale_in_window_expansion_returns_sim_only_action(monkeypatch
         held_sec=120,
     )
 
-    assert action["should_add"] is True
-    assert action["add_type"] == "PYRAMID"
-    assert action["actual_order_submitted"] is False
-    assert action["broker_order_forbidden"] is True
-    assert action["decision_authority"] == "sim_observation_only"
+    assert action == {}
     assert "sim_scale_in_attempt_count_pyramid" not in stock
     assert state_handlers._SCALP_SIM_SCALE_IN_WINDOW_DAILY_CREATED == {}
 
 
-def test_scalp_sim_scale_in_window_claims_quota_only_at_execution_handoff(
+def test_retired_scale_in_window_handoff_does_not_claim_quota(
     monkeypatch,
 ):
     rules = replace(
@@ -3536,26 +3532,10 @@ def test_scalp_sim_scale_in_window_claims_quota_only_at_execution_handoff(
         is None
     )
 
-    assert stock["sim_scale_in_attempt_count_pyramid"] == 1
-    daily_key = f"{action['scale_in_window_day_key']}:PYRAMID"
-    assert state_handlers._SCALP_SIM_SCALE_IN_WINDOW_DAILY_CREATED[daily_key] == 1
-    funnel_states = [
-        fields["scale_in_candidate_funnel_state"]
-        for stage, fields in logs
-        if stage == "scalp_sim_scale_in_candidate_funnel"
-    ]
-    assert funnel_states == ["eligible", "execution_closed_without_result"]
-
-    second_action = state_handlers._evaluate_scalp_sim_scale_in_window_expansion(
-        stock=stock,
-        strategy="SCALPING",
-        profit_rate=0.5,
-        peak_profit=0.7,
-        current_ai_score=71,
-        held_sec=130,
-    )
-    assert second_action == {}
-    assert logs[-1][1]["scale_in_candidate_funnel_state"] == ("position_quota_blocked")
+    assert action == {}
+    assert "sim_scale_in_attempt_count_pyramid" not in stock
+    assert state_handlers._SCALP_SIM_SCALE_IN_WINDOW_DAILY_CREATED == {}
+    assert logs == []
 
 
 def test_scalp_simulator_preset_tp_touch_flows_to_trailing_without_real_sell(
@@ -3820,7 +3800,7 @@ def test_scalp_simulator_sell_registers_exact_smoothing_post_sell_observer(
     assert state_handlers._SMOOTHING_NON_REVIVE_POST_SELL_REGISTRY == {}
 
 
-def test_scalp_simulator_scale_in_does_not_call_real_buy(monkeypatch):
+def test_sim_scale_in_without_native_vote_cannot_buy_or_assume_fill(monkeypatch):
     holding_logs = []
     monkeypatch.setattr(
         state_handlers,
@@ -3878,6 +3858,7 @@ def test_scalp_simulator_scale_in_does_not_call_real_buy(monkeypatch):
         "actual_order_submitted": False,
     }
 
+    before = stock.copy()
     res = state_handlers.execute_scale_in_order(
         stock=stock,
         code="123456",
@@ -3892,12 +3873,13 @@ def test_scalp_simulator_scale_in_does_not_call_real_buy(monkeypatch):
         admin_id=None,
     )
 
-    assert res["simulated_order"] is True
-    assert stock["buy_qty"] == 2
-    assert stock["actual_order_submitted"] is False
-    assert any(
-        stage == "scalp_sim_scale_in_order_assumed_filled" for stage, _ in holding_logs
-    )
+    assert res == {
+        "status": "blocked",
+        "reason": "add_path_vote_missing_or_stale",
+        "qty": 0,
+    }
+    assert stock == before
+    assert not any("assumed_filled" in stage for stage, _ in holding_logs)
 
 
 def test_scalp_simulator_scale_in_uses_central_allocator_without_real_order_cap(
@@ -3981,7 +3963,7 @@ def test_real_scalp_scale_in_uses_orderable_percent_budget_without_one_share_cap
     assert details["qty"] == 9
 
 
-def test_real_scalp_pyramid_uses_dynamic_budget_for_one_share_position(monkeypatch):
+def test_retired_pyramid_has_zero_quantity_for_one_share_position(monkeypatch):
     rules = replace(
         CONFIG,
         INVEST_RATIO_SCALPING_MIN=0.10,
@@ -4036,17 +4018,14 @@ def test_real_scalp_pyramid_uses_dynamic_budget_for_one_share_position(monkeypat
         },
     )
 
-    assert details["sim_uncapped_qty"] is False
-    assert details["scale_in_budget_qty"] == 5
-    assert details["would_qty"] == 5
-    assert details["effective_qty"] == 5
-    assert details["qty"] == 5
-    assert details["qty_reason"] == "dynamic_allowed"
-    assert details["pyramid_sizing_mode"] == "dynamic_budget"
-    assert details["pyramid_position_ratio_cap_applied"] is False
+    assert details["qty"] == 0
+    assert details["would_qty"] == 0
+    assert details["effective_qty"] == 0
+    assert details["qty_reason"] == "pyramid_permanently_retired"
+    assert "scale_in_budget_qty" not in details
 
 
-def test_real_scalp_pyramid_uses_dynamic_budget_qty_without_existing_position_ratio_cap(
+def test_retired_pyramid_has_zero_quantity_with_large_available_budget(
     monkeypatch,
 ):
     rules = replace(
@@ -4103,12 +4082,11 @@ def test_real_scalp_pyramid_uses_dynamic_budget_qty_without_existing_position_ra
         },
     )
 
-    assert details["scale_in_budget_qty"] == 95
-    assert details["would_qty"] == 95
-    assert details["effective_qty"] == 95
-    assert details["qty"] == 95
-    assert details["pyramid_sizing_mode"] == "dynamic_budget"
-    assert details["pyramid_position_ratio_cap_applied"] is False
+    assert details["qty"] == 0
+    assert details["would_qty"] == 0
+    assert details["effective_qty"] == 0
+    assert details["qty_reason"] == "pyramid_permanently_retired"
+    assert "scale_in_budget_qty" not in details
 
 
 def test_real_scalp_scale_in_min_one_share_floor_when_percent_budget_is_below_price(
@@ -4154,7 +4132,7 @@ def test_real_scalp_scale_in_min_one_share_floor_when_percent_budget_is_below_pr
     assert details["qty"] == 1
 
 
-def test_scalp_simulator_scale_in_uses_virtual_budget_not_real_deposit(monkeypatch):
+def test_sim_budget_cannot_bypass_native_scale_in_vote(monkeypatch):
     holding_logs = []
     monkeypatch.setattr(
         state_handlers,
@@ -4199,6 +4177,7 @@ def test_scalp_simulator_scale_in_uses_virtual_budget_not_real_deposit(monkeypat
         "actual_order_submitted": False,
     }
 
+    before = stock.copy()
     res = state_handlers.execute_scale_in_order(
         stock=stock,
         code="123456",
@@ -4213,19 +4192,16 @@ def test_scalp_simulator_scale_in_uses_virtual_budget_not_real_deposit(monkeypat
         admin_id=None,
     )
 
-    assert res["simulated_order"] is True
-    assert stock["actual_order_submitted"] is False
-    filled = next(
-        fields
-        for stage, fields in holding_logs
-        if stage == "scalp_sim_scale_in_order_assumed_filled"
-    )
-    assert filled["virtual_budget_override"] is True
-    assert filled["virtual_budget_krw"] == 10_000_000
-    assert filled["budget_authority"] == "sim_virtual_not_real_orderable_amount"
+    assert res == {
+        "status": "blocked",
+        "reason": "add_path_vote_missing_or_stale",
+        "qty": 0,
+    }
+    assert stock == before
+    assert not any("assumed_filled" in stage for stage, _ in holding_logs)
 
 
-def test_swing_probe_scale_in_uses_virtual_budget_not_real_deposit(monkeypatch):
+def test_swing_probe_budget_cannot_bypass_native_scale_in_vote(monkeypatch):
     holding_logs = []
     monkeypatch.setattr(
         state_handlers,
@@ -4271,6 +4247,7 @@ def test_swing_probe_scale_in_uses_virtual_budget_not_real_deposit(monkeypatch):
         "probe_id": "PROBE1",
     }
 
+    before = stock.copy()
     res = state_handlers.execute_scale_in_order(
         stock=stock,
         code="654321",
@@ -4282,16 +4259,13 @@ def test_swing_probe_scale_in_uses_virtual_budget_not_real_deposit(monkeypatch):
         admin_id=None,
     )
 
-    assert res["simulated_order"] is True
-    assert stock["actual_order_submitted"] is False
-    filled = next(
-        fields
-        for stage, fields in holding_logs
-        if stage == "swing_probe_scale_in_order_assumed_filled"
-    )
-    assert filled["virtual_budget_override"] is True
-    assert filled["virtual_budget_krw"] == 10_000_000
-    assert filled["budget_authority"] == "sim_virtual_not_real_orderable_amount"
+    assert res == {
+        "status": "blocked",
+        "reason": "add_path_vote_missing_or_stale",
+        "qty": 0,
+    }
+    assert stock == before
+    assert not any("assumed_filled" in stage for stage, _ in holding_logs)
 
 
 def test_swing_probe_state_sync_removes_exited_and_restores_active(tmp_path):
