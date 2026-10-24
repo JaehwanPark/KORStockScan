@@ -1,3 +1,4 @@
+from src.engine.ai.holding_exit_vote import PATH_PROMPT_VERSION
 from src.engine.ai_response_contracts import (
     AI_RESPONSE_SCHEMA_REGISTRY,
     build_openai_response_text_format,
@@ -14,7 +15,7 @@ def test_ai_response_schema_registry_covers_required_endpoints():
         "entry_price_explicit_fill_value_v1",
         "holding_exit_v1",
         "holding_exit_vote_v1",
-        "holding_path_vote_v10",
+        PATH_PROMPT_VERSION,
         "holding_score_v2",
         "decision_quality_holding_score_v1",
         "holding_exit_flow_v1",
