@@ -77,11 +77,15 @@
 - tmp의 큰 경로에는 삼성 pattern 약1.2GiB, opportunity contract 약800MiB, ENTER 미진입 분석 약711MiB, 과거 disk cleanup 약499MiB가 있다. 이들은 **검토 대상 크기**이며 삭제 승인 목록이 아니다.
 - 연구가 닫혔어도 원본 후보/계산/재현/이후 검증에서 참조하는 유일 자료는 보존한다. 동일 내용을 가진 중복 사본만 hash·경로 소비자 대사 후 제거한다.
 - tmp 경로를 정식 archive로 옮길 필요가 있으면 새 immutable manifest와 옛 경로 소비의 호환/복원 방식을 먼저 만든다. 기존 연구 receipt를 새 bytes에 맞춰 덮어쓰지 않는다.
+- 문서 참조는 역사 기록이라는 이유로 보호 집합에서 제외하지 않는다. [기존 정리 owner의 문서 보호 검사](../operational-log-retention.md)는 저장소 최상위·`docs`·연결된 외부 Markdown 색인을 따라 원 경로와 실제 대상을 확인한다. 원본 파일/행·링크·archive/member SHA를 기존 정리 manifest/검토 기록에 남기고, 파일 링크는 hash가 같은 개별 원문으로, 디렉터리 링크는 전체 보관 범위·복원 방법을 명시한 색인으로 먼저 연결한다. 보관본과 색인은 삭제 후보 밖에 둔다. Git 코드 이력이나 tar 존재만으로 실행 원문을 대신하지 않는다.
+- 링크 교체 전 strict-bound 문서의 원 SHA와 native historical snapshot을 보존한다. 편집 가능한 문서의 연결만 교체하고 새 대상·fragment·상대경로를 실제로 읽어 검증한다. 새 보관본의 원문 내부 링크는 임의 수정하지 않는다. 대체 연결을 검증하지 못하면 원 경로를 유지한다. `check`와 최종 `delete_verified`의 참조 차단을 우회하지 않는다.
+- 문서 편집을 멈춘 창에서 같은 보호 검사를 삭제 직전과 직후 수행한다. 문서/색인/alias 변경이나 검사 범위·읽기 실패는 해당 시도 중단이다. 변경 전 계획/PASS를 재사용하지 않는다. 사후 변경이 발견되면 원 archive와 실패 journal을 보존하고 영향 연결을 복구·검증한 뒤 다시 판정한다. 기존 일자별 archive/resume caller도 같은 최종 삭제 함수를 사용한다.
 - raw_row_exclusion·Parquet·가격 봉·pipeline·policy snapshot을 크기만 보고 삭제하지 않는다. 큰 구조적 감축이 필요하면 검증된 외부 보관/복원과 각 owner의 보존 계약을 별도 계획으로 다룬다.
 
 ### S5. 사후 확인
 
 - 삭제/압축 성공·보류·실패 path와 이유, 실제 free-space 증가를 기록한다.
+- 변경 문서의 모든 로컬 링크와 보관 색인의 archive/manifest 연결을 다시 열고 원 member SHA를 대사한다. 기존 결손과 새 결손을 분리하고 새 broken link가 있으면 정리 완료로 기록하지 않는다. 원본 문서·원천·실패 기록과 링크 대사 결과는 기존 보관/검토 owner에 유지하며, 이후 정리에서도 이 연결 전체를 보호한다.
 - selector/previous/모든 service pin/실제 PID/rollback/source manifest가 여전히 해석되는지 확인한다.
 - 보호한63파일 frozen manifest 및 다음 PREOPEN/삼성 forward 입력을 재검증한다. 원래 존재하던 준비 실패와 새 변경을 구분한다.
 - policy/source bytes가 바뀌는 정리는 새 prepared 세대 봉인 전에 마친다. 봉인 후 정리는 해당 manifest에 영향이 없는 대상으로 한정한다. collector history manifest가 이미 변한 현 상태에서 참조 파일을 추가로 제거하지 않는다.

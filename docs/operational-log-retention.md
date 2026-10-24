@@ -36,6 +36,48 @@ because their names contain `.log`. A read-only all-process FD census may use
 `sudo -n /usr/bin/python3` with constant code when `/proc` denies access; cleanup
 itself remains unprivileged. An unavailable census prevents deletion.
 
+Document protection uses the existing
+[`DocumentReferences`](../src/engine/infrastructure/log_retention.py) owner.
+It reads repository-root Markdown, all `docs` Markdown (including history), and
+linked local Markdown indexes. It resolves relative/absolute paths, URL encoding,
+fragments/line suffixes, reference definitions and symlink destinations; directory
+references protect their descendants. Literal path/name pins remain conservative.
+An archive manifest or Git commit alone does not replace a clickable file link.
+Missing/unreadable document roots, symlinked document trees, invalid text and scan
+limits prevent deletion when candidates exist. An empty deletion lane does not
+need a document or process census.
+
+The census reads text once per invocation and checks the file/directory identity
+set and linked indexes/aliases around each unlink. New, removed or changed
+documents stop that attempt; do not reuse its plan or automatically retry it.
+Keep document writers quiescent during deletion: these checks detect observed
+races but cannot lock arbitrary editors. Preserve the source archive and failure
+journal if a post-unlink check fails, restore the affected reference through the
+existing recovery procedure, and validate before retrying. Tmp document-census
+failure propagates to the existing CLI terminal/nonzero exit.
+
+The previously untracked, reused
+[`archive_tmp.py`](../tmp/source-disk-cleanup-20261022/worktree-audit/archive_tmp.py)
+is now tracked at its existing path so the dated `reclaim_tmp`, archive and resume
+callers retain one implementation. Both `check` and the shared `delete_verified`
+entry protect document references, including partial-tree deletion. This is a
+deliberate source-file exception to ignored `tmp/`, not enrollment of generated
+evidence. Its original dated host census/closure dependencies and allowed-root
+checks remain required; absent dependencies fail closed. Invoke reviewed source
+from the workspace with its project interpreter and `PYTHONPATH=.`. Do not copy
+an old unguarded helper into a new cleanup caller or substitute a selected release
+that lacks this reviewed API. Changing this source does not deploy scheduled code.
+
+Before moving cited evidence, follow the existing
+[storage plan S4–S5](proposals/runtime-and-research-storage-cleanup-plan-2026-10-05.md#s4-사용-종료된-연구-tempsnapshotcache):
+verify archive/member hashes, recover individually cited original bytes or a
+directory index outside the removal set, update editable links, and validate them
+before deletion. Strict-bound originals retain their native historical snapshot;
+their receipts are never resealed to match a document edit. Recovered indexes,
+original archives/manifests and linked files remain protected in later cleanup.
+This gate preserves references; it does not authorize deletion or automatically
+rewrite documents.
+
 Resource-pressure recovery runs only the bounded log lane. Exit zero and the
 exact run-id/applied/complete terminal are required before recording success and
 the 30-minute cooldown. It does not launch Parquet/research compaction. The daily

@@ -3008,3 +3008,27 @@ Friday monitoring scope refinement (2026-10-23T20:41:21+09:00): the user will sh
 선택된 reader는 운영 경로 쓰기를 막는 native Landlock 경계에서 실행했고 network/database/process-control 호출도 차단했다. 계좌/수탁 값은 native router context로만 읽고 출력하지 않았다. 운영 release/selector/정책/준비본/strict/controller/기동용 checklist와 종료 상태를 보존했다. 보고서 재생성, 상태/hash 수동 수정, provider/order/외부 동기화, 배포·재기동0이다. 기존 보존 owner는 유지하며 변위된 것은 문서의 낡은 링크뿐이다. 새 runtime 모듈/검증기/보고서 producer·중복 작업 owner를 만들지 않았다.
 
 최종 문서 검증: 수정 문서의 로컬 링크511개 missing0, 복원 Markdown 원 anchor1개 PASS,72개 링크 이외의 기존 본문 bytes 동일, print-only backlog22개/10월26일 단일 handoff owner 유지, git diff --check PASS. 문서/증거 연결 변경이므로 trading 회귀나 report 재생성은 실행하지 않았다.
+
+### Document-reference protection in retention owners — 2026-10-24
+
+사용자 요청은 보관/정리 후 문서 링크 단절의 재발 방지, 원본 보존, 리뷰/회귀, 클린 커밋/푸시다. 기준은 `e30d7dc8f20b8bfb50905891a557d0ab278aa423`의 clean main이다. 운영 release 변경·재기동·실제 보관/삭제는 이번 범위에 없다.10/24 checklist는 없으며10/26 strict-bound checklist를 오늘 owner로 대체하거나 편집하지 않았다. 다음 기동의 기존 `DirectFamilyPreopenPolicyHandoff`와 자연 수용 상태는 유지한다.
+
+**원인 → 수리:** 이전72개 링크를 끊은 경로는 일자별 archive/resume caller가 공유하는 `archive_tmp.delete_verified`였다. archive/member integrity와 inode 검사는 있었으나 Markdown 소비자는 최종 삭제 조건에 없었다. 기존 정기 `log_retention.document_references`도 `docs/*.md`의 문자열 포함 검사에 그쳐 인코딩/상대경로/alias와 외부 보관 색인 의존을 놓칠 수 있었다. 보존한 원 삭제 함수의 private fixture 재현에서는 인용 중인 원 파일이 실제로 삭제됐다.
+
+- 기존 [log_retention](../../src/engine/infrastructure/log_retention.py)의 문서 검사에 최상위/전체 docs 및 연결된 Markdown 색인, 상대·절대경로, 인코딩, fragment/행, reference definition/HTML, 디렉터리·symlink 실제 대상을 결합했다. 보관 색인이 인용한 원 archive/manifest도 보호한다. 문자열 경로/name pin의 보수적 보호는 유지한다.
+- 본문은 호출당 제한 범위에서 한 번 읽고, 삭제 전후 파일/디렉터리 집합·identity와 연결 색인/alias를 재확인한다. 읽기/범위/세대 변경은 삭제 권한이 되지 않는다. tmp 검사 실패는 기존 CLI terminal 및 nonzero exit로 전달된다. 삭제 적격 로그나 등록 tmp가 없는 lane은 불필요한 문서/전체 PID 검사를 생략한다. 적격 후보가 있으면 원 FD/pin/hash/age/count/closed-manifest 검사를 그대로 요구한다.
+- 실제 공유 [archive_tmp.py](../../tmp/source-disk-cleanup-20261022/worktree-audit/archive_tmp.py)의 계획 검사와 최종 삭제 함수에 같은 owner를 연결했다. `reclaim_tmp.apply`, `storage-unintegrated/tmp_cleanup.resume_verified`, `verified-storage-cleanup/retired_reports`, `archive_failed_report`의 부분 삭제가 이 함수에 도달함을 확인했다. 원 archive/member/restore, PID/native/research/custody, pin, exact-inode 검사는 유지한다. 문서 링크를 자동 덮어쓰거나 tar 존재만으로 삭제를 허용하지 않는다.
+- 이255행 기존 공통 스크립트는 지금까지 Git 미추적이었다. 경로와 caller 계약을 유지한 채 수리16행을 추가하고 이 소스 파일만 Git 추적에 편입한다. 주변 generated tmp/host census/실행 증거는 포함하지 않는다. 그 일자별 호스트 의존이 없으면 실행 불가이며, 새로운 범용 삭제 진입점을 추가하지 않았다. 운영 절차는 [보존 owner 문서](../operational-log-retention.md)와 [기존 S4–S5 정리계획](../proposals/runtime-and-research-storage-cleanup-plan-2026-10-05.md)에 보완했다.
+
+**리뷰·보완·재리뷰:** 직접 링크뿐 아니라 외부 Markdown 색인의 간접 archive 의존, 계획 이후 새 문서/링크/alias 변경, tmp 실패의 상위 exit 전파를 보완했다. 실제 삭제 후보가 없는 정기 lane까지 새 census를 요구하는 부작용을 제거했다. 실패한 FD census를 같은 실행에서 반복하지 않도록 종료 경계를 검증했다. 테스트의 FD 조회는 테스트 프로세스 소유 파일로 격리했고 운영 all-PID 실패 시 보존 계약은 유지했다. 문서 편집기는 공통 잠금을 사용하지 않으므로 정리는 문서 편집이 멈춘 창에서 수행한다. 검사 사이의 비협조적 편집을 원자적으로 차단한다고 주장하지 않으며, 사후 변경 발견 시 원 archive/실패 journal을 보존하고 연결을 복구한 뒤 재판정하는 절차를 명시했다.
+
+**검증:**
+
+- `test_operational_log_retention`, `test_log_rotation_cleanup`, `test_log_archive_service`, `test_research_storage`: **202 PASS**. 실제 source 삭제/resume 함수의 부분/전체 삭제, 검증된 링크 교체 후 삭제, 복구 대상 재보호, 변경/신규 파일, 손상 archive, missing/symlink/invalid/overflow 문서 및 CLI 실패를 포함한다. provider/order/운영 삭제 호출은 없다.
+- 원72개 링크 표기 재현72/72 보호, 복구70개 고유 대상(58개 원문+12개 색인) 보호70/70·SHA 불변. 원 archive14개58,557,461bytes SHA 불변이다. [원본·검증 기록](../../tmp/document-retention-repair-20261024/)에 원 소스6개, 기준 SHA, 과거 실패 재현과 회귀 시도별 결과를 보존한다. 원 archive helper SHA는 `a691cb26ed593ef5267460b35177bf2a864c08dd0547266f84e22fcde88324db`다.
+- 실제 census는1,343문서/64,832,381bytes와 연결 Markdown306경로(부재 경로 포함)를 검토했다. 최초 약3.48초, 변경 재확인 약0.13초이며 삭제마다 본문 전체를 다시 읽지 않는다. 수치는 문서 추가 전 실측이며 resource limit을 올리지 않았다.
+- 확장 점검의 `test_snapshot_archive.py::test_legacy_gzip_with_sidecar_retains_original_bounded_snapshot_contract`는 `valid_empty` 기대에 `source_gap`으로 실패했다. 변경 전 retention 모듈로도 동일 실패(그 파일21 PASS/1 FAIL)를 재현했고 snapshot test/owner, log_archive_service, research_storage bytes가 기준 commit과 같음을 확인했다. 이 gzip/sidecar 의미 계약은 이번 링크 수리 범위 밖의 기존 실패로 보존하며 전체 회귀 GREEN이나 다음 실제 기동 수용으로 합산하지 않는다.
+
+교체/제거 대사: 문자열 전용 본문 스캔은 `DocumentReferences`로 **consolidated**, 기존 함수 이름은 archive 계획 검사의 실제 caller를 위해 같은 구현을 호출하도록 **retained**. archive inventory/verify/delete 구현은 기존 호출자와 원본 보존 계약으로 **retained**, 중복 새 wrapper/validator/보고서 producer/OPEN owner는 없다. 코드 변경은 기존 source owner의 참조 검사와 전파에 한정한다. 비테스트 source 신규 논리는 log_retention +169/-23, 기존 archive helper +16/-0이며255행의 최초 Git 편입은 신규 구현량과 구분한다. 테스트 +249/-1은 격리·회귀 추가다. 문서와 보관 증거는 별도이며 실제 배포·PREOPEN/PID 소비·자연 완주·경제성 수용은 이 검증으로 대체하지 않는다.
+
+최종 읽기 전용 대사: 선택 `7a962bbba703a1977b1ea68f7df85c9da6c9aae0`, source23→target26 native controller generation issues=[], prepared receipt/6개 물리 SHA·기동용 checklist가 전후 동일하고 Main 프로세스0이다. 변경 문서 로컬 링크304개 missing0/anchor 오류0, print-only backlog22개와10/26 단일 handoff owner 유지, Python3파일 compile 및 git diff --check PASS다. 원 strict/PASS 재생산·운영 selector 변경·재기동·외부 동기화는 수행하지 않았다.

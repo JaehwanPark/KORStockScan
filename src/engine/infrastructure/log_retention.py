@@ -10,18 +10,150 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 import fcntl
 import hashlib
+import html
 import json
 import os
 from pathlib import Path
 import math
+import re
 import stat
 import subprocess
 import time
 import uuid
+from urllib.parse import unquote, urlsplit
 
 SCHEMA = "closed_operational_log_v1"
 DAY = 86400
 MAX_METADATA = 1024 * 1024
+MAX_DOCUMENT_BYTES = 128 * 1024**2
+MAX_DOCUMENT_FILES = 20000
+
+# Include reference definitions and HTML links, even in examples: conservative
+# retention is preferable to discarding a cited original. Balanced parentheses
+# and Markdown escapes are allowed in ordinary destinations.
+_DESTINATION = r'(<[^>\n]+>|(?:\\.|[^\s()<>]|\([^\n()]*\))+)'
+_DOCUMENT_LINK = re.compile(
+    r'\]\(\s*' + _DESTINATION + r'|^\s{0,3}\[[^\]\n]+\]:\s*' + _DESTINATION
+    + r'|\b(?:href|src)=[\"\x27]([^\"\x27]+)[\"\x27]'
+    + r'|<((?:file://|/|\.\.?/)[^>\n]+)>', re.MULTILINE | re.IGNORECASE)
+
+
+class DocumentReferenceError(ValueError):
+    """An incomplete or changed document census cannot authorize deletion."""
+
+
+class DocumentReferences:
+    """One bounded text read per run; restat the full census before each unlink.
+
+    Covers repository-root Markdown and all docs (including archived checklists).
+    Document editing must be quiescent during deletion. An observed concurrent
+    change aborts the run; original archives remain the recovery authority.
+    """
+
+    def __init__(self, workspace):
+        self.workspace = Path(workspace).resolve()
+        self.inventory = self._inventory()
+        self.texts = []
+        self.targets = set()
+        self.aliases = {}
+        self.linked_documents = {}
+        total = 0
+        pending = [p for p, sig in self.inventory.items() if stat.S_ISREG(sig[-1])]
+        while pending:
+            path = pending.pop()
+            with path.open('rb') as handle:
+                raw = handle.read(MAX_DOCUMENT_BYTES - total + 1)
+            total += len(raw)
+            if total > MAX_DOCUMENT_BYTES:
+                raise DocumentReferenceError('document_reference_scan_limit')
+            text = raw.decode('utf-8', errors='strict')
+            self.texts.append(unquote(html.unescape(text)))
+            for match in _DOCUMENT_LINK.finditer(text):
+                token = next(part for part in match.groups() if part is not None)
+                token = re.sub(r'\\([!"#$%&\x27()*+,\-./:;<=>?@\[\]\\^_`{|}~])', r'\1', token.strip('<>'))
+                url = urlsplit(html.unescape(token))
+                if url.scheme not in ('', 'file') or url.netloc not in ('', 'localhost') or not url.path:
+                    continue
+                target = Path(re.sub(r':\d+(?::\d+)?$', '', unquote(url.path)))
+                target = Path(os.path.abspath(target if target.is_absolute() else path.parent/target))
+                resolved = target.resolve()
+                self.targets.update((target, resolved))
+                self.aliases[target] = resolved
+                # A recovered directory index is itself a document consumer.
+                # Preserve its archive/manifest links, not only the small index.
+                if (resolved.suffix.lower() == '.md' and resolved not in self.inventory
+                        and resolved not in self.linked_documents):
+                    sig = self._linked_signature(resolved)
+                    self.linked_documents[resolved] = sig
+                    if len(self.inventory) + len(self.linked_documents) > MAX_DOCUMENT_FILES:
+                        raise DocumentReferenceError('document_reference_scan_limit')
+                    if sig is not None and stat.S_ISREG(sig[-1]):
+                        pending.append(resolved)
+        self.bytes_read = total
+        self.assert_unchanged()
+
+    def _inventory(self):
+        docs = self.workspace/'docs'
+        if not docs.is_dir() or docs.is_symlink():
+            raise DocumentReferenceError('document_reference_root_missing_or_symlink')
+        paths = [self.workspace, docs]
+        paths.extend(p for p in self.workspace.iterdir() if p.suffix.lower() == '.md')
+        def fail(error):
+            raise error
+        for parent, dirs, names in os.walk(docs, followlinks=False, onerror=fail):
+            paths.extend(Path(parent)/name for name in dirs)
+            paths.extend(Path(parent)/name for name in names if Path(name).suffix.lower() == '.md')
+            if len(paths) > MAX_DOCUMENT_FILES:
+                raise DocumentReferenceError('document_reference_scan_limit')
+        result = {}
+        for path in paths:
+            s = path.lstat()
+            if not (stat.S_ISREG(s.st_mode) or stat.S_ISDIR(s.st_mode)):
+                raise DocumentReferenceError('document_reference_symlink_or_special')
+            result[path] = (s.st_dev, s.st_ino, s.st_size, s.st_mtime_ns, s.st_ctime_ns, s.st_mode)
+        return result
+
+    @staticmethod
+    def _linked_signature(path):
+        try:
+            s = path.lstat()
+        except FileNotFoundError:
+            return None
+        if not (stat.S_ISREG(s.st_mode) or stat.S_ISDIR(s.st_mode)):
+            raise DocumentReferenceError('document_reference_symlink_or_special')
+        return (s.st_dev, s.st_ino, s.st_size, s.st_mtime_ns, s.st_ctime_ns, s.st_mode)
+
+    def assert_unchanged(self):
+        if self._inventory() != self.inventory:
+            raise DocumentReferenceError('document_references_changed')
+        if any(self._linked_signature(path) != sig for path, sig in self.linked_documents.items()):
+            raise DocumentReferenceError('linked_document_references_changed')
+        # Alias targets can change without a Markdown edit.
+        if any(target.resolve() != resolved for target, resolved in self.aliases.items()):
+            raise DocumentReferenceError('document_reference_alias_changed')
+
+    def references(self, names):
+        referenced = set()
+        for name in names:
+            name = str(name)
+            if not name:
+                raise DocumentReferenceError('document_reference_empty_candidate')
+            candidate = Path(name)
+            if any(name in text for text in self.texts):
+                referenced.add(name)
+            if candidate.is_absolute() or len(candidate.parts) > 1:
+                candidate = self.workspace/candidate
+                for identity in (Path(os.path.abspath(candidate)), candidate.resolve()):
+                    if any(target == identity or identity in target.parents or target in identity.parents
+                           for target in self.targets):
+                        referenced.add(name)
+        return referenced
+
+    def require_unreferenced(self, names):
+        self.assert_unchanged()
+        refs = self.references(names)
+        if refs:
+            raise DocumentReferenceError('document_reference_preserved:' + ','.join(sorted(refs)))
 
 
 def digest(path):
@@ -171,17 +303,7 @@ def retention_pins(workspace):
 
 
 def document_references(workspace, names):
-    """Bounded current document scan; overflow protects the entire collection."""
-    referenced = set(); total = 0
-    for path in (Path(workspace) / "docs").rglob("*.md"):
-        if path.is_symlink():
-            raise ValueError("document_reference_symlink")
-        total += path.stat().st_size
-        if total > 128*1024**2:
-            raise ValueError("document_reference_scan_limit")
-        raw = path.read_text(errors="strict")
-        referenced.update(name for name in names if name in raw)
-    return referenced
+    return DocumentReferences(workspace).references(names)
 
 
 def maintain_logs(workspace, *, apply=False, now=None, time_budget=20):
@@ -218,8 +340,9 @@ def maintain_logs(workspace, *, apply=False, now=None, time_budget=20):
                 rows.append((meta, r, p))
             except (OSError, ValueError, KeyError) as exc:
                 report["errors"].append(dict(path=str(meta), reason=str(exc)))
-        refs = document_references(workspace, {p.name for _, _, p in rows})
-        opened = open_owned_inodes(); grouped = {}
+        documents = None
+        opened = None
+        grouped = {}
         for meta, r, p in rows:
             grouped.setdefault(r["active_path"], []).append((meta, r, p))
         for owner_rows in grouped.values():
@@ -231,18 +354,29 @@ def maintain_logs(workspace, *, apply=False, now=None, time_budget=20):
                     if sig != r["signature"]:
                         raise ValueError("generation_changed")
                     kept_bytes += sig[2]
+                    expired = now-r["closed_at"] > int(r["retention_days"])*DAY
+                    over_limit = index >= int(r["max_generations"]) or kept_bytes > int(r["max_owner_bytes"])
+                    if not expired and not over_limit:
+                        report["retained_bytes"] += sig[2]
+                        continue
+                    if documents is None:
+                        try:
+                            proposed_documents = DocumentReferences(workspace)
+                            proposed_opened = open_owned_inodes()
+                        except (OSError, ValueError, subprocess.SubprocessError) as exc:
+                            report["errors"].append(dict(path=str(p), reason=str(exc)))
+                            report["status"] = "failed"
+                            return report
+                        documents, opened = proposed_documents, proposed_opened
+                    refs = documents.references({str(p), p.name})
                     reason = None
                     if time.monotonic()-started >= time_budget:
                         reason = "time_budget"
                     elif (sig[0], sig[1]) in opened:
                         reason = "open_inode"
                     elif (str(p) in pins or p.name in pins or r.get("source_sha256") in pins
-                          or r.get("archive_sha256") in pins or p.name in refs):
+                          or r.get("archive_sha256") in pins or p.name in refs or str(p) in refs):
                         reason = "pinned_or_referenced"
-                    expired = now-r["closed_at"] > int(r["retention_days"])*DAY
-                    over_limit = index >= int(r["max_generations"]) or kept_bytes > int(r["max_owner_bytes"])
-                    if not expired and not over_limit:
-                        reason = reason or "within_retention"
                     if reason:
                         report["retained_bytes"] += sig[2]
                         if reason != "within_retention":
@@ -259,10 +393,13 @@ def maintain_logs(workspace, *, apply=False, now=None, time_budget=20):
                             raise ValueError("generation_changed_or_opened")
                         # Persist intent before unlink; restart can reconcile a
                         # completed deletion without inventing a new generation.
-                        if retention_pins(workspace) != pins or document_references(workspace, {p.name}):
+                        if retention_pins(workspace) != pins:
                             raise ValueError('retention_authority_changed')
+                        documents.require_unreferenced({str(p), p.name})
                         atomic_json(meta, dict(r, state='delete_pending', delete_started_at=now))
+                        documents.assert_unchanged()
                         p.unlink()
+                        documents.assert_unchanged()
                         atomic_json(meta, dict(r, state="deleted", deleted_at=now,
                                                deletion_reason="expired" if expired else "owner_capacity"))
                     report["deleted"] += 1; report["deleted_bytes"] += sig[2]
@@ -315,8 +452,9 @@ def _maintain_tmp_locked(workspace, *, apply=False, now=None, time_budget=10):
     except (OSError, ValueError, IndexError, subprocess.SubprocessError):
         report['capacity_inventory_complete'] = False
     report.update(total_bytes=total, capacity_warning=total > report["limit_bytes"], file_count=count)
-    refs = document_references(workspace, {str(p.parent.relative_to(workspace)) for p in manifests})
-    opened = open_owned_inodes()
+    documents = DocumentReferences(workspace) if manifests else None
+    refs = documents.references({str(p.parent.relative_to(workspace)) for p in manifests}) if documents else set()
+    opened = open_owned_inodes() if manifests else set()
     for manifest in manifests:
         try:
             r = read_json(manifest)
@@ -363,11 +501,13 @@ def _maintain_tmp_locked(workspace, *, apply=False, now=None, time_budget=10):
                         break
                     if signature(p) != sig or (sig[0],sig[1]) in open_owned_inodes():
                         raise ValueError("tmp_changed_before_delete")
-                    if (retention_pins(workspace) != pins or document_references(workspace,
-                            {p.name, str(manifest.parent.relative_to(workspace))})):
+                    if retention_pins(workspace) != pins:
                         raise ValueError('tmp_retention_authority_changed')
+                    documents.require_unreferenced({str(p), p.name, str(manifest.parent.relative_to(workspace))})
                     atomic_json(manifest, dict(r, deleted_files=deleted, delete_pending=p.name))
+                    documents.assert_unchanged()
                     p.unlink()
+                    documents.assert_unchanged()
                     deleted[p.name] = files[p.name]
                     atomic_json(manifest, dict(r, deleted_files=deleted, delete_pending=None))
                     report['deleted'] += 1
@@ -378,6 +518,10 @@ def _maintain_tmp_locked(workspace, *, apply=False, now=None, time_budget=10):
             else:
                 report['deleted'] += len(verified)
                 report['deleted_bytes'] += sum(s[2] for _,s in verified)
+        except DocumentReferenceError as exc:
+            report['errors'].append(dict(path=str(manifest), reason=str(exc)))
+            report['status'] = 'failed'
+            break
         except (OSError, ValueError, KeyError) as exc:
             report['deferred'].append(dict(path=str(manifest), reason=str(exc)))
     state = workspace / "data/report/log_retention/tmp_capacity.json"
@@ -449,6 +593,8 @@ def main(argv=None):
         result = maintain_logs(args.workspace, apply=args.apply)
         if args.include_tmp:
             result['tmp'] = maintain_tmp(args.workspace, apply=args.apply)
+            if result['tmp']['status'] != 'complete':
+                result['status'] = 'failed'
         if args.include_metrics:
             result['metrics'] = prune_metrics(args.workspace, apply=args.apply)
     except (OSError, ValueError, subprocess.SubprocessError) as exc:
