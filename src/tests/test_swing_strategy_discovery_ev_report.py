@@ -1,6 +1,6 @@
 import json
 import os
-from datetime import date
+from datetime import date, timedelta
 
 import pytest
 from sqlalchemy import create_engine
@@ -41,12 +41,17 @@ def _setup_test_db():
     return db_url, sessionmaker(bind=engine)
 
 
+@pytest.fixture
+def clean_source_date():
+    return date.fromisoformat(mod.clean_baseline_policy()["clean_tuning_baseline_date"])
+
+
 def _seed_labeled_arm(
     session,
     idx: int,
     *,
     ret: float,
-    source_date=date(2026, 5, 1),
+    source_date: date,
     selection_arm="lifecycle_rank",
     stop_touch_outcome_bucket="no_touch",
     entry_position_opportunity_bucket="neutral_location_observation",
@@ -135,15 +140,23 @@ def _seed_labeled_arm(
     )
 
 
-def test_ev_report_aggregates_surviving_arms_and_contract(tmp_path):
+def test_ev_report_aggregates_surviving_arms_and_contract(clean_source_date):
     db_url, Session = _setup_test_db()
     with Session.begin() as session:
         for idx, ret in enumerate([1.0, 2.0, 1.5, 0.5, 3.0, -0.2], start=1):
-            _seed_labeled_arm(session, idx, ret=ret)
-        _seed_labeled_arm(session, 20, ret=-2.0, selection_arm="legacy_ml")
+            _seed_labeled_arm(session, idx, ret=ret, source_date=clean_source_date)
+        _seed_labeled_arm(
+            session,
+            20,
+            ret=-2.0,
+            source_date=clean_source_date,
+            selection_arm="legacy_ml",
+        )
 
     report = mod.build_swing_strategy_discovery_ev_report(
-        "2026-05-20", db_url=db_url, lookback_days=30
+        (clean_source_date + timedelta(days=19)).isoformat(),
+        db_url=db_url,
+        lookback_days=30,
     )
 
     assert report["runtime_effect"] is False
@@ -163,7 +176,7 @@ def test_ev_report_aggregates_surviving_arms_and_contract(tmp_path):
     assert report["source_quality_summary"]["runtime_effect"] is False
 
 
-def test_ev_report_adds_source_only_morning_turbulence_analysis(tmp_path):
+def test_ev_report_adds_source_only_morning_turbulence_analysis(clean_source_date):
     db_url, Session = _setup_test_db()
     with Session.begin() as session:
         for idx, ret in enumerate([1.0, 0.5, -0.2, 1.2, 0.8], start=1):
@@ -171,6 +184,7 @@ def test_ev_report_adds_source_only_morning_turbulence_analysis(tmp_path):
                 session,
                 idx,
                 ret=ret,
+                source_date=clean_source_date,
                 stop_touch_outcome_bucket="wick_stop_recovered_close_above_stop",
                 entry_position_opportunity_bucket="pullback_retest_observation",
             )
@@ -178,12 +192,15 @@ def test_ev_report_adds_source_only_morning_turbulence_analysis(tmp_path):
             session,
             10,
             ret=-3.2,
+            source_date=clean_source_date,
             stop_touch_outcome_bucket="close_below_stop",
             entry_position_opportunity_bucket="invalidation_observation",
         )
 
     report = mod.build_swing_strategy_discovery_ev_report(
-        "2026-05-20", db_url=db_url, lookback_days=30
+        (clean_source_date + timedelta(days=19)).isoformat(),
+        db_url=db_url,
+        lookback_days=30,
     )
     analysis = report["morning_turbulence_analysis"]
     contract = analysis["metric_contract"]
@@ -215,21 +232,31 @@ def test_ev_report_adds_source_only_morning_turbulence_analysis(tmp_path):
     assert opportunity_rows["invalidation_observation"]["sample_count"] == 1
 
 
-def test_ev_report_clean_baseline_filters_pre_baseline_discovery_rows(tmp_path):
+def test_ev_report_clean_baseline_filters_pre_baseline_discovery_rows(
+    clean_source_date,
+):
     db_url, Session = _setup_test_db()
     with Session.begin() as session:
-        _seed_labeled_arm(session, 1, ret=-10.0, source_date=date(2026, 5, 20))
-        _seed_labeled_arm(session, 2, ret=2.0, source_date=date(2026, 6, 4))
+        _seed_labeled_arm(
+            session, 1, ret=-10.0, source_date=clean_source_date - timedelta(days=1)
+        )
+        _seed_labeled_arm(session, 2, ret=2.0, source_date=clean_source_date)
 
     report = mod.build_swing_strategy_discovery_ev_report(
-        "2026-06-04", db_url=db_url, lookback_days=90
+        clean_source_date.isoformat(), db_url=db_url, lookback_days=90
     )
 
     assert report["summary"]["labeled_sample_count"] == 1
     assert report["summary"]["candidate_count"] == 1
     assert report["clean_tuning_baseline"]["filter_active"] is True
-    assert report["clean_tuning_baseline"]["requested_start_date"] == "2026-03-06"
-    assert report["clean_tuning_baseline"]["effective_start_date"] == "2026-06-04"
+    assert (
+        report["clean_tuning_baseline"]["requested_start_date"]
+        == (clean_source_date - timedelta(days=90)).isoformat()
+    )
+    assert (
+        report["clean_tuning_baseline"]["effective_start_date"]
+        == clean_source_date.isoformat()
+    )
     assert (
         "clean_tuning_baseline_swing_discovery_lookback_filtered" in report["warnings"]
     )
