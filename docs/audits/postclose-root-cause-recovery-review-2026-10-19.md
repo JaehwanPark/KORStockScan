@@ -3131,3 +3131,28 @@ CI의 Black 형식 검사는 기능 회귀와 별개다. 보존한 main 원본 �
 **작업별 커밋.** 수집 경계 `cba77cf52`, 퇴역 회귀 `78bfac3d7`, schema 기대값 `aed5ea0e5`, 형식 및 exact 계약 이관 `2f1182f33`으로 분리했다. 마지막 감사/운영 문서 커밋과 원격 HEAD는 [커밋 명세](../../tmp/quality-gates-repair-20261024/clean-commits.json)·게시 영수증에서 확인한다. Project/Calendar push-trigger를 실행하지 않기 위해 source branch에서 Black CI를 먼저 확인하고, 최종 문서만 추가한 main 게시에는 `[skip ci]`를 사용한다. 이는 테스트 성공을 대신하는 표시가 아니며 원격 CI 결과는 source commit에 귀속한다.
 
 소스 commit `2f1182f33`의 [원격 Black CI](https://github.com/JaehwanPark/KORStockScan/actions/runs/40068092616)는 SUCCESS다. [CI 영수증](../../tmp/quality-gates-repair-20261024/black-ci-result.json)에서 exact head를 확인했다. 최종 문서 커밋은 이 source와 같은 Python 바이트를 유지한다.
+
+### 2026-10-24 — 전체 33,296건 실행 및 잔여 실패 원인 수리
+
+**결정과 범위.** 사용자가 승인한 전체 테스트 실행·원인 수리·코드리뷰·작업별 클린 커밋·푸시를 수행했다. 기준 main은 `427055368c2bec15869a690bd99850e8bdc76787`, 검토한 최종 소스는 `75fd2c486`이다. 운영 코드는 수정하지 않았고 테스트 27개 파일의 격리·현재 계약·역사 원천 fixture를 수리했다. 운영 릴리스 선택·재생성·재기동·provider/order 호출·외부 Project/Calendar 동기화는 수행하지 않았다. 10/24 일일 체크리스트가 없어 이전 날짜를 현재 계약으로 대체하지 않았으며, strict에 묶인 10/26 체크리스트와 기존 `DirectFamilyPreopenPolicyHandoff` owner를 보존했다.
+
+**전체 실행과 최종 대사.** 원래 수집된 33,296개 고유 ID를 세 분할과 미완료 ID의 두 후속 분할로 모두 처리했다. 첫 진단 실행의 10,557 PASS·34 FAIL·1 SKIP 및 중단 기록도 유지했다. 전체 분할의 원 결과는 33,196 PASS·48 FAIL·52 SKIP이다. 두 분할에서 전역 `open`/시각 mock이 결과 기록기에 영향을 주어 중단됐으며, 완료된 case는 재사용하고 미완료 3,662건만 이어서 실행했다. 기록기의 실제 IO/시각 함수를 고정하고 테스트 mock을 검사 대상에 한정했다. 원 JUnit 부재/차이와 중단 단계는 [전체 ID 대사](../../tmp/full-suite-repair-20261024/full-suite-final.json)에 명시했다. 한 번의 무중단 green 실행으로 표시하지 않는다.
+
+수리 후 원래 33,296건의 최종 결과는 **33,271 PASS·25 SKIP·실패 0·미실행 0**이다. 기존 parameter ID를 유지하며 추가한 시장상태 원천 부재 음성 회귀 1건을 포함하면 현재 수집은 **33,297건, 33,272 PASS·25 SKIP**이다. SKIP은 기존 퇴역 ADM/LDM fixture 18건과 실 provider/account 호출을 요구하는 기존 7건뿐이다. 역사 증거 부재 17건과 DB 미설정 10건은 정확한 원본 및 격리 DB를 제공해 실행 완료했다. 수정 모듈 통합 실행 1,109 PASS·21 SKIP의 DB 3건도 안전한 테스트 DB 이름을 지정한 후속 24건 전체 PASS로 대사했다. 원형과 변경 ID는 [이름 이관 명세](../../tmp/full-suite-repair-20261024/node-renames.json), 실행 원문·이벤트·JUnit·SHA는 [보존 결과 디렉터리](../../tmp/full-suite-repair-20261024/test-results)에 있다.
+
+| 최초 깨진 계약 | 수정 및 재발 방지 | 제거·유지 근거 |
+| --- | --- | --- |
+| constants 재로드가 격리 경로/객체를 유출하고 임시 SQLite writer·checkpoint가 삭제된 경로를 재사용 | 원 module namespace 복원, 해당 test 경로의 native 자원만 lock 아래 해제 | 운영 writer와 공유 경로는 유지; test 수명 누수 제거 |
+| fault injector가 실제 keyword를 받지 못해 의도한 변조 전에 TypeError; 캐시 검사가 필수 pointer 읽기까지 금지 | 정확한 keyword·변조 발생·원인 예외 검증; pointer 읽기와 전체 검증 재사용을 분리 | 세대 변경·stale·변조 음성 검증 유지 |
+| 퇴역 publisher·PYRAMID·구 scale-in window·구 verifier API를 테스트가 호출 | 퇴역 무출력/무주문/수량 0, 현 ADD_REBOUND guard, 유지된 reader와 실제 source-date gate로 이관 | 예전 실행 기대와 계산 fixture 제거; 퇴역 authority 복구 없음 |
+| 실제 허용 metadata import·stage 순서 및 Black 이후 AST/문자열 계약 불일치 | 정확한 import/call AST와 native stage 순서를 검증; nested docstring의 의미 동일성을 불변 Git 원본과 먼저 대사 | Main loop/startup 원 golden hash와 나머지 literal/scope 유지 |
+| source fixture가 clean 경계 전 날짜·잘못된 디렉터리·격리 data cwd 사용 | native clean 날짜와 pre-baseline 제외, pipeline archive 영수증 경로, 실제 Git root 사용 | 경제·원천 guard 완화 없음; 전체 파일 세대로 inode 재사용 오판 방지 |
+| 현재 정책 pointer·변환된 파일·불완전 kernel revision으로 역사 replay | 원 sealed SHA와 동일한 archive/Git bytes, private dated policy root, 정확한 negative reason | 원 census/정책/해시 보존; 새 holdout·경제 증거로 승격하지 않음 |
+| 빈 Swing source에도 승인 ID 기대, submit 완료 관측 누락 | 실제 정책 입력만 승인, broker acceptance=false인 terminal observer까지 검증 | 원천 없는 승인 제거; 관측과 주문 authority 구분 |
+| Telegram test가 운영 config에 의존, WS test가 시각만으로 정상 공백 기대 | 명시적 offline config 및 native 0s receipt, receipt 부재·만료·route 충돌 회귀 | 운영 비밀값 접근 없음; stale/연결/구독 실패 guard 유지 |
+
+**리뷰와 검증.** 구현→자체 리뷰→보완→재리뷰 후 회귀를 실행했다. [원인·대체/제거 리뷰](../../tmp/full-suite-repair-20261024/final-review.json)에 15개 원인군과 현재 소비자를 기록했다. 추가 리뷰에서 generic ValueError로 다른 원인까지 통과하던 역사 음성 검사를 구체화했고, inode 단독 writer mock과 직접 probe/submit observer 구분을 수정했다. 관련 회귀 423 PASS·18 기존 SKIP, WS 및 소비자 167 PASS, 역사 실제 intake 59 PASS, 격리 DB 24 PASS를 포함한다. 전체 ID 대사는 모든 실패 시도를 최종 PASS와 연결한다. [형식·compile](../../tmp/full-suite-repair-20261024/final-format-compile.json), [문서 검증](../../tmp/full-suite-repair-20261024/document-validation.json), `git diff --check`, print-only backlog parser를 검증했다. 기존 pandas 의존성의 deprecation warning은 실패가 아니며 패키지를 변경하지 않았다.
+
+**원본과 운영 계약.** 원본 2,749개 파일을 [SHA 명세](../../tmp/full-suite-repair-20261024/original-source-manifest.json)와 [무결성 검증](../../tmp/full-suite-repair-20261024/original-archive-verification.json)에 따라 보존했다. 역사 입력은 [복원 근거](../../tmp/full-suite-repair-20261024/historical-restoration.json)·[10개 manifest 원 bytes 복원](../../tmp/full-suite-repair-20261024/historical-manifest-byte-recovery.json)·[원본 149개 보존 대사](../../tmp/full-suite-repair-20261024/historical-original-preservation.json)를 연결한다. 압축 전 manifest는 기존 sealed SHA에 일치하는 원 bytes만 인정했고, 운영 원본을 편집하거나 seal을 재발급하지 않았다. [작업 전](../../tmp/full-suite-repair-20261024/startup-before.json)과 [작업 후](../../tmp/full-suite-repair-20261024/startup-after.json)의 native 준비 판독 결과가 동일하며, [최종 보존 대사](../../tmp/full-suite-repair-20261024/preservation-final.json)는 선택본 source 1,313개·selector·준비 binding·strict 체크리스트 보존과 Main 정지를 확인한다.
+
+**게시와 남은 경계.** [작업별 커밋](../../tmp/full-suite-repair-20261024/clean-commits.json)·[변경량](../../tmp/full-suite-repair-20261024/source-growth-reviewed.json)·[원격 게시 영수증](../../tmp/full-suite-repair-20261024/publication-receipt.json)에 exact commit을 기록한다. 테스트 변경은 +556/-522, 순증 34줄이며 운영 source·새 runtime module/entrypoint·이동은 0이다. 역사 복원과 격리 fixture 보강이 순증 이유이고, 오래된 실행 기대와 중복 검사는 제거했다. 현재 source 수리에 deferred removal은 없다. 다음 실제 Main PID 소비와 수동 보정 없는 장후 완주는 기존 10/26 owner의 자연 검증 항목으로 남으며, 이 작업의 회귀·준비 증거로 닫지 않는다. 추가 배포·재기동은 이번 범위에 포함되지 않는다.
