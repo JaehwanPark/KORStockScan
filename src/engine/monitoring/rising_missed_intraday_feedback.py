@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import gzip
 import io
 import hashlib
 import json
+import math
 import os
 import pickle
 import tempfile
@@ -20,6 +22,9 @@ from src.engine.monitoring.entry_turn_point_replay import (
     load_verified_symbol_master as load_entry_turn_verified_symbol_master,
 )
 from src.trading.market.comparison_cost import comparison_cost_contract
+from src.engine.scalping.micro_reversion.contracts import (
+    registration_item_market_data_identity,
+)
 from src.engine.scalping.risky_micro_episode import (
     POLICY_VERSION as RISKY_MICRO_POLICY_VERSION,
     PRIMARY_ENTRY_PROFILE as RISKY_MICRO_PRIMARY_ENTRY_PROFILE,
@@ -286,6 +291,8 @@ TP1_LABEL_PROJECTION_FIELD_KEYS = frozenset(
         "market_session_bucket",
         "market_session_regime",
         "market_data_route",
+        "input_quote_source_receipt",
+        "market_data_health",
         "mark_price_at_submit",
         "market_data_effective_price_source",
         "market_data_effective_best_ask",
@@ -532,12 +539,152 @@ def _tp1_quantity_source(fields):
         return None
 
 
+def _quote_receipt_mapping(value: Any) -> dict[str, Any]:
+    """Read native JSON and the historical journal's Python mapping encoding."""
+
+    if isinstance(value, dict):
+        return value
+    if not isinstance(value, str) or len(value) > 65536:
+        return {}
+    try:
+        result = json.loads(value)
+    except (ValueError, RecursionError):
+        try:
+            result = ast.literal_eval(value)
+        except (ValueError, SyntaxError, RecursionError):
+            return {}
+    return result if isinstance(result, dict) else {}
+
+
+def _native_quote_context(row: dict[str, Any]) -> dict[str, Any] | None:
+    """Bind an adopted WS quote to its native clock, identity and health budget.
+
+    Absence denotes the historical field-only reader, not verified freshness.
+    Present but invalid proof must never fall back to that historical reader.
+    """
+
+    fields = _fields(row)
+    if not any(
+        key in fields for key in ("input_quote_source_receipt", "market_data_health")
+    ):
+        return None
+    receipt = _quote_receipt_mapping(fields.get("input_quote_source_receipt"))
+    health = _quote_receipt_mapping(fields.get("market_data_health"))
+    context = {"receipt": receipt, "reason": "native_quote_identity_unverified"}
+    symbol, route, _ = registration_item_market_data_identity(receipt.get("item"))
+    explicit_route = str(fields.get("market_data_route") or "").strip().lower()
+    if (
+        not symbol
+        or symbol != _event_code(row)
+        or receipt.get("market_route") != route
+        or (explicit_route and explicit_route != route)
+        or str(receipt.get("source_type") or "") not in {"0D", "0B"}
+        or type(receipt.get("transport_epoch")) is not int
+        or type(receipt.get("route_sequence")) is not int
+        or receipt["transport_epoch"] <= 0
+        or receipt["route_sequence"] < 0
+    ):
+        return context
+    stamp = _safe_float(receipt.get("observed_epoch"))
+    as_of = _safe_float(health.get("as_of_epoch"))
+    max_age = _safe_float(health.get("quote_max_age_ms"))
+    event_ts = _parse_ts(_event_ts(row))
+    if (
+        event_ts is None
+        or any(
+            value is None or not math.isfinite(value) or value <= 0
+            for value in (stamp, as_of, max_age)
+        )
+        or health.get("schema") != "kiwoom_market_data_health_v1"
+        or any(
+            isinstance(value, bool)
+            for value in (
+                receipt.get("observed_epoch"),
+                health.get("as_of_epoch"),
+                health.get("quote_max_age_ms"),
+            )
+        )
+        or not stamp <= as_of <= event_ts.timestamp()
+        or not 0 <= (event_ts.timestamp() - stamp) * 1000 <= max_age
+    ):
+        context["reason"] = "native_quote_clock_missing_stale_or_future"
+        return context
+    routes = health.get("routes")
+    matching = (
+        [
+            item
+            for item in routes.values()
+            if isinstance(item, dict)
+            and item.get("item") == receipt.get("item")
+            and item.get("market_route") == route
+            and item.get("transport_epoch") == receipt.get("transport_epoch")
+        ]
+        if isinstance(routes, dict)
+        else []
+    )
+    if len(matching) != 1 or matching[0].get("quote_state") != "fresh":
+        context["reason"] = "native_quote_health_unverified"
+        return context
+    context.update(
+        reason="",
+        session=_tp1_market_axes(fields)["market_session_bucket"],
+        decision_scope=_tp1_effective_venue(fields),
+    )
+    return context
+
+
+def _native_quote_followup_reason(
+    anchor: dict[str, Any] | None,
+    observation: dict[str, Any] | None,
+    *,
+    anchor_ts: datetime | None,
+    seen: set[tuple[float, int]],
+) -> str:
+    if anchor is None and observation is None:
+        return ""
+    if not anchor or not observation or anchor["reason"] or observation["reason"]:
+        return "source_gap"
+    before, after = anchor["receipt"], observation["receipt"]
+    if (
+        any(
+            before.get(key) != after.get(key)
+            for key in ("item", "market_route", "transport_epoch")
+        )
+        or anchor.get("session") in {None, "unknown"}
+        or anchor.get("session") != observation.get("session")
+        or anchor.get("decision_scope") in {None, "unknown"}
+        or anchor.get("decision_scope") != observation.get("decision_scope")
+    ):
+        return "scope_mismatch"
+    identity = (float(after["observed_epoch"]), after["route_sequence"])
+    if (
+        anchor_ts is None
+        or identity[0] <= anchor_ts.timestamp()
+        or identity[1] <= before["route_sequence"]
+        or (
+            seen
+            and any(
+                identity[0] <= prior[0] or identity[1] <= prior[1] for prior in seen
+            )
+        )
+    ):
+        return "repeated_or_nonfuture_quote"
+    # A monotone source cursor rejects duplicates and reordered evidence in
+    # constant space; repeated decision rows must not grow the sample set.
+    seen.clear()
+    seen.add(identity)
+    return ""
+
+
 def _event_executable_bbo(
     row: dict[str, Any],
 ) -> tuple[float | None, float | None, str]:
-    """Return a validated executable top of book without mark-price fallback."""
+    """Read BBO prices, enforcing native receipt proof whenever it is present."""
 
     fields = _fields(row)
+    native = _native_quote_context(row)
+    if native is not None and native["reason"]:
+        return None, None, native["reason"]
     candidates = (
         (
             "market_data_effective_bbo",
@@ -579,7 +726,19 @@ def _event_executable_bbo(
     for source, bid_key, ask_key in candidates:
         bid = _safe_float(fields.get(bid_key))
         ask = _safe_float(fields.get(ask_key))
-        if bid is not None and ask is not None and bid > 0 and ask >= bid:
+        if (
+            bid is not None
+            and ask is not None
+            and math.isfinite(bid)
+            and math.isfinite(ask)
+            and bid > 0
+            and ask >= bid
+        ):
+            if native is not None and (
+                bid != _safe_float(native["receipt"].get("best_bid"))
+                or ask != _safe_float(native["receipt"].get("best_ask"))
+            ):
+                return None, None, "native_quote_price_binding_invalid"
             return bid, ask, source
     return None, None, "missing_or_invalid_executable_bbo"
 
@@ -1595,7 +1754,8 @@ def _submit_safety_block_row(
     executable_bid, executable_ask, executable_bbo_source = _event_executable_bbo(row)
     predecessor_age_ms = None
     predecessor_stage = None
-    if executable_bid is None and predecessor_bbo is not None:
+    native_quote = _native_quote_context(row)
+    if executable_bid is None and predecessor_bbo is not None and native_quote is None:
         executable_bid = _safe_float(predecessor_bbo.get("bid"))
         executable_ask = _safe_float(predecessor_bbo.get("ask"))
         executable_bbo_source = str(
@@ -1659,6 +1819,10 @@ def _submit_safety_block_row(
             else "source_gap_missing_or_invalid"
         ),
         "executable_bbo_source": executable_bbo_source,
+        "executable_bbo_proof": (
+            "native_receipt" if native_quote is not None else "historical_field_only"
+        ),
+        "input_quote_source_receipt": native_quote["receipt"] if native_quote else None,
         "executable_bbo_predecessor_stage": predecessor_stage,
         "executable_bbo_predecessor_age_ms": predecessor_age_ms,
         "block_executable_best_bid": executable_bid,
@@ -1682,6 +1846,8 @@ def _submit_safety_block_row(
         "post_block_executable_bbo_source_gap_count": 0,
         "post_block_executable_bbo_venue_mismatch_count": 0,
         "post_block_executable_bbo_out_of_window_count": 0,
+        "post_block_executable_bbo_scope_mismatch_count": 0,
+        "post_block_executable_bbo_repeated_or_nonfuture_quote_count": 0,
         "post_block_first_hit": "not_observed",
         "post_block_first_hit_ts": None,
         "post_block_first_hit_elapsed_sec": None,
@@ -1897,7 +2063,8 @@ def _update_block_mfe_mae(
     if block.get("post_block_first_hit") != "not_observed":
         return
     if move_pct >= TP1_NET_TARGET_PCT:
-        first_hit = "net_target_first"
+        # This price-only diagnostic has no cost or completed-trade receipt.
+        first_hit = "gross_target_first"
     elif move_pct <= TP1_ADVERSE_STOP_PCT:
         first_hit = "adverse_stop_first"
     else:
@@ -2146,7 +2313,7 @@ def _update_dynamic_age_post_apply_row(
         )
     if item.get("first_hit") == "not_observed":
         if move_pct >= TP1_NET_TARGET_PCT:
-            first_hit = "net_target_first"
+            first_hit = "gross_target_first"
         elif move_pct <= TP1_ADVERSE_STOP_PCT:
             first_hit = "adverse_stop_first"
         else:
@@ -2177,7 +2344,11 @@ def _build_submit_safety_and_backoff_audit(
     latest_seen_ts: datetime | None = None
     dynamic_age_rows_by_trace: dict[str, dict[str, Any]] = {}
     open_dynamic_age_rows_by_code: dict[str, list[dict[str, Any]]] = {}
+    dynamic_quote_context: dict[int, dict[str, Any] | None] = {}
+    dynamic_seen_quotes: dict[int, set[tuple[float, int]]] = {}
     recent_executable_bbo_by_record: dict[str, dict[str, Any]] = {}
+    block_quote_context: dict[int, dict[str, Any] | None] = {}
+    block_seen_quotes: dict[int, set[tuple[float, int]]] = {}
 
     for row in _pipeline_rows(pipeline_path):
         code = _event_code(row)
@@ -2196,8 +2367,18 @@ def _build_submit_safety_and_backoff_audit(
             row
         )
         delta = _event_delta_pct(row)
+        quote_context = _native_quote_context(row)
 
         for item in open_dynamic_age_rows_by_code.get(code, []):
+            if executable_bid is None:
+                continue
+            if _native_quote_followup_reason(
+                dynamic_quote_context[id(item)],
+                quote_context,
+                anchor_ts=_parse_ts(item.get("ts")),
+                seen=dynamic_seen_quotes[id(item)],
+            ):
+                continue
             _update_dynamic_age_post_apply_row(
                 item,
                 observation_ts=parsed_ts,
@@ -2210,6 +2391,8 @@ def _build_submit_safety_and_backoff_audit(
             existing_dynamic_age = dynamic_age_rows_by_trace.get(trace_id)
             if existing_dynamic_age is None:
                 dynamic_age_rows_by_trace[trace_id] = dynamic_age_source
+                dynamic_quote_context[id(dynamic_age_source)] = quote_context
+                dynamic_seen_quotes[id(dynamic_age_source)] = set()
                 open_dynamic_age_rows_by_code.setdefault(code, []).append(
                     dynamic_age_source
                 )
@@ -2223,7 +2406,7 @@ def _build_submit_safety_and_backoff_audit(
             if block.get("counterfactual_requires_executable_bbo"):
                 block_ts = _parse_ts(block.get("ts"))
                 elapsed_sec = _compatible_elapsed_seconds(parsed_ts, block_ts)
-                if elapsed_sec is None or elapsed_sec < 0 or elapsed_sec > 3600.0:
+                if elapsed_sec is None or elapsed_sec <= 0 or elapsed_sec > 3600.0:
                     block["post_block_executable_bbo_out_of_window_count"] = (
                         _safe_int(
                             block.get("post_block_executable_bbo_out_of_window_count")
@@ -2249,13 +2432,29 @@ def _build_submit_safety_and_backoff_audit(
                         + 1
                     )
                     continue
+                join_reason = _native_quote_followup_reason(
+                    block_quote_context[id(block)],
+                    quote_context,
+                    anchor_ts=block_ts,
+                    seen=block_seen_quotes[id(block)],
+                )
+                if join_reason:
+                    key = f"post_block_executable_bbo_{join_reason}_count"
+                    block[key] = _safe_int(block.get(key)) + 1
+                    continue
                 block["post_block_executable_bbo_event_count"] = (
                     _safe_int(block.get("post_block_executable_bbo_event_count")) + 1
                 )
                 _update_block_mfe_mae(
                     block,
                     executable_bid,
-                    observation_ts=parsed_ts,
+                    observation_ts=(
+                        datetime.fromtimestamp(
+                            quote_context["receipt"]["observed_epoch"], tz=timezone.utc
+                        )
+                        if quote_context is not None
+                        else parsed_ts
+                    ),
                 )
             else:
                 _update_block_mfe_mae(
@@ -2320,6 +2519,10 @@ def _build_submit_safety_and_backoff_audit(
                     and str(recent_bbo.get("stage") or "")
                     in EXECUTABLE_BBO_PREDECESSOR_STAGES
                     and same_venue
+                    and recent_bbo.get("stock_code") == code
+                    and recent_bbo.get("native_quote_context") is None
+                    and quote_context is None
+                    and recent_bbo.get("market_axes") == _tp1_market_axes(fields)
                 ):
                     predecessor_bbo = {
                         **recent_bbo,
@@ -2330,6 +2533,8 @@ def _build_submit_safety_and_backoff_audit(
                 predecessor_bbo=predecessor_bbo,
             )
             submit_blocks.append(block)
+            block_quote_context[id(block)] = quote_context
+            block_seen_quotes[id(block)] = set()
             open_submit_blocks_by_code.setdefault(code, []).append(block)
             reason_counts[block["reason"]] += 1
             bucket_counts[block["blocker_bucket"]] += 1
@@ -2366,6 +2571,9 @@ def _build_submit_safety_and_backoff_audit(
                     "stage": stage,
                     "ts": parsed_ts,
                     "venue": _tp1_effective_venue(fields),
+                    "stock_code": code,
+                    "market_axes": _tp1_market_axes(fields),
+                    "native_quote_context": quote_context,
                 }
 
         if _is_backoff_event(row):
@@ -3362,13 +3570,21 @@ def _tp1_market_axes(fields: dict[str, Any]) -> dict[str, str]:
 
     decision_scope = _tp1_effective_venue(fields)
     route = str(fields.get("market_data_route") or "").strip().lower()
+    receipt = _quote_receipt_mapping(fields.get("input_quote_source_receipt"))
+    symbol, receipt_route, _ = registration_item_market_data_identity(
+        receipt.get("item")
+    )
+    if receipt:
+        if (
+            not symbol
+            or receipt.get("market_route") != receipt_route
+            or (route and route != receipt_route)
+        ):
+            route = "unknown"
+        else:
+            route = receipt_route
     if route not in {"krx_only", "nxt_only", "krx_nxt_integrated"}:
-        route = {
-            "KRX": "krx_only",
-            "NXT": "nxt_only",
-            "KRX_NXT_INTEGRATED": "krx_nxt_integrated",
-            "PREMARKET_KRX_LIKE": "krx_only",
-        }.get(decision_scope, "unknown")
+        route = "unknown"
     session_regime = str(fields.get("market_session_regime") or "").strip()
     session_bucket = str(
         fields.get("rising_missed_market_session_bucket")
@@ -3480,6 +3696,8 @@ def _tp1_post_block_horizon_measurements(
     first_boundary_label: str | None = None
 
     observation_rows: list[tuple[datetime, int, dict[str, Any]]] = []
+    anchor_quote_context = _native_quote_context(events[start_index])
+    seen_quotes: set[tuple[float, int]] = set()
     for position, subsequent in enumerate(events[start_index + 1 :], start_index + 1):
         if _event_code(subsequent) != code:
             continue
@@ -3546,6 +3764,14 @@ def _tp1_post_block_horizon_measurements(
             continue
 
         executable_bid, _executable_ask, bbo_source = _event_executable_bbo(subsequent)
+        quote_context = _native_quote_context(subsequent)
+        if executable_bid is not None and _native_quote_followup_reason(
+            anchor_quote_context,
+            quote_context,
+            anchor_ts=candidate_ts,
+            seen=seen_quotes,
+        ):
+            executable_bid = None
         if executable_bid is None or executable_bid <= 0:
             mark_price, _mark_source = _tp1_observation_price(subsequent)
             if mark_price is not None and mark_price > 0:
@@ -5957,7 +6183,7 @@ def _risky_micro_fresh_executable_bbo(
     fields = _fields(row)
     bid, ask, source = _event_executable_bbo(row)
     quote_age_ms = _risky_micro_quote_age_ms(fields)
-    if bid is None or ask is None:
+    if (bid is None or ask is None) and _native_quote_context(row) is None:
         bid = _safe_float(fields.get("risky_micro_episode_best_bid"))
         ask = _safe_float(fields.get("risky_micro_episode_best_ask"))
         quote_age_ms = _safe_float(fields.get("risky_micro_episode_quote_age_ms"))

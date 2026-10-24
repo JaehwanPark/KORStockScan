@@ -1,6 +1,290 @@
 import json
+from datetime import datetime, timedelta
+
+import pytest
 
 from src.engine.monitoring import rising_missed_intraday_feedback as mod
+
+
+def _native_quote_event(
+    *, offset=0, age_ms=100, sequence=1, stage="latency_block", bid=1000
+):
+    timestamp = datetime.fromisoformat("2026-10-23T08:20:00+09:00") + timedelta(
+        seconds=offset
+    )
+    observed = timestamp.timestamp() - age_ms / 1000
+    receipt = dict(
+        item="034020_NX",
+        market_route="nxt_only",
+        source_type="0D",
+        transport_epoch=701,
+        route_sequence=sequence,
+        observed_epoch=observed,
+        best_bid=bid,
+        best_ask=bid + 5,
+    )
+    health = dict(
+        schema="kiwoom_market_data_health_v1",
+        as_of_epoch=timestamp.timestamp(),
+        quote_max_age_ms=700,
+        routes={
+            "_NX|nxt_only": dict(
+                item=receipt["item"],
+                market_route=receipt["market_route"],
+                transport_epoch=701,
+                quote_state="fresh",
+            )
+        },
+    )
+    return _event(
+        "native-quote",
+        "034020",
+        "native-quote",
+        stage,
+        dict(
+            forced_entry_reason="rising_missed_one_share_entry",
+            effective_venue="PREMARKET_KRX_LIKE",
+            market_session_bucket="premarket_krx_like",
+            input_quote_source_receipt=receipt,
+            market_data_health=health,
+            pre_submit_ws_snapshot_refresh_best_bid=bid,
+            pre_submit_ws_snapshot_refresh_best_ask=bid + 5,
+            current_price_observed=bid,
+        ),
+        emitted_at=timestamp.isoformat(),
+    )
+
+
+@pytest.mark.parametrize("encoding", [dict, json.dumps, repr])
+def test_native_quote_proof_preserves_data_route_separate_from_policy(encoding):
+    row = _native_quote_event()
+    for key in ("input_quote_source_receipt", "market_data_health"):
+        row["fields"][key] = encoding(row["fields"][key])
+    block = mod._submit_safety_block_row(row)
+    assert block["market_data_route"] == "nxt_only"
+    assert block["effective_venue"] == "PREMARKET_KRX_LIKE"
+    assert block["actual_execution_venue"] == "UNKNOWN"
+    assert block["block_price"] == 1005
+    assert block["executable_bbo_proof"] == "native_receipt"
+
+
+@pytest.mark.parametrize(
+    "defect",
+    [
+        "stale",
+        "future",
+        "missing_health",
+        "malformed_receipt",
+        "wrong_symbol",
+        "route_conflict",
+        "health_epoch",
+        "health_stale",
+        "price_conflict",
+        "nan_clock",
+        "malformed_source_type",
+    ],
+)
+def test_native_quote_defects_remain_null_without_legacy_fallback(defect):
+    row = _native_quote_event(
+        age_ms=701 if defect == "stale" else -1 if defect == "future" else 100
+    )
+    f = row["fields"]
+    if defect == "missing_health":
+        f.pop("market_data_health")
+    elif defect == "malformed_receipt":
+        f["input_quote_source_receipt"] = "{broken"
+    elif defect == "wrong_symbol":
+        row["stock_code"] = "000660"
+    elif defect == "route_conflict":
+        f["market_data_route"] = "krx_only"
+    elif defect == "health_epoch":
+        f["market_data_health"]["routes"]["_NX|nxt_only"]["transport_epoch"] = 702
+    elif defect == "health_stale":
+        f["market_data_health"]["routes"]["_NX|nxt_only"]["quote_state"] = "stale"
+    elif defect == "price_conflict":
+        f["market_data_effective_best_bid"] = 2000
+        f["market_data_effective_best_ask"] = 2005
+    elif defect == "nan_clock":
+        f["input_quote_source_receipt"]["observed_epoch"] = float("nan")
+    elif defect == "malformed_source_type":
+        f["input_quote_source_receipt"]["source_type"] = []
+    f.update(
+        risky_micro_episode_best_bid=1000,
+        risky_micro_episode_best_ask=1005,
+        risky_micro_episode_quote_age_ms=10,
+    )
+    block = mod._submit_safety_block_row(row, predecessor_bbo=dict(bid=1000, ask=1005))
+    assert block["block_price"] is None
+    assert block["mfe_after_block_pct"] is None
+    assert block["mae_after_block_pct"] is None
+    assert mod._risky_micro_fresh_executable_bbo(row)[:2] == (None, None)
+
+
+def test_policy_scope_alone_never_invents_market_data_route():
+    assert (
+        mod._tp1_market_axes({"effective_venue": "PREMARKET_KRX_LIKE"})[
+            "market_data_route"
+        ]
+        == "unknown"
+    )
+
+
+@pytest.mark.parametrize(
+    "defect",
+    ["repeated", "nonfuture", "epoch", "route", "session", "scope", "missing_proof"],
+)
+def test_native_followup_only_counts_new_same_scope_quotes(tmp_path, defect):
+    anchor = _native_quote_event()
+    other = _native_quote_event(
+        offset=0.002 if defect == "repeated" else 0.05 if defect == "nonfuture" else 2,
+        sequence=1 if defect == "repeated" else 2,
+        stage="latency_pass",
+        bid=1200,
+    )
+    f = other["fields"]
+    if defect == "repeated":
+        f = dict(anchor["fields"])
+        other["fields"] = f
+    elif defect == "epoch":
+        f["input_quote_source_receipt"]["transport_epoch"] = 702
+        f["market_data_health"]["routes"]["_NX|nxt_only"]["transport_epoch"] = 702
+    elif defect == "route":
+        f["input_quote_source_receipt"].update(
+            item="034020_AL", market_route="krx_nxt_integrated"
+        )
+        f["market_data_health"]["routes"]["_NX|nxt_only"].update(
+            item="034020_AL", market_route="krx_nxt_integrated"
+        )
+    elif defect == "session":
+        f["market_session_bucket"] = "krx_nxt_aftermarket"
+    elif defect == "scope":
+        f["effective_venue"] = "NXT"
+    elif defect == "missing_proof":
+        f.pop("input_quote_source_receipt")
+        f.pop("market_data_health")
+    path = tmp_path / "events.jsonl"
+    path.write_text("\n".join(json.dumps(r) for r in [anchor, other]))
+    _, blocks, _, _ = mod._build_submit_safety_and_backoff_audit(path)
+    assert blocks[0]["post_block_executable_bbo_event_count"] == 0
+    assert blocks[0]["mfe_after_block_pct"] is None
+    assert blocks[0]["mae_after_block_pct"] is None
+
+
+def test_native_followup_full_report_and_classifier_consume_bound_empty(
+    tmp_path, monkeypatch
+):
+    from src.engine.monitoring import rising_missed_classifier_prior as classifier
+
+    anchor = _native_quote_event()
+    observation = _native_quote_event(
+        offset=2, sequence=2, stage="latency_pass", bid=1020
+    )
+    repeated = dict(
+        observation,
+        stage="scalp_entry_action_decision_snapshot",
+        emitted_at="2026-10-23T08:20:02.001+09:00",
+    )
+    path = tmp_path / "events.jsonl"
+    path.write_text("\n".join(json.dumps(r) for r in [anchor, observation, repeated]))
+    monkeypatch.setattr(mod, "REPORT_DIR", tmp_path)
+    report = mod.build_report("2026-10-23", pipeline_path=path, generated_at="fixed")
+    block = report["submit_safety_blocker_rows"][0]
+    assert block["post_block_executable_bbo_event_count"] == 1
+    assert block["post_block_executable_bbo_repeated_or_nonfuture_quote_count"] == 1
+    assert block["mfe_after_block_pct"] == 1.4925
+    assert block["post_block_first_hit_elapsed_sec"] == 1.9
+    assert block["post_block_first_hit"] == "gross_target_first"
+    assert report["runtime_effect"] is False
+    assert report["allowed_runtime_apply"] is False
+    target = tmp_path / "rising_missed_intraday_feedback_2026-10-23.json"
+    target.write_text(json.dumps(report))
+    result = classifier.build_report("2026-10-23", source_paths=[target])
+    assert result["source_receipts"][0]["state"] == "valid_empty"
+    assert result["runtime_effect"] is False
+    assert result["economic_evaluation"]["actual"]["cost_adjusted_ev_pct"] is None
+
+
+def test_predecessor_never_crosses_symbol_under_reused_record_id(tmp_path):
+    first = _event(
+        "reused",
+        "034020",
+        "first",
+        "rising_missed_one_share_entry",
+        dict(
+            effective_venue="KRX",
+            market_data_effective_best_bid=1000,
+            market_data_effective_best_ask=1005,
+        ),
+    )
+    second = _event(
+        "reused",
+        "000660",
+        "second",
+        "blocked_zero_qty",
+        dict(
+            effective_venue="KRX", forced_entry_reason="rising_missed_one_share_entry"
+        ),
+        emitted_at="2026-07-02T09:00:00.100",
+    )
+    path = tmp_path / "events.jsonl"
+    path.write_text("\n".join(json.dumps(r) for r in [first, second]))
+    _, blocks, _, _ = mod._build_submit_safety_and_backoff_audit(path)
+    assert blocks[0]["block_price"] is None
+
+
+def test_native_quote_projection_and_horizon_keep_proof_and_deduplicate(tmp_path):
+    anchor = _native_quote_event(stage="rising_missed_one_share_entry")
+    anchor["fields"].update(
+        rising_missed_tp1_selector_active=True,
+        rising_missed_tp1_candidate_allowed=True,
+        rising_missed_tp1_candidate_reason="rising_missed_tp1_candidate_pass",
+    )
+    later = _native_quote_event(offset=2, sequence=2, stage="latency_pass", bid=1020)
+    duplicate = dict(later, emitted_at="2026-10-23T08:20:02.001+09:00")
+    path = tmp_path / "events.jsonl"
+    path.write_text("\n".join(json.dumps(row) for row in (anchor, later, duplicate)))
+    events, watermark = mod._load_tp1_label_event_projection(path)
+    assert (
+        events[0]["fields"]["input_quote_source_receipt"]
+        == anchor["fields"]["input_quote_source_receipt"]
+    )
+    assert (
+        events[1]["fields"]["market_data_health"]
+        == later["fields"]["market_data_health"]
+    )
+    result = mod._tp1_post_block_horizon_measurements(
+        events,
+        start_index=0,
+        candidate_ts=datetime.fromisoformat(anchor["emitted_at"]),
+        code="034020",
+        entry_price=1005,
+        observation_watermark=watermark,
+    )
+    assert all(
+        row["observed_price_event_count"] == 1 for row in result["horizon_measurements"]
+    )
+
+
+def test_native_dynamic_age_followup_rejects_repeated_quote(tmp_path):
+    anchor = _native_quote_event(stage="scalp_entry_action_decision_snapshot")
+    anchor["fields"].update(
+        latency_true_ofi_direct_canary_dynamic_age_band_applied=True,
+        ai_decision_trace_id="native-trace",
+    )
+    later = _native_quote_event(offset=2, sequence=2, stage="latency_pass", bid=1020)
+    duplicate = dict(later, emitted_at="2026-10-23T08:20:02.001+09:00")
+    path = tmp_path / "events.jsonl"
+    path.write_text("\n".join(json.dumps(row) for row in (anchor, later, duplicate)))
+    _, _, _, rows = mod._build_submit_safety_and_backoff_audit(path)
+    assert rows[0]["post_apply_executable_bid_event_count"] == 1
+    assert all(row["event_count"] == 1 for row in rows[0]["horizons"].values())
+
+
+@pytest.mark.parametrize("receipt", ["x" * 65537, "[1,2]", "{'x': invalid}", "[" * 300])
+def test_malformed_native_receipt_cannot_restore_legacy_bbo(receipt):
+    row = _native_quote_event()
+    row["fields"]["input_quote_source_receipt"] = receipt
+    assert mod._event_executable_bbo(row)[:2] == (None, None)
 
 
 def _event(
@@ -4688,7 +4972,7 @@ def test_blocked_zero_qty_reuses_only_exact_recent_one_share_bbo_for_source_only
     assert block["post_block_executable_bbo_out_of_window_count"] == 1
     assert block["mfe_after_block_pct"] == 1.4925
     assert block["mae_after_block_pct"] == -0.995
-    assert block["post_block_first_hit"] == "net_target_first"
+    assert block["post_block_first_hit"] == "gross_target_first"
     assert block["post_block_first_hit_elapsed_sec"] == 2.75
     assert report["blocked_zero_qty_counterfactual_rows"] == [block]
     assert report["summary"]["blocked_zero_qty_count"] == 1
@@ -4927,7 +5211,7 @@ def test_dynamic_age_post_apply_attribution_uses_executable_ask_and_future_bid(
     assert summary["dynamic_age_post_apply_actual_order_submitted_count"] == 0
     assert summary["dynamic_age_post_apply_source_quality_pass_count"] == 1
     assert summary["dynamic_age_post_apply_first_hit_counts"] == [
-        {"first_hit": "net_target_first", "count": 1}
+        {"first_hit": "gross_target_first", "count": 1}
     ]
     assert attribution_rows[0]["downstream_terminal_stage"] == (
         "pre_submit_entry_ai_authority_guard_block"
@@ -4937,7 +5221,7 @@ def test_dynamic_age_post_apply_attribution_uses_executable_ask_and_future_bid(
         "mfe_pct": 1.2,
         "mae_pct": -0.5,
     }
-    assert attribution_rows[0]["first_hit"] == "net_target_first"
+    assert attribution_rows[0]["first_hit"] == "gross_target_first"
     assert attribution_rows[0]["actual_order_submitted"] is False
 
 
