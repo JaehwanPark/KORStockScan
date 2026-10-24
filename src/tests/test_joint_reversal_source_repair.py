@@ -2,6 +2,7 @@
 import copy
 from datetime import datetime
 from types import SimpleNamespace
+import threading
 import pytest
 from src.engine.scalping import reversal_joint_catalog as J
 from src.engine.scalping import reversal_extended_catalog as C
@@ -10,6 +11,64 @@ from src.engine.scalping import reversal_extended_auxiliary as A
 from src.engine.scalping import continuous_reversal as K
 
 T=datetime(2026,10,13,16,20,tzinfo=K.KST).timestamp()
+
+@pytest.fixture
+def prefix_readiness(monkeypatch):
+    from src.engine.scalping import reversal_source_diagnostics as D
+    from src.engine.scalping import reversal_current_backend as dispatch
+    def build(bid='G4',session='SOR_REGULAR'):
+        stamp=datetime(2026,10,21,11 if session=='SOR_REGULAR' else 17,tzinfo=K.KST).timestamp()
+        values=[[stamp+i,7,i+1,11000,10990,11010,1,1,1,'127120_AL',0] for i in range(71)]
+        state=S.State(branch_ids=[bid],offline=True,session_anchor=values[0],generation='scope')
+        for r in values:state.observe(r,symbol='127120',venue='SOR',session=session)
+        market=K.market_bucket(session);key=C.cell_key('127120',market,11000)
+        cell=dict(backend='union_v6',scope_execution_hash='scope',payload=dict(branches=[dict(branch_id=bid)]))
+        family=dict(family_sha256='family',registry_sha256=C.registry_for([bid]),machine_cells={key:dict(routes={'SOR':cell})})
+        owner=SimpleNamespace(_LOCK=threading.RLock(),_FAMILY=family,_GENERATION='family',
+            _STATES={('127120','SOR','127120_AL',market,'2026-10-21',key):state},R=None)
+        monkeypatch.setattr(dispatch,'backend',lambda:owner)
+        candidate=SimpleNamespace(code='127120',route='krx_nxt_integrated',discovery_price=11000)
+        return D,state,candidate,values[-1],bid
+    return build
+
+@pytest.mark.parametrize('bid,session,expected',[
+    ('G4','SOR_REGULAR',100*(11010/10990-1)),
+    ('manual_cumulative_01fc4db1dba5571d25f9a3f5','SOR_AFTERMARKET',100*(11010-10990)/11000),
+])
+def test_prefix_readiness_projects_native_quote_without_inventing_confirmation(prefix_readiness,bid,session,expected):
+    D,state,candidate,last,bid=prefix_readiness(bid,session)
+    before=copy.deepcopy((state._feature_values,state.diagnostic_rolling,dict(state.coverage_snapshot),list(state.ready)))
+    result=D.branch_readiness(candidate,now=last[0]+.1,deadline=last[0]+60)
+    desc=result['branch_descriptors'][bid]
+    assert desc['feature_values']['spread']==pytest.approx(expected)
+    assert desc['feature_availability']=='complete' and not desc['missing_inputs']
+    assert desc['feature_basis']=='prefix_context_no_confirmation' and desc['detector_truth']=='FALSE'
+    assert not state.ready and (state._feature_values,state.diagnostic_rolling,dict(state.coverage_snapshot),list(state.ready))==before
+
+@pytest.mark.parametrize('case',['stale_source','missing_quote','crossed_quote','invalid_source','unbound_prefix','explicit_unknown','confirmation_unknown','nonfinite_quote'])
+def test_prefix_quote_projection_preserves_missing_stale_and_confirmed_unknown(prefix_readiness,case):
+    D,state,candidate,last,bid=prefix_readiness()
+    now=last[0]+.1
+    if case=='stale_source':now=last[0]+3.001
+    elif case=='missing_quote':last[4]=None
+    elif case=='crossed_quote':last[4]=last[5]+1
+    elif case=='nonfinite_quote':last[5]=float('inf')
+    elif case=='invalid_source':last[8]=0
+    elif case=='unbound_prefix':state.diagnostic_rolling['identity']=(0,0,0)
+    elif case=='explicit_unknown':state.diagnostic_rolling['values']['spread']=None
+    elif case=='confirmation_unknown':state.diagnostic_features[bid]=dict(identity=tuple(last[:3]),values=dict(state._feature_values,spread=None))
+    # Real State stores a separate native row value; replace its current view
+    # only for the invalid-source/quote negative cases.
+    if case in {'missing_quote','crossed_quote','invalid_source','nonfinite_quote'}:state.legacy.last=last
+    result=D.branch_readiness(candidate,now=now,deadline=now+60)
+    desc=result['branch_descriptors'][bid]
+    assert 'spread' in desc['missing_inputs'] and desc['feature_values']['spread'] is None
+
+def test_prefix_projection_cannot_reuse_a_different_state_generation(prefix_readiness):
+    D,state,candidate,last,bid=prefix_readiness()
+    state.generation='different-scope'
+    result=D.branch_readiness(candidate,now=last[0]+.1,deadline=last[0]+60)
+    assert result['status']=='unobservable' and result['reason']=='native_interval_unobserved'
 def row(i,p=110000,qty=1):return [T+i,1,i+1,p,p,p+1,qty,1,1,'036930_AL',0]
 def feed(state,values):
     result=[]

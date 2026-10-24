@@ -121,6 +121,8 @@ def _branch_descriptor(registry_sha256, bid):
             'range_spread10','price_progress_spreads10'} else None,
         known_side_required='buy10' in fields,
         positive_quantity_required=bool(fields & {'buy10', 'vwap', 'volume'}),
+        prefix_spread_denominator=('bid' if d.get('kind') in {'legacy_rule', 'registered_pattern'}
+            else 'trade' if d.get('kind') in {'manual_path_pattern', 'cumulative_root'} else None),
         transition_required=phase in {'MOMENTUM_CROSS', 'MOMENTUM_HOLD', 'HIGH_BREAKOUT'},
         feature_fields=sorted(fields), optional_refinement_fields=optional_fields, root_contract=deepcopy(root))
 
@@ -251,6 +253,19 @@ def branch_readiness(candidate, *, now, deadline, original_requirements=None):
         projection = (actual if actual.get('identity') == tuple(last[:3]) else
                       rolling if rolling.get('identity') == tuple(last[:3]) else {})
         values = projection.get('values', facts['features'])
+        # Rolling caches contain trade features; native spread is an event
+        # quote fact. Project only a missing prefix key from this same current
+        # row, using its owner's denominator. Explicit UNKNOWN confirmations
+        # and producer values remain untouched; this never evaluates a gate.
+        if (feature_bound and quote_usable and projection is rolling and projection
+                and 'spread' in row['feature_fields'] and 'spread' not in values
+                and all(type(v) in (int, float) and math.isfinite(v) for v in last[3:6])):
+            basis = row['prefix_spread_denominator']
+            if basis in {'bid', 'trade'}:
+                spread = (100*(last[5]/last[4]-1) if basis == 'bid'
+                          else 100*(last[5]-last[4])/last[3])
+                if math.isfinite(spread):
+                    values = dict(values, spread=spread)
         missing = [field for field in row['feature_fields']
                    if not feature_bound or values.get(field) is None]
         if not quote_usable:
