@@ -666,3 +666,5 @@ The reviewed source-repair profile binds the complete producer dependencies
 and independent preparation pairs; current fixtures attest code capability,
 not the correctness of superseded calculation results. Rebuild affected
 producers before summary/strict/controller/finalization/preparation closure.
+
+Frozen auxiliary registries retain their original projector, compact wire and production-input contracts after a reviewed source formatting transition. The existing compatibility owner compares exact reviewed generations without returning historical bytes as a physical code hash. Registry parent reconstruction and native request/response readers preserve original identities; unknown code, changed semantic fields and mixed source/transform generations remain invalid. A successor requires fresh full native registry/request parity, its own compatibility receipts, the complete code profile and independent capability fixtures before candidate P5. A prepared holding-prompt baseline with no eligible candidate remains the native parent-only disposition. [Review](audits/postclose-root-cause-recovery-review-2026-10-19.md#postclose-approved-integration-2026-10-25).

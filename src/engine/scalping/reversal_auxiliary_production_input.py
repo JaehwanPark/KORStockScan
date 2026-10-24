@@ -53,7 +53,13 @@ def contract(scope_ids):
 
 
 def validate(value):
-    if not isinstance(value, dict) or value != contract(value.get("scope_ids")):
+    from src.engine.scalping import reversal_auxiliary_compatibility as C
+
+    if not isinstance(value, dict) or not C.contract_matches(
+        value,
+        contract(value.get("scope_ids")),
+        {"source_sha256": __file__, "transform_sha256": X.__file__},
+    ):
         raise ValueError("auxiliary_production_input_contract_changed")
     return value
 

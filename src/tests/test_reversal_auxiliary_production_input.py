@@ -323,3 +323,159 @@ def test_unknown_transform_bytes_cannot_use_the_reviewed_production_contract(
         ValueError, match="auxiliary_production_input_transform_changed"
     ):
         M.validate(current["production_input_contract"])
+
+
+def frozen_formatted_definitions():
+    """Build original-schema fixtures, preserving their physical source stamps."""
+    from src.engine.automation.intraday_release_handoff import _formatting_review
+    from src.engine.scalping import reversal_auxiliary_compatibility as C
+
+    review = _formatting_review()
+    original, _, current = definitions()
+    original["projector_sha256"] = review[
+        "src/engine/scalping/reversal_extended_union.py"
+    ]["before_sha256"]
+    original["registry_sha256"] = P.digest(
+        {k: v for k, v in original.items() if k != "registry_sha256"}
+    )
+    wire = dict(
+        W.contract(),
+        source_sha256=C.REVIEWED_CONTRACT_SOURCE_PAIRS[
+            "src/engine/scalping/reversal_auxiliary_wire.py"
+        ][0][0],
+    )
+    parent = G.compact_definition(
+        original, research_wire_contract=OLD_W.contract(), wire_contract=wire
+    )
+    contract = dict(
+        current["production_input_contract"],
+        source_sha256=C.REVIEWED_CONTRACT_SOURCE_PAIRS[
+            "src/engine/scalping/reversal_auxiliary_production_input.py"
+        ][0][0],
+        transform_sha256=review[
+            "src/engine/scalping/reversal_auxiliary_risk_role_experiment.py"
+        ]["before_sha256"],
+    )
+    current = G.production_definition(
+        parent, scope_ids=contract["scope_ids"], production_contract=contract
+    )
+    return original, parent, current
+
+
+def test_frozen_registry_full_consumer_preserves_identity_and_guards(tmp_path):
+    original, parent, current = frozen_formatted_definitions()
+    fixture = next(iter(FIXTURES.values()))
+    snapshot = (fixture["event"], fixture["source"])
+    originals = copy.deepcopy((original, parent, current))
+    for item in originals:
+        G.register(tmp_path, item)
+    assert G.load(tmp_path, current["registry_sha256"]) == current
+    assert G.load(tmp_path, parent["registry_sha256"]) == parent
+    logical, prompt, schema = G.production_request(snapshot, current)
+    fresh = definitions()[2]
+    assert G.production_request(snapshot, fresh) == (logical, prompt, schema)
+    request = G.request(snapshot, current)
+    request["candidate"]["compact_runtime_contract"] = copy.deepcopy(
+        parent["wire_contract"]
+    )
+    _, _, aliases = W.encode(logical)
+    raw = dict(
+        assessed={aliases[s["ref"]]: True for s in logical["signals"]},
+        screen=dict(
+            verdict="PASS",
+            risk="NO_BLOCKING_RISK",
+            fact=aliases["observed_machine_signal"],
+        ),
+        confidence=50,
+    )
+    response = W.response(
+        dict(candidate_response=raw), request, logical, current["base_arm"]
+    )
+    assert response == W.decode(raw, logical, current["base_arm"])
+    before = copy.deepcopy(request)
+    bad = copy.deepcopy(raw)
+    bad["assessed"] = {}
+    with pytest.raises(ValueError):
+        W.response(dict(candidate_response=bad), request, logical, current["base_arm"])
+    assert request == before and (original, parent, current) == originals
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "projector",
+        "wire_source",
+        "wire_version",
+        "input_source",
+        "transform",
+        "scope",
+        "authority",
+        "unknown_field",
+    ],
+)
+def test_frozen_contract_never_accepts_unknown_semantics_even_when_resealed(field):
+    _, _, value = frozen_formatted_definitions()
+    value = copy.deepcopy(value)
+    if field == "projector":
+        value["projector_sha256"] = "0" * 64
+    elif field == "wire_source":
+        value["wire_contract"]["source_sha256"] = "0" * 64
+    elif field == "wire_version":
+        value["wire_contract"]["decoder_version"] = "unknown"
+    elif field == "input_source":
+        value["production_input_contract"]["source_sha256"] = "0" * 64
+    elif field == "transform":
+        value["production_input_contract"]["transform_sha256"] = "0" * 64
+    elif field == "scope":
+        value["production_input_contract"]["scope_ids"] = ["foreign|scope"]
+    elif field == "authority":
+        value["production_input_contract"]["decision_authority"] = "MACHINE_PROMOTION"
+    else:
+        value["production_input_contract"]["unexpected"] = True
+    value["registry_sha256"] = P.digest(
+        {k: v for k, v in value.items() if k != "registry_sha256"}
+    )
+    with pytest.raises(ValueError):
+        G.validate(value)
+
+
+@pytest.mark.parametrize("source", ["wire", "production", "transform", "projector"])
+def test_frozen_contract_rejects_changed_current_source(source, monkeypatch):
+    from src.engine.scalping import reversal_auxiliary_compatibility as C
+
+    _, _, value = frozen_formatted_definitions()
+    name = dict(
+        wire=W.__file__,
+        production=M.__file__,
+        transform=X.__file__,
+        projector=M.U.__file__,
+    )[source]
+    original = P.file_hash
+    monkeypatch.setattr(
+        P, "file_hash", lambda path: "f" * 64 if str(path) == name else original(path)
+    )
+    with pytest.raises(ValueError):
+        G.validate(value)
+
+
+def test_frozen_contract_fails_if_review_manifest_changed(monkeypatch):
+    from src.engine.automation import intraday_release_handoff as H
+
+    _, _, value = frozen_formatted_definitions()
+    monkeypatch.setattr(H, "_FORMATTING_REVIEW_SHA256", "0" * 64)
+    with pytest.raises(ValueError, match="formatting_review_invalid"):
+        G.validate(value)
+
+
+@pytest.mark.parametrize(
+    "mixed", ["old_source_new_transform", "new_source_old_transform"]
+)
+def test_frozen_contract_rejects_unissued_mixed_source_generation(mixed):
+    _, _, value = frozen_formatted_definitions()
+    original = value["production_input_contract"]
+    current = M.contract(original["scope_ids"])
+    bad = dict(original)
+    key = "transform_sha256" if mixed == "old_source_new_transform" else "source_sha256"
+    bad[key] = current[key]
+    with pytest.raises(ValueError, match="contract_changed"):
+        M.validate(bad)

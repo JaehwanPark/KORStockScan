@@ -11,6 +11,7 @@ import re
 from pathlib import Path
 from src.engine.scalping import reversal_operating_auxiliary as A
 from src.engine.scalping import continuous_reversal_postclose as P
+from src.engine.scalping import reversal_auxiliary_compatibility as C
 
 SCHEMA = "main_auxiliary_prompt_registry_v1"
 SCHEMA_V2 = "main_auxiliary_prompt_registry_v2"
@@ -270,7 +271,10 @@ def validate(value):
             if value.get("schema") == SCHEMA
             else "auxiliary_compact_citations_v1"
         )
-        or value.get("projector_sha256") != projector_hash(A.VERSION)
+        or (
+            value.get("projector_sha256") != projector_hash(A.VERSION)
+            and not C.source_matches(value.get("projector_sha256"), A.__file__)
+        )
         or value.get("provider") != "openai"
         or value.get("model") != "gpt-5.4-nano"
         or value.get("max_output_tokens") != 1024
@@ -289,7 +293,9 @@ def validate(value):
         from src.engine.scalping import reversal_auxiliary_wire as W
 
         if (
-            value.get("wire_contract") != W.contract()
+            not C.contract_matches(
+                value.get("wire_contract"), W.contract(), {"source_sha256": W.__file__}
+            )
             or value["input_version"] != "continuous_reversal_union_auxiliary_v3"
             or value.get("temperature_policy") != "omit"
             or value.get("logical_response_schema_version") != A.VERSION
@@ -317,7 +323,7 @@ def validate(value):
     return value
 
 
-def compact_definition(research_value, *, research_wire_contract):
+def compact_definition(research_value, *, research_wire_contract, wire_contract=None):
     validate(research_value)
     if research_value["schema"] != SCHEMA:
         raise ValueError("auxiliary_research_registry_version_invalid")
@@ -328,7 +334,9 @@ def compact_definition(research_value, *, research_wire_contract):
         schema=SCHEMA_V2,
         response_schema_version=W.VERSION,
         logical_response_schema_version=research_value["input_version"],
-        wire_contract=W.contract(),
+        wire_contract=copy.deepcopy(
+            W.contract() if wire_contract is None else wire_contract
+        ),
         temperature_policy="omit",
         research_registry_sha256=research_value["registry_sha256"],
         research_wire_contract=copy.deepcopy(research_wire_contract),
@@ -351,7 +359,7 @@ def register(data_root, value):
     return value["registry_sha256"]
 
 
-def production_definition(compact_value, *, scope_ids):
+def production_definition(compact_value, *, scope_ids, production_contract=None):
     """Build a separate scoped opt-in; never rewrite or register its parent."""
     validate(compact_value)
     if (
@@ -361,9 +369,16 @@ def production_definition(compact_value, *, scope_ids):
         raise ValueError("auxiliary_production_parent_invalid")
     from src.engine.scalping import reversal_auxiliary_production_input as M
 
+    selected = (
+        M.contract(scope_ids)
+        if production_contract is None
+        else M.validate(production_contract)
+    )
+    if selected["scope_ids"] != scope_ids:
+        raise ValueError("auxiliary_production_input_scope_changed")
     body = copy.deepcopy(compact_value)
     body.update(
-        production_input_contract=M.contract(scope_ids),
+        production_input_contract=copy.deepcopy(selected),
         production_parent_registry_sha256=compact_value["registry_sha256"],
     )
     body.pop("registry_sha256")
@@ -389,7 +404,9 @@ def load(data_root, ident):
         ):
             raise ValueError("auxiliary_registry_research_identity_changed")
         expected = compact_definition(
-            original, research_wire_contract=value["research_wire_contract"]
+            original,
+            research_wire_contract=value["research_wire_contract"],
+            wire_contract=value["wire_contract"],
         )
         if "production_input_contract" in value:
             parent = validate(
@@ -401,7 +418,9 @@ def load(data_root, ident):
             if parent != expected:
                 raise ValueError("auxiliary_production_parent_changed")
             expected = production_definition(
-                parent, scope_ids=value["production_input_contract"]["scope_ids"]
+                parent,
+                scope_ids=value["production_input_contract"]["scope_ids"],
+                production_contract=value["production_input_contract"],
             )
         if expected != value:
             raise ValueError("auxiliary_registry_research_binding_changed")

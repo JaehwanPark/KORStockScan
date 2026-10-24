@@ -886,6 +886,34 @@ REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS["auxiliary"] += (
 )
 
 
+# Exact frozen auxiliary reader repair and shared capability inventory.
+# Original reports remain unmodified; every family needs a fresh native fixture.
+REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS["entry_cancel_wait"] += (
+    (
+        "5fa218b7b916b6b2a98a7a395573dac80ff96d2345edae3b64f9f99e3574125d",
+        "1a5f1647c8640688497416bc41eca31a029a583beb4638e30505be509d758b2b",
+    ),
+)
+REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS["rising_missed"] += (
+    (
+        "d48f497b194c96ca5776bacf2910a08de4c0c3a6a323c5cde1d8a30c171c15e4",
+        "b6d68e2d8af215eddfc43260e751802605eb139402f73704eea488191617b0ae",
+    ),
+)
+REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS["holding_vote"] += (
+    (
+        "7ea8d358191c970b16384b182f2feaa66c4486f1082f4c36cb54616df4485a81",
+        "f418aa6f7c047c947c60b1bf9f75e328dd041b00757d37a60cda04d31be9675c",
+    ),
+)
+REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS["auxiliary"] += (
+    (
+        "8f7446efe983c1ad88ba90c3ca72114fe9e90d045356e8c7d74acd0d4ceb62fd",
+        "40a5beb1a6cb36dafffd4fe4ac8b0d34107aa522208b80c6e508e8454fe1ca4a",
+    ),
+)
+
+
 def current_fixture_observation(observed, data):
     family = observed.get("family")
     pair = REVIEWED_SUCCESSORS.get(family)

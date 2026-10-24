@@ -40,6 +40,9 @@ COMPONENTS = {
     "auxiliary": (
         "scalping/reversal_auxiliary_tuning.py",
         "scalping/reversal_auxiliary_registry.py",
+        "scalping/reversal_auxiliary_compatibility.py",
+        "scalping/reversal_auxiliary_wire.py",
+        "scalping/reversal_auxiliary_production_input.py",
         # Versioned cumulative membership and materialization are consumed by
         # auxiliary comparison/initial carry; their changes need fresh fixtures.
         "scalping/reversal_cumulative_catalog.py",

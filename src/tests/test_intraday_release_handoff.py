@@ -5198,7 +5198,8 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(
     )
     subprocess.run(["git", "-C", str(root), "checkout", "-q", "75e0fbbf7"], check=True)
     hashes = {
-        "current": handoff.REVIEWED_POSTCLOSE_SOURCE_PROFILE,
+        "current": handoff.REVIEWED_AUXILIARY_FORMAT_PROFILE,
+        "consumed_postclose_source": handoff.REVIEWED_POSTCLOSE_SOURCE_PROFILE,
         "consumed_closed_scanner": handoff.REVIEWED_CLOSED_SCANNER_PREVIOUS_PROFILE,
         "consumed_scanner_preflight": handoff.REVIEWED_SCANNER_PREFLIGHT_PROFILE,
         "consumed_listing_source": handoff.REVIEWED_AFTERMARKET_LISTING_PROFILE,
@@ -5239,6 +5240,7 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(
                     str(canonical),
                     "show",
                     {
+                        "consumed_postclose_source": "06dbfe661",
                         "consumed_closed_scanner": "2edf3263e",
                         "consumed_scanner_preflight": "6e970e41f",
                         "consumed_listing_source": "ea8a9ba85",
@@ -5840,7 +5842,13 @@ def test_scanner_preflight_handoff_rejects_unreviewed_or_mixed_sources(
 
 @pytest.mark.parametrize("family", ["pre_submit_delay", "main_stop", "holding_vote"])
 @pytest.mark.parametrize(
-    "generation", ["current", "consumed_scanner_preflight", "consumed_closed_scanner"]
+    "generation",
+    [
+        "current",
+        "consumed_postclose_source",
+        "consumed_scanner_preflight",
+        "consumed_closed_scanner",
+    ],
 )
 def test_closed_scanner_handoff_preserves_consumed_preflight(
     tmp_path, family, generation
@@ -5961,3 +5969,15 @@ def test_formatting_original_digest_is_verified_before_comparison(monkeypatch):
     with pytest.raises(ValueError, match="formatting_origin_invalid"):
         handoff._formatting_original("src/core/event_bus.py", "0" * 64)
     handoff._formatting_original.cache_clear()
+
+
+@pytest.mark.parametrize("dependency", sorted(handoff.REVIEWED_AUXILIARY_FORMAT_HASHES))
+@pytest.mark.parametrize(
+    "fault", ["missing", "dirty", "committed_change", "parent_mix"]
+)
+def test_auxiliary_format_handoff_rejects_partial_successor(
+    tmp_path, dependency, fault
+):
+    test_entry_cost_handoff_keeps_exact_complete_generation(
+        tmp_path, "pre_submit_delay", fault, "current", dependency
+    )

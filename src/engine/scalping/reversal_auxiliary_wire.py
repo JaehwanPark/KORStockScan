@@ -128,7 +128,11 @@ def encode(inp):
 
 
 def request(req, logical_input, expected_contract):
-    if expected_contract != contract():
+    from src.engine.scalping import reversal_auxiliary_compatibility as C
+
+    if not C.contract_matches(
+        expected_contract, contract(), {"source_sha256": __file__}
+    ):
         raise ValueError("compact_wire_contract_changed")
     wire, schema, aliases = encode(logical_input)
     result = copy.deepcopy(req)
@@ -199,13 +203,15 @@ def decode(raw, inp, arm):
 
 
 def response(record_result, req, logical_input, arm):
+    from src.engine.scalping import reversal_auxiliary_compatibility as C
+
     raw = record_result.get("candidate_response")
     cfg = req["candidate"].get("compact_runtime_contract")
     if not cfg:
         return raw
-    if cfg != contract() or req["candidate"].get("logical_input_sha256") != P.digest(
-        logical_input
-    ):
+    if not C.contract_matches(cfg, contract(), {"source_sha256": __file__}) or req[
+        "candidate"
+    ].get("logical_input_sha256") != P.digest(logical_input):
         raise ValueError("compact_wire_contract_changed")
     # Keep provider receipts and parsed wire response unmodified. Evaluation
     # recomputes this projection from the stored wire payload every time.

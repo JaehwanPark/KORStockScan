@@ -2021,6 +2021,88 @@ REVIEWED_PREPARATION_HISTORY.setdefault(
     }
 )
 
+# Reviewed immutable auxiliary contract readers after source formatting.
+REVIEWED_PREPARATION_HISTORY.setdefault(
+    "src/engine/scalping/reversal_auxiliary_compatibility.py", set()
+).update(
+    {
+        (old, "77f8d67a5bc89fabab76438d92cad8d719e607c6b5321d56d1e3003ec41aca34")
+        for old in (
+            "05d728265ca85e27fac5af90a1676f2675631af0d2be63406b5c2ac619558cef",
+            "9cc4e362967b0294c0ee43b92cb4ced24f8d40946257567d6becf72253940bce",
+        )
+    }
+)
+REVIEWED_PREPARATION_HISTORY.setdefault(
+    "src/engine/scalping/reversal_auxiliary_production_input.py", set()
+).update(
+    {
+        (old, "324b2d6e41bafaf0eddb1b65069de8f140325bb84e4e3aa42941e397d75d3464")
+        for old in (
+            "29bcf083d4849d0c8ca883c75a4397caba47448aa2c4951671e669eeeb638003",
+            "ac517cab3a60a6a224cbabe1ef3b162edf9dfa1992b6ebfa0b4fafbf9e34428a",
+        )
+    }
+)
+REVIEWED_PREPARATION_HISTORY.setdefault(
+    "src/engine/scalping/reversal_auxiliary_registry.py", set()
+).update(
+    {
+        (old, "8699770d1c0d5a51d1b48521dba270cde65ba8d65429f0a3f7c6be3a5105d651")
+        for old in (
+            "7421c595f810d155ad7b6f1ce264107adca8c3f14a23961aeeffbc6427cf7719",
+            "80d91c4cd7758621236403d2f4ae4596317d9fa10a8624a616c3699775aedea0",
+        )
+    }
+)
+REVIEWED_PREPARATION_HISTORY.setdefault(
+    "src/engine/scalping/reversal_auxiliary_wire.py", set()
+).update(
+    {
+        (old, "7751d8cbeb4d1fdfe8411aefee2b0adaf25079abb8ebdf5800222b4fe7c42600")
+        for old in (
+            "6f3de130bc8ca5670a4588c8c274399f79b68408ed3312523bdbbe7e0018d578",
+            "e10a29e96d65e5a00da11bbb5b248b1263fd34a10f8c4bcec39337802c2a021f",
+        )
+    }
+)
+REVIEWED_PREPARATION_HISTORY.setdefault(
+    "src/engine/monitoring/policy_generation_contract.py", set()
+).update(
+    {
+        (old, "afb9e016f2772721a249566d51f02b5de0ae20c642446c0909194f21413914e4")
+        for old in (
+            "9542537f06fc603ffe04b9cb6a1f01ea9689749d0b06becaeda8f0a4c19b20c9",
+            "e72472f82c1fc81c6103b618b9b1a3230c47a332a012654b1b50366ce2137489",
+            "ff28f004a26a287394d45c4bebfe14a22a144369e8354ea23df0a0c25f7b0028",
+        )
+    }
+)
+REVIEWED_PREPARATION_HISTORY.setdefault(
+    "src/engine/monitoring/policy_generation_code_handoff.py", set()
+).update(
+    {
+        (old, "28feb05ecb68ddb0413e45043e92f0d30805a0b4b5b708c894bbdbe12a286411")
+        for old in (
+            "056582f3a61d683220910a86107018d5fea3467f5181a7a837498cf94df6d4c2",
+            "1a572a81032cd49121e24e2e4925d91d922d9697a65c65db0f473873b656c5cc",
+            "1dff8c3fcc6dba15fdc720a36c5070a81805d5124433140b8158f3f50c62b98e",
+            "41ebbc34a2fd015a0cd76ae525c1e6e859edbaa6dc4e4e88e4cc76a44a7a9bef",
+            "4db24d4d542b8cc6142c1b85e0839bfce6a7116aaae5f49e2b0d90e4174e3d62",
+            "58f427eee221104aef727ec4dcadb4ad5ec8021c262b6e3c104941ed851fcf6e",
+            "62872a82eda5eae04541329a65dc062b4f99150360dfb24b7eeb8888214f0c25",
+            "858f6f949015f1c27d0185a0183df7a331f7fda971830408a5cdf53d16b39b5a",
+            "af16ae40eed72ce51960ce6141f3b800e476007f3026cfd2dcd7455226b32fdc",
+            "b14d8aaf06d7414bcbe6bdb87ddfc685f2c3765db15f8a5f50d93f3e5eeaf444",
+            "b188d34dea921cf21f602ce83ef7d6c8af0527b8e874b208e92394f2d904759d",
+            "b65c616d024460c825d73472311ddf995282069cd58dfdec9241447d4285d841",
+            "b9bb89e9ea3c3835e2cb45dc7687b91e38156d208adf1dfc7554869038e50a0e",
+            "ceb7e9d6031da3e0f77fd0285897e760bec25b3c26f82f85e7b272537e4cbfee",
+            "e9b1ef85c2cae6c3bec70a6697a36d767584abee1c6fe621530865ef5146a9eb",
+        )
+    }
+)
+
 
 def reviewed_preparation_pair(relative, old, current):
     # An already reviewed physical pair keeps its original authority; a

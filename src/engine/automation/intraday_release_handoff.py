@@ -10191,6 +10191,61 @@ REVIEWED_ENTRY_COST_PAIRS = {
     },
 }
 
+# Reviewed frozen auxiliary definition/request readers. Physical source hashes
+# remain current; frozen contract fields and registry identities are preserved.
+REVIEWED_AUXILIARY_FORMAT_PREVIOUS = {
+    "src/engine/scalping/reversal_auxiliary_compatibility.py": "9cc4e362967b0294c0ee43b92cb4ced24f8d40946257567d6becf72253940bce",
+    "src/engine/scalping/reversal_auxiliary_production_input.py": "ac517cab3a60a6a224cbabe1ef3b162edf9dfa1992b6ebfa0b4fafbf9e34428a",
+    "src/engine/scalping/reversal_auxiliary_registry.py": "80d91c4cd7758621236403d2f4ae4596317d9fa10a8624a616c3699775aedea0",
+    "src/engine/scalping/reversal_auxiliary_wire.py": "6f3de130bc8ca5670a4588c8c274399f79b68408ed3312523bdbbe7e0018d578",
+    "src/engine/monitoring/policy_generation_contract.py": "9542537f06fc603ffe04b9cb6a1f01ea9689749d0b06becaeda8f0a4c19b20c9",
+    "src/engine/monitoring/policy_generation_code_handoff.py": "056582f3a61d683220910a86107018d5fea3467f5181a7a837498cf94df6d4c2",
+    "src/engine/infrastructure/startup_validation_code_context.py": "13d85428ca0657171a7e01e9d5ada28e0ef1bd42db630d851072748963fc1ca5",
+}
+REVIEWED_AUXILIARY_FORMAT_HASHES = {
+    "src/engine/scalping/reversal_auxiliary_compatibility.py": "77f8d67a5bc89fabab76438d92cad8d719e607c6b5321d56d1e3003ec41aca34",
+    "src/engine/scalping/reversal_auxiliary_production_input.py": "324b2d6e41bafaf0eddb1b65069de8f140325bb84e4e3aa42941e397d75d3464",
+    "src/engine/scalping/reversal_auxiliary_registry.py": "8699770d1c0d5a51d1b48521dba270cde65ba8d65429f0a3f7c6be3a5105d651",
+    "src/engine/scalping/reversal_auxiliary_wire.py": "7751d8cbeb4d1fdfe8411aefee2b0adaf25079abb8ebdf5800222b4fe7c42600",
+    "src/engine/monitoring/policy_generation_contract.py": "afb9e016f2772721a249566d51f02b5de0ae20c642446c0909194f21413914e4",
+    "src/engine/monitoring/policy_generation_code_handoff.py": "28feb05ecb68ddb0413e45043e92f0d30805a0b4b5b708c894bbdbe12a286411",
+    "src/engine/infrastructure/startup_validation_code_context.py": "a54c23586d077630db8bdbe7b012719bbae411dfdf5f33ebae7bfa559a76f3bc",
+}
+REVIEWED_AUXILIARY_FORMAT_PROFILE = {
+    **REVIEWED_POSTCLOSE_SOURCE_PROFILE,
+    **REVIEWED_AUXILIARY_FORMAT_HASHES,
+}
+REVIEWED_AUXILIARY_FORMAT_VARIANTS = {
+    (key[0], REVIEWED_AUXILIARY_FORMAT_HASHES.get(key[0], key[1])): {
+        **value,
+        "selector_path": "src/engine/scalping/reversal_auxiliary_compatibility.py",
+        "selector_sha256": REVIEWED_AUXILIARY_FORMAT_HASHES[
+            "src/engine/scalping/reversal_auxiliary_compatibility.py"
+        ],
+        "dependencies": {**value["dependencies"], **REVIEWED_AUXILIARY_FORMAT_HASHES},
+        "contract_extensions": {
+            origin: {
+                name: REVIEWED_AUXILIARY_FORMAT_HASHES.get(os.path.normpath(name), sha)
+                for name, sha in paths.items()
+            }
+            for origin, paths in value["contract_extensions"].items()
+        },
+    }
+    for key, value in REVIEWED_POSTCLOSE_SOURCE_VARIANTS.items()
+}
+REVIEWED_ENTRY_COST_PAIRS = {
+    **REVIEWED_ENTRY_COST_PAIRS,
+    **{
+        name: REVIEWED_ENTRY_COST_PAIRS.get(name, ())
+        + tuple(
+            (origin, current)
+            for origin in {REVIEWED_AUXILIARY_FORMAT_PREVIOUS[name]}
+            | {old for pair in REVIEWED_ENTRY_COST_PAIRS.get(name, ()) for old in pair}
+        )
+        for name, current in REVIEWED_AUXILIARY_FORMAT_HASHES.items()
+    },
+}
+
 # Exact source-only formatting succession. The review manifest preserves the
 # committed predecessor and deterministic formatter output; it never rewrites
 # a policy contract or grants runtime authority. The verifier itself remains
@@ -10770,6 +10825,15 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     ):
         prepared_hashes = REVIEWED_POSTCLOSE_SOURCE_PROFILE
         prepared_variants = REVIEWED_POSTCLOSE_SOURCE_VARIANTS
+    auxiliary_name = "src/engine/scalping/reversal_auxiliary_compatibility.py"
+    auxiliary_successor = candidate_bytes(auxiliary_name, optional=True)
+    if (
+        auxiliary_successor is not None
+        and hashlib.sha256(auxiliary_successor).hexdigest()
+        == REVIEWED_AUXILIARY_FORMAT_HASHES[auxiliary_name]
+    ):
+        prepared_hashes = REVIEWED_AUXILIARY_FORMAT_PROFILE
+        prepared_variants = REVIEWED_AUXILIARY_FORMAT_VARIANTS
     entry_cost_hashes = (
         prepared_hashes
         if prepared_owner_present
