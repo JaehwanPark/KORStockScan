@@ -11491,3 +11491,168 @@ def test_native_advisory_producer_and_audit_keep_missing_micro_explicit(
     assert not audit._micro_vwap_provenance_unusable(
         fields, stage="scalp_entry_action_decision_snapshot"
     )
+
+
+@pytest.mark.parametrize("feature", [False, True])
+@pytest.mark.parametrize(
+    "damage",
+    [
+        None,
+        "body_hash",
+        "trace_hash",
+        "bundle",
+        "attempt",
+        "clock",
+        "order",
+        "capture_order",
+        "reason_shape",
+        "identity_shape",
+        "schema_shape",
+        "blockers",
+        "schema",
+        "duplicate",
+        "status",
+        "receipt_flag",
+        "missing_trace",
+    ],
+)
+def test_native_preassessment_receipt_does_not_require_uncomputed_features(
+    tmp_path, monkeypatch, feature, damage
+):
+    from datetime import datetime
+    from src.engine.scalping import ai_decision_trace as producer
+
+    day = "2026-10-23"
+    captured = []
+    monkeypatch.setattr(producer, "trace_enabled", lambda: True)
+    monkeypatch.setattr(
+        producer, "_now", lambda: datetime.fromisoformat(day + "T09:05:00+09:00")
+    )
+    monkeypatch.setattr(
+        producer, "_append_jsonl", lambda path, row: captured.append(row)
+    )
+    native = producer.capture_machine_observation(
+        exact_payload={
+            "schema": "ai_market_snapshot_v1",
+            "snapshot_id": "snapshot",
+            "evaluation_attempt_id": "attempt",
+            "stock_code": "034020",
+        },
+        setup_evidence={
+            "source_quality_status": "blocked",
+            "source_quality_blockers": [
+                "required_feature_tape" if feature else "candle_missing"
+            ],
+        },
+        assessment={
+            "schema": (
+                "mechanistic_entry_required_feature_v1"
+                if feature
+                else "mechanistic_entry_source_invalid_v1"
+            ),
+            "action": "RECHECK" if feature else "source_invalid",
+            "reason": (
+                "required_feature_input_insufficient"
+                if feature
+                else "ai_input_preflight_blocked"
+            ),
+        },
+        bundle_sha256="b" * 64,
+        metadata={"source_event_stage": "watching_analyze_target"},
+    )
+    assert len(captured) == 1
+    row = captured[0]
+    trace = dict(
+        schema="ai_decision_trace_v1",
+        decision_stage="entry_screen",
+        decision_ts=day + "T09:05:01+09:00",
+        decision_trace_id="trace",
+        snapshot_id="snapshot",
+        evaluation_attempt_id="attempt",
+        machine_bundle_sha256="b" * 64,
+        machine_observation_sha256=native["machine_observation_sha256"],
+        entry_mechanistic_action="RECHECK" if feature else "source_invalid",
+        machine_evaluation_status=(
+            "required_feature_blocked_before_assessment"
+            if feature
+            else "source_quality_blocked_before_assessment"
+        ),
+        machine_source_invalid_receipt=not feature,
+        machine_required_feature_receipt=feature,
+        provider_called=False,
+        actual_order_submitted=False,
+        runtime_effect=False,
+        allowed_runtime_apply=False,
+        broker_order_forbidden=True,
+    )
+    if damage == "body_hash":
+        row["source"]["assessment"]["reason"] = "tampered"
+    if damage in {
+        "capture_order",
+        "reason_shape",
+        "identity_shape",
+        "schema_shape",
+        "blockers",
+        "schema",
+    }:
+        if damage == "capture_order":
+            row["actual_order_submitted"] = True
+        if damage == "reason_shape":
+            row["source"]["assessment"]["reason"] = ["not_a_native_reason"]
+        if damage == "schema_shape":
+            row["source"]["assessment"]["schema"] = ["not_a_native_schema"]
+        if damage == "identity_shape":
+            row["label_context"]["evaluation_attempt_id"] = 123
+            row["source"]["exact_payload"]["evaluation_attempt_id"] = 123
+            trace["evaluation_attempt_id"] = 123
+        if damage == "blockers":
+            row["source"]["setup_evidence"]["source_quality_blockers"] = []
+        if damage == "schema":
+            row["source"]["assessment"]["schema"] = "mechanistic_entry_assessment_v1"
+        row["machine_observation_sha256"] = audit._canonical_digest(
+            {k: v for k, v in row.items() if k != "machine_observation_sha256"}
+        )
+        trace["machine_observation_sha256"] = row["machine_observation_sha256"]
+    for case, field, value in [
+        ("trace_hash", "machine_observation_sha256", "0" * 64),
+        ("bundle", "machine_bundle_sha256", "0" * 64),
+        ("attempt", "evaluation_attempt_id", "other"),
+        ("clock", "decision_ts", "2026-10-22T09:05:01+09:00"),
+        ("order", "actual_order_submitted", True),
+        ("status", "machine_evaluation_status", "assessed"),
+        (
+            "receipt_flag",
+            (
+                "machine_required_feature_receipt"
+                if feature
+                else "machine_source_invalid_receipt"
+            ),
+            False,
+        ),
+    ]:
+        if damage == case:
+            trace[field] = value
+    traces = (
+        []
+        if damage == "missing_trace"
+        else [trace] * (2 if damage == "duplicate" else 1)
+    )
+    originals = {}
+    for name, rows in [("ai_decision_payloads", [row]), ("ai_decision_trace", traces)]:
+        path = tmp_path / name / f"{name}_{day}.jsonl"
+        path.parent.mkdir()
+        path.write_text("".join(json.dumps(r) + "\n" for r in rows))
+        originals[path] = path.read_bytes()
+    result = audit._machine_ai_natural_source_consumption(day, data_root=tmp_path)
+    population = result["machine_evaluation_population"]
+    missing = population["missing_required_context_counts"]
+    for field in ("machine_micro_window", "machine_policy_version"):
+        assert missing.get(field, 0) == int(damage is not None)
+    assert population.get("verified_preassessment_count", 0) == int(damage is None)
+    if damage is None:
+        receipt = population["preassessment_receipts"][0]
+        assert receipt["economic_eligibility_granted"] is False
+        assert (
+            receipt["original_evaluation_status"] == trace["machine_evaluation_status"]
+        )
+    assert all(p.read_bytes() == raw for p, raw in originals.items())

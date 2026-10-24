@@ -327,13 +327,14 @@ def _audited_jsonl(path: Path, receipt: dict[str, Any]):
 
 
 def _verified_machine_completion_capture(
-    row: dict, day: str, *, evaluation_role: str = "main_live"
+    row: dict, day: str, *, evaluation_role: str = "main_live", preassessment=False
 ) -> dict | None:
     """Keep a bounded identity only after verifying the original capture bytes."""
     if (
-        evaluation_role not in {"main_live", "probe_observation"}
+        evaluation_role not in {"main_live", "probe_observation", "unspecified_legacy"}
         or row.get("schema") != "mechanistic_entry_observation_v1"
         or row.get("evaluation_role") != evaluation_role
+        or (evaluation_role == "unspecified_legacy" and not preassessment)
     ):
         return None
     digest = lambda value: hashlib.sha256(
@@ -359,6 +360,66 @@ def _verified_machine_completion_capture(
         return None
     native = runtime.get("continuous_reversal")
     assessment = source.get("assessment")
+    if preassessment:
+        # These producers explicitly stop before policy assessment. Verify their
+        # original receipt, never invent the uncomputed policy/micro fields.
+        exact, setup = source.get("exact_payload"), source.get("setup_evidence")
+        schemas = {
+            "mechanistic_entry_source_invalid_v1": "source_invalid",
+            "mechanistic_entry_required_feature_v1": "RECHECK",
+        }
+        if not (
+            isinstance(assessment, dict)
+            and isinstance(assessment.get("schema"), str)
+            and assessment.get("schema") in schemas
+            and assessment.get("action") == schemas[assessment["schema"]]
+            and isinstance(assessment.get("reason"), str)
+            and assessment.get("reason")
+            and isinstance(exact, dict)
+            and isinstance(setup, dict)
+            and setup.get("source_quality_status") == "blocked"
+            and isinstance(setup.get("source_quality_blockers"), list)
+            and setup["source_quality_blockers"]
+            and all(isinstance(v, str) and v for v in setup["source_quality_blockers"])
+            and context.get("snapshot_id") == exact.get("snapshot_id")
+            and isinstance(context.get("snapshot_id"), str)
+            and context.get("snapshot_id")
+            and context.get("evaluation_attempt_id")
+            == exact.get("evaluation_attempt_id")
+            and isinstance(context.get("evaluation_attempt_id"), str)
+            and context.get("evaluation_attempt_id")
+            and row.get("bundle_sha256") == runtime.get("bundle_sha256")
+            and re.fullmatch("[a-f0-9]{64}", str(row.get("bundle_sha256") or ""))
+            and type(runtime.get("pid")) is int
+            and runtime["pid"] > 0
+            and str(runtime.get("process_start_ticks") or "").isdigit()
+            and all(
+                row.get(k) is False
+                for k in (
+                    "provider_called",
+                    "actual_order_submitted",
+                    "runtime_effect",
+                    "allowed_runtime_apply",
+                )
+            )
+            and row.get("broker_order_forbidden") is True
+        ):
+            return None
+        try:
+            captured = datetime.fromisoformat(row["captured_at"])
+            if captured.tzinfo is None or captured.date().isoformat() != day:
+                return None
+        except (KeyError, TypeError, ValueError):
+            return None
+        return dict(
+            context=context,
+            assessment=assessment,
+            pid=runtime["pid"],
+            process_start_ticks=runtime["process_start_ticks"],
+            bundle_sha256=row["bundle_sha256"],
+            captured_at=row["captured_at"],
+            machine_observation_sha256=expected,
+        )
     if (
         not isinstance(native, dict)
         or not isinstance(assessment, dict)
@@ -709,6 +770,12 @@ def _machine_ai_natural_source_consumption(
                     )
                 } | {
                     "probe_observation_verified": probe_verified,
+                    "preassessment_receipt": _verified_machine_completion_capture(
+                        row,
+                        target_date,
+                        evaluation_role=row.get("evaluation_role"),
+                        preassessment=True,
+                    ),
                     "source": {
                         "assessment": source.get("assessment"),
                         "exact_payload": {
@@ -752,6 +819,11 @@ def _machine_ai_natural_source_consumption(
                         "source_event_stage",
                         "async_producer_pid",
                         "async_producer_start_ticks",
+                        "evaluation_attempt_id",
+                        "actual_order_submitted",
+                        "runtime_effect",
+                        "allowed_runtime_apply",
+                        "broker_order_forbidden",
                     )
                 }
             parsed.append(row)
@@ -832,6 +904,7 @@ def _machine_ai_natural_source_consumption(
         str(row.get("evaluation_role") or "unspecified_legacy") for row in captures
     )
     verified_probe_count = 0
+    preassessment_counts, preassessment_rows = Counter(), []
     for capture in captures:
         source = (
             capture.get("source") if isinstance(capture.get("source"), dict) else {}
@@ -857,6 +930,84 @@ def _machine_ai_natural_source_consumption(
             f"{str(context.get('effective_venue') or 'UNKNOWN').upper()}|"
             f"{str(context.get('session_bucket') or 'UNKNOWN').upper()}"
         ] += 1
+        before_assessment = capture.get("preassessment_receipt")
+        matching = [
+            trace
+            for trace in trace_by_snapshot.get(
+                str(context.get("snapshot_id") or ""), []
+            )
+            if before_assessment
+            and trace.get("machine_observation_sha256")
+            == before_assessment["machine_observation_sha256"]
+            and trace.get("machine_bundle_sha256") == capture.get("bundle_sha256")
+            and trace.get("evaluation_attempt_id")
+            == context.get("evaluation_attempt_id")
+            and trace.get("provider_called") is False
+            and all(
+                trace.get(k) is False
+                for k in (
+                    "actual_order_submitted",
+                    "runtime_effect",
+                    "allowed_runtime_apply",
+                )
+            )
+            and trace.get("broker_order_forbidden") is True
+            and str(trace.get("entry_mechanistic_action") or "").upper() == action
+            and trace.get("machine_evaluation_status")
+            in {
+                "source_quality_blocked_before_assessment",
+                "required_feature_blocked_before_assessment",
+                "assessment_contract_invalid",
+            }
+        ]
+        if before_assessment and len(matching) == 1:
+            trace = matching[0]
+            required_feature = (
+                assessment.get("schema") == "mechanistic_entry_required_feature_v1"
+            )
+            try:
+                traced = datetime.fromisoformat(trace["decision_ts"])
+                captured = datetime.fromisoformat(before_assessment["captured_at"])
+                clock_valid = bool(
+                    traced.tzinfo
+                    and traced.date().isoformat() == target_date
+                    and traced >= captured
+                )
+            except (TypeError, ValueError, KeyError):
+                clock_valid = False
+            contract_valid = (
+                trace.get("machine_required_feature_receipt") is True
+                and trace.get("machine_evaluation_status")
+                == "required_feature_blocked_before_assessment"
+                if required_feature
+                else trace.get("machine_source_invalid_receipt") is True
+                and trace.get("machine_evaluation_status")
+                in {
+                    "source_quality_blocked_before_assessment",
+                    "assessment_contract_invalid",
+                }
+            )
+            if not clock_valid or not contract_valid:
+                matching = []
+        verified_preassessment = before_assessment is not None and len(matching) == 1
+        if verified_preassessment:
+            reason = assessment["reason"]
+            preassessment_counts[reason] += 1
+            preassessment_rows.append(
+                dict(
+                    snapshot_id=context["snapshot_id"],
+                    evaluation_attempt_id=context["evaluation_attempt_id"],
+                    decision_trace_id=matching[0].get("decision_trace_id"),
+                    reason=reason,
+                    machine_observation_sha256=before_assessment[
+                        "machine_observation_sha256"
+                    ],
+                    original_evaluation_status=matching[0]["machine_evaluation_status"],
+                    policy_version_required=False,
+                    micro_window_required=False,
+                    economic_eligibility_granted=False,
+                )
+            )
         for field, value in (
             ("snapshot_id", context.get("snapshot_id")),
             ("bundle_sha256", capture.get("bundle_sha256")),
@@ -865,6 +1016,11 @@ def _machine_ai_natural_source_consumption(
             ("machine_policy_version", assessment.get("policy_version")),
             ("machine_micro_window", exact_payload.get("mechanistic_micro_window")),
         ):
+            if verified_preassessment and field in {
+                "machine_policy_version",
+                "machine_micro_window",
+            }:
+                continue
             if value in (None, "", {}, []):
                 machine_missing_fields[field] += 1
         snapshot_id = str(context.get("snapshot_id") or "").strip()
@@ -1246,6 +1402,9 @@ def _machine_ai_natural_source_consumption(
                 for row in captures
             ),
             "trace_expected_count": len(captures) - verified_probe_count,
+            "verified_preassessment_count": len(preassessment_rows),
+            "preassessment_reason_counts": dict(sorted(preassessment_counts.items())),
+            "preassessment_receipts": preassessment_rows,
             "action_counts": dict(sorted(machine_actions.items())),
             "scope_counts": dict(sorted(machine_scopes.items())),
             "missing_required_context_counts": dict(
